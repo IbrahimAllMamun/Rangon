@@ -136,7 +136,8 @@ Rules:
 The design system is defined in [docs/design-system.md](docs/design-system.md) and implemented as
 tokens in `apps/web/src/styles/tokens.css`. Highlights:
 
-- Brand red `#FB3208` is the **only** primary action colour. Generic SaaS blue is forbidden as a CTA.
+- Brand red `#FD3807` (read from the official logo vector) is the **only** primary action colour.
+  Generic SaaS blue is forbidden as a CTA.
 - Structure comes from black / white / neutral grey; red is reserved for action, emphasis, identity.
 - Semantic colours (`success #16A34A`, `warning #D97706`, `error #DC2626`, `info #2563EB`) are separate
   from the brand red — brand red is not the error colour.

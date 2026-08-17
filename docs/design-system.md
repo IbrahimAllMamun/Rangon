@@ -11,11 +11,15 @@ Black + white + Rangon red is the signature. Red means *action, emphasis, identi
 | Token | Hex | Use |
 |---|---|---|
 | `brand-50` | `#FFF4F1` | subtle tint |
-| `brand-100` | `#FFE6E0` | soft brand background, badges |
-| `brand-400` | `#FF5530` | highlight, focus glow |
-| `brand-500` | `#FB3208` | **primary action** |
-| `brand-600` | `#E52B05` | hover |
-| `brand-700` | `#C92304` | active/pressed |
+| `brand-100` | `#FFE7E1` | soft brand background, badges |
+| `brand-400` | `#FF5C33` | highlight, focus glow |
+| `brand-500` | `#FD3807` | **primary action** |
+| `brand-600` | `#E22D04` | hover |
+| `brand-700` | `#C42503` | active/pressed |
+
+> `brand-500` is taken from the official logo vector (`logo.svg` → `#FD3807`).
+> The build plan quoted `#FB3208` as an eyedropper approximation and said the
+> production asset wins. The rest of the ramp is derived from `#FD3807`.
 | `black` | `#000000` | brand foundation, POS header, logo lockup |
 | `white` | `#FFFFFF` | surfaces, logo text |
 
@@ -118,9 +122,21 @@ text and UI components), semantic landmarks, labelled icon-only buttons, dialogs
 
 ## Logo
 
-Use the asset in `public/brand/logo/` (`rangon-fashion-dark.svg` on dark, `-light.svg` on light,
-`rangon-symbol.svg` for favicon/app icon). Clear space ≥ 0.25 × symbol height. Never stretch, rotate,
-recolour, shadow, gradient, place on busy imagery, or re-set the wordmark in a font.
+Official vectors live in `public/brand/logo/`; `src/components/brand/logo.tsx` is the only component
+allowed to render them.
+
+| Surface | Variant | Asset |
+|---|---|---|
+| Storefront navbar (white) | `full-on-light` | `logo_full_dark.svg` |
+| Storefront footer (near-black) | `vertical-on-dark` | `logo_vertical_light.svg` |
+| Admin sidebar, POS header (near-black) | `full-on-dark` | `logo_full_light.svg` |
+| Browser tab, app icon | `symbol` | `logo.svg` |
+
+Naming reads as *the colour of the wordmark*, so `_dark` goes on white and `_light` goes on black.
+`Logo` takes a **height** and derives the width from the asset's own aspect ratio, so the mark cannot
+be stretched. Clear space ≥ 0.25 × symbol height. Never rotate, recolour, shadow, gradient, place on
+busy imagery, or re-set the wordmark in a font.
+Details: [`apps/web/public/brand/BRAND-ASSETS.md`](../apps/web/public/brand/BRAND-ASSETS.md).
 
 ## QA checklist per UI feature
 

@@ -75,7 +75,7 @@ ATTRIBUTES = {
             ("Olive", "#5A6B3B"),
             ("Maroon", "#6B1F2E"),
             ("Beige", "#D8C3A5"),
-            ("Rangon Red", "#FB3208"),
+            ("Rangon Red", "#FD3807"),
         ],
     ),
     "shade": (
