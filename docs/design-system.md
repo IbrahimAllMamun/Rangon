@@ -1,0 +1,133 @@
+# Rangon Fashion Design System
+
+Derived from plan §57–86. Implemented as CSS custom properties in
+`apps/web/src/styles/tokens.css` and surfaced to Tailwind in `apps/web/tailwind.config.ts`.
+**Never write a raw hex value in a component.**
+
+## Brand
+
+Black + white + Rangon red is the signature. Red means *action, emphasis, identity* — not background.
+
+| Token | Hex | Use |
+|---|---|---|
+| `brand-50` | `#FFF4F1` | subtle tint |
+| `brand-100` | `#FFE6E0` | soft brand background, badges |
+| `brand-400` | `#FF5530` | highlight, focus glow |
+| `brand-500` | `#FB3208` | **primary action** |
+| `brand-600` | `#E52B05` | hover |
+| `brand-700` | `#C92304` | active/pressed |
+| `black` | `#000000` | brand foundation, POS header, logo lockup |
+| `white` | `#FFFFFF` | surfaces, logo text |
+
+Neutrals: `neutral-950 #0A0A0A`, `900 #111111`, `800 #1C1C1C`, `700 #2B2B2B`, `600 #525252`,
+`500 #737373`, `400 #A3A3A3`, `300 #D4D4D4`, `200 #E5E5E5`, `100 #F5F5F5`, `50 #FAFAFA`.
+
+Semantic (never brand red for errors): `success #16A34A`, `warning #D97706`, `error #DC2626`,
+`info #2563EB`, `neutral #737373`. Semantic colours appear in badges, alerts, icons and charts — not as
+large decorative areas.
+
+## Surfaces
+
+| | Background | Card | Text | Muted | Border |
+|---|---|---|---|---|---|
+| Storefront | `#FAFAFA` | `#FFFFFF` | `#111111` | `#737373` | `#E5E5E5` |
+| Admin | `#F5F5F5` | `#FFFFFF` | `#171717` | `#737373` | `#E5E5E5` |
+| POS | `#F5F5F5` | `#FFFFFF` | `#111111` | `#525252` | `#D4D4D4` |
+
+Same design language, different density. Storefront = whitespace + photography. Admin = data density.
+POS = contrast + speed.
+
+## Typography
+
+```css
+--font-sans:    "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;   /* everything */
+--font-display: "Space Grotesk", "Inter", system-ui, sans-serif;            /* headlines only */
+```
+
+| Token | Size / line-height / weight | Use |
+|---|---|---|
+| `display-xl` | 56 / 1.05 / 700 | storefront hero (mobile: 36) |
+| `display-lg` | 44 / 1.10 / 700 | campaign heading (mobile: 32) |
+| `h1` | 36 / 1.15 / 700 | page heading |
+| `h2` | 30 / 1.20 / 700 | section |
+| `h3` | 24 / 1.25 / 650 | subsection |
+| `h4` | 20 / 1.30 / 600 | card heading |
+| `body-lg` | 18 / 1.55 / 400 | lead |
+| `body` | 16 / 1.50 / 400 | default |
+| `body-sm` | 14 / 1.45 / 400 | secondary |
+| `caption` | 12 / 1.40 / 500 | metadata |
+
+Hierarchy comes from weight (400 body, 500 labels/nav, 600 buttons, 700 headings), not from many
+colours. No 800/900. Never set Space Grotesk on tables or paragraphs. Financial figures use
+`font-variant-numeric: tabular-nums` (`.tabular` utility).
+
+## Spacing, radius, shadow
+
+4 px grid; components default to 8 px increments: `4 8 12 16 20 24 32 40 48 64 80 96`.
+
+Radius `sm 6 · md 8 · lg 12 · xl 16 · 2xl 20 · full 9999`. Controls `md`, cards `lg`, storefront modules
+`xl`, pills/avatars `full`.
+
+```css
+--shadow-sm: 0 1px 2px rgba(0,0,0,.05);
+--shadow-md: 0 4px 12px rgba(0,0,0,.08);
+--shadow-lg: 0 12px 30px rgba(0,0,0,.10);
+```
+
+Prefer borders and spacing over shadows. Admin cards use borders.
+
+## Components
+
+- **Button** — `primary` (brand-500 → 600 → 700, white text), `secondary` (white, `neutral-300` border),
+  `ghost` (transparent → `neutral-100`), `destructive` (`#DC2626`, semantic red — *not* brand red),
+  `link`. Sizes `sm 32 · md 40 · lg 44 · xl 52` (POS uses `lg`/`xl`).
+- **Input / Select / Textarea** — 40–44 px desktop, 44–48 px touch, 1 px `#D4D4D4` border, radius 8,
+  focus `border: brand-500` + `ring: rgba(251,50,8,.18)`. Label + control + error message, always;
+  errors are text, never colour alone, and are tied to the field with `aria-describedby`.
+- **Badge** — semantic colour + text. `Paid → success`, `Pending → warning`, `Failed → error`,
+  `Processing → info`, `Cancelled → error-muted`, `Delivered → success`, `Returned → neutral`.
+- **ProductCard** — 4:5 image, optional badge, brand/category, name (2-line clamp), price + compare-at,
+  colour swatches. Nothing else.
+- **DataTable** — TanStack Table; sticky header, 40 px rows, right-aligned tabular numbers, row
+  selection + bulk actions, column visibility, keyboard navigation, per-column filters.
+- **StatCard** — label, big tabular value, delta with direction, optional sparkline.
+- Empty, loading (skeleton) and error states are part of every data component, not an afterthought.
+
+## Motion
+
+`fast 140ms` (hover, focus, badge), `normal 200ms` (drawer, dropdown, toast), `slow 320ms` (page/gallery
+transitions). Easing `cubic-bezier(.2,.8,.2,1)`. Motion is used for cart feedback, drawers/modals,
+toasts, gallery changes — never decoration. POS animations are limited to instant feedback.
+
+```css
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after {
+  animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+```
+
+## Imagery
+
+Product images 4:5, consistent treatment, `next/image` with responsive `sizes`, descriptive alt text
+built from product + variant, blur placeholder, `priority` only on the hero and the first product image.
+
+## Accessibility
+
+WCAG 2.2 AA: visible focus ring on every interactive element, 4.5:1 text contrast (brand red on white is
+3.6:1 → **never** use brand red for body text; it is for fills with white text, where it passes for large
+text and UI components), semantic landmarks, labelled icon-only buttons, dialogs with focus trap and
+`Esc`, full keyboard operation of the POS, `৳` and Bengali text verified in every numeric component.
+
+## Logo
+
+Use the asset in `public/brand/logo/` (`rangon-fashion-dark.svg` on dark, `-light.svg` on light,
+`rangon-symbol.svg` for favicon/app icon). Clear space ≥ 0.25 × symbol height. Never stretch, rotate,
+recolour, shadow, gradient, place on busy imagery, or re-set the wordmark in a font.
+
+## QA checklist per UI feature
+
+```text
+[ ] tokens only (no raw hex)      [ ] focus states visible       [ ] empty state
+[ ] logo used correctly           [ ] contrast checked           [ ] loading state
+[ ] type scale respected          [ ] mobile + desktop tested    [ ] error state
+[ ] 4px spacing grid              [ ] keyboard path works        [ ] long text + big numbers
+[ ] button hierarchy clear        [ ] reduced motion respected   [ ] ৳ / Bengali text renders
+```
