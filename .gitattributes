@@ -1,0 +1,13 @@
+# Keep LF in the repo; scripts that run inside Linux containers must never get CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

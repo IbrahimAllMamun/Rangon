@@ -1,0 +1,87 @@
+# Development overlay: source mounts, autoreload, published ports, dev extras.
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+services:
+  db:
+    ports: ["5432:5432"]          # published for local psql/GUI only
+
+  redis:
+    ports: ["6379:6379"]
+
+  api:
+    build:
+      dockerfile: Dockerfile.dev
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DJANGO_DEBUG: "1"
+    volumes:
+      - ./apps/api:/app
+      - api_media:/app/media
+    ports: ["8000:8000"]
+    stdin_open: true
+    tty: true
+
+  worker:
+    build:
+      dockerfile: Dockerfile.dev
+    command: ["watchmedo", "auto-restart", "--directory=/app", "--pattern=*.py", "--recursive",
+              "--", "celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DJANGO_DEBUG: "1"
+    volumes:
+      - ./apps/api:/app
+      - api_media:/app/media
+
+  beat:
+    build:
+      dockerfile: Dockerfile.dev
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DJANGO_DEBUG: "1"
+    volumes:
+      - ./apps/api:/app
+
+  web:
+    build:
+      dockerfile: Dockerfile.dev
+    command: ["npm", "run", "dev"]
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules            # keep the image's node_modules
+      - /app/.next
+    ports: ["3000:3000"]
+    networks: [frontend, backend]
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"                  # web UI
+    networks: [backend]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-rangon_minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-rangon_minio_password}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [backend]
+    restart: unless-stopped
+
+volumes:
+  api_media:
+  minio_data:

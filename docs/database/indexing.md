@@ -30,8 +30,11 @@ Created by the `core` migration `0002_extensions`.
 ## Check constraints (invariants in the database, not only in Python)
 
 ```sql
-inventory_inventory:      on_hand >= 0
 inventory_inventory:      reserved >= 0
+-- NOTE: on_hand has no >= 0 constraint on purpose.  Negative stock is a real
+-- business state when RANGON_ALLOW_OVERSELL is on, and for the V2 offline POS
+-- where a sale physically happened offline.  Overselling is prevented by the
+-- service guard under SELECT … FOR UPDATE and detected by verify_integrity().
 orders_order:             grand_total >= 0 AND paid_total >= 0 AND refunded_total >= 0
 orders_orderitem:         quantity > 0 AND unit_price >= 0 AND unit_cost >= 0
 orders_payment:           amount > 0

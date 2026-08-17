@@ -63,8 +63,8 @@ Every mutating function:
 
 | Invariant | Enforced by |
 |---|---|
-| `on_hand ≥ 0` | service guard + `CheckConstraint inventory_inventory_on_hand_gte_0` |
-| `reserved ≥ 0` | service guard + `CheckConstraint` |
+| `on_hand ≥ 0` unless overselling is enabled | service guard under `SELECT … FOR UPDATE`. **No database constraint** — negative stock is a legitimate state when `RANGON_ALLOW_OVERSELL=1` and for the V2 offline POS, where the sale physically happened. Drift is caught by `verify_integrity()` |
+| `reserved ≥ 0` | service guard + `CheckConstraint inventory_reserved_gte_0` |
 | `reserved ≤ on_hand` unless overselling enabled | service guard (org config) |
 | cached columns == ledger sum | `verify_integrity()`, nightly task, test suite |
 | a reservation is consumed at most once | `consume_reservation` is keyed on `(reference_type, reference_id, variant)` and refuses a second pass |

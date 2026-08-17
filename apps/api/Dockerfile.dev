@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1.7
+# Development image: dev dependencies, source mounted as a volume, autoreload.
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DJANGO_SETTINGS_MODULE=config.settings.dev
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev postgresql-client curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements/ ./requirements/
+RUN pip install -r requirements/dev.txt
+
+# Source is bind-mounted by docker-compose.dev.yml, so nothing else is copied
+# here — a code change must not invalidate the dependency layer.
+
+EXPOSE 8000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

@@ -1,0 +1,137 @@
+# Base stack shared by every environment.
+# Development:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Production:   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+name: rangon
+
+x-api-env: &api-env
+  DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.dev}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
+  DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,api}
+  DJANGO_CORS_ALLOWED_ORIGINS: ${DJANGO_CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+  DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:3000}
+  DJANGO_TIME_ZONE: ${DJANGO_TIME_ZONE:-Asia/Dhaka}
+  DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}
+  DATABASE_URL: ${DATABASE_URL:-postgresql://rangon:rangon_dev_password@db:5432/rangon}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+  USE_S3: ${USE_S3:-0}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+  EMAIL_HOST: ${EMAIL_HOST:-mailpit}
+  EMAIL_PORT: ${EMAIL_PORT:-1025}
+  EMAIL_USER: ${EMAIL_USER:-}
+  EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+  EMAIL_USE_TLS: ${EMAIL_USE_TLS:-0}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-Rangon Fashion <no-reply@rangonfashion.test>}
+  RANGON_CURRENCY: ${RANGON_CURRENCY:-BDT}
+  RANGON_ALLOW_OVERSELL: ${RANGON_ALLOW_OVERSELL:-0}
+  RANGON_RESERVATION_MINUTES: ${RANGON_RESERVATION_MINUTES:-60}
+  RANGON_LOW_STOCK_THRESHOLD: ${RANGON_LOW_STOCK_THRESHOLD:-5}
+  RANGON_DEFAULT_TAX_RATE: ${RANGON_DEFAULT_TAX_RATE:-0.00}
+  JWT_ACCESS_TOKEN_MINUTES: ${JWT_ACCESS_TOKEN_MINUTES:-30}
+  JWT_REFRESH_TOKEN_DAYS: ${JWT_REFRESH_TOKEN_DAYS:-14}
+  PAYMENT_DEFAULT_PROVIDER: ${PAYMENT_DEFAULT_PROVIDER:-manual}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rangon}
+      POSTGRES_USER: ${POSTGRES_USER:-rangon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rangon} -d ${POSTGRES_DB:-rangon}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    environment: *api-env
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend, frontend]
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    environment: *api-env
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  beat:
+    # Exactly one replica, ever — two schedulers fire every job twice.
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "config", "beat", "--loglevel=info",
+              "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    environment: *api-env
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000/api/v1}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      NEXT_PUBLIC_CURRENCY: ${NEXT_PUBLIC_CURRENCY:-BDT}
+      NEXT_PUBLIC_CURRENCY_SYMBOL: ${NEXT_PUBLIC_CURRENCY_SYMBOL:-৳}
+    depends_on:
+      - api
+    networks: [frontend]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  # db and redis live only on `backend`, which is never published.
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
