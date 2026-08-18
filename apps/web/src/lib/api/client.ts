@@ -92,7 +92,14 @@ export async function apiClient<T>(
   if (cartToken) headers.set("X-Cart-Token", cartToken);
   if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
 
-  const response = await fetch(`/api/proxy${path}`, {
+  // Next redirects trailing-slash URLs (308), so sending "/pos/sales/" here
+  // would cost an extra round trip on every call. Strip it: the proxy route
+  // re-adds the slash Django requires when it forwards.
+  const [pathname, query = ""] = path.split("?");
+  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  const url = `/api/proxy${trimmed}${query ? `?${query}` : ""}`;
+
+  const response = await fetch(url, {
     ...rest,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -17,11 +17,11 @@ run, 155 backend tests passing, `ruff` clean, frontend typecheck passing.
 | 04 | Auth + RBAC | ✅ | ✅ | JWT in httpOnly cookies, 7 roles, branch scoping, audit log, sign-in page |
 | 05 | Product catalog | ✅ | 🟡 | Full CRUD API. Admin has a **read-only** product list; no create/edit form yet |
 | 06 | Inventory engine | ✅ | 🟡 | Ledger, reservations, transfers, WAC, `verify_inventory`. Admin list is read-only; no adjust/count UI |
-| 07 | Suppliers + purchasing | ✅ | ⬜ | PO → receive → ledger → cost recalculation all work via API; no admin screens |
+| 07 | Suppliers + purchasing | ✅ | 🟡 | PO → receive → ledger → cost recalculation. Admin purchase list built; creating/receiving is still API-only |
 | 08 | POS | ✅ | ✅ | Barcode-first register, split payment, hold/resume, receipt, F2/F4/F8 shortcuts |
 | 09 | Payments | ✅ | ✅ | Generic model + provider registry; `manual` provider (cash/card/MFS/COD) shipped |
-| 10 | Returns | ✅ | ⬜ | Full request→approve→receive→restock→refund service + API; POS one-step return API. No admin UI |
-| 11 | Customers | ✅ | ⬜ | Phone-first identity, addresses, notes, history via API; no admin screens |
+| 10 | Returns | ✅ | 🟡 | Full request→approve→receive→restock→refund + POS one-step return. Admin returns list built; approve/receive/refund still API-only |
+| 11 | Customers | ✅ | 🟡 | Phone-first identity, addresses, notes, history. Admin customer list built; editing still API-only |
 | 12 | Online store | ✅ | ✅ | Home, shop, product, cart, checkout, order tracking, account, policies |
 | 13 | Search + filters | ✅ | ✅ | Postgres trigram + indexed facets; facet UI with colour swatches |
 | 14 | Cart | ✅ | ✅ | Server-authoritative, re-priced on every read, drawer + full page |
@@ -32,7 +32,7 @@ run, 155 backend tests passing, `ruff` clean, frontend typecheck passing.
 | 19 | Coupons | ✅ | 🟡 | Full engine + API; cart can apply/remove. No admin coupon screens |
 | 20 | Wishlist + reviews | ✅ | 🟡 | API complete, reviews render on the product page. No wishlist page, no moderation UI |
 | 21 | Dashboard | ✅ | ✅ | Server-aggregated KPIs, sales chart with a table alternative |
-| 22 | Reports | ✅ | ⬜ | 8 report endpoints + CSV export work; no reports UI (dashboard covers the headline numbers) |
+| 22 | Reports | ✅ | ✅ | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven) |
 | 23 | Offline POS | ⬜ | ⬜ | Deliberately V2 (plan §29). Design recorded in `architecture/offline-pos.md` |
 | 24 | Barcode + printing | 🟡 | 🟡 | Keyboard-wedge scanning + barcode generation work; print CSS for 80 mm receipt and A4. No ESC/POS driver |
 | 25 | Notifications | 🟡 | ⬜ | Model, in-app feed API, Celery email tasks. No SMS provider, no bell UI |
@@ -60,8 +60,9 @@ frontend typecheck (tsc --noEmit) ..... clean
 1. **Payment gateway.** Implement a real provider against
    `orders.payments.providers.base.PaymentProvider`, with signature verification and webhook replay
    tests. COD works today; the card option is visibly disabled rather than pretending to work.
-2. **Admin CRUD screens** for products, purchasing, customers, returns, coupons and reports. The APIs
-   are complete and tested — this is frontend work, not backend work.
+2. **Admin *write* screens.** Every admin section now has a working list view, but creating and
+   editing products, purchase orders, customers, coupons and return approvals is still API-only.
+   The endpoints are complete and tested — this is form work, not backend work.
 3. **Run the E2E suite** against a seeded stack and wire it into CI.
 4. **Restore rehearsal.** A backup that has never been restored is not a backup.
 5. **Load test** product listing, checkout and POS search at expected peak; add the

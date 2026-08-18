@@ -27,7 +27,14 @@ async function refreshAccess(refresh: string): Promise<{ access: string; refresh
 
 async function forward(request: NextRequest, path: string[]) {
   const store = await cookies();
-  const target = `${INTERNAL_URL}/${path.join("/")}${request.nextUrl.search}`;
+
+  // Next hands the catch-all over as path *segments*, so a trailing slash is
+  // lost: "/pos/sales/" arrives as ["pos","sales"]. The Django API is
+  // trailing-slash throughout, and APPEND_SLASH cannot redirect a POST without
+  // discarding the body - it raises instead. So restore the slash here.
+  const segments = path.join("/");
+  const normalised = segments.endsWith("/") ? segments : `${segments}/`;
+  const target = `${INTERNAL_URL}/${normalised}${request.nextUrl.search}`;
 
   const headers = new Headers();
   for (const name of FORWARD_HEADERS) {

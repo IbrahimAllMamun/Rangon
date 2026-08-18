@@ -241,7 +241,11 @@ class HeldSaleSerializer(serializers.ModelSerializer):
             "created_by_email",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        # `branch` is derived from the cashier's session in the view, never sent
+        # by the client - a register must not be able to park a sale against
+        # another branch. Leaving it writable also made it *required*, which
+        # rejected every hold with "branch: This field is required."
+        read_only_fields = ["id", "branch", "created_at"]
 
 
 class ElevateSerializer(serializers.Serializer):
