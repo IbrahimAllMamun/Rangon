@@ -4,6 +4,12 @@ Permanent project instructions. Read this file before modifying any code.
 Source plan: [rangon_fashion_build_plan.md](rangon_fashion_build_plan.md) (authoritative product spec).
 Roadmap and current status: [docs/roadmap.md](docs/roadmap.md).
 
+**Before running anything, read [.claude/environment.md](.claude/environment.md).**
+This machine reserves the port the storefront expects, its home directory is a git
+repo, and several verification commands report success misleadingly. That file
+lists the traps and the commands that actually work.
+Session context and the bugs already found: [.claude/](.claude/README.md).
+
 ---
 
 ## 1. Project purpose
