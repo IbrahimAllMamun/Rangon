@@ -14,6 +14,30 @@ import { ACCESS_COOKIE, ApiError, type ApiErrorBody } from "./client";
 
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 
+/**
+ * Deadline for reads that go through Next's data cache.
+ *
+ * When a cached fetch rejects, Next leaves the in-flight cache entry pending
+ * and every later read of the same key waits on it forever. One unreachable
+ * API call therefore wedges every render that shares the key: `next build`
+ * hangs on the storefront pages, and a running server would stop serving them
+ * after a momentary API outage. A deadline turns that permanent hang back into
+ * the ordinary error each caller already handles. Mutations are never raced --
+ * aborting a payment mid-flight is worse than waiting for it.
+ */
+const CACHED_READ_TIMEOUT_MS = 5_000;
+
+function withDeadline<T>(request: Promise<T>, ms: number, path: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new ApiError(504, "UPSTREAM_TIMEOUT", `Timed out after ${ms}ms: ${path}`)),
+      ms,
+    );
+  });
+  return Promise.race([request, deadline]).finally(() => clearTimeout(timer));
+}
+
 interface ServerRequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   /** ISR revalidation window in seconds; omit for dynamic data. */
@@ -22,6 +46,8 @@ interface ServerRequestOptions extends Omit<RequestInit, "body"> {
   auth?: boolean;
   cartToken?: string;
   idempotencyKey?: string;
+  /** Override the deadline applied to cached reads. */
+  timeoutMs?: number;
 }
 
 /**
@@ -29,7 +55,9 @@ interface ServerRequestOptions extends Omit<RequestInit, "body"> {
  * attaching the caller's access token from the httpOnly cookie.
  */
 export async function apiServer<T>(path: string, options: ServerRequestOptions = {}): Promise<T> {
-  const { body, revalidate, tags, auth = true, cartToken, idempotencyKey, ...rest } = options;
+  const { body, revalidate, tags, auth = true, cartToken, idempotencyKey, timeoutMs, ...rest } =
+    options;
+  const cached = revalidate !== undefined && revalidate !== false;
 
   const headers = new Headers(rest.headers);
   headers.set("Content-Type", "application/json");
@@ -43,13 +71,17 @@ export async function apiServer<T>(path: string, options: ServerRequestOptions =
   if (cartToken) headers.set("X-Cart-Token", cartToken);
   if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
 
-  const response = await fetch(`${INTERNAL_URL}${path}`, {
+  const request = fetch(`${INTERNAL_URL}${path}`, {
     ...rest,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
-    next: revalidate === undefined || revalidate === false ? { tags } : { revalidate, tags },
-    cache: revalidate === undefined || revalidate === false ? "no-store" : undefined,
+    next: cached ? { revalidate, tags } : { tags },
+    cache: cached ? undefined : "no-store",
   });
+
+  const response = cached
+    ? await withDeadline(request, timeoutMs ?? CACHED_READ_TIMEOUT_MS, path)
+    : await request;
 
   if (response.status === 204) return undefined as T;
 
