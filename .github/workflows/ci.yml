@@ -175,15 +175,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=web
 
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.27.0  # or latest available version
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: rangon-api:${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      
+
       - name: Scan web image
-        uses: aquasecurity/trivy-action@0.27.0  # or latest available version
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: rangon-web:${{ github.sha }}
           severity: HIGH,CRITICAL
