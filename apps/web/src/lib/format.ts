@@ -56,7 +56,9 @@ export function relativeTime(value: string | Date | null | undefined): string {
 }
 
 export function percent(value: string | number | null | undefined, digits = 1): string {
-  const amount = typeof value === "string" ? Number.parseFloat(value ?? "0") : (value ?? 0);
+  // Nothing to show reads as a plain "0%", not "0.0%" -- same as an unparseable value.
+  if (value === null || value === undefined) return "0%";
+  const amount = typeof value === "string" ? Number.parseFloat(value) : value;
   if (Number.isNaN(amount)) return "0%";
   return `${amount.toFixed(digits)}%`;
 }
