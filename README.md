@@ -73,6 +73,26 @@ docker compose exec api python manage.py seed_demo --reset
 | Mailpit (dev email) | http://localhost:8025 |
 | MinIO console (dev S3) | http://localhost:9001 |
 
+> **Windows: if port 3000 will not bind**, `docker compose up` fails with
+> `bind: An attempt was made to access a socket in a way forbidden by its access permissions`.
+> Windows reserves wide TCP ranges for Hyper-V/WinNAT — frequently the whole
+> 2900–3500 block, so 3000, 3001 and 3100 all fail. List the reserved ranges:
+>
+> ```bash
+> netsh interface ipv4 show excludedportrange protocol=tcp
+> ```
+>
+> Then pick a free port and set it in `.env`, keeping the origin consistent:
+> `WEB_PORT`, `NEXT_PUBLIC_SITE_URL`, `DJANGO_CORS_ALLOWED_ORIGINS` and
+> `DJANGO_CSRF_TRUSTED_ORIGINS`. Recreate with:
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api
+> ```
+>
+> Reclaiming 3000 instead needs an elevated `net stop winnat && net start winnat`,
+> which drops every other Docker port mapping while it restarts.
+
 Demo logins created by `seed_demo` (development only):
 
 | Role | Email | Password |
@@ -161,9 +181,11 @@ Images are built by CI and tagged with the git SHA (`rangon/api:<sha>`, `rangon/
 
 ## Brand assets
 
-Logo, favicon and social assets live in `apps/web/public/brand/`. The files currently committed are
-**placeholders** — see [apps/web/public/brand/BRAND-ASSETS.md](apps/web/public/brand/BRAND-ASSETS.md)
-before shipping anything customer-facing.
+The official logo vectors live in `apps/web/public/brand/logo/` and are rendered only by
+`src/components/brand/logo.tsx`. Which variant goes where, the geometry, and the brand colour
+(`#FD3807`, read from the vector itself) are documented in
+[apps/web/public/brand/BRAND-ASSETS.md](apps/web/public/brand/BRAND-ASSETS.md). A raster favicon and
+an OG share image still need to be produced from the symbol.
 
 ## Licence
 

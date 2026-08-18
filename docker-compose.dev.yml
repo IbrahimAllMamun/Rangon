@@ -53,7 +53,11 @@ services:
       - ./apps/web:/app
       - /app/node_modules            # keep the image's node_modules
       - /app/.next
-    ports: ["3000:3000"]
+    # Host port is configurable: Windows reserves wide TCP ranges (check with
+    # `netsh interface ipv4 show excludedportrange protocol=tcp`) and 3000 often
+    # falls inside one, which fails with "socket ... forbidden by its access
+    # permissions". Set WEB_PORT in .env to move it.
+    ports: ["${WEB_PORT:-3000}:3000"]
     networks: [frontend, backend]
 
   mailpit:
