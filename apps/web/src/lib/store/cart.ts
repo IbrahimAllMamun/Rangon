@@ -44,7 +44,7 @@ async function run<T>(
   }
 }
 
-export const useCart = create<CartState>((set, get) => ({
+export const useCart = create<CartState>((set) => ({
   cart: null,
   loading: false,
   error: null,
