@@ -24,7 +24,7 @@ export default function AboutPage() {
 
       <h2 className="mt-10 text-h3">What we sell</h2>
       <p className="mt-3 text-body text-neutral-700">
-        Everyday menswear and womenswear, kidswear, footwear, bags and cosmetics — chosen for Dhaka's
+        Everyday menswear and womenswear, kidswear, footwear, bags and cosmetics — chosen for Dhaka’s
         climate and how people here actually dress, not for a catalogue photograph.
       </p>
 
