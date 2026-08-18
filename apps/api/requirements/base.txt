@@ -1,5 +1,5 @@
 # Core framework
-Django==5.1.5
+Django==5.1.15
 djangorestframework==3.15.2
 djangorestframework-simplejwt==5.3.1
 django-cors-headers==4.6.0
@@ -21,7 +21,7 @@ argon2-cffi==23.1.0
 # Storage & media
 django-storages==1.14.4
 boto3==1.35.81
-Pillow==11.0.0
+Pillow==12.3.0
 
 # Utilities
 python-decouple==3.8
