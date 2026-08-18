@@ -1,7 +1,9 @@
-# syntax=docker/dockerfile:1.7
 # ---------------------------------------------------------------------------
 # Production image for the Rangon API.  Multi-stage: wheels are built in a
 # throwaway stage so the runtime image carries no compiler toolchain.
+#
+# No `# syntax=` directive on purpose: nothing here needs a newer Dockerfile
+# frontend, and pulling one adds a network dependency to every build.
 # ---------------------------------------------------------------------------
 
 FROM python:3.12-slim-bookworm AS builder

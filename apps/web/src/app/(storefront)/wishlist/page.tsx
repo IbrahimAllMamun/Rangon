@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 
 import { ProductCard } from "@/components/commerce/product-card";
 import { Button, EmptyState } from "@/components/ui/primitives";
-import { apiServer, isAuthenticated } from "@/lib/api/client";
+import { apiServer, isAuthenticated } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 
 export const metadata: Metadata = {

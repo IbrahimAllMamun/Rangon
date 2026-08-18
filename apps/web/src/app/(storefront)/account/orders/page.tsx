@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Button, Card, EmptyState } from "@/components/ui/primitives";
-import { apiServer, isAuthenticated } from "@/lib/api/client";
+import { apiServer, isAuthenticated } from "@/lib/api/server";
 import type { Order } from "@/lib/api/types";
 import { dateTime, money } from "@/lib/format";
 

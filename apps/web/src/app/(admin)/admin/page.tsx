@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/admin/shell";
 import { SalesChart } from "@/components/admin/sales-chart";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { DashboardData } from "@/lib/api/types";
 import { humanise, money, moneyCompact, percent } from "@/lib/format";
 

@@ -1,18 +1,20 @@
 /**
- * API access.
+ * Browser-safe API access.
  *
- * Server components call the API directly over the private network using the
- * access token from an httpOnly cookie (ADR-0005). The browser never sees a
- * token: client components call same-origin Next.js route handlers under
- * /api/proxy, which attach it.
+ * SAFE TO IMPORT ANYWHERE. Nothing here touches `next/headers`, so a
+ * `"use client"` component can import it without dragging server-only code
+ * into the browser bundle.
+ *
+ * Server components and route handlers use `apiServer` from ./server, which
+ * reads the httpOnly access-token cookie and calls the API over the private
+ * network (ADR-0005). The browser never sees a token: it calls the same-origin
+ * /api/proxy route handler, which attaches it.
  */
-import { cookies } from "next/headers";
 
 export const ACCESS_COOKIE = "rangon_access";
 export const REFRESH_COOKIE = "rangon_refresh";
 export const CART_COOKIE = "rangon_cart";
 
-const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 export const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
 export interface ApiErrorBody {
@@ -57,39 +59,6 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
   idempotencyKey?: string;
 }
 
-/**
- * Server-side fetch. Only ever called from server components and route
- * handlers — importing `next/headers` makes that structural, not a convention.
- */
-export async function apiServer<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, revalidate, tags, auth = true, cartToken, idempotencyKey, ...rest } = options;
-
-  const headers = new Headers(rest.headers);
-  headers.set("Content-Type", "application/json");
-  headers.set("Accept", "application/json");
-
-  if (auth) {
-    const store = await cookies();
-    const token = store.get(ACCESS_COOKIE)?.value;
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
-  if (cartToken) headers.set("X-Cart-Token", cartToken);
-  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
-
-  const response = await fetch(`${INTERNAL_URL}${path}`, {
-    ...rest,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    next:
-      revalidate === undefined || revalidate === false
-        ? { tags }
-        : { revalidate, tags },
-    cache: revalidate === undefined || revalidate === false ? "no-store" : undefined,
-  });
-
-  return handle<T>(response);
-}
-
 async function handle<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
 
@@ -130,18 +99,4 @@ export async function apiClient<T>(
   });
 
   return handle<T>(response);
-}
-
-/** Is the visitor signed in? (Presence of the cookie, not a validity check.) */
-export async function isAuthenticated(): Promise<boolean> {
-  const store = await cookies();
-  return Boolean(store.get(ACCESS_COOKIE)?.value);
-}
-
-export async function currentUser<T = unknown>(): Promise<T | null> {
-  try {
-    return await apiServer<T>("/auth/me/");
-  } catch {
-    return null;
-  }
 }

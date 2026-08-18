@@ -1,5 +1,5 @@
 import { PosRegister } from "@/components/pos/register";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { PosSession } from "@/lib/api/types";
 
 export default async function PosPage() {

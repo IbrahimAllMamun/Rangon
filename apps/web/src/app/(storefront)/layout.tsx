@@ -4,7 +4,7 @@ import { LogoLink } from "@/components/brand/logo";
 import { CartButton } from "@/components/commerce/cart-button";
 import { MobileNav } from "@/components/commerce/mobile-nav";
 import { SearchBar } from "@/components/commerce/search-bar";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 
 interface NavCategory {
   name: string;

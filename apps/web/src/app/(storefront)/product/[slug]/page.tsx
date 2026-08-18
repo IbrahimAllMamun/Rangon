@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { ProductBuyPanel } from "@/components/commerce/product-buy-panel";
 import { ProductGallery } from "@/components/commerce/product-gallery";
 import { ProductGrid } from "@/components/commerce/product-card";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 import { dateOnly } from "@/lib/format";
 

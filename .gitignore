@@ -26,6 +26,7 @@ coverage.xml
 node_modules/
 .next/
 out/
+build-output.log
 .turbo/
 *.tsbuildinfo
 npm-debug.log*
@@ -46,3 +47,6 @@ Thumbs.db
 # --- local infra ---
 /infrastructure/docker/certs/
 /backups/
+
+# Windows null-device artifact, created if a command redirects to `nul`
+nul

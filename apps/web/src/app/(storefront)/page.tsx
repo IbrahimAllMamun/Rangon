@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { ProductGrid } from "@/components/commerce/product-card";
 import { Button } from "@/components/ui/primitives";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 
 interface HomePayload {

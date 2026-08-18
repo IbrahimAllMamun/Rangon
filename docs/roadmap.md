@@ -27,7 +27,7 @@ run, 155 backend tests passing, `ruff` clean, frontend typecheck passing.
 | 14 | Cart | ✅ | ✅ | Server-authoritative, re-priced on every read, drawer + full page |
 | 15 | Checkout | ✅ | ✅ | Idempotency keys, reservation, COD, server-side totals, error summary |
 | 16 | Online payments | 🟡 | 🟡 | Abstraction + COD complete. **No live gateway** — the card option is disabled in the UI |
-| 17 | Orders | ✅ | 🟡 | Status machine, timeline, invoice/packing-slip payloads. Admin list built; **no order detail page** |
+| 17 | Orders | ✅ | ✅ | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip |
 | 18 | Shipping | ✅ | 🟡 | Zones, methods, shipments, courier-ready interface. Checkout picks a method; no admin screens |
 | 19 | Coupons | ✅ | 🟡 | Full engine + API; cart can apply/remove. No admin coupon screens |
 | 20 | Wishlist + reviews | ✅ | 🟡 | API complete, reviews render on the product page. No wishlist page, no moderation UI |
@@ -62,17 +62,17 @@ frontend typecheck (tsc --noEmit) ..... clean
    tests. COD works today; the card option is visibly disabled rather than pretending to work.
 2. **Admin CRUD screens** for products, purchasing, customers, returns, coupons and reports. The APIs
    are complete and tested — this is frontend work, not backend work.
-3. **Admin order detail page** (status changes, refunds, invoice/packing slip printing). The endpoints
-   exist; `/admin/orders/[id]` does not.
-4. **Run the E2E suite** against a seeded stack and wire it into CI.
-5. **Restore rehearsal.** A backup that has never been restored is not a backup.
-6. **Load test** product listing, checkout and POS search at expected peak; add the
+3. **Run the E2E suite** against a seeded stack and wire it into CI.
+4. **Restore rehearsal.** A backup that has never been restored is not a backup.
+5. **Load test** product listing, checkout and POS search at expected peak; add the
    `assertNumQueries` budgets from `docs/database/indexing.md` as real tests.
-7. **Independent security review.**
-8. **SMS provider** for order notifications.
-9. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired).
+6. **Independent security review.**
+7. **SMS provider** for order notifications.
+8. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired).
 
 ## Suggested next task
 
-Build `/admin/orders/[id]`. It is the screen the shop will use every single day, every endpoint it
-needs is already built and tested, and it closes the loop between the storefront and the back office.
+Admin product create/edit. It is the last screen that forces someone into the API to do everyday work:
+adding a product, generating its variant matrix and setting prices. `POST /products/`,
+`POST /products/{id}/generate-variants/` and `POST /products/{id}/publish/` are built and tested — this
+is a form, not new business logic.

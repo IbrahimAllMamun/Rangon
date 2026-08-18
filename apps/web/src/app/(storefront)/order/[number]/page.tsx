@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { Badge, Card } from "@/components/ui/primitives";
-import { apiServer } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { Order } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 

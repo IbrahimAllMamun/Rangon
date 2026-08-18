@@ -1,7 +1,10 @@
-# syntax=docker/dockerfile:1.7
 # ---------------------------------------------------------------------------
 # Production image for the Rangon web app (storefront + admin + POS).
 # deps -> build -> minimal standalone runtime.
+#
+# No `# syntax=` directive on purpose: nothing here needs a Dockerfile frontend
+# newer than the built-in one, and pulling an external frontend adds a network
+# dependency (and a failure mode) to every build.
 # ---------------------------------------------------------------------------
 
 FROM node:22-alpine AS deps

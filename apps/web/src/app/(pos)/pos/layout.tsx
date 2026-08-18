@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { currentUser, isAuthenticated } from "@/lib/api/client";
+import { currentUser, isAuthenticated } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 
 export const metadata = {

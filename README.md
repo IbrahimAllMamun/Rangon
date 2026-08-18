@@ -114,9 +114,17 @@ Frontend:
 docker compose exec web npm run dev
 docker compose exec web npm run lint
 docker compose exec web npm run typecheck
+docker compose exec web npm run test                  # Vitest unit/component
 docker compose exec web npm run build
-docker compose exec web npm run test:e2e              # Playwright
+docker compose exec web npm run test:e2e              # Playwright, needs a seeded stack
 ```
+
+`apps/web/package-lock.json` is committed and CI installs with `npm ci`, so every environment gets
+byte-identical dependencies. Never delete it or install with `npm install` in CI.
+
+> On Windows, `npm run build` through the bind-mounted dev container is very slow. Building the
+> production image (`docker compose build web`) copies the source in instead and is the faster path —
+> it is also exactly what CI does.
 
 Tests in a throwaway containerised environment (what CI runs):
 

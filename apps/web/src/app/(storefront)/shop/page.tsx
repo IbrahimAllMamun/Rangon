@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { FilterPanel } from "@/components/commerce/filter-panel";
-import { ProductCardSkeleton, ProductGrid } from "@/components/commerce/product-card";
+import { ProductGrid } from "@/components/commerce/product-card";
 import { EmptyState } from "@/components/ui/primitives";
-import { apiServer, type Paginated } from "@/lib/api/client";
+import { type Paginated } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -182,14 +183,4 @@ function titleise(slug: string) {
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-export function ShopLoading() {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4">
-      {Array.from({ length: 8 }).map((_, index) => (
-        <ProductCardSkeleton key={index} />
-      ))}
-    </div>
-  );
 }

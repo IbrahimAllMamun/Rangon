@@ -3,7 +3,8 @@ import Link from "next/link";
 import { PageHeader } from "@/components/admin/shell";
 import { StockBadge } from "@/components/admin/status-badge";
 import { Card, EmptyState } from "@/components/ui/primitives";
-import { apiServer, type Paginated } from "@/lib/api/client";
+import { type Paginated } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import type { InventoryRow } from "@/lib/api/types";
 import { money } from "@/lib/format";
 

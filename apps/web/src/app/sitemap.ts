@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 
-import { apiServer, type Paginated } from "@/lib/api/client";
+import { type Paginated } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 

@@ -2,7 +2,8 @@ import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Card, EmptyState } from "@/components/ui/primitives";
-import { apiServer, type Paginated } from "@/lib/api/client";
+import { type Paginated } from "@/lib/api/client";
+import { apiServer } from "@/lib/api/server";
 import { dateOnly, money } from "@/lib/format";
 
 export const metadata = { title: "Products" };

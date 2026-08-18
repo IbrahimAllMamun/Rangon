@@ -98,7 +98,6 @@ Backend APIs are complete and tested for all of these; what is missing is the ad
 |---|---|---|
 | Live payment gateway | COD works; the card option is visibly **disabled**, not faked | `orders/payments/providers/base.py` |
 | Admin product/purchase/customer/returns/coupon/report screens | Every operation is available through the API and tested | `docs/api/endpoints.md` |
-| Admin order detail page | Order list works; detail actions are API-only for now | `/api/v1/orders/{id}/…` |
 | Offline POS | Explicitly V2 in the plan; needs an oversell exception report first | `architecture/offline-pos.md` |
 | SMS notifications | Email + in-app work | `notifications/tasks.py` |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
@@ -130,8 +129,9 @@ implemented so the system runs; each one is a business call, not a technical one
 
 ## 8. Next three tasks, in order
 
-1. **`/admin/orders/[id]`** — the screen the shop touches daily. Every endpoint it needs already
-   exists and is tested.
+1. **Admin product create/edit.** The last everyday job that still forces someone into the API.
+   `POST /products/`, `/generate-variants/` and `/publish/` are built and tested — this is a form,
+   not new business logic.
 2. **Run the Playwright suite** (`apps/web/e2e/`) against a seeded stack and add it to CI.
 3. **One real payment gateway**, end to end, with webhook signature verification and replay tests.
 

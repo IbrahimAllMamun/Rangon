@@ -62,7 +62,7 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
       {/* Sidebar: brand red marks the active item only, never the whole panel. */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-64 shrink-0 border-r border-border bg-neutral-950 transition-transform duration-normal ease-rangon lg:static lg:translate-x-0",
+          "no-print fixed inset-y-0 left-0 z-50 w-64 shrink-0 border-r border-border bg-neutral-950 transition-transform duration-normal ease-rangon lg:static lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -128,7 +128,8 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-surface px-4">
+        {/* Chrome is hidden when printing an invoice or packing slip. */}
+        <header className="no-print sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-surface px-4">
           <Button
             variant="ghost"
             size="icon"

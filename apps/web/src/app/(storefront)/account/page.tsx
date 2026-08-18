@@ -4,7 +4,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { Card } from "@/components/ui/primitives";
-import { currentUser, isAuthenticated } from "@/lib/api/client";
+import { currentUser, isAuthenticated } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 
 export const metadata: Metadata = {

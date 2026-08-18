@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Development image: full dependency tree, source bind-mounted, fast refresh.
 FROM node:22-alpine
 
