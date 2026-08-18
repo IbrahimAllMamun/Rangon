@@ -6,7 +6,8 @@ built before the product/variant/inventory/order architecture is stable.
 Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started
 
 **Verified** means it was actually executed: migrations applied from an empty database, `seed_demo`
-run, 155 backend tests passing, `ruff` clean, frontend typecheck passing.
+run, 167 backend tests passing, `ruff` clean, frontend typecheck passing, and the three surfaces
+serving real requests from the host.
 
 | # | Phase | Backend | Frontend | Notes |
 |---|---|---|---|---|
@@ -50,9 +51,12 @@ run, 155 backend tests passing, `ruff` clean, frontend typecheck passing.
 migrations from empty database ........ OK (all 12 apps)
 seed_demo --reset ..................... 12 products, 72 variants, 2 POs, 40 orders
 ledger integrity after seeding ........ 0 drift
-pytest ................................ 155 passed (148 unit/service/API + 7 concurrency)
+pytest ................................ 167 passed (160 unit/service/API + 7 concurrency)
 ruff check + ruff format .............. clean
 frontend typecheck (tsc --noEmit) ..... clean
+storefront / admin / POS served ....... 200 from the Windows host
+live POS sale through the web proxy ... RGN-POS-000025 DELIVERED PAID
+all 10 admin routes ................... 200 (no dead sidebar links)
 ```
 
 ## Gaps to close before go-live
