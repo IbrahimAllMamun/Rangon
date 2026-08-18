@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { LogoLink } from "@/components/brand/logo";
 import { CartButton } from "@/components/commerce/cart-button";
@@ -69,7 +70,11 @@ export default async function StorefrontLayout({ children }: { children: React.R
             </nav>
 
             <div className="ml-auto flex items-center gap-1">
-              <SearchBar />
+              {/* SearchBar reads ?q= via useSearchParams; without this boundary the
+                  whole layout bails out of static rendering at build time. */}
+              <Suspense fallback={<div className="h-10 w-10" aria-hidden />}>
+                <SearchBar />
+              </Suspense>
               <Link
                 href="/account"
                 className="hidden rounded-md p-2 text-neutral-700 hover:bg-neutral-100 sm:inline-flex"
