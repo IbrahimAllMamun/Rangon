@@ -46,6 +46,30 @@ def _cart_for(request: Request):
     )
 
 
+#: Everything `_product_payload` touches beyond the product row itself.
+#:
+#: It reads `product.category`, `product.brand`, `product.images`, and for each
+#: variant every attribute link plus that link's attribute *and* attribute value.
+#: A queryset that feeds the payload without these turns one page into hundreds
+#: of queries: the listing once issued 363, and the home page 511, because each
+#: call site prefetched its own guess at the right depth. Route querysets through
+#: `_payload_queryset` instead of hand-rolling a fifth variation.
+#: Budgets: docs/database/indexing.md. Guard: tests/test_performance.py.
+_PAYLOAD_SELECT_RELATED = ("category", "brand")
+_PAYLOAD_PREFETCH_RELATED = (
+    "images",
+    "variants__attribute_values__attribute",
+    "variants__attribute_values__attribute_value",
+)
+
+
+def _payload_queryset(queryset: Any) -> Any:
+    """Attach every relation `_product_payload` reads. Safe before slicing."""
+    return queryset.select_related(*_PAYLOAD_SELECT_RELATED).prefetch_related(
+        *_PAYLOAD_PREFETCH_RELATED
+    )
+
+
 def _product_payload(product: Product, *, request: Request, snapshots: dict) -> dict[str, Any]:
     images = [
         {
@@ -131,7 +155,9 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         )
 
     def list(self, request: Request) -> Response:
-        queryset = self.get_queryset()
+        # Prefetches resolve after pagination slices, so only the rows actually
+        # returned are fetched.
+        queryset = _payload_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         products = page if page is not None else list(queryset)
 
@@ -145,16 +171,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         return self.get_paginated_response(payload) if page is not None else Response(payload)
 
     def retrieve(self, request: Request, slug: str | None = None) -> Response:
-        product = (
-            visible_products()
-            .prefetch_related(
-                "images",
-                "variants__attribute_values__attribute_value",
-                "variants__attribute_values__attribute",
-            )
-            .filter(slug=slug)
-            .first()
-        )
+        product = _payload_queryset(visible_products()).filter(slug=slug).first()
         if product is None:
             raise NotFound("That product is not available.")
 
@@ -181,12 +198,9 @@ class ShopProductViewSet(viewsets.GenericViewSet):
                 for review in reviews[:20]
             ],
         }
-        related = (
-            visible_products()
-            .filter(category=product.category)
-            .exclude(pk=product.pk)
-            .prefetch_related("images", "variants")[:8]
-        )
+        related = _payload_queryset(
+            visible_products().filter(category=product.category).exclude(pk=product.pk)
+        )[:8]
         related_snapshots = inventory_services.availability(
             branch=branch,
             variants=list(ProductVariant.objects.filter(product__in=related)),
@@ -318,7 +332,7 @@ class ShopHomeView(APIView):
                 for product in products
             ]
 
-        base = visible_products().prefetch_related("images", "variants__attribute_values")
+        base = _payload_queryset(visible_products())
 
         best_sellers = (
             base.annotate(sold=Count("variants__order_items"))

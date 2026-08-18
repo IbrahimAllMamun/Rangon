@@ -78,6 +78,123 @@
       transform: translateX(100%);
     }
   }
+
+  /* Route-transition bar. Indeterminate: it cannot know real progress, so it
+     eases out and parks short of the end, then snaps to full on arrival.
+     Scales a transform rather than animating width — width relayouts every
+     frame, and this runs during the busiest moment in the app. */
+  .route-progress {
+    animation: route-progress 6s var(--ease) forwards;
+  }
+
+  @keyframes route-progress {
+    0% {
+      transform: scaleX(0.03);
+    }
+    25% {
+      transform: scaleX(0.38);
+    }
+    55% {
+      transform: scaleX(0.66);
+    }
+    80% {
+      transform: scaleX(0.84);
+    }
+    100% {
+      transform: scaleX(0.93);
+    }
+  }
+
+  /* Content entrance on arrival. Keyed by pathname so it replays per screen
+     and the new page reads as *arriving* rather than snapping into place.
+     Opacity plus a 6px lift only: nothing that can shift the layout below it. */
+  .route-fade {
+    animation: route-fade var(--duration-normal) var(--ease) both;
+  }
+
+  @keyframes route-fade {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* A region whose content is being replaced by a navigation: it stays exactly
+     where it is and dims, so the eye keeps its place and nothing reflows. */
+  .is-stale {
+    opacity: 0.45;
+    filter: saturate(0.75);
+    pointer-events: none;
+    transition:
+      opacity var(--duration-normal) var(--ease),
+      filter var(--duration-normal) var(--ease);
+  }
+
+}
+
+/* --- brand loader -----------------------------------------------------
+   The mark traces itself, then the solid logo fills in. Lives here rather
+   than in `<style jsx>` inside the component for one concrete reason:
+   Turbopack applies styled-jsx's generated class names but never injects its
+   CSS, so under `next dev --turbopack` the loader rendered as a dead, static
+   shape. Plain CSS works identically under both bundlers.
+   `speed` still works: the component writes --ll-duration/--ll-delay inline. */
+.logo-loader {
+  --ll-duration: 2.2s;
+  --ll-delay: 0.28s;
+  display: inline-flex;
+  line-height: 0;
+}
+.logo-loader .ll-trace {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 5;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: ll-draw var(--ll-duration) ease-in-out infinite;
+}
+.logo-loader .ll-fill {
+  fill: currentColor;
+  opacity: 0;
+  animation: ll-fill var(--ll-duration) ease-in-out infinite;
+}
+/* The second glyph follows the first rather than drawing on top of it. */
+.logo-loader .ll-second {
+  animation-delay: var(--ll-delay);
+}
+@keyframes ll-draw {
+  0% {
+    stroke-dashoffset: 100;
+    opacity: 1;
+  }
+  45% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  70%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+
+@keyframes ll-fill {
+  0%,
+  42% {
+    opacity: 0;
+  }
+  62%,
+  86% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 }
 
 /* Motion is a courtesy, not a requirement (WCAG 2.3.3). */
@@ -92,6 +209,18 @@
   }
   .skeleton::after {
     display: none;
+  }
+
+  /* Without this the loader would *vanish*: the rule above leaves
+     `animation-name: ll-fill` in place while forcing the duration to 0.01ms and
+     one iteration, so the mark lands on the 100% keyframe — opacity 0. Kill the
+     animation outright and show the solid logo instead. */
+  .logo-loader .ll-trace {
+    display: none;
+  }
+  .logo-loader .ll-fill {
+    animation-name: none;
+    opacity: 1;
   }
 }
 

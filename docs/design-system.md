@@ -4,24 +4,28 @@ Derived from plan §57–86. Implemented as CSS custom properties in
 `apps/web/src/styles/tokens.css` and surfaced to Tailwind in `apps/web/tailwind.config.ts`.
 **Never write a raw hex value in a component.**
 
+## Always Do First
+
+- **Invoke the `ui-ux-pro-max-skill` and `frontend-ui-animator`skill** before writing any frontend code, every session, no exceptions.
+
 ## Brand
 
 Black + white + Rangon red is the signature. Red means *action, emphasis, identity* — not background.
 
-| Token | Hex | Use |
-|---|---|---|
-| `brand-50` | `#FFF4F1` | subtle tint |
+| Token         | Hex         | Use                           |
+| ------------- | ----------- | ----------------------------- |
+| `brand-50`  | `#FFF4F1` | subtle tint                   |
 | `brand-100` | `#FFE7E1` | soft brand background, badges |
-| `brand-400` | `#FF5C33` | highlight, focus glow |
-| `brand-500` | `#FD3807` | **primary action** |
-| `brand-600` | `#E22D04` | hover |
-| `brand-700` | `#C42503` | active/pressed |
+| `brand-400` | `#FF5C33` | highlight, focus glow         |
+| `brand-500` | `#FD3807` | **primary action**      |
+| `brand-600` | `#E22D04` | hover                         |
+| `brand-700` | `#C42503` | active/pressed                |
 
 > `brand-500` is taken from the official logo vector (`logo.svg` → `#FD3807`).
 > The build plan quoted `#FB3208` as an eyedropper approximation and said the
 > production asset wins. The rest of the ramp is derived from `#FD3807`.
-| `black` | `#000000` | brand foundation, POS header, logo lockup |
-| `white` | `#FFFFFF` | surfaces, logo text |
+> | `black` | `#000000` | brand foundation, POS header, logo lockup |
+> | `white` | `#FFFFFF` | surfaces, logo text |
 
 Neutrals: `neutral-950 #0A0A0A`, `900 #111111`, `800 #1C1C1C`, `700 #2B2B2B`, `600 #525252`,
 `500 #737373`, `400 #A3A3A3`, `300 #D4D4D4`, `200 #E5E5E5`, `100 #F5F5F5`, `50 #FAFAFA`.
@@ -32,11 +36,11 @@ large decorative areas.
 
 ## Surfaces
 
-| | Background | Card | Text | Muted | Border |
-|---|---|---|---|---|---|
+|            | Background  | Card        | Text        | Muted       | Border      |
+| ---------- | ----------- | ----------- | ----------- | ----------- | ----------- |
 | Storefront | `#FAFAFA` | `#FFFFFF` | `#111111` | `#737373` | `#E5E5E5` |
-| Admin | `#F5F5F5` | `#FFFFFF` | `#171717` | `#737373` | `#E5E5E5` |
-| POS | `#F5F5F5` | `#FFFFFF` | `#111111` | `#525252` | `#D4D4D4` |
+| Admin      | `#F5F5F5` | `#FFFFFF` | `#171717` | `#737373` | `#E5E5E5` |
+| POS        | `#F5F5F5` | `#FFFFFF` | `#111111` | `#525252` | `#D4D4D4` |
 
 Same design language, different density. Storefront = whitespace + photography. Admin = data density.
 POS = contrast + speed.
@@ -48,18 +52,18 @@ POS = contrast + speed.
 --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;            /* headlines only */
 ```
 
-| Token | Size / line-height / weight | Use |
-|---|---|---|
-| `display-xl` | 56 / 1.05 / 700 | storefront hero (mobile: 36) |
-| `display-lg` | 44 / 1.10 / 700 | campaign heading (mobile: 32) |
-| `h1` | 36 / 1.15 / 700 | page heading |
-| `h2` | 30 / 1.20 / 700 | section |
-| `h3` | 24 / 1.25 / 650 | subsection |
-| `h4` | 20 / 1.30 / 600 | card heading |
-| `body-lg` | 18 / 1.55 / 400 | lead |
-| `body` | 16 / 1.50 / 400 | default |
-| `body-sm` | 14 / 1.45 / 400 | secondary |
-| `caption` | 12 / 1.40 / 500 | metadata |
+| Token          | Size / line-height / weight | Use                           |
+| -------------- | --------------------------- | ----------------------------- |
+| `display-xl` | 56 / 1.05 / 700             | storefront hero (mobile: 36)  |
+| `display-lg` | 44 / 1.10 / 700             | campaign heading (mobile: 32) |
+| `h1`         | 36 / 1.15 / 700             | page heading                  |
+| `h2`         | 30 / 1.20 / 700             | section                       |
+| `h3`         | 24 / 1.25 / 650             | subsection                    |
+| `h4`         | 20 / 1.30 / 600             | card heading                  |
+| `body-lg`    | 18 / 1.55 / 400             | lead                          |
+| `body`       | 16 / 1.50 / 400             | default                       |
+| `body-sm`    | 14 / 1.45 / 400             | secondary                     |
+| `caption`    | 12 / 1.40 / 500             | metadata                      |
 
 Hierarchy comes from weight (400 body, 500 labels/nav, 600 buttons, 700 headings), not from many
 colours. No 800/900. Never set Space Grotesk on tables or paragraphs. Financial figures use
@@ -108,6 +112,46 @@ toasts, gallery changes — never decoration. POS animations are limited to inst
   animation-duration:.01ms !important; transition-duration:.01ms !important; } }
 ```
 
+### Waiting: which loader, and when
+
+The brand mark is the only loading animation in the product (`LogoLoader`). What differs is *where*
+it appears, and that is decided by how long the wait is and whether the screen is being replaced.
+
+| Wait | Treatment | Why |
+|---|---|---|
+| 0–480 ms | Progress bar at the top of the viewport, nothing else | Answers "did my click land?" within a frame. A full loader for a 90 ms navigation reads as a glitch |
+| > 480 ms, whole screen changing | `LogoLoaderOverlay` — brand mark over a dimmed, blurred page, pointer blocked | The destination is not there yet, and a second click would queue another navigation onto the slow one |
+| > 480 ms, one region changing | `PendingRegion` — the region dims in place, mark centred over it | Filtering a list is not an arrival. Replacing the grid with a loader throws away the reader's place and relayouts the page |
+| Route segment streaming | `loading.tsx` → `LogoLoaderScreen` | Next's own Suspense boundary; the same mark, so all three surfaces agree |
+| Blocking mutation (checkout) | `LogoLoaderOverlay`, 350 ms delay, held through the redirect | Money is moving; the loader must not blink off between the response and the confirmation page |
+
+Two rules govern every loader: **delay before showing** (~480 ms, 350 ms for known-slow work) so fast
+work never flashes one, and **a minimum visible time** (~400 ms) so it cannot appear and vanish within
+a blink. Both live in `useDelayedFlag`.
+
+`LogoLoader`'s keyframes live in `styles/globals.css` under `.logo-loader`, **not** in a `<style jsx>`
+block inside the component, and not inside `@layer components`. Two separate reasons, both found the
+hard way:
+
+- Turbopack applies styled-jsx's generated class names but never injects its CSS, so under
+  `next dev --turbopack` the loader rendered as a dead, unstyled shape — animating nothing.
+- Tailwind tree-shakes `@layer components`, and the content glob did not include `.jsx`, so the rules
+  were stripped from the bundle while the class names survived. Same silent failure, different cause.
+
+Plain global CSS is immune to both. `speed` still works: the component writes `--ll-duration` and
+`--ll-delay` inline. Reduced motion needs an explicit `animation-name: none` on the fill paths — the
+global flattening rule would otherwise leave the mark parked on its `opacity: 0` keyframe, i.e.
+invisible.
+
+**Same-segment navigations are the trap.** `loading.tsx` fires only when a navigation crosses into a
+segment that has one. Changing just the query string — `/shop?category=…`, `/admin/orders?status=…`,
+page 2 — re-renders the same segment with no Suspense boundary, so React holds the old screen on
+display until the server answers. Untreated, that is indistinguishable from a frozen app. Route those
+pushes through `useRouteTransition().navigate` and wrap the affected region in `PendingRegion`.
+
+The POS is exempt from arrival animation: no route fade, no content transition. A cashier mid-scan
+waits for nothing (`CLAUDE.md` §10, §13).
+
 ## Imagery
 
 Product images 4:5, consistent treatment, `next/image` with responsive `sizes`, descriptive alt text
@@ -125,12 +169,12 @@ text and UI components), semantic landmarks, labelled icon-only buttons, dialogs
 Official vectors live in `public/brand/logo/`; `src/components/brand/logo.tsx` is the only component
 allowed to render them.
 
-| Surface | Variant | Asset |
-|---|---|---|
-| Storefront navbar (white) | `full-on-light` | `logo_full_dark.svg` |
-| Storefront footer (near-black) | `vertical-on-dark` | `logo_vertical_light.svg` |
-| Admin sidebar, POS header (near-black) | `full-on-dark` | `logo_full_light.svg` |
-| Browser tab, app icon | `symbol` | `logo.svg` |
+| Surface                                | Variant              | Asset                       |
+| -------------------------------------- | -------------------- | --------------------------- |
+| Storefront navbar (white)              | `full-on-light`    | `logo_full_dark.svg`      |
+| Storefront footer (near-black)         | `vertical-on-dark` | `logo_vertical_light.svg` |
+| Admin sidebar, POS header (near-black) | `full-on-dark`     | `logo_full_light.svg`     |
+| Browser tab, app icon                  | `symbol`           | `logo.svg`                |
 
 Naming reads as *the colour of the wordmark*, so `_dark` goes on white and `_light` goes on black.
 `Logo` takes a **height** and derives the width from the asset's own aspect ratio, so the mark cannot

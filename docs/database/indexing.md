@@ -83,14 +83,35 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 
 ## Query budgets (enforced in tests)
 
-| Endpoint | Max queries |
-|---|---|
-| `GET /shop/products/` (25 items) | 8 |
-| `GET /shop/products/{slug}/` | 10 |
-| `GET /pos/lookup/` | 4 |
-| `POST /pos/sales/` (3 lines) | 30 |
-| `GET /orders/` (25 orders) | 10 |
-| `GET /reports/dashboard/` | 15 |
+| Endpoint | Budget | Enforced? | Measured | Was |
+|---|---|---|---|---|
+| `GET /shop/home/` | 45 | **yes** | 27 · 0.26 s | **511 · 2.42 s** |
+| `GET /shop/products/` | 25 | **yes** | 11 · 0.10 s | **363 · 1.29 s** |
+| `GET /shop/products/{slug}/` | 10 | no | 13 · 0.05 s | 15 |
+| `GET /pos/lookup/` | 4 | no | — | — |
+| `POST /pos/sales/` (3 lines) | 30 | no | — | — |
+| `GET /orders/` (25 orders) | 10 | no | — | — |
+| `GET /reports/dashboard/` | 15 | no | — | — |
 
-`apps/api/tests/test_performance.py` asserts these with `assertNumQueries`, so an accidental N+1 fails
-CI instead of surfacing in production.
+Only the first two rows are asserted, in `apps/api/tests/test_performance.py`. The rest are intentions,
+not guarantees — do not cite them as evidence. Note that product detail measures **13** against a
+documented budget of 10: the budget was never measured, and nothing enforces it yet. Either raise it
+deliberately or bring the endpoint down, but do not leave the doc claiming a number the code misses.
+
+All three storefront read paths serialise through `_product_payload`, so they share one failure mode.
+`orders/api/shop_views._payload_queryset` is now the single place that declares the relations that
+serialiser needs; every product queryset feeding it goes through that helper. The N+1s above existed
+because four call sites each prefetched their own guess at the right depth — the home page stopped one
+hop short (`variants__attribute_values`, but not its `attribute` and `attribute_value`), and the listing
+prefetched nothing at all.
+
+That distinction is not academic. This table previously claimed the listing was capped at 8 queries and
+that the whole set was `assertNumQueries`-enforced. Neither was true: the test file did not exist, and
+the listing was in fact issuing **363 queries per page** (1.3 s) because the list path never prefetched
+the variant attribute relations its serialiser reads — while the *detail* path, using the same
+serialiser, always had. The budget above is the measured figure plus headroom, and the test that guards
+it asserts something stronger than a constant: that the count **does not grow with catalogue size**. A
+budget can be quietly raised; a growth check cannot be satisfied by an N+1 at all.
+
+The remaining rows are the obvious next tests. Each one written is one fewer place a regression can
+hide behind documentation.

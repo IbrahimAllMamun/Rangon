@@ -1,13 +1,14 @@
 "use client";
 
 import { Search, X } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/primitives";
+import { useRouteTransition } from "@/lib/navigation/route-transition";
 
 export function SearchBar() {
-  const router = useRouter();
+  const { navigate, pending } = useRouteTransition();
   const params = useSearchParams();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(params.get("q") ?? "");
@@ -21,7 +22,9 @@ export function SearchBar() {
     event.preventDefault();
     const trimmed = query.trim();
     if (!trimmed) return;
-    router.push(`/shop?q=${encodeURIComponent(trimmed)}`);
+    // Searching from /shop only changes the query string, so nothing suspends
+    // and no loading.tsx fires — the transition is the only feedback there is.
+    navigate(`/shop?q=${encodeURIComponent(trimmed)}`);
     setOpen(false);
   }
 
@@ -52,7 +55,9 @@ export function SearchBar() {
               placeholder="Search for shirts, sneakers, lipstick…"
               className="h-11 flex-1 rounded-md border border-neutral-300 px-4 text-body focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-[var(--ring)]"
             />
-            <Button type="submit">Search</Button>
+            <Button type="submit" loading={pending}>
+              Search
+            </Button>
             <Button
               type="button"
               variant="ghost"

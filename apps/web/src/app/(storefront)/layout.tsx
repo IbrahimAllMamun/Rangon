@@ -5,6 +5,7 @@ import { LogoLink } from "@/components/brand/logo";
 import { CartButton } from "@/components/commerce/cart-button";
 import { MobileNav } from "@/components/commerce/mobile-nav";
 import { SearchBar } from "@/components/commerce/search-bar";
+import { RouteFade } from "@/components/ui/route-fade";
 import { apiServer } from "@/lib/api/server";
 
 interface NavCategory {
@@ -89,7 +90,7 @@ export default async function StorefrontLayout({ children }: { children: React.R
       </header>
 
       <main id="main" className="flex-1">
-        {children}
+        <RouteFade>{children}</RouteFade>
       </main>
 
       <footer className="mt-16 border-t border-border bg-neutral-950 text-neutral-300">

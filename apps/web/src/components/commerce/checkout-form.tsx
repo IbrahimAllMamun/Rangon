@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { LogoLoaderOverlay } from "@/components/brand/logo-loader-overlay";
 import {
   Button,
   Card,
@@ -179,6 +180,12 @@ export function CheckoutForm() {
 
   return (
     <form onSubmit={submit} noValidate className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
+      {/* The longest wait in the app, and the one where a second click costs
+          real money. `submitting` is deliberately never cleared on success, so
+          the loader carries straight through to the confirmation page instead
+          of blinking off while the router navigates. */}
+      <LogoLoaderOverlay active={submitting} label="Placing your order" delay={350} />
+
       <div className="space-y-6">
         <ErrorSummary errors={errors} />
 

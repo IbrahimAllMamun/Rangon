@@ -5,11 +5,21 @@ const P1 =
 const P2 =
   'M204.66,70.68l-14.15,33.49h-55.4l22.42-53.12-103.92.11L75.19.09,157.75,0c36.43-.02,61.07,37.12,46.91,70.68Z';
 
+/** Base cadence in seconds; `speed` divides these. */
+const DRAW_DURATION = 2.2;
+const SECOND_GLYPH_DELAY = 0.28;
+
 /**
  * Logo loading animation — outline traces, then the solid mark fills in.
  * <LogoLoader />
  * <LogoLoader size={140} speed={0.8} label="Loading dashboard" />
  * Defaults to the brand orange; pass color="..." or inherit by passing color="inherit".
+ *
+ * The keyframes live in `styles/globals.css` under `.logo-loader`, not in a
+ * `<style jsx>` block. Turbopack applies styled-jsx's class names but does not
+ * inject its CSS, which left this rendering as a dead static shape under
+ * `next dev --turbopack`. Plain CSS behaves the same under both bundlers, and
+ * `prefers-reduced-motion` is handled alongside it.
  */
 export default function LogoLoader({
   size = 96,
@@ -20,87 +30,25 @@ export default function LogoLoader({
   style,
 }) {
   const h = Math.round((size * 218.16) / 251.46);
-  const dur = (v) => `${v / speed}s`;
 
   return (
     <span
       role="status"
       aria-label={label}
-      className={className}
-      style={{ display: 'inline-flex', lineHeight: 0, color, ...style }}
+      className={['logo-loader', className].filter(Boolean).join(' ')}
+      style={{
+        color,
+        '--ll-duration': `${DRAW_DURATION / speed}s`,
+        '--ll-delay': `${SECOND_GLYPH_DELAY / speed}s`,
+        ...style,
+      }}
     >
       <svg viewBox="-6 -6 251.46 218.16" width={size} height={h} aria-hidden="true">
-        <path className="s" pathLength="100" d={P1} />
-        <path className="s d2" pathLength="100" d={P2} />
-        <path className="f" d={P1} />
-        <path className="f d2" d={P2} />
+        <path className="ll-trace" pathLength="100" d={P1} />
+        <path className="ll-trace ll-second" pathLength="100" d={P2} />
+        <path className="ll-fill" d={P1} />
+        <path className="ll-fill ll-second" d={P2} />
       </svg>
-
-      <style jsx>{`
-        .s {
-          fill: none;
-          stroke: currentColor;
-          stroke-width: 5;
-          stroke-dasharray: 100;
-          stroke-dashoffset: 100;
-          animation: ll-draw ${dur(2.2)} ease-in-out infinite;
-        }
-        .f {
-          fill: currentColor;
-          opacity: 0;
-          animation: ll-fill ${dur(2.2)} ease-in-out infinite;
-        }
-        .d2 {
-          animation-delay: ${dur(0.28)};
-        }
-        @keyframes ll-draw {
-          0% {
-            stroke-dashoffset: 100;
-            opacity: 1;
-          }
-          45% {
-            stroke-dashoffset: 0;
-            opacity: 1;
-          }
-          70%,
-          100% {
-            stroke-dashoffset: 0;
-            opacity: 0;
-          }
-        }
-        @keyframes ll-fill {
-          0%,
-          42% {
-            opacity: 0;
-          }
-          62%,
-          86% {
-            opacity: 1;
-          }
-          100% {
-            opacity: 0;
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .s {
-            animation: none;
-            opacity: 0;
-          }
-          .f {
-            animation: ll-fade ${dur(1.6)} ease-in-out infinite;
-            opacity: 1;
-          }
-          @keyframes ll-fade {
-            0%,
-            100% {
-              opacity: 0.35;
-            }
-            50% {
-              opacity: 1;
-            }
-          }
-        }
-      `}</style>
     </span>
   );
 }

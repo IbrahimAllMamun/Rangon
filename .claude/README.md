@@ -21,7 +21,7 @@ And in this folder:
 
 ---
 
-## State as of 2026-08-18
+## State as of 2026-08-18 (diagnosis pass on `423cdf4`)
 
 Working, running, and verified against the live stack:
 
@@ -43,29 +43,44 @@ Logins (dev seed, all `rangon12345`): `owner@`, `manager@`, `cashier@`, `stock@`
 ```text
 migrations from an empty database ..... OK, all 12 Django apps
 seed_demo --reset ..................... 12 products, 72 variants, 2 POs, 40 orders
-inventory ledger integrity ............ 0 drift
+inventory ledger integrity ............ 0 drift (re-checked after a live browser order)
 pytest ................................ 167 passed (160 + 7 threaded concurrency)
 ruff check + ruff format .............. clean
 tsc --noEmit .......................... clean
-storefront / admin / POS .............. 200 from the Windows host
+vitest ................................ 17 passed, 2 files
+production Next build ................. passes in CI and via `docker compose build web`
+GitHub Actions CI ..................... green on all four jobs at HEAD (14 runs, latest #15)
+storefront / admin / POS .............. 11 storefront 200, 10 admin/POS 307 → /login
 a real POS sale through the web proxy . RGN-POS-000025 DELIVERED PAID 2450.00
-all 10 admin routes ................... 200, no dead sidebar links
+a real browser purchase ............... RGN-WEB-000018 CONFIRMED UNPAID 2520.00 (COD)
+all 10 admin routes ................... no dead sidebar links
 ```
 
 ### Never successfully run — do not claim these work
 
-- `npm run build` (the **production** Next build). Only the dev server has run.
-  The prod image build was attempted three times and never completed: BuildKit
-  crashed once, and Windows bind-mount builds are pathologically slow.
-- `npm run test` (Vitest). Config and one test file exist; never executed.
-- `npm run test:e2e` (Playwright). Specs written for the four critical flows;
-  never executed.
-- Browser-side interaction: add-to-cart and completing a checkout as a shopper.
-  The endpoints are verified; the click-through is not.
+- `npm run test:e2e` (Playwright). Specs for the four critical flows exist, but the
+  dev image is `node:22-alpine` and Playwright has no musl browsers. Needs a glibc
+  image or a host run.
+- A signed-in pass over the admin **write** screens (organization + branches). The
+  code is there and anonymous access correctly redirects; nobody has used them.
+- Anything deployed. There is no environment, and CI builds images without pushing.
+
+### Known defects found on 2026-08-18
+
+Nine, none of them touching money or stock. Full table in `../docs/roadmap.md`:
+dead-end wishlist / reviews / notifications UI, a doubled brand suffix in product
+titles, a cart dialog with no description, 98 non-blocking mypy errors, Playwright
+blocked by Alpine, both web images sharing one tag, and a seed with no product
+images.
 
 ## Commit history
 
 ```text
+423cdf4  subtle change                                  ← CI green from here
+d312a24  fixed ci.yml error
+c347068  requirements updated
+93772f0  feat(web): LogoLoader route transition, editable settings
+03c9a45  docs: add .claude/ with the working context for this repo
 18d1078  docs: correct verified test count, record live-stack checks
 5c77f39  fix(pos): unbreak sales and holds, build the five 404ing admin pages
 9fb2c1c  fix(docker): configurable storefront host port (Windows reserves 3000)
@@ -75,11 +90,16 @@ ce9df26  fix(web): split API module so client code cannot pull in next/headers
 6a780e2  docs: constitution, architecture, operations
 ```
 
-## Next three tasks
+(23 commits total; the ones between `03c9a45` and `423cdf4` are small frontend
+fixes and CI-workflow repairs.)
 
-1. **Run the Playwright suite** against the seeded stack, fix what it finds, add to CI.
-   It covers exactly the gap above (browser-side flows).
-2. **Admin write screens** — product create/edit, receive a purchase, approve a
-   return. Every endpoint exists and is tested; this is form work.
-3. **One real payment gateway** end to end, with webhook signature verification
+## Next four tasks
+
+1. **Admin product create/edit** — the last screen that forces someone into the API
+   for everyday work. Every endpoint exists and is tested; this is form work.
+2. **Close the dead ends** — a save button, a review form, a notification bell.
+   Small, and each has a tested endpoint waiting.
+3. **Unblock Playwright** (glibc runner), then put both `npm run test` and
+   `npm run test:e2e` into CI. CI currently runs no frontend tests at all.
+4. **One real payment gateway** end to end, with webhook signature verification
    and replay tests.

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
 
+import { RouteTransitionProvider } from "@/lib/navigation/route-transition";
 import "@/styles/globals.css";
 
 const inter = Inter({
@@ -66,7 +67,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           Skip to content
         </a>
-        {children}
+        {/* Every navigation reports itself here: an immediate progress bar, and
+            the logo loader if the wait turns out to be a real one. Same-segment
+            navigations (filters, pagination) have no `loading.tsx` to fall back
+            on, so without this they look like the app has frozen. */}
+        <RouteTransitionProvider>{children}</RouteTransitionProvider>
       </body>
     </html>
   );

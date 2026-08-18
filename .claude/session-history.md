@@ -80,6 +80,55 @@ closes that seam — extend it rather than trusting service tests alone.
 
 ---
 
+---
+
+## Diagnosis pass, 2026-08-18 (commit `423cdf4`)
+
+No code was changed. The point was to test what the docs claimed, and four claims
+turned out to be stale in the good direction:
+
+- **CI had never been observed** because there was no remote. There is one now
+  (`github.com/IbrahimAllMamun/Rangon`), it has run 15 times, and it is green on
+  all four jobs at HEAD — including `npm run build`, which the docs still called
+  "never completed".
+- **The production Next build works.** It completes in CI and locally via
+  `docker compose build web`.
+- **Vitest had never been run.** It passes: 17 tests, 2 files.
+- **The browser journey had never been walked.** It works: shop → product → add
+  to cart → checkout → COD order `RGN-WEB-000018`, correct totals and timeline,
+  cart emptied, ledger still consistent afterwards.
+
+### What that pass found (D1–D9 in `../docs/roadmap.md`)
+
+The interesting ones, and why they were invisible until someone looked:
+
+9. **Three features are dead ends.** The wishlist page renders and is linked from
+   two places, but nothing in the codebase calls `POST /shop/wishlist/`. Reviews
+   render but cannot be written. Notifications have a model, an API and Celery
+   tasks, and the string "notification" appears nowhere in `apps/web/src`.
+   *Lesson: "the API is tested" and "the feature works" are different claims. A
+   route that 404s gets noticed; a page that renders and does nothing does not.*
+10. **`mypy` reports 98 errors** and CI runs it with a trailing `|| echo`, so it
+    has been passing while proving nothing. 60 are `arg-type` from DRF's
+    `request.user` being `User | AnonymousUser`.
+    *Lesson: a non-blocking check drifts to noise, then to zero information.*
+11. **Both web images share the tag `rangon-web:latest`**, so building the
+    production image silently replaces the dev one — and the production runtime
+    has npm deleted, so `npm run dev` would then fail. Recorded in
+    `environment.md` §7.
+12. **Playwright cannot run in the Alpine dev image** (no musl browsers). Phase 29
+    was not merely "not done"; it was blocked, and nothing said so.
+13. **Product titles carry the brand twice** — `seed_demo` writes
+    `seo_title = "<name> | Rangon Fashion"` and the Next root layout appends the
+    same suffix through its title template.
+
+**The pattern:** every one of these is a seam between two things that were each
+correct on their own — a tested endpoint and an untested button, a CI step and
+its `|| true`, a dev Dockerfile and a prod Dockerfile, a seed field and a title
+template. Check seams, not components.
+
+---
+
 ## Deviations from the plan (all have ADRs)
 
 | Plan said | Built | ADR |

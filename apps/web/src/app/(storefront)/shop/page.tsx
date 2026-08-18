@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { FilterPanel } from "@/components/commerce/filter-panel";
 import { ProductGrid } from "@/components/commerce/product-card";
+import { PendingRegion } from "@/components/ui/pending-region";
 import { EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
@@ -99,7 +100,11 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
       <div className="mt-8 grid gap-8 lg:grid-cols-[240px_1fr]">
         <FilterPanel facets={facets} />
 
-        <div>
+        {/* Filtering, sorting and paging all rewrite the query string, which
+            re-renders this same segment — no loading.tsx, no Suspense, no
+            visible change until the server answers. PendingRegion holds the
+            results in place and dims them so the wait is legible. */}
+        <PendingRegion label="Updating products">
           {productsResult.status === "rejected" ? (
             <div role="alert" className="rounded-lg border border-[var(--error)] bg-[var(--error-bg)] p-6">
               <h2 className="text-body font-semibold text-[var(--error)]">
@@ -108,10 +113,13 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
               <p className="mt-1 text-body-sm">Please refresh the page or try again shortly.</p>
             </div>
           ) : products && products.results.length > 0 ? (
-            <>
+            // Keyed on the query so a filter change remounts the grid and the
+            // fade replays: the results dim, the loader confirms the work, then
+            // the new set arrives visibly rather than swapping in silently.
+            <div key={JSON.stringify(params)} className="route-fade">
               <ProductGrid products={products.results} />
               <Pagination params={params} count={products.count} hasNext={Boolean(products.next)} />
-            </>
+            </div>
           ) : (
             <EmptyState
               title="Nothing matches those filters"
@@ -123,7 +131,7 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
               }
             />
           )}
-        </div>
+        </PendingRegion>
       </div>
     </div>
   );

@@ -1,11 +1,12 @@
 "use client";
 
 import { SlidersHorizontal, X } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { Button, Label, Select } from "@/components/ui/primitives";
 import { money } from "@/lib/format";
+import { useRouteTransition } from "@/lib/navigation/route-transition";
 
 interface Facets {
   brands: { slug: string; name: string; count: number }[];
@@ -27,16 +28,19 @@ const SORTS = [
 ];
 
 export function FilterPanel({ facets }: { facets: Facets | null }) {
-  const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  const { navigate, pending } = useRouteTransition();
   const [open, setOpen] = useState(false);
 
   function apply(mutate: (next: URLSearchParams) => void) {
     const next = new URLSearchParams(params.toString());
     mutate(next);
     next.delete("page"); // a new filter always returns to page 1
-    router.push(`${pathname}?${next.toString()}`);
+    // `navigate`, not `router.push`: this changes only the query string, so
+    // Next re-renders the same segment and no `loading.tsx` fires. Routing it
+    // through the transition is what turns a dead click into visible progress.
+    navigate(`${pathname}?${next.toString()}`);
   }
 
   function toggle(key: string, value: string) {
@@ -208,7 +212,7 @@ export function FilterPanel({ facets }: { facets: Facets | null }) {
             const category = params.get("category");
             if (q) next.set("q", q);
             if (category) next.set("category", category);
-            router.push(`${pathname}?${next.toString()}`);
+            navigate(`${pathname}?${next.toString()}`);
           }}
         >
           Clear filters ({activeCount})
@@ -239,7 +243,10 @@ export function FilterPanel({ facets }: { facets: Facets | null }) {
         )}
       </div>
 
-      <aside className="hidden lg:block" aria-label="Product filters">
+      {/* The controls stay live while results reload — shoppers pick two
+          filters in a row and blocking the second one is worse than waiting.
+          The feedback belongs on the results, which dim in place. */}
+      <aside className="hidden lg:block" aria-label="Product filters" aria-busy={pending || undefined}>
         <h2 className="sr-only">Filters</h2>
         {body}
       </aside>

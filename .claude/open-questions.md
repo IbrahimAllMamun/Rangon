@@ -3,14 +3,16 @@
 Two lists: decisions only the owner can make, and things no one has proven yet.
 Do not let either quietly become "done".
 
+Last reviewed: **2026-08-18** (diagnosis pass on commit `423cdf4`).
+
 ---
 
 ## 1. Decisions the owner owes
 
 Each is implemented with a documented default so the system runs. Each is a
 business call, not a technical one. Full detail in `../docs/business-rules.md`,
-marked `DECISION REQUIRED`. They are also surfaced in the app at
-`/admin/settings` so they are visible rather than buried.
+which carries **9** `DECISION REQUIRED` markers. They are also surfaced in the
+app at `/admin/settings` so they are visible rather than buried.
 
 | # | Decision | Current default | Why it matters |
 |---|---|---|---|
@@ -20,32 +22,48 @@ marked `DECISION REQUIRED`. They are also surfaced in the app at
 | 4 | Reservation expiry for unpaid online orders | 60 minutes | Releases held stock |
 | 5 | Shipping refunded on a change-of-mind return | No | Refund maths |
 | 6 | Restocking fee | None (0%) | Refund maths |
-| 7 | Which payment gateway | none — COD only | Blocks prepaid online orders |
-| 8 | Which courier, and API or manual | manual tracking | Shipping integration |
+| 7 | Where stock is deducted in the order lifecycle | at `PACKED` | Alternative is `CONFIRMED`; changes what "available" means online |
+| 8 | Formal in-transit location for transfers | none in V1 | Multi-branch transfer accuracy |
+| 9 | Whether coupons may stack | one per order | Discount maths |
+| 10 | Which payment gateway | none — COD only | Blocks prepaid online orders |
+| 11 | Which courier, and API or manual | manual tracking | Shipping integration |
 
-Ask before implementing any of these differently. Do not silently change a
-default that historical data already depends on — especially #1.
+Rows 1–9 are the `DECISION REQUIRED` markers; 10 and 11 are product choices that
+block whole features. Ask before implementing any of them differently. Do not
+silently change a default that historical data already depends on — especially #1.
 
 ---
 
-## 2. Not verified — do not claim these work
+## 2. Verified on 2026-08-18 — no longer open
+
+These were on the "never run" list. They have now been executed. The evidence is
+in `../docs/roadmap.md`.
+
+| Was unproven | Now |
+|---|---|
+| `npm run build` (production Next build) | **Passes.** CI runs it on every push, and `docker compose build web` completes locally |
+| Vitest (`npm run test`) | **17 tests pass**, 2 files, ~25 s |
+| Browser add-to-cart / checkout click-through | **Walked end to end**: shop → product → add to cart → checkout → COD order `RGN-WEB-000018` (৳2,450 + ৳70 = ৳2,520), correct timeline, cart emptied, ledger still consistent |
+| CI (`.github/workflows/ci.yml`) | **Runs.** `origin` is `github.com/IbrahimAllMamun/Rangon`; 14 runs, and the most recent (#15, on `423cdf4`) is green on backend, frontend, dependency audit and image build + Trivy scan |
+
+## 3. Not verified — do not claim these work
 
 | Area | State |
 |---|---|
-| `npm run build` (production Next build) | **Never completed.** Only the dev server has run. |
-| Vitest (`npm run test`) | Config + one test file exist; never executed |
-| Playwright (`npm run test:e2e`) | Specs for the four critical flows written; never executed |
-| Browser add-to-cart / checkout click-through | Endpoints verified; the UI journey is not |
+| Playwright (`npm run test:e2e`) | **Blocked.** The dev image is `node:22-alpine`; Playwright has no musl browser builds and none are installed. Needs a glibc runner or a host run |
+| Vitest / Playwright in CI | Neither is in `ci.yml`. The frontend job is `npm ci` → lint → typecheck → build |
+| Admin write screens, signed in | Organization + branch editors exist in code and anonymous requests correctly redirect, but nobody has signed in and used them |
 | Payment gateway | No live provider; the card option is visibly **disabled**, not faked |
-| Backup restore | Scripts and runbook written; **never rehearsed**. A backup that has never been restored is not a backup. |
+| Backup restore | Scripts and runbook written; **never rehearsed**. A backup that has never been restored is not a backup |
 | Load / performance | Query budgets documented in `docs/database/indexing.md` but **not asserted in tests**; no load test |
-| Security | Controls implemented and documented; **no independent penetration test** |
-| Deployment | Compose prod stack + CI written; no live environment |
-| CI | `.github/workflows/ci.yml` written; **never run** — no remote configured |
+| Security | Controls implemented; CI runs `pip-audit`, `npm audit` and Trivy. **No independent penetration test** |
+| Deployment | Compose prod stack + green CI; no registry push, **no live environment** |
+| `mypy` | Runs, reports **98 errors in 29 files**, and is non-blocking in CI. It currently proves nothing |
 
-## 3. Known-missing UI (APIs exist and are tested)
+## 4. Known-missing UI (APIs exist and are tested)
 
-Every admin section now has a working **list** view. Still API-only:
+Every admin section has a working **list** view, and `/admin/settings` can now
+edit the organization and create/edit branches. Still API-only:
 
 - product create/edit and variant-matrix generation
 - creating and receiving purchase orders
@@ -55,7 +73,16 @@ Every admin section now has a working **list** view. Still API-only:
 - inventory adjust / stock count from the UI
 - notification bell
 
-## 4. Deliberately out of scope
+### Three of these are worse than missing — they are dead ends
+
+The customer can see them and cannot use them. Fix or hide:
+
+- **Wishlist** — page and two nav links exist; nothing calls `POST /shop/wishlist/`
+- **Reviews** — they render and feed the JSON-LD rating; no form to write one
+- **Notifications** — model, feed API and email tasks exist; the word does not
+  appear anywhere in `apps/web/src`
+
+## 5. Deliberately out of scope
 
 - **Offline POS** — V2 by the plan. It needs an oversell exception report first,
   because it is the one case where selling below zero is legitimate. Design
@@ -73,4 +100,5 @@ this project:
 - **Tests written and passing** — and for anything with an HTTP surface, test
   the endpoint, not just the service beneath it.
 - **Run it.** A green typecheck is not evidence the app works; that mistake
-  shipped a completely broken storefront once already.
+  shipped a completely broken storefront once already. The wishlist is the same
+  mistake in a quieter form: it type-checks, renders, and does nothing.

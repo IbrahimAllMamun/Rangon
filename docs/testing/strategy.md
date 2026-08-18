@@ -19,6 +19,20 @@ Testing is mandatory (plan §34). A failing test is never deleted or skipped to 
 Concurrency and performance tests need real PostgreSQL — they never run against SQLite. The whole suite
 runs against the containerised database (`docker-compose.test.yml`), which is what CI uses.
 
+### What of that table actually exists (2026-08-18)
+
+The backend rows are real: **167 tests pass**, concurrency included. Three rows are aspirational and
+should not be read as coverage that exists:
+
+| Row | Reality |
+|---|---|
+| Performance | `apps/api/tests/test_performance.py` now exists and asserts the storefront listing's query budget. It was written after that listing was found issuing **363 queries** for one page. Other endpoints in `docs/database/indexing.md` still have no assertions, and there is no load test |
+| Component | The only frontend tests are `src/lib/format.test.ts` and `src/lib/api/server.test.ts` — 17 tests, no component or form-validation tests |
+| E2E | The specs exist but have **never been executed**; they cannot run in the dev image (`node:22-alpine` has no Playwright browsers). Use a glibc runner such as `mcr.microsoft.com/playwright`, and set `E2E_BASE_URL` — the config default is port 3000, which is not where the storefront runs on Windows |
+
+CI runs the backend suite on every push. It runs **neither** frontend suite — the frontend job stops
+at `npm ci` → lint → typecheck → build.
+
 ## Coverage expectations
 
 Not a percentage target — a list. These **must** have tests:
@@ -62,8 +76,8 @@ Each asserts both the API outcome **and** ledger integrity via `verify_integrity
 docker compose exec api pytest                      # everything
 docker compose exec api pytest -m "not slow"        # skips concurrency/perf
 docker compose exec api pytest --cov=. --cov-report=term-missing
-docker compose exec web npm run test                # Vitest
-docker compose exec web npm run test:e2e            # Playwright
+docker compose exec web npm run test                # Vitest (17 tests, ~25 s)
+docker compose exec web npm run test:e2e            # Playwright — DOES NOT WORK, see above
 docker compose -f docker-compose.test.yml run --rm api-test    # what CI runs
 ```
 

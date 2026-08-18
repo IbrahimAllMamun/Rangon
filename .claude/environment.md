@@ -111,13 +111,99 @@ Same for `docker compose run` with absolute in-container paths.
 - Host `node`/`npm` were intermittently unavailable in this session. Do
   everything through the containers.
 - `tsc --noEmit` through the bind mount takes **~10 minutes**.
-- `npm run build` through the bind mount is far worse and never completed.
+- `npm run build` through the bind mount is far worse and has still never been
+  allowed to finish. Do not use it to check whether the build works.
   `docker compose build web` (production image, copies source in) is the faster
-  path and is what CI does.
+  path, is what CI does, and **does** complete here — about 6 minutes with warm
+  layers, most of it `npm ci`. The build itself is fine; only the bind mount is
+  pathological.
 - The Dockerfiles deliberately have **no `# syntax=docker/dockerfile:1.7`
   directive**. Nothing needed a newer frontend, and fetching one added a network
   dependency that crashed BuildKit (`failed to solve: frontend grpc server
   closed unexpectedly`). Do not add it back.
+
+---
+
+## 7. `node_modules` is an anonymous volume — it outlives image rebuilds
+
+`docker-compose.dev.yml` mounts `/app/node_modules` as an anonymous volume so
+the bind mount does not hide the image's install. The cost: that volume is
+populated **once**, when the container is first created, and then shadows the
+image forever.
+
+This bit hard. `package.json` and `package-lock.json` pinned Next **15.5.23**,
+the image contained 15.5.23, CI built 15.5.23 — and the running container served
+**15.1.4**, because its volume had been created before the upgrade. Two image
+rebuilds changed nothing. Every "works on my machine" reading was against a
+different Next than CI.
+
+Check whenever dependency behaviour looks wrong:
+
+```bash
+# what the container actually runs vs. what the image ships
+MSYS_NO_PATHCONV=1 docker exec rangon-web-1 node -p "require('/app/node_modules/next/package.json').version"
+MSYS_NO_PATHCONV=1 docker run --rm --entrypoint node rangon-web:latest -p "require('/app/node_modules/next/package.json').version"
+```
+
+If they disagree, the volume is stale. Recreate it:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate --renew-anon-volumes web
+```
+
+`--renew-anon-volumes` is the flag that matters; `--force-recreate` alone keeps
+the old volume. A plain `docker compose down` (without `-v`) also leaves it.
+
+---
+
+## 8. Both web images are called `rangon-web:latest`
+
+Neither compose file sets an `image:` key for `web`, so Compose derives the name
+from project + service. That means:
+
+```bash
+docker compose build web                                    # production Dockerfile
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build web   # Dockerfile.dev
+```
+
+both write **the same tag**, and the second silently replaces the first. The
+production runtime deliberately deletes npm (so Trivy stops flagging npm's own
+vendored dependencies), so if the tag is left pointing at the production image, a
+later `up -d` *without* `--build` starts it with the dev command `npm run dev`
+and fails.
+
+**After building the production image, rebuild the dev one before starting the
+stack.** A running container keeps the image it started with, so an already-up
+stack is unaffected until it is recreated.
+
+---
+
+## 9. Playwright cannot run in the web container
+
+`apps/web/Dockerfile.dev` is `node:22-alpine`. Playwright publishes no musl
+browser builds, and `~/.cache/ms-playwright` does not exist in the image, so
+`npm run test:e2e` has nothing to drive. `npx playwright install` will not fix
+it.
+
+To actually run the E2E specs, use a glibc image (`mcr.microsoft.com/playwright`)
+on the same Docker network, or run them from the Windows host, pointing
+`E2E_BASE_URL` at the real storefront origin (`http://localhost:4000` here, not
+the config default of 3000).
+
+---
+
+## 10. There is no `gh` CLI on this machine
+
+`gh` is not installed, but `origin` is a **public** GitHub repo, so the REST API
+answers unauthenticated:
+
+```bash
+curl.exe -s "https://api.github.com/repos/IbrahimAllMamun/Rangon/actions/runs?per_page=10"
+curl.exe -s "https://api.github.com/repos/IbrahimAllMamun/Rangon/actions/runs/<id>/jobs"
+```
+
+That is how the CI status in `../docs/roadmap.md` was checked. Downloading run
+**logs** does need a token; job and step conclusions do not.
 
 ---
 
@@ -138,7 +224,10 @@ docker compose exec api ruff check . && docker compose exec api ruff format .
 
 # Frontend
 MSYS_NO_PATHCONV=1 docker exec rangon-web-1 npx tsc --noEmit      # ~10 min
-docker compose build web                                          # prod build
+MSYS_NO_PATHCONV=1 docker exec rangon-web-1 npx vitest run        # ~25 s, 17 tests
+docker compose build web                                          # prod build (~6 min warm)
+# then put the dev image back on the shared tag — see §7
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build web
 
 # Verify from Windows, not from a container
 curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4000/

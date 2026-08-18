@@ -5,7 +5,9 @@ import { Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
-import { Button, EmptyState, Spinner } from "@/components/ui/primitives";
+import LogoLoader from "@/components/brand/LogoLoader";
+import { Button, EmptyState } from "@/components/ui/primitives";
+import { cn } from "@/lib/cn";
 import { useCart } from "@/lib/store/cart";
 import { money } from "@/lib/format";
 
@@ -22,6 +24,11 @@ export function CartDrawer() {
             <Dialog.Title className="text-h4 font-semibold">
               Your cart{cart?.totals?.item_count ? ` (${cart.totals.item_count})` : ""}
             </Dialog.Title>
+            {/* Radix warns without this, and a screen reader otherwise opens the
+                drawer with nothing but its title to go on. */}
+            <Dialog.Description className="sr-only">
+              Items in your cart, with quantity controls and the order total.
+            </Dialog.Description>
             <Dialog.Close asChild>
               <Button variant="ghost" size="icon" aria-label="Close cart">
                 <X aria-hidden />
@@ -41,10 +48,18 @@ export function CartDrawer() {
             </div>
           ) : null}
 
-          <div className="flex-1 overflow-y-auto px-5">
+          {/* Two different waits, two different treatments. An empty drawer that
+              is still fetching gets the brand loader, because there is nothing
+              else to look at. A drawer with items re-pricing after a quantity
+              change keeps its rows and dims them — swapping a full cart for a
+              spinner loses the shopper's place for a 200 ms round trip. */}
+          <div
+            className={cn("flex-1 overflow-y-auto px-5", loading && items.length > 0 && "is-stale")}
+            aria-busy={loading || undefined}
+          >
             {loading && !items.length ? (
               <div className="flex h-40 items-center justify-center">
-                <Spinner />
+                <LogoLoader size={64} label="Loading your cart" />
               </div>
             ) : items.length === 0 ? (
               <EmptyState

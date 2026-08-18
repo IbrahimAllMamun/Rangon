@@ -19,6 +19,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { LogoLink } from "@/components/brand/logo";
+import { PendingRegion } from "@/components/ui/pending-region";
 import { Button } from "@/components/ui/primitives";
 import type { SessionUser } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
@@ -154,8 +155,15 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
           </div>
         </header>
 
+        {/* Admin lists are filtered by query string — every status tab, search
+            and page link re-renders this same segment, so `admin/loading.tsx`
+            never fires for them. Dimming the content in place is the only
+            feedback those clicks get, and it keeps the table where the eye is.
+            Keyed by pathname so arriving at a new screen fades it in. */}
         <main id="main" className="min-w-0 flex-1 p-4 sm:p-6">
-          {children}
+          <PendingRegion key={pathname} label="Loading" className="route-fade">
+            {children}
+          </PendingRegion>
         </main>
       </div>
     </div>

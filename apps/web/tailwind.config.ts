@@ -7,7 +7,10 @@ import type { Config } from "tailwindcss";
  */
 const config: Config = {
   darkMode: ["class"],
-  content: ["./src/**/*.{ts,tsx}"],
+  // `.jsx`/`.js` are in here deliberately: LogoLoader is plain JSX, and when the
+  // glob missed it Tailwind tree-shook the loader's own rules out of
+  // `@layer components` — the class names survived, the CSS did not.
+  content: ["./src/**/*.{ts,tsx,js,jsx}"],
   theme: {
     extend: {
       colors: {

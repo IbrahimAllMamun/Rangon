@@ -18,6 +18,22 @@ database and order system.
 - Business rules: [docs/business-rules.md](docs/business-rules.md)
 - Architecture: [docs/architecture/architecture.md](docs/architecture/architecture.md)
 
+## Status
+
+Not production-ready; not deployed anywhere. As of **2026-08-18** (commit `423cdf4`):
+
+|                  |                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CI               | Green on all four jobs — backend lint/format/migrations/tests, frontend lint/typecheck/**build**, dependency audits, image build + Trivy scan              |
+| Backend tests    | 167 passing, including 7 threaded concurrency tests against real PostgreSQL                                                                                       |
+| Frontend tests   | Vitest 17 passing —**not run by CI**. Playwright specs exist but [cannot run in the dev image](docs/roadmap.md#known-defects)                               |
+| Verified by hand | Migrations from empty, seeded demo data, ledger integrity, a POS sale, and a full browser purchase (add to cart → COD checkout → confirmed order)               |
+| Type checking    | `tsc` clean; `mypy` reports 98 errors and is deliberately non-blocking in CI                                                                                  |
+| Biggest gaps     | No payment gateway, no live environment, most admin**write** screens are still API-only, and the wishlist/reviews/notifications features have no working UI |
+
+Phase-by-phase status, the full verification log, and the known defects (D1–D9) are in
+[docs/roadmap.md](docs/roadmap.md). Read it before claiming any part of this works.
+
 ## Repository layout
 
 ```text
@@ -62,16 +78,16 @@ docker compose exec api python manage.py migrate
 docker compose exec api python manage.py seed_demo --reset
 ```
 
-| Service | URL |
-|---|---|
-| Storefront | http://localhost:3000 |
-| Admin | http://localhost:3000/admin |
-| POS | http://localhost:3000/pos |
-| API | http://localhost:8000/api/v1/ |
-| API schema (Swagger) | http://localhost:8000/api/docs/ |
-| Django admin | http://localhost:8000/django-admin/ |
-| Mailpit (dev email) | http://localhost:8025 |
-| MinIO console (dev S3) | http://localhost:9001 |
+| Service                | URL                                                                |
+| ---------------------- | ------------------------------------------------------------------ |
+| Storefront             | http://localhost:3000 (`WEB_PORT` — see the Windows note below) |
+| Admin                  | http://localhost:3000/admin                                        |
+| POS                    | http://localhost:3000/pos                                          |
+| API                    | http://localhost:8000/api/v1/                                      |
+| API schema (Swagger)   | http://localhost:8000/api/docs/                                    |
+| Django admin           | http://localhost:8000/django-admin/                                |
+| Mailpit (dev email)    | http://localhost:8025                                              |
+| MinIO console (dev S3) | http://localhost:9001                                              |
 
 > **Windows: if port 3000 will not bind**, `docker compose up` fails with
 > `bind: An attempt was made to access a socket in a way forbidden by its access permissions`.
@@ -95,14 +111,14 @@ docker compose exec api python manage.py seed_demo --reset
 
 Demo logins created by `seed_demo` (development only):
 
-| Role | Email | Password |
-|---|---|---|
-| OWNER | owner@rangon.test | rangon12345 |
-| MANAGER | manager@rangon.test | rangon12345 |
-| CASHIER | cashier@rangon.test | rangon12345 |
-| INVENTORY_MANAGER | stock@rangon.test | rangon12345 |
-| ACCOUNTANT | accounts@rangon.test | rangon12345 |
-| CUSTOMER | customer@rangon.test | rangon12345 |
+| Role              | Email                | Password    |
+| ----------------- | -------------------- | ----------- |
+| OWNER             | owner@rangon.test    | rangon12345 |
+| MANAGER           | manager@rangon.test  | rangon12345 |
+| CASHIER           | cashier@rangon.test  | rangon12345 |
+| INVENTORY_MANAGER | stock@rangon.test    | rangon12345 |
+| ACCOUNTANT        | accounts@rangon.test | rangon12345 |
+| CUSTOMER          | customer@rangon.test | rangon12345 |
 
 ## Everyday commands
 
@@ -134,10 +150,36 @@ Frontend:
 docker compose exec web npm run dev
 docker compose exec web npm run lint
 docker compose exec web npm run typecheck
-docker compose exec web npm run test                  # Vitest unit/component
+docker compose exec web npm run test                  # Vitest unit/component (17 tests, ~25 s)
 docker compose exec web npm run build
-docker compose exec web npm run test:e2e              # Playwright, needs a seeded stack
+docker compose exec web npm run test:e2e              # Playwright — see the warning below
 ```
+
+> **`npm run test:e2e` does not work in the dev container.** `apps/web/Dockerfile.dev` is
+> `node:22-alpine`, and Playwright publishes no musl browser builds, so `npx playwright install`
+> has nothing to install. Run the specs from a glibc image (`mcr.microsoft.com/playwright`) or from
+> the host against a seeded stack, pointing `E2E_BASE_URL` at the storefront origin. Until that is
+> set up, the four critical flows are only covered by hand.
+
+> **CI runs neither frontend test suite.** The frontend job is `npm ci` → lint → typecheck → build.
+> Vitest and Playwright are not wired in; adding Vitest is a two-line change and it already passes.
+
+### "○ Compiling /checkout ..." in the dev log is not a problem
+
+`next dev` compiles each route the first time it is requested. It is a **development-only, once-per-route**
+cost — production precompiles every route during `npm run build`, which is why the build takes minutes.
+Measured on this project:
+
+| | first hit (compiles) | afterwards |
+|---|---|---|
+| a storefront route | 1.7–2.7 s | 0.3–1.0 s |
+
+The dev script therefore uses **Turbopack** (`next dev --turbopack`), which cut per-route compilation
+from ~5–16 s to ~2 s. It pays a one-off graph build (~30 s) on the very first request after start, then
+is consistently faster. `npm run build` still uses webpack — the production path is unchanged.
+
+If a *warm* page is slow, compilation is not the cause; look at the API call the page makes. Time the
+endpoint directly (`curl http://localhost:8000/api/v1/...`) before blaming the frontend.
 
 `apps/web/package-lock.json` is committed and CI installs with `npm ci`, so every environment gets
 byte-identical dependencies. Never delete it or install with `npm install` in CI.
@@ -145,6 +187,16 @@ byte-identical dependencies. Never delete it or install with `npm install` in CI
 > On Windows, `npm run build` through the bind-mounted dev container is very slow. Building the
 > production image (`docker compose build web`) copies the source in instead and is the faster path —
 > it is also exactly what CI does.
+>
+> **Both web images share the tag `rangon-web:latest`.** Neither compose file sets `image:`, so
+> `docker compose build web` (production `Dockerfile`) overwrites the tag the dev overlay
+> (`Dockerfile.dev`) produced, and vice versa. The production runtime deliberately removes npm, so a
+> later `up -d` *without* `--build` can start the production image with the dev command `npm run dev`
+> and fail. After building the production image, rebuild the dev one before bringing the stack up:
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.dev.yml build web
+> ```
 
 Tests in a throwaway containerised environment (what CI runs):
 
@@ -176,8 +228,10 @@ Staging/production procedures, migration strategy, rollback and backups are docu
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)
 
-Images are built by CI and tagged with the git SHA (`rangon/api:<sha>`, `rangon/web:<sha>`).
-`latest` is never the only production reference.
+CI builds both images on every push and tags them with the git SHA (`rangon-api:<sha>`,
+`rangon-web:<sha>`), then scans them with Trivy for HIGH/CRITICAL vulnerabilities. `latest` is never
+the only production reference. Note that CI **builds and scans but does not push** — no registry is
+configured yet, and nothing has ever been deployed.
 
 ## Brand assets
 
