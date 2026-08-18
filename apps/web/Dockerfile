@@ -37,7 +37,15 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000
 
+# The standalone server runs under plain `node`; npm is never invoked here.
+# npm vendors its own dependency tree (tar, sigstore, ip-address, ...) into the
+# base image, and those advisories fail the Trivy gate while being unreachable
+# from anything this app declares -- no package.json pin can fix them. Dropping
+# npm from the runtime removes them along with the tooling itself. The guard
+# turns a silently-wrong path into a build failure rather than a quiet no-op.
 RUN apk add --no-cache curl \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && ! command -v npm > /dev/null \
     && addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs
 
