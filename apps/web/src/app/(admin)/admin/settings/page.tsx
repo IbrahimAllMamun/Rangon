@@ -1,6 +1,9 @@
+import { type Branch, BranchEditor } from "@/components/admin/branch-editor";
+import { OrganizationForm } from "@/components/admin/organization-form";
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
-import { apiServer } from "@/lib/api/server";
+import { apiServer, currentUser } from "@/lib/api/server";
+import type { SessionUser } from "@/lib/api/types";
 import { humanise } from "@/lib/format";
 
 export const metadata = { title: "Settings" };
@@ -15,16 +18,7 @@ interface Organization {
   vat_registration: string;
   currency: string;
   receipt_footer: string;
-  branches: {
-    id: string;
-    name: string;
-    code: string;
-    address: string;
-    phone: string;
-    is_default: boolean;
-    register_count: number;
-    status: string;
-  }[];
+  branches: Branch[];
 }
 
 interface StaffUser {
@@ -37,110 +31,90 @@ interface StaffUser {
 }
 
 export default async function SettingsPage() {
-  const [orgResult, usersResult] = await Promise.allSettled([
-    apiServer<Organization>("/organization/"),
-    apiServer<{ results: StaffUser[] }>("/users/"),
+  const [orgResult, usersResult, user] = await Promise.all([
+    apiServer<Organization>("/organization/").catch(() => null),
+    apiServer<{ results: StaffUser[] }>("/users/").catch(() => null),
+    currentUser<SessionUser>(),
   ]);
 
-  const organization = orgResult.status === "fulfilled" ? orgResult.value : null;
-  const users = usersResult.status === "fulfilled" ? usersResult.value.results : [];
+  const permissions = user?.permissions ?? [];
+  const can = (code: string) => permissions.includes("*") || permissions.includes(code);
+  const canManage = can("settings.manage");
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Business behaviour lives in code and docs; this shows the values a manager can change."
+        description={
+          canManage
+            ? "Changes here are written straight through to the API and appear on receipts and invoices."
+            : "You can view these settings. Changing them needs the settings.manage permission."
+        }
       />
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Organisation</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {organization ? (
-              <dl className="space-y-2 text-body-sm">
-                <Row term="Name" value={organization.name} />
-                <Row term="Legal name" value={organization.legal_name || "—"} />
-                <Row term="Phone" value={organization.phone || "—"} />
-                <Row term="Email" value={organization.email || "—"} />
-                <Row term="Address" value={organization.address || "—"} />
-                <Row term="VAT registration" value={organization.vat_registration || "Not set"} />
-                <Row term="Currency" value={organization.currency} />
-              </dl>
-            ) : (
-              <p className="text-body-sm text-muted">
-                You do not have permission to view organisation settings.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+      {orgResult ? (
+        <div className="space-y-6">
+          <OrganizationForm
+            canManage={canManage}
+            initial={{
+              name: orgResult.name ?? "",
+              legal_name: orgResult.legal_name ?? "",
+              email: orgResult.email ?? "",
+              phone: orgResult.phone ?? "",
+              address: orgResult.address ?? "",
+              vat_registration: orgResult.vat_registration ?? "",
+              currency: orgResult.currency ?? "BDT",
+              receipt_footer: orgResult.receipt_footer ?? "",
+            }}
+          />
 
+          <BranchEditor branches={orgResult.branches ?? []} canManage={canManage} />
+        </div>
+      ) : (
         <Card>
-          <CardHeader>
-            <CardTitle>Branches</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {organization?.branches?.length ? (
-              organization.branches.map((branch) => (
-                <div key={branch.id} className="rounded-md border border-border p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-body-sm font-medium">
-                      {branch.name} <span className="text-muted">({branch.code})</span>
-                    </p>
-                    <div className="flex gap-1">
-                      {branch.is_default && <Badge tone="brand">Default</Badge>}
-                      <Badge tone={branch.status === "ACTIVE" ? "success" : "neutral"}>
-                        {humanise(branch.status)}
-                      </Badge>
-                    </div>
-                  </div>
-                  <p className="mt-1 text-caption text-muted">{branch.address || "No address set"}</p>
-                  <p className="text-caption text-muted">
-                    {branch.register_count} register{branch.register_count === 1 ? "" : "s"}
-                  </p>
-                </div>
-              ))
-            ) : (
-              <p className="text-body-sm text-muted">No branches visible.</p>
-            )}
+          <CardContent>
+            <p role="alert" className="text-body-sm text-muted">
+              You do not have permission to view organisation settings.
+            </p>
           </CardContent>
         </Card>
-      </div>
+      )}
 
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>Staff</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {users.length ? (
-            <table className="w-full text-body-sm">
-              <caption className="sr-only">Staff accounts</caption>
-              <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">
-                <tr>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Name</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Email</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Role</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Branch</th>
-                  <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td className="px-4 py-2.5 font-medium">{user.full_name}</td>
-                    <td className="px-4 py-2.5">{user.email}</td>
-                    <td className="px-4 py-2.5">{user.role_name}</td>
-                    <td className="px-4 py-2.5 text-muted">{user.branch_name || "—"}</td>
-                    <td className="px-4 py-2.5">
-                      <Badge tone={user.status === "ACTIVE" ? "success" : "neutral"}>
-                        {humanise(user.status)}
-                      </Badge>
-                    </td>
+          {usersResult?.results?.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-body-sm">
+                <caption className="sr-only">Staff accounts</caption>
+                <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">
+                  <tr>
+                    <th scope="col" className="px-4 py-2.5 font-medium">Name</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">Email</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">Role</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">Branch</th>
+                    <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {usersResult.results.map((staff) => (
+                    <tr key={staff.id}>
+                      <td className="px-4 py-2.5 font-medium">{staff.full_name}</td>
+                      <td className="px-4 py-2.5">{staff.email}</td>
+                      <td className="px-4 py-2.5">{staff.role_name}</td>
+                      <td className="px-4 py-2.5 text-muted">{staff.branch_name || "—"}</td>
+                      <td className="px-4 py-2.5">
+                        <Badge tone={staff.status === "ACTIVE" ? "success" : "neutral"}>
+                          {humanise(staff.status)}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <p className="p-6 text-body-sm text-muted">
               You do not have permission to view staff accounts.
@@ -170,20 +144,12 @@ export default async function SettingsPage() {
             <li><strong>Shipping refunded on a change-of-mind return</strong> — assumed no.</li>
           </ul>
           <p className="mt-3 text-caption text-muted">
-            Editing these is API/config only for now — they live in environment variables so a change
-            is deliberate and auditable rather than a stray click.
+            These five stay in environment variables on purpose. They change how money and stock are
+            calculated, so a change should be a deliberate deployment with a record — not a stray
+            click in a browser. See <code>.env</code> and <code>config/settings/base.py</code>.
           </p>
         </CardContent>
       </Card>
     </>
-  );
-}
-
-function Row({ term, value }: { term: string; value: string }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="shrink-0 text-muted">{term}</dt>
-      <dd className="text-right">{value}</dd>
-    </div>
   );
 }
