@@ -67,6 +67,11 @@ browser purchase journey .............. shop -> product -> add to cart -> checko
                                         RGN-WEB-000018, 2,450 + 70 = 2,520 BDT, timeline correct,
                                         cart emptied, ledger still consistent afterwards
 live POS sale through the web proxy ... RGN-POS-000025 DELIVERED PAID (earlier session)
+PRODUCTION STACK RUN LOCALLY ......... 2026-08-19: prod images (api 327MB, web 251MB), gunicorn +
+                                        3 workers, DEBUG off, nginx single origin, Celery worker
+                                        and beat. `scripts/smoke-test.sh` PASSED for the first time
+                                        (7/7). Storefront, cart and add-to-cart verified in a browser.
+                                        Page latency 12-70ms warm. Found D16 and D17 doing it.
 production page latency ............... measured from the built image on the same machine and API:
                                         / 0.03s · /shop 0.29s · /checkout 0.012s · product 0.11s
                                         (the dev server is 10-80x slower and is not a fair measure)
@@ -110,7 +115,8 @@ Do not describe any of these as working.
 ## Known defects
 
 Found by diagnosis on 2026-08-18. None is a data-integrity or money bug; all are user-visible or
-process gaps. D5, D10, D11, D12 and D13 have since been fixed and are struck through.
+process gaps. D5, D10, D11, D12, D13 and D17 have since been fixed and are struck through. **D16 blocks
+any deployment** — the production CSP renders a blank page.
 
 | # | Defect | Where | Impact |
 |---|---|---|---|
@@ -123,6 +129,8 @@ process gaps. D5, D10, D11, D12 and D13 have since been fixed and are struck thr
 | D7 | **Playwright cannot run in the dev container.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds, and none are installed (`~/.cache/ms-playwright` is absent) | `apps/web/Dockerfile.dev` | Phase 29 is blocked until E2E runs on a glibc image (`mcr.microsoft.com/playwright`) or on the host |
 | D8 | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail | `docker-compose.yml`, `docker-compose.dev.yml` | A confusing, self-inflicted breakage after any production build. Also recorded in `.claude/environment.md` |
 | D9 | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder | `seed_demo` | The photography-led storefront of `CLAUDE.md` §10 cannot actually be judged |
+| D16 | **The production CSP renders a blank page.** `script-src 'self'` blocks the inline `<script>` tags the Next.js App Router streams its RSC payload through, so React never hydrates and the page shows nothing. Verified in a browser against the production build — the console fills with CSP violations. Flagged in `conf.d/rangon.conf`; the local-prod config uses `'unsafe-inline'` as a stopgap. **Proper fix: a per-request nonce issued from Next middleware** so the directive can stay strict | `infrastructure/docker/nginx/conf.d/rangon.conf` | Nothing renders in production until this is resolved |
+| ~~D17~~ | ~~**Nginx sent `/api/proxy/*` and `/api/auth/*` to Django.**~~ **Fixed 2026-08-19** — those prefixes are Next.js route handlers (`/api/proxy/*` attaches the httpOnly token, `/api/auth/*` sets it at login), but the config routed all of `/api/` to the API, so they 404'd. Pages rendered while **every interactive feature was dead**: sign-in, cart, checkout, POS sales, admin actions. Caught by clicking "Add to cart" against the production build | `infrastructure/docker/nginx/conf.d/rangon.conf`, `docs/operations/webuzo-deployment.md` | Would have made the first real deployment look completely broken |
 | D14 | **`backup-db.sh` cannot run in the API container.** The API image ships `pg_dump` 15.19 against a PostgreSQL 16.15 server, which aborts with a version mismatch; the script also resolves the Docker-network host `db`. Verified 2026-08-18: it works from the `db` container (398 KB dump). Documented in [backups.md](operations/backups.md), not yet fixed in the image | `apps/api/Dockerfile`, `scripts/backup-db.sh` | The backup runbook names a container where it cannot work — and no backup has ever been taken |
 | D15 | **Production Nginx config would not start.** `infrastructure/docker/nginx/conf.d/rangon.conf` uses `${RANGON_DOMAIN}` in `server_name` and the TLS certificate paths, but Nginx does not expand environment variables in config files and the file is mounted straight into `conf.d/` rather than `templates/`. Also, the `api_static` volume it serves `/static/` from is never populated by any service | `infrastructure/docker/nginx/` | First deploy using the shipped prod stack fails to start. Sidestepped by the Webuzo topology, which drops that container |
 | ~~D10~~ | ~~**N+1s on the three busiest list endpoints.**~~ **Fixed 2026-08-18** — `GET /shop/home/` **511 queries / 2.42 s**, `GET /shop/products/` **363 / 1.29 s**, `GET /purchase-orders/` **156 / 0.58 s**. Common cause: `ProductVariant.label` is a property that joins attribute values, so any serialiser rendering a variant label costs a query per row unless the queryset prefetches that far. Now **29**, **13** and **15**, guarded by growth-based tests | `orders/api/shop_views.py`, `purchasing/api/views.py` | Was the single largest source of slow page loads |

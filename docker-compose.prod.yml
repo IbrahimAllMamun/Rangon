@@ -29,7 +29,7 @@ services:
       - ${REDIS_DATA_PATH:-/var/lib/rangon/redis}:/data
 
   api:
-    image: ${REGISTRY:-ghcr.io/rangon}/rangon-api:${TAG:?set TAG to the git sha}
+    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
@@ -47,7 +47,7 @@ services:
         limits: {memory: 1G}
 
   worker:
-    image: ${REGISTRY:-ghcr.io/rangon}/rangon-api:${TAG:?set TAG to the git sha}
+    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
@@ -57,7 +57,7 @@ services:
       replicas: 2
 
   beat:
-    image: ${REGISTRY:-ghcr.io/rangon}/rangon-api:${TAG:?set TAG to the git sha}
+    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
@@ -67,7 +67,7 @@ services:
       replicas: 1        # never raise this
 
   web:
-    image: ${REGISTRY:-ghcr.io/rangon}/rangon-web:${TAG:?set TAG to the git sha}
+    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-web:${TAG:?set TAG to the git sha}
     build: !reset null
     read_only: true
     tmpfs:

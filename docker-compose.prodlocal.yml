@@ -1,0 +1,83 @@
+# Run the PRODUCTION build on your own machine, to use rather than to deploy.
+#
+#   docker compose -p rangon-prod --env-file .env.prod.local \
+#     -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
+#
+# Deliberately a SEPARATE compose project (`-p rangon-prod`) with its own
+# volumes and network, so it cannot collide with the development stack or share
+# a Postgres data directory with it — two servers on one data dir is how you
+# lose a database.
+#
+# Differences from a real deployment, all of them intentional:
+#   * plain HTTP on localhost, so SECURE_SSL_REDIRECT is off (see below)
+#   * images are built locally rather than pulled by immutable tag
+#   * no Nginx: the two services are published directly on 4100 / 8100
+#   * container hardening from docker-compose.prod.yml (read_only, cap_drop) is
+#     not applied — it changes nothing about what you see in the browser
+# For the real thing see docker-compose.prod.yml and docs/operations/.
+
+# docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml down
+
+services:
+  api:
+    image: rangon-api:prod
+    build: !reset null
+    environment:
+      # `prod.py` reads these two directly; neither is in the base env anchor,
+      # so without them the API either refuses to boot or redirects every
+      # request to https and nothing loads over http://localhost.
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_SECURE_SSL_REDIRECT: "0"
+    ports:
+      - "8100:8000"
+    restart: unless-stopped
+
+  worker:
+    image: rangon-api:prod
+    build: !reset null
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_SECURE_SSL_REDIRECT: "0"
+    command:
+      ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    restart: unless-stopped
+
+  beat:
+    image: rangon-api:prod
+    build: !reset null
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_SECURE_SSL_REDIRECT: "0"
+    restart: unless-stopped
+
+  web:
+    image: rangon-web:prod
+    build: !reset null
+    environment:
+      NODE_ENV: production
+      # Server-side calls stay on the private network. NEXT_PUBLIC_* values are
+      # already baked into the bundle at build time and cannot be changed here.
+      API_INTERNAL_URL: http://api:8000/api/v1
+    # No published port: nginx owns 4100 so everything is one origin, which is
+    # what the deployed topology looks like and what smoke-test.sh assumes.
+    restart: unless-stopped
+
+  # One origin for the whole app, exactly like production but without TLS.
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on: [api, web]
+    volumes:
+      - ./infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/docker/nginx/local-prod:/etc/nginx/conf.d:ro
+    ports:
+      - "4100:80"
+    networks: [frontend, backend]
+    restart: unless-stopped
+
+  # Kept so order confirmation emails land somewhere you can read them.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8125:8025"
+    networks: [backend]
+    restart: unless-stopped

@@ -279,6 +279,9 @@ add_header X-Frame-Options           "DENY" always;
 add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy        "camera=(), microphone=(), geolocation=(), payment=()" always;
 # 'unsafe-inline' for styles is required by Next.js's inlined critical CSS.
+# NOTE: `script-src 'self'` renders a blank page — Next streams through inline
+# scripts. Use a nonce from Next middleware, or add 'unsafe-inline' knowing the
+# cost. See D16 in docs/roadmap.md.
 add_header Content-Security-Policy   "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 
 # These four headers are not optional. Django's prod settings set
@@ -290,6 +293,21 @@ proxy_set_header Host              $host;
 proxy_set_header X-Real-IP         $remote_addr;
 proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
+
+# Next.js owns these two prefixes — they are route handlers in the web app, not
+# Django. `/api/proxy/*` attaches the httpOnly token to browser calls and
+# `/api/auth/*` sets those cookies at login. Send them to the API and every
+# interactive feature 404s (cart, checkout, POS sales, admin actions, sign-in)
+# while the pages still render. Longest prefix wins, so these override /api/.
+location /api/proxy/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_read_timeout 60s;
+}
+
+location /api/auth/ {
+    limit_req zone=rangon_auth burst=5 nodelay;
+    proxy_pass http://127.0.0.1:8080;
+}
 
 location /api/ {
     limit_req zone=rangon_general burst=60 nodelay;
