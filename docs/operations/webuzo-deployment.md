@@ -347,7 +347,7 @@ curl -s https://rangonfashion.com/api/health/
 
 ```bash
 cd /opt/rangon
-BASE_URL=https://rangonfashion.com ./scripts/smoke-test.sh      # check the script's expected variable
+./scripts/smoke-test.sh https://rangonfashion.com          # base URL is a positional argument
 docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec api \
   python manage.py verify_inventory
 ```
@@ -371,16 +371,56 @@ Then by hand, because none of it has ever been done on a server:
 
 `/var/lib/rangon/postgres` holds the only copy of every order, payment and ledger row.
 
+### Where `backup-db.sh` can actually run — this was tested
+
+`scripts/backup-db.sh` calls `pg_dump` against host `db`, which only resolves **inside** the Docker
+network. That rules out running it from the Webuzo host unless you publish the database port, which the
+overlay in §4.4 deliberately does not do. So it has to run in a container — and only one of them works:
+
+| Runs in | `pg_dump` | Result |
+|---|---|---|
+| `api` container | 15.19 (Debian bookworm) | **Fails** — `aborting because of server version mismatch` |
+| `db` container | 16.15 | **Works** — verified, produced a 398 KB dump |
+
+`pg_dump` refuses to read a server newer than itself, and the API image ships the older client. Run
+backups from the **db** container, which has both `pg_dump` 16 and `bash`:
+
 ```bash
-# In Webuzo's cron manager, or the system crontab:
-0 2 * * * cd /opt/rangon && ./scripts/backup-db.sh >> /var/log/rangon-backup.log 2>&1
+# In Webuzo's cron manager, or the system crontab. Adjust the path to .env.
+0 2 * * * cd /opt/rangon && /usr/bin/docker compose -f docker-compose.yml -f docker-compose.webuzo.yml \
+  exec -T -e RANGON_ENV=prod -e BACKUP_DIR=/backups db bash /scripts/backup-db.sh scheduled \
+  >> /var/log/rangon-backup.log 2>&1
 ```
 
-Read [backups.md](backups.md) for retention and off-site copies, and
+That command needs two mounts added to the `db` service in your overlay, so the script and the output
+directory exist inside the container:
+
+```yaml
+  db:
+    volumes:
+      - /var/lib/rangon/postgres:/var/lib/postgresql/data
+      - ./scripts:/scripts:ro
+      - /var/backups/rangon:/backups
+```
+
+`PGPASSWORD` is picked up from `POSTGRES_PASSWORD`, which the compose env already provides to `db`.
+
+If you would rather not mount the repo into the database container, the equivalent without the script —
+losing its size check, `pg_restore --list` verification, off-site upload and pruning — is:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec -T db \
+  pg_dump -U rangon -d rangon --format=custom --compress=6 --no-owner --no-privileges \
+  > /var/backups/rangon/rangon-$(date -u +%Y%m%dT%H%M%SZ).dump
+```
+
+Set `BACKUP_S3_BUCKET` to get off-site copies; without it the script warns that the backup exists only
+on the same disk as the database it is protecting. Read [backups.md](backups.md) for retention and
 [disaster-recovery.md](disaster-recovery.md) for the restore drill.
 
-**Rehearse a restore into a scratch database before go-live.** The scripts exist and have never been
-run; a backup nobody has restored is not a backup ([roadmap.md](../roadmap.md#still-unproven)).
+**Rehearse a restore into a scratch database before go-live.** The scripts exist and have never been run
+end to end; a backup nobody has restored is not a backup
+([roadmap.md](../roadmap.md#still-unproven)).
 
 ---
 

@@ -25,6 +25,23 @@ is not a backup.
 `backup-db.sh` writes `rangon-<env>-<UTC timestamp>[-label].dump`, uploads it, verifies the object size,
 and exits non-zero if anything fails — so a broken backup pages someone instead of failing silently.
 
+### It cannot run in the API container
+
+Tested on 2026-08-18 against the running stack:
+
+| Runs in | `pg_dump` version | Result |
+|---|---|---|
+| `api` container | 15.19 | **Fails** — `pg_dump: error: aborting because of server version mismatch` |
+| `db` container | 16.15 | **Works** — produced a 398 KB dump |
+
+`pg_dump` refuses to read a server newer than itself, and the API image (Debian bookworm, `libpq5`)
+carries the PostgreSQL 15 client against a PostgreSQL 16 server. The script also resolves the host `db`,
+which only exists on the Docker network. Run it from the **database** container — which has both
+`pg_dump` 16 and `bash` — or from a host that has a matching client and can reach the database.
+
+A worked cron example for a single-host Docker deployment is in
+[webuzo-deployment.md](webuzo-deployment.md#7-backups--do-this-on-day-one-not-later).
+
 ## Scheduling
 
 Production runs the dump from a cron/scheduled job on the database host or as a Kubernetes CronJob —

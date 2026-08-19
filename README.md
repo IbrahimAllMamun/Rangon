@@ -241,6 +241,7 @@ npm install && npm run dev
 Staging/production procedures, migration strategy, rollback and backups are documented in:
 
 - [docs/operations/deployment.md](docs/operations/deployment.md)
+- [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — single-server Webuzo VPS
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)
 

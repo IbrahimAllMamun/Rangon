@@ -107,3 +107,8 @@ Nginx terminates TLS, redirects HTTP→HTTPS, sets security headers (HSTS, `X-Co
 `Referrer-Policy`, CSP), gzip/brotli, request size limits, and routes `/api/*` → api, everything else →
 web. If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service
 and record that decision here rather than running two proxies.
+
+A worked example of exactly that: [webuzo-deployment.md](webuzo-deployment.md), where the panel's own
+web server terminates TLS and the project's Nginx container is not used. It also records three defects
+in the shipped prod stack that stop a first deploy: `${RANGON_DOMAIN}` is never substituted, the
+`api_static` volume is never populated, and the prod overlay cannot build images.
