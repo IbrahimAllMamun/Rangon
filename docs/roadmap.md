@@ -41,7 +41,7 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 25 | Notifications | 🟡 | ⬜ | Model, in-app feed API, Celery email tasks. **No UI at all** — no bell, no feed screen. No SMS provider |
 | 26 | SEO | 🟡 | 🟡 | Metadata, OG, sitemap, robots, canonicals, JSON-LD product + breadcrumbs. Product titles render the brand twice — [D4](#known-defects) |
 | 27 | Security | 🟡 | 🟡 | Controls implemented and documented; CI runs `pip-audit` + `npm audit` and Trivy-scans both images. **No independent penetration test** |
-| 28 | Performance | 🟡 | 🟡 | Indexes + DB-side aggregation. N+1s on home (511 → 27 queries) and the listing (363 → 11) found and fixed; both budgets now asserted in `tests/test_performance.py`. The other five budgets in `docs/database/indexing.md` are still unasserted, product detail currently **exceeds** its documented 10, and there is no load test |
+| 28 | Performance | 🟡 | 🟡 | Every list endpoint swept: three N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15) plus a per-keystroke POS request storm; all guarded by growth tests. Production measured at 11–320 ms per page. Remaining: five documented budgets unasserted, product detail **exceeds** its documented 10, no load test |
 | 29 | E2E testing | 🟡 | 🟡 | Playwright specs written for the four critical flows; **still not executed — blocked**, see [D7](#known-defects). The flows they cover were instead walked by hand in a browser |
 | 30 | Deployment | 🟡 | 🟡 | Compose prod stack; **CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment** |
 | 31 | Backup/recovery | 🟡 | — | Scripts + runbook written; **restore never rehearsed** |
@@ -55,10 +55,10 @@ Everything below was executed on 2026-08-18 against commit `423cdf4`.
 migrations from empty database ........ OK (all 12 apps)
 seed_demo --reset ..................... 12 products, 72 variants, 2 POs, 40 orders
 ledger integrity (verify_inventory) ... consistent, 0 drift
-pytest ................................ 171 passed (160 unit/service/API + 7 concurrency + 4 query budget)
+pytest ................................ 172 passed (160 unit/service/API + 7 concurrency + 5 query budget)
 ruff check + ruff format .............. clean
 frontend typecheck (tsc --noEmit) ..... clean
-vitest (npm run test) ................. 17 passed, 2 files  <- first time this was ever run
+vitest (npm run test) ................. 22 passed, 3 files (17 + 5 POS debounce)
 production Next build ................. succeeds: `docker compose build web` completes, and CI
                                         runs `npm run build` on every push
 storefront / admin / POS served ....... 21 routes checked from the Windows host:
@@ -67,6 +67,11 @@ browser purchase journey .............. shop -> product -> add to cart -> checko
                                         RGN-WEB-000018, 2,450 + 70 = 2,520 BDT, timeline correct,
                                         cart emptied, ledger still consistent afterwards
 live POS sale through the web proxy ... RGN-POS-000025 DELIVERED PAID (earlier session)
+production page latency ............... measured from the built image on the same machine and API:
+                                        / 0.03s · /shop 0.29s · /checkout 0.012s · product 0.11s
+                                        (the dev server is 10-80x slower and is not a fair measure)
+API query counts after the N+1 sweep .. home 29 · listing 13 · purchase orders 15 · detail 13;
+                                        every other list endpoint 4-7
 ```
 
 ### CI is real now
@@ -105,7 +110,7 @@ Do not describe any of these as working.
 ## Known defects
 
 Found by diagnosis on 2026-08-18. None is a data-integrity or money bug; all are user-visible or
-process gaps. D5, D10 and D11 have since been fixed and are struck through.
+process gaps. D5, D10, D11, D12 and D13 have since been fixed and are struck through.
 
 | # | Defect | Where | Impact |
 |---|---|---|---|
@@ -118,7 +123,9 @@ process gaps. D5, D10 and D11 have since been fixed and are struck through.
 | D7 | **Playwright cannot run in the dev container.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds, and none are installed (`~/.cache/ms-playwright` is absent) | `apps/web/Dockerfile.dev` | Phase 29 is blocked until E2E runs on a glibc image (`mcr.microsoft.com/playwright`) or on the host |
 | D8 | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail | `docker-compose.yml`, `docker-compose.dev.yml` | A confusing, self-inflicted breakage after any production build. Also recorded in `.claude/environment.md` |
 | D9 | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder | `seed_demo` | The photography-led storefront of `CLAUDE.md` §10 cannot actually be judged |
-| ~~D10~~ | ~~**Storefront N+1s on the two most-visited pages.**~~ **Fixed 2026-08-18** — `GET /shop/home/` issued **511 queries / 2.42 s** and `GET /shop/products/` **363 / 1.29 s**. Four call sites each prefetched their own guess at the depth `_product_payload` reads: home stopped one hop short, the listing prefetched nothing. All now route through one `_payload_queryset` helper — **27 / 0.26 s** and **11 / 0.10 s**, guarded by growth-based tests | `apps/api/orders/api/shop_views.py` | Was the single largest source of slow page loads |
+| ~~D10~~ | ~~**N+1s on the three busiest list endpoints.**~~ **Fixed 2026-08-18** — `GET /shop/home/` **511 queries / 2.42 s**, `GET /shop/products/` **363 / 1.29 s**, `GET /purchase-orders/` **156 / 0.58 s**. Common cause: `ProductVariant.label` is a property that joins attribute values, so any serialiser rendering a variant label costs a query per row unless the queryset prefetches that far. Now **29**, **13** and **15**, guarded by growth-based tests | `orders/api/shop_views.py`, `purchasing/api/views.py` | Was the single largest source of slow page loads |
+| ~~D12~~ | ~~**POS searched on every keystroke.**~~ **Fixed 2026-08-18** — the scan field fired `/pos/products/?q=` per character with no debounce. A keyboard-wedge scanner types a 13-character barcode in ~100 ms, so **one scan issued 13 parallel requests** at ~700 ms each; six saturated the browser's per-origin connection limit and the `lookup` that Enter fires queued behind them. Now debounced at 220 ms with request cancellation, so a scan issues **none**. Five Vitest cases cover it | `apps/web/src/components/pos/register.tsx` | The register appeared to freeze on every scan — the most severe user-facing defect found |
+| ~~D13~~ | ~~**Admin product list paginated without ordering.**~~ **Fixed 2026-08-18** — Django warned `UnorderedObjectListWarning`; PostgreSQL may return unordered rows in any order, so page 2 could repeat or skip products page 1 already showed. Now `-created_at, pk` | `apps/api/catalog/api/views.py` | Correctness, not just speed |
 | ~~D11~~ | ~~**Dev container ran a different Next than CI.**~~ **Fixed 2026-08-18** — `/app/node_modules` is an anonymous volume, so it kept a pre-upgrade install (15.1.4) while the lockfile, image and CI were all on 15.5.23; image rebuilds could not dislodge it. Recorded in [.claude/environment.md](../.claude/environment.md) §7 | `docker-compose.dev.yml` | Local behaviour diverged from CI with no signal |
 
 ## Still API-only (no UI)

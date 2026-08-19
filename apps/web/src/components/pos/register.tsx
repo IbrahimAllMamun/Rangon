@@ -21,7 +21,24 @@ import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Order, PosSession, PosVariant } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { usePos } from "@/lib/store/pos";
+
+/**
+ * Delay before the scan field asks the server what it is looking at.
+ *
+ * This is the difference between a usable register and one that appears to
+ * freeze. A keyboard-wedge scanner types a whole barcode in ~100 ms and then
+ * presses Enter; searching on every keystroke turned one scan into 13 parallel
+ * requests of ~700 ms each. Six of them saturated the browser's per-origin
+ * connection pool, and the `lookup` fired by Enter — the only request that
+ * mattered — queued behind them.
+ *
+ * 220 ms is below the threshold where a cashier typing a name notices a wait,
+ * and above the interval a wedge scanner types at, so a scan now issues no
+ * search at all.
+ */
+const SEARCH_DEBOUNCE_MS = 220;
 
 /**
  * The register.
@@ -43,6 +60,11 @@ export function PosRegister({ session }: { session: PosSession }) {
   const [completed, setCompleted] = useState<Order | null>(null);
   const [holds, setHolds] = useState(session.holds);
   const [announcement, setAnnouncement] = useState("");
+  const searchAbort = useRef<AbortController | null>(null);
+  const [debouncedSearch, cancelQueuedSearch] = useDebouncedCallback(
+    (term: string) => void search(term),
+    SEARCH_DEBOUNCE_MS,
+  );
 
   const focusScan = useCallback(() => scanRef.current?.focus(), []);
 
@@ -74,9 +96,16 @@ export function PosRegister({ session }: { session: PosSession }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pos.lines.length]);
 
+  // The hook clears its own timer; the in-flight request is ours to drop.
+  useEffect(() => () => searchAbort.current?.abort(), []);
+
   async function lookup(code: string) {
     const trimmed = code.trim();
     if (!trimmed) return;
+
+    // The scan is the answer; a half-typed search for the same barcode is not.
+    // Dropping it here frees the connection this lookup is about to need.
+    cancelSearch();
 
     setScanning(true);
     setScanError(null);
@@ -117,21 +146,44 @@ export function PosRegister({ session }: { session: PosSession }) {
     }
   }
 
-  async function search(term: string) {
+  /** Drop any queued or in-flight search. Called before a scan is submitted. */
+  function cancelSearch() {
+    cancelQueuedSearch();
+    searchAbort.current?.abort();
+    searchAbort.current = null;
+  }
+
+  /** Wait for the typing to stop before asking the server. */
+  function queueSearch(term: string) {
     if (term.trim().length < 2) {
+      cancelSearch();
       setResults([]);
+      setSearching(false);
       return;
     }
+    debouncedSearch(term);
+  }
+
+  async function search(term: string) {
+    // Supersede the previous search rather than racing it: responses can arrive
+    // out of order, and the slower earlier one would otherwise overwrite the
+    // results for what the cashier has actually typed.
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+
     setSearching(true);
     try {
       const data = await apiClient<{ results: PosVariant[] }>(
         `/pos/products/?q=${encodeURIComponent(term)}`,
+        { signal: controller.signal },
       );
       setResults(data.results);
     } catch {
+      if (controller.signal.aborted) return; // superseded — leave state alone
       setResults([]);
     } finally {
-      setSearching(false);
+      if (!controller.signal.aborted) setSearching(false);
     }
   }
 
@@ -250,7 +302,7 @@ export function PosRegister({ session }: { session: PosSession }) {
                   onChange={(event) => {
                     setScan(event.target.value);
                     setScanError(null);
-                    void search(event.target.value);
+                    queueSearch(event.target.value);
                   }}
                   placeholder="Ready to scan…"
                   className="pl-10 text-body-lg"

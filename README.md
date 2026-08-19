@@ -164,22 +164,38 @@ docker compose exec web npm run test:e2e              # Playwright — see the w
 > **CI runs neither frontend test suite.** The frontend job is `npm ci` → lint → typecheck → build.
 > Vitest and Playwright are not wired in; adding Vitest is a two-line change and it already passes.
 
-### "○ Compiling /checkout ..." in the dev log is not a problem
+### The dev server is not the app. Do not judge speed by it.
 
-`next dev` compiles each route the first time it is requested. It is a **development-only, once-per-route**
-cost — production precompiles every route during `npm run build`, which is why the build takes minutes.
-Measured on this project:
+`next dev` compiles each route on first request and serves an unminified React development build. It
+is **many times slower than production, by design**. Measured on this project, same machine, same API,
+same seeded data:
 
-| | first hit (compiles) | afterwards |
+| Page | Production | Dev |
 |---|---|---|
-| a storefront route | 1.7–2.7 s | 0.3–1.0 s |
+| `/` | **0.03 s** | 4.87 s |
+| `/shop` | **0.29 s** | 1.44 s |
+| `/checkout` | **0.012 s** | 0.93 s |
+| `/product/[slug]` | **0.11 s** | 1.36 s |
 
-The dev script therefore uses **Turbopack** (`next dev --turbopack`), which cut per-route compilation
-from ~5–16 s to ~2 s. It pays a one-off graph build (~30 s) on the very first request after start, then
-is consistently faster. `npm run build` still uses webpack — the production path is unchanged.
+Production boots in ~0.35 s and serves pages in 11–320 ms. If you want a real number, measure the real
+thing:
 
-If a *warm* page is slow, compilation is not the cause; look at the API call the page makes. Time the
-endpoint directly (`curl http://localhost:8000/api/v1/...`) before blaming the frontend.
+```bash
+docker compose build web
+docker run -d --name rangon-web-prod --network rangon_frontend \
+  -e API_INTERNAL_URL=http://api:8000/api/v1 -p 4100:3000 rangon-web:latest
+```
+
+Then compare `http://localhost:4100` against `http://localhost:4000`. Remove it with
+`docker rm -f rangon-web-prod` afterwards, and rebuild the dev image, because both share one tag.
+
+The dev script uses **Turbopack** (`next dev --turbopack`), which cut per-route compilation from
+~5–16 s to ~2 s. It pays a one-off graph build (~30 s) on the first request after start. `npm run build`
+still uses webpack — the production path is unchanged.
+
+**When a page really is slow, it is almost never the bundler.** Time the endpoint directly and count
+its queries before touching the frontend — that is how three N+1s and a per-keystroke request storm
+were found here. See [docs/database/indexing.md](docs/database/indexing.md).
 
 `apps/web/package-lock.json` is committed and CI installs with `npm ci`, so every environment gets
 byte-identical dependencies. Never delete it or install with `npm install` in CI.

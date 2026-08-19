@@ -16,12 +16,19 @@ a growth check cannot be satisfied by an N+1 at all.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
+from purchasing.services import (
+    PurchaseLine,
+    create_purchase_order,
+    receive_purchase,
+    send_purchase_order,
+)
 from tests import factories
 
 pytestmark = pytest.mark.django_db
@@ -122,4 +129,51 @@ class TestHomeQueryBudget:
         assert count <= HOME_QUERY_BUDGET, (
             f"The home page used {count} queries, over its budget of "
             f"{HOME_QUERY_BUDGET} (docs/database/indexing.md)."
+        )
+
+
+class TestPurchaseOrderQueryBudget:
+    """Purchase orders serialise their receipts, and each receipt line its SKU.
+
+    That chain (`receipt -> item -> purchase_order_item -> variant`) ran one
+    query per line: **156 queries for two orders**, before anyone had received
+    stock at scale. It grows with receipts, not orders, which is why the check
+    below adds receipts rather than orders.
+    """
+
+    def _order_with_receipt(self, shop: dict[str, Any], quantity: int = 10) -> None:
+        variant = factories.variant(price="1000.00", cost="0.00")
+        order = create_purchase_order(
+            supplier=factories.supplier(),
+            branch=shop["branch"],
+            lines=[
+                PurchaseLine(variant_id=variant.pk, quantity=quantity, unit_cost=Decimal("400.00"))
+            ],
+            actor=shop["manager"],
+        )
+        send_purchase_order(purchase_order=order, actor=shop["manager"])
+        item = order.items.first()
+        assert item is not None
+        receive_purchase(
+            purchase_order=order,
+            lines={str(item.pk): quantity},
+            actor=shop["manager"],
+        )
+
+    def test_query_count_does_not_grow_with_receipts(self, auth_client, shop):
+        client = auth_client(shop["owner"])
+        url = "/api/v1/purchase-orders/"
+
+        self._order_with_receipt(shop)
+        _count_queries(client, url)  # warm
+        with_one = _count_queries(client, url)
+
+        for _ in range(3):
+            self._order_with_receipt(shop)
+        with_four = _count_queries(client, url)
+
+        assert with_four == with_one, (
+            f"Queries grew from {with_one} to {with_four} as received orders grew: "
+            f"the purchase-order list has an N+1. The receipt serialisers reach "
+            f"`purchase_order_item.variant` and `received_by`; prefetch that far."
         )

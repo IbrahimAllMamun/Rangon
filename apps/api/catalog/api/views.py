@@ -117,7 +117,11 @@ class ProductViewSet(viewsets.ModelViewSet):
             from catalog.search import search_products
 
             return search_products(queryset, query=search)
-        return queryset
+        # Pagination over an unordered queryset is not merely untidy: PostgreSQL
+        # is free to return rows in any order, so page 2 can repeat or skip
+        # products that page 1 already showed. `pk` breaks ties between rows
+        # created in the same transaction, which the seed does in bulk.
+        return queryset.order_by("-created_at", "pk")
 
     def get_serializer_class(self) -> Any:
         if self.action in {"create", "update", "partial_update"}:

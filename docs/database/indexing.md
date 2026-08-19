@@ -85,13 +85,34 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 
 | Endpoint | Budget | Enforced? | Measured | Was |
 |---|---|---|---|---|
-| `GET /shop/home/` | 45 | **yes** | 27 · 0.26 s | **511 · 2.42 s** |
-| `GET /shop/products/` | 25 | **yes** | 11 · 0.10 s | **363 · 1.29 s** |
+| `GET /shop/home/` | 45 | **yes** | 29 · 0.16 s | **511 · 2.42 s** |
+| `GET /shop/products/` | 25 | **yes** | 13 · 0.09 s | **363 · 1.29 s** |
+| `GET /purchase-orders/` | — | **yes** (growth only) | 15 · 0.10 s | **156 · 0.58 s** |
 | `GET /shop/products/{slug}/` | 10 | no | 13 · 0.05 s | 15 |
-| `GET /pos/lookup/` | 4 | no | — | — |
+| `GET /products/` (admin) | — | no | 21 · 0.10 s | 21 · 0.42 s |
+| `GET /pos/products/` | — | no | 9 · 0.06 s | — |
+| `GET /pos/lookup/` | 4 | no | 13 · 0.05 s | — |
 | `POST /pos/sales/` (3 lines) | 30 | no | — | — |
-| `GET /orders/` (25 orders) | 10 | no | — | — |
-| `GET /reports/dashboard/` | 15 | no | — | — |
+| `GET /orders/` (25 orders) | 10 | no | 6 · 0.07 s | — |
+| `GET /reports/dashboard/` | 15 | no | 14 · 0.07 s | — |
+
+Every other list endpoint was swept on 2026-08-18 and sits at 4–7 queries: suppliers, coupons, reviews,
+shipments, shipping methods and zones, stock transfers and counts, audit logs, categories, brands,
+attributes, branches, notifications, inventory, inventory transactions, customers, returns.
+
+### The trap that produced all three N+1s
+
+`ProductVariant.label` is a *property* that joins the variant's attribute values:
+
+```python
+values = [str(v.attribute_value.display) for v in self.attribute_values.all()]
+```
+
+Nothing about `serializers.CharField(source="variant.label")` hints that rendering it costs a query
+per row. Any queryset feeding a serialiser that renders a variant label — storefront payload, purchase
+order line, inventory row — must prefetch `attribute_values__attribute_value` or it degrades silently
+as the data grows. That is why these are guarded by *growth* tests rather than constants: the failure
+is invisible at seed scale and only appears in production.
 
 Only the first two rows are asserted, in `apps/api/tests/test_performance.py`. The rest are intentions,
 not guarantees — do not cite them as evidence. Note that product detail measures **13** against a

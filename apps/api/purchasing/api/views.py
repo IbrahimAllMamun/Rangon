@@ -76,7 +76,17 @@ class PurchaseOrderViewSet(
         return branch_queryset(
             self.request.user,
             PurchaseOrder.objects.select_related("supplier", "branch").prefetch_related(
-                "items__variant__product", "receipts__items"
+                "items__variant__product",
+                # `ProductVariant.label` is a property that joins its attribute
+                # values, so rendering a line label costs a query per variant
+                # unless the values come along too.
+                "items__variant__attribute_values__attribute_value",
+                # The receipt serialisers reach further than `receipts__items`:
+                # each receipt line renders `purchase_order_item.variant.sku`, and
+                # each receipt renders `received_by.email`. Stopping at the items
+                # cost 156 queries for two purchase orders.
+                "receipts__received_by",
+                "receipts__items__purchase_order_item__variant",
             ),
         ).order_by("-created_at")
 
