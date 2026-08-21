@@ -7,6 +7,11 @@ Related: [dostishop-feature-review.md](dostishop-feature-review.md) reviewed Dos
 storefront dashboard*. This document covers the *ERP they run the business on*, which is a different
 system with a different shape.
 
+**Where this landed.** The plan in §5 is now tracked as **phases 35–39** in
+[roadmap.md](../roadmap.md), specified as **§87.2** of `rangon_fashion_build_plan.md`, and its two new
+owner decisions are `DECISION REQUIRED` markers in [business-rules.md](../business-rules.md) §6b.
+This document stays the reasoning; those are the tracker and the spec.
+
 ---
 
 ## 1. What Bseba is, and why that matters before copying anything

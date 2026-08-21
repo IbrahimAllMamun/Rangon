@@ -11,8 +11,10 @@ Last reviewed: **2026-08-21** (after the product form / D2 / D3 / D16 build pass
 
 Each is implemented with a documented default so the system runs. Each is a
 business call, not a technical one. Full detail in `../docs/business-rules.md`,
-which carries **9** `DECISION REQUIRED` markers. They are also surfaced in the
-app at `/admin/settings` so they are visible rather than buried.
+which carries **11** `DECISION REQUIRED` markers. Rows 1–11 are surfaced in the
+app at `/admin/settings` so they are visible rather than buried; rows 12–13 are
+new (from the Bseba audit) and are **not** on that screen yet — add them when
+phase 35 starts, or they will stay buried in a document.
 
 | # | Decision | Current default | Why it matters |
 |---|---|---|---|
@@ -25,6 +27,8 @@ app at `/admin/settings` so they are visible rather than buried.
 | 7 | Where stock is deducted in the order lifecycle | at `PACKED` | Alternative is `CONFIRMED`; changes what "available" means online |
 | 8 | Formal in-transit location for transfers | none in V1 | Multi-branch transfer accuracy |
 | 9 | Whether coupons may stack | one per order | Discount maths |
+| 12 | **Does the business sell on credit?** (D-A) | assumed no | Decides whether phase 37 (party ledger) is built at all, and how orders relate to payment |
+| 13 | **Flat account list or a chart of accounts?** (D-B) | flat list | Phase 35's schema. A chart of accounts is an accounting product |
 | 10 | Which payment gateway | none — COD only | Blocks prepaid online orders |
 | 11 | Which courier, and API or manual | manual tracking | Shipping integration |
 

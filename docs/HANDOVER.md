@@ -138,7 +138,7 @@ and does nothing does not.** "The API is tested" and "the feature works" are dif
 
 ## 6. Decisions someone must confirm
 
-[business-rules.md](business-rules.md) carries **9** `DECISION REQUIRED` markers. A sensible default
+[business-rules.md](business-rules.md) carries **11** `DECISION REQUIRED` markers. A sensible default
 is implemented so the system runs; each one is a business call, not a technical one. The headline six
 (the last of which is not a marker but blocks prepaid orders and shipping integration):
 
