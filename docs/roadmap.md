@@ -45,7 +45,7 @@ Phases 07 and 35 shipped after that diagnosis — see the 2026-08-22 entries in 
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: three N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15) plus a per-keystroke POS request storm; all guarded by growth tests. Production measured at 11–320 ms per page. Remaining: five documented budgets unasserted, product detail**exceeds** its documented 10, no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 29  | E2E testing                           | 🟡      | 🟡       | Playwright specs written for the four critical flows;**still not executed — blocked**, see [D7](#known-defects). The flows they cover were instead walked by hand in a browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 31  | Backup/recovery                       | 🟡      | —       | Scripts + runbook written;**restore never rehearsed**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 31  | Backup/recovery                       | ✅      | —       | Scripts + runbook written, and **the restore has now been rehearsed for real** — 2026-08-22, against a production database that was actually destroyed. See the verification log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 32  | Production launch                     | ⬜      | ⬜       | Blocked on`docs/operations/go-live-checklist.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 33  | Dynamic navigation                    | ✅      | ✅       | Category-driven navbar with a one-table override,`/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5                                                                                                                                                                                                                                                 |
 | 34  | Colour-linked product media           | ✅      | ✅       | Images bind to a colour`AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image; clicking another colour's thumbnail repairs the other axes. Phases B1–B3 all done — **B3 landed 2026-08-21** with the admin product form it was blocked on — [architecture/product-media.md](architecture/product-media.md#6-phases)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -210,6 +210,38 @@ tree nested. `Category.parent` is `PROTECT`, so `Category.objects.all().delete()
 `ProtectedError` on the top-level rows. It now deletes leaves first. This was pre-existing and
 unrelated to phase 35 — it simply had not been run since.
 
+### The backup was rehearsed the hard way, 2026-08-22
+
+Not a drill. While updating the production stack for phase 35, the
+`rangon-prod_postgres_data` volume was destroyed — along with every local image
+except one, which is the signature of a `docker system prune -a --volumes` or a
+`compose down -v`. The volume's `CreatedAt` timestamp (`22:58:00Z`) is 14 minutes
+after the backup taken at `22:44:48Z`.
+
+```text
+before .......... 74 tables · 40 orders · 12 products · 6 users · 169 ledger rows
+after the wipe .. 0 tables
+pg_restore ...... exit 0
+after restore ... 74 tables · 40 orders · 12 products · 6 users · 169 ledger rows
+verify_inventory  consistent with the ledger
+verify_accounts . consistent with the cash book
+```
+
+Three things this settles, and one it does not:
+
+* **The dump format works.** `pg_dump -Fc` from the **db** container (never the
+  api container — D14) restored cleanly with
+  `pg_restore --no-owner --clean --if-exists`.
+* **`backups/` is gitignored and lives on the host**, which is the only reason
+  the file outlived the volume. A backup stored in a Docker volume would have
+  gone with it.
+* **Taking the backup before a deploy is not ceremony.** The 14-minute margin
+  is the whole story.
+
+What it does **not** settle: nothing is automated. No schedule, no off-machine
+copy, no retention. A single host-local dump taken by hand is one disk failure
+from being no backup at all. That remains open.
+
 ### CI is real now
 
 `origin` is `github.com/IbrahimAllMamun/Rangon`. The workflow has run **14 times**; the most recent,
@@ -280,7 +312,7 @@ Do not describe any of these as working.
 | Vitest and Playwright in CI             | Neither is wired into`ci.yml`                                                                                                                   |
 | Admin**write** screens, signed in | The organization and branch editors exist in code and the routes correctly redirect anonymous users, but no signed-in click-through has been done |
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
-| Backup restore                          | Scripts and runbook written;**never rehearsed**. A backup that has never been restored is not a backup                                      |
+| ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets documented in`docs/database/indexing.md` but **not asserted in tests**; no load test                                        |
 | Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**                                                  |
 | Deployment                              | Compose prod stack + green CI;**no live environment** — nothing has ever been deployed                                                     |
@@ -344,7 +376,10 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
    tested — this is form work, not backend work, and `product-form.tsx` and `purchase-order-form.tsx`
    are the patterns to copy.
 3. **Unblock and run E2E** (D7), then wire **both** Vitest and Playwright into `ci.yml`.
-4. **Restore rehearsal.** A backup that has never been restored is not a backup.
+4. ~~**Restore rehearsal.**~~ Done 2026-08-22, for real (see the verification log). What is
+   still missing is **automation**: the dump that saved the database was taken by hand, stored only
+   on this machine, on no schedule and with no retention. Schedule it, copy it off the host, and
+   keep the restore drill.
 5. **Load test** product listing, checkout and POS search at expected peak; add the
    `assertNumQueries` budgets from `docs/database/indexing.md` as real tests.
 6. **Make mypy mean something** (D6) — fix the errors or annotate them deliberately, then drop the
