@@ -32,8 +32,22 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 
-  /** Field errors from a VALIDATION_ERROR, flattened for form display. */
+  /**
+   * Field errors from a VALIDATION_ERROR, flattened for form display.
+   *
+   * Only a VALIDATION_ERROR carries per-field messages. Every other
+   * `BusinessError` puts *diagnostic context* in `details` — an
+   * `INSUFFICIENT_FUNDS` sends `{account_id, account, balance, requested}`,
+   * and `INSUFFICIENT_STOCK` sends `{sku, available, requested}`. Rendering
+   * those as field errors printed a list of raw values ("65450.00",
+   * "100000.00") where the human message belonged, and linked each to a
+   * form field that does not exist.
+   *
+   * Returning nothing for those codes is what makes callers fall back to
+   * `error.message`, which is the sentence the service actually wrote.
+   */
   fieldErrors(): { field: string; message: string }[] {
+    if (this.code !== "VALIDATION_ERROR") return [];
     if (!this.details || typeof this.details !== "object") return [];
     return Object.entries(this.details as Record<string, unknown>).map(([field, value]) => ({
       field,

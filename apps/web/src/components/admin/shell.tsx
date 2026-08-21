@@ -5,6 +5,7 @@ import {
   Boxes,
   ClipboardList,
   Factory,
+  Landmark,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -43,6 +44,7 @@ const NAV: NavItem[] = [
   { href: "/admin/suppliers", label: "Suppliers", icon: Factory, permission: "purchases.view" },
   { href: "/admin/customers", label: "Customers", icon: Users, permission: "customers.view" },
   { href: "/admin/returns", label: "Returns", icon: Truck, permission: "orders.view" },
+  { href: "/admin/finance", label: "Finance", icon: Landmark, permission: "finance.view" },
   { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
   {
     href: "/admin/navigation",

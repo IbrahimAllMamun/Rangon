@@ -38,10 +38,24 @@ class PosSessionView(APIView):
 
     def get(self, request: Request) -> Response:
         from accounts.services import get_organization
+        from finance.selectors import active_accounts
 
         branch = resolve_branch(request.user, request.query_params.get("branch"))
         organization = get_organization()
         holds = HeldSale.objects.filter(branch=branch).order_by("-created_at")[:20]
+
+        # The accounts this branch's takings can land in. Sent with the session
+        # rather than fetched separately so opening the register stays one
+        # request — the POS is the one screen where a second round trip is felt.
+        accounts = [
+            {
+                "id": str(account.pk),
+                "name": account.name,
+                "kind": account.kind,
+                "is_default": account.is_default,
+            }
+            for account in active_accounts(branch=branch)
+        ]
 
         return Response(
             {
@@ -66,6 +80,7 @@ class PosSessionView(APIView):
                     "vat_registration": organization.vat_registration if organization else "",
                 },
                 "holds": HeldSaleSerializer(holds, many=True).data,
+                "accounts": accounts,
             }
         )
 

@@ -29,7 +29,7 @@ from django.utils import timezone
 from accounts.models import Branch, User
 from core import audit
 from core.exceptions import InsufficientFunds, ValidationError
-from core.money import ZERO, quantize
+from core.money import ZERO, format_money, quantize
 from finance.models import (
     METHOD_TO_KIND,
     REASON_REQUIRED,
@@ -266,9 +266,11 @@ def _check_can_reduce(account: Account, delta: Decimal) -> None:
     if delta >= ZERO:
         return
     if account.balance + delta < ZERO and not account.allow_overdraft:
+        # Formatted, because this message is shown verbatim on a money screen
+        # and "65450.00" beside "৳ 65,450.00" reads as a different number.
         raise InsufficientFunds(
-            f"{account.name} holds {account.balance}, which is less than the "
-            f"{abs(delta)} this would take out.",
+            f"{account.name} holds {format_money(account.balance)}, which is less than the "
+            f"{format_money(abs(delta))} this would take out.",
             details={
                 "account_id": str(account.pk),
                 "account": account.name,

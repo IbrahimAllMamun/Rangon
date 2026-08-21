@@ -1,4 +1,4 @@
-import { AlertTriangle, Package, ShoppingCart, TrendingUp, Undo2, Wallet } from "lucide-react";
+import { AlertTriangle, Landmark, Package, ShoppingCart, TrendingUp, Undo2, Wallet } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
@@ -6,10 +6,18 @@ import { SalesChart } from "@/components/admin/sales-chart";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
-import type { DashboardData } from "@/lib/api/types";
+import type { AccountKind, CashPosition, DashboardData } from "@/lib/api/types";
 import { humanise, money, moneyCompact, percent } from "@/lib/format";
 
 type Search = Promise<{ range?: string }>;
+
+// `humanise("MFS")` gives "Mfs", which reads as a typo on a money tile.
+const KIND_LABEL: Record<AccountKind, string> = {
+  CASH: "Cash",
+  BANK: "Bank",
+  MFS: "Mobile money",
+  OTHER: "Other",
+};
 
 const RANGES = [
   { value: "today", label: "Today" },
@@ -27,6 +35,16 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     data = await apiServer<DashboardData>(`/reports/dashboard/?range=${range}`);
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load the dashboard.";
+  }
+
+  // Cash position is fetched separately and allowed to fail on its own: a user
+  // without `finance.view` still gets the rest of the dashboard rather than an
+  // error page.
+  let cash: CashPosition | null = null;
+  try {
+    cash = await apiServer<CashPosition>("/accounts/cash-position/");
+  } catch {
+    cash = null;
   }
 
   if (!data) {
@@ -128,6 +146,31 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           context={`Discounts ${moneyCompact(kpis.discount_total)}`}
         />
       </div>
+
+      {cash && (
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Cash position"
+            value={money(cash.total)}
+            context={`Held across ${cash.accounts.length} account${
+              cash.accounts.length === 1 ? "" : "s"
+            }`}
+            href="/admin/finance"
+            icon={<Landmark className="size-4" aria-hidden />}
+            tone={Number(cash.total) < 0 ? "error" : "neutral"}
+          />
+          {cash.by_kind.slice(0, 3).map((row) => (
+            <StatCard
+              key={row.kind}
+              label={KIND_LABEL[row.kind] ?? row.kind}
+              value={money(row.total)}
+              context="On hand now"
+              href="/admin/finance"
+              tone={Number(row.total) < 0 ? "error" : "neutral"}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">

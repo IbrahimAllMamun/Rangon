@@ -292,15 +292,16 @@ business rule and belongs on the server.
 
 ## 6b. Money accounts and credit
 
-**Not built yet** — this section states the rules phases 35–37 must implement, so the decisions are
+**§6b.1 is built** (phase 35, `finance` app — see
+[architecture/finance.md](architecture/finance.md) and [ADR-0011](architecture/decisions/0011-append-only-cash-book.md)).
+§6b.2 and §6b.3 are not: they state the rules phases 37 and 38 must implement, so the decisions are
 settled before the schema is. See [roadmap.md](roadmap.md) and
 [planning/bseba-erp-feature-audit.md](planning/bseba-erp-feature-audit.md).
 
 ### 6b.1 Where money is held
 
 Every payment, refund and supplier payment names the **account** it moved through — a cash drawer, a
-bank account or an MFS wallet — not merely a *method*. Today the system records `PaymentMethod` and
-loses the destination, so there is no cash position and no bank balance.
+bank account or an MFS wallet — not merely a *method*.
 
 An account's balance is a **transactional cache over an append-only transaction table**, reconciled
 by replaying the ledger, exactly as `Inventory.on_hand` sits over `InventoryTransaction`
@@ -308,7 +309,45 @@ by replaying the ledger, exactly as `Inventory.on_hand` sits over `InventoryTran
 
 *`DECISION REQUIRED` — a flat list of cash/bank/MFS accounts is assumed, not a chart of accounts. A
 flat list is sufficient for a retailer; a chart of accounts is an accounting product and changes the
-schema materially. Roadmap decision D-B.*
+schema materially. Roadmap decision D-B. **Built on this default.***
+
+**Money moves on capture, never on record.** A payment that is `PENDING` or `AUTHORIZED` has put
+money nowhere: an authorised card payment has not settled, and a COD order's cash arrives when the
+courier remits. `capture_payment()` is what posts to the cash book.
+
+**Which account, when the caller does not say.** The branch's default account for the *kind* the
+method implies: cash and COD → `CASH`, card, bank transfer and gateway → `BANK`, MFS → `MFS`,
+store credit and anything else → `OTHER`. If the branch has no active account of that kind, the
+service posts **nothing** and returns `None` rather than guessing — card takings dropped into the
+cash drawer would make the drawer impossible to reconcile.
+
+**A missing account never blocks a sale.** A shop that has not set its accounts up must still be
+able to trade. The sale, refund or supplier payment completes; `manage.py verify_accounts` reports
+how many money events posted nowhere, so the gap is stated rather than hidden.
+
+**Historical rows keep no account.** `Payment.account`, `Refund.account` and
+`SupplierPayment.account` are nullable and stay that way: every payment taken before the `finance`
+app existed has no honest answer, and §3.3 of CLAUDE.md forbids inventing one after the fact.
+
+**An account cannot pay out money it does not hold.** A withdrawal, transfer or supplier payment
+that would take a balance below zero raises `INSUFFICIENT_FUNDS` (409) under `SELECT … FOR UPDATE`,
+unless the account is explicitly marked `allow_overdraft` — a bank account with an overdraft line
+legitimately goes negative; a cash drawer never does.
+
+**An opening balance is an entry, not a column.** Opening an account with a starting figure writes
+an `OPENING` transaction, so `balance == SUM(transactions.amount)` holds from the first row and
+`verify_accounts` can prove the cache honest with no special case.
+
+**Reasons are mandatory** for `WITHDRAWAL` and `ADJUSTMENT`, as they are for stock adjustments and
+write-offs (§1.1). An unexplained movement of money is a red flag.
+
+**Transfers are not income or spending.** Moving money between two of the business's own accounts
+(banking the takings, floating the drawer) is excluded from money-in and money-out totals; counting
+it would inflate both sides by the same amount.
+
+**Accounts are never deleted.** An account with movements against it is financial history. Closing
+one sets `is_active = false`; the balance and the cash book stay readable, and no new movement may
+pass through it.
 
 ### 6b.2 Selling on credit
 
