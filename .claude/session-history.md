@@ -288,6 +288,55 @@ nested: `Category.parent` is `PROTECT`, so a flat `Category.objects.all()
 since. It now deletes leaves first. Worth noting because it means **the seed was
 unrunnable for a whole phase and no check noticed** — nothing in CI reseeds.
 
+## Incident, 2026-08-22 — the production database was destroyed and restored
+
+Recorded because it is the only real test this project's backup story has had.
+
+**What happened.** The prod stack was running images built 2026-08-21, before
+the `content` app existed. So `/api/v1/shop/navigation/` returned Django's own
+404 HTML page, the navbar fell back to its four static links, and the Next
+server logged:
+
+```text
+Navigation unavailable, using the static fallback: SyntaxError:
+Unexpected token '<', "<!doctype "... is not valid JSON
+```
+
+The fix was to rebuild the images and migrate. During that, the
+`rangon-prod_postgres_data` volume was destroyed — every local image vanished
+too, bar one, which is the signature of `docker system prune -a --volumes` or a
+`compose down -v`. The volume's `CreatedAt` was 14 minutes after the backup.
+
+**What saved it.** A `pg_dump -Fc` taken from the **db** container immediately
+before starting, into host-side `backups/`. `pg_restore --no-owner --clean
+--if-exists` brought back all 74 tables, 40 orders, 12 products, 6 users and 169
+inventory ledger rows; `verify_inventory` and `verify_accounts` were both clean
+afterwards.
+
+### Lessons worth keeping
+
+1. **Back up before touching prod, every time.** The 14-minute margin is the
+   entire difference between an outage and a data loss.
+2. **The backup must live outside Docker.** `backups/` is on the host and
+   gitignored, which is the only reason the file outlived the volume. A dump
+   written into a named volume would have been pruned with it.
+3. **`pg_dump` must run in the `db` container, not `api`** (D14 — the API image
+   ships pg_dump 15 against a PostgreSQL 16 server). The runbook says so;
+   following it is what made the dump usable.
+4. **Verify the dump when you take it, not when you need it.**
+   `pg_restore --list` on the fresh file costs a second and proves it is
+   readable.
+5. **`up -d` is not the fix for a stale image.** Compose only pulls when the
+   image is absent, so once the local image was pruned it tried Docker Hub and
+   failed with `pull access denied for rangon-api` — which reads like an auth
+   problem and is actually "your image is gone, rebuild it".
+
+### Still open
+
+Nothing about this is automated. One hand-taken dump, on one machine, on no
+schedule, with no retention and no off-host copy. The restore is proven; the
+*backup* is not yet a system. That is now the honest state of roadmap phase 31.
+
 ## Deviations from the plan (all have ADRs)
 
 | Plan said | Built | ADR |

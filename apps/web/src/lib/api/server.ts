@@ -10,7 +10,7 @@
  */
 import { cookies } from "next/headers";
 
-import { ACCESS_COOKIE, ApiError, type ApiErrorBody } from "./client";
+import { ACCESS_COOKIE, ApiError, parseApiResponse } from "./client";
 
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 
@@ -86,18 +86,17 @@ export async function apiServer<T>(path: string, options: ServerRequestOptions =
   if (response.status === 204) return undefined as T;
 
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    const errorBody = payload as ApiErrorBody | null;
-    throw new ApiError(
-      response.status,
-      errorBody?.error?.code ?? "SERVER_ERROR",
-      errorBody?.error?.message ?? `Request failed with status ${response.status}`,
-      errorBody?.error?.details,
-    );
-  }
-  return payload as T;
+  // Shared with the browser client so both surface an upstream that answers
+  // with HTML (a Django 404 page, an nginx 502, a misrouted proxy) as an
+  // ApiError naming the status and the path — not as a bare JSON SyntaxError
+  // from inside a bundled chunk.
+  return parseApiResponse<T>(
+    response.status,
+    response.ok,
+    text,
+    response.headers.get("content-type"),
+    `${INTERNAL_URL}${path}`,
+  );
 }
 
 /** Is the visitor signed in? (Presence of the cookie, not a validity check.) */

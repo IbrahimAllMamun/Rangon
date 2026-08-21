@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ApiError } from "./client";
+import { ApiError, parseApiResponse } from "./client";
 
 /**
  * `fieldErrors()` exists to drive `ErrorSummary` and the inline messages under
@@ -65,5 +65,85 @@ describe("ApiError.fieldErrors", () => {
   it("handles a missing or non-object details payload", () => {
     expect(new ApiError(400, "VALIDATION_ERROR", "Invalid.").fieldErrors()).toEqual([]);
     expect(new ApiError(400, "VALIDATION_ERROR", "Invalid.", "nope").fieldErrors()).toEqual([]);
+  });
+});
+
+/**
+ * Regression: a stale production API answered `/shop/navigation/` with
+ * Django's own 404 HTML page. Parsing before checking the status turned that
+ * into `SyntaxError: Unexpected token '<', "<!doctype "... is not valid JSON`
+ * thrown from a bundled chunk — an error that names neither the status, the
+ * URL, nor which upstream answered.
+ */
+describe("parseApiResponse", () => {
+  // Django's own 404 page, byte for byte — this is what the stale production
+  // API returned for /shop/navigation/.
+  const HTML_404 = [
+    "",
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    "  <title>Not Found</title>",
+    "</head>",
+    "<body>",
+    "  <h1>Not Found</h1><p>The requested resource was not found on this server.</p>",
+    "</body>",
+    "</html>",
+    "",
+  ].join("\n");
+
+  it("parses a JSON success body", () => {
+    expect(
+      parseApiResponse<{ ok: boolean }>(200, true, '{"ok":true}', "application/json", "/x/"),
+    ).toEqual({ ok: true });
+  });
+
+  it("treats an empty body as null rather than a parse failure", () => {
+    expect(parseApiResponse(200, true, "", null, "/x/")).toBeNull();
+  });
+
+  it("raises the status, not a SyntaxError, when an error body is HTML", () => {
+    let thrown: unknown;
+    try {
+      parseApiResponse(404, false, HTML_404, "text/html; charset=utf-8", "/shop/navigation/");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ApiError);
+    expect((thrown as ApiError).status).toBe(404);
+    expect((thrown as ApiError).message).toContain("/shop/navigation/");
+    expect(String(thrown)).not.toContain("Unexpected token");
+  });
+
+  it("still uses the documented envelope when the error body is JSON", () => {
+    let thrown: unknown;
+    try {
+      parseApiResponse(
+        409,
+        false,
+        JSON.stringify({ error: { code: "INSUFFICIENT_FUNDS", message: "No.", details: {} } }),
+        "application/json",
+        "/accounts/",
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as ApiError).code).toBe("INSUFFICIENT_FUNDS");
+    expect((thrown as ApiError).message).toBe("No.");
+  });
+
+  it("names the upstream when a 2xx body is not JSON at all", () => {
+    let thrown: unknown;
+    try {
+      parseApiResponse(200, true, HTML_404, "text/html", "/shop/navigation/");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as ApiError).code).toBe("UPSTREAM_NOT_JSON");
+    expect((thrown as ApiError).message).toContain("text/html");
+    expect((thrown as ApiError).message).toContain("/shop/navigation/");
   });
 });
