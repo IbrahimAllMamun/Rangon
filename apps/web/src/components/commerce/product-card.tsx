@@ -9,6 +9,7 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/primitives";
 import type { ShopProduct } from "@/lib/api/types";
+import { Reveal } from "@/components/ui/reveal";
 import { cn } from "@/lib/cn";
 import { money } from "@/lib/format";
 
@@ -29,7 +30,16 @@ export function ProductCard({
   const colours = collectColours(product);
 
   return (
-    <article className={cn("group relative", className)}>
+    <article
+      className={cn(
+        // Lift on hover: transform + shadow only, so the grid never reflows and
+        // neighbouring cards do not move. Pairs with the image zoom below —
+        // the card rises, the photo pushes in slightly behind it.
+        "group relative transition-[transform,box-shadow] duration-normal ease-rangon",
+        "hover:-translate-y-1 hover:shadow-md",
+        className,
+      )}
+    >
       <Link
         href={`/product/${product.slug}`}
         className="block focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] rounded-lg"
@@ -123,7 +133,12 @@ export function ProductGrid({
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4">
       {products.map((product, index) => (
-        <ProductCard key={product.id} product={product} priority={index < priorityCount} />
+        // Capped at 400ms total: a 40-product page must not make the last card
+        // wait four seconds to exist. Reveal keeps its space from first paint,
+        // so this stagger costs nothing in layout shift.
+        <Reveal key={product.id} delay={Math.min(index * 50, 400)}>
+          <ProductCard product={product} priority={index < priorityCount} />
+        </Reveal>
       ))}
     </div>
   );

@@ -46,6 +46,13 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 30 | Deployment | 🟡 | 🟡 | Compose prod stack; **CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment** |
 | 31 | Backup/recovery | 🟡 | — | Scripts + runbook written; **restore never rehearsed** |
 | 32 | Production launch | ⬜ | ⬜ | Blocked on `docs/operations/go-live-checklist.md` |
+| 33 | Dynamic navigation | ⬜ | ⬜ | Designed, not started. Category-driven navbar with a one-table override, `/category/[...slug]` URLs, announcement bar. Phases N0–N6 in [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md) |
+| 34 | Colour-linked product media | ⬜ | ⬜ | Designed, not started. Images bind to a colour `AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image. Phases B1–B3 in [architecture/product-media.md](architecture/product-media.md#6-phases) |
+
+Phases 33 and 34 come from external design input, reviewed 2026-08-21: the navbar specification in
+`rangon_fashion_dynamic_navbar_design.md` and a read of the Dosti Shop codebase. Nothing in either
+phase is implemented — the documents record decisions and scope only. The wider backlog drawn from
+that review is in [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
 

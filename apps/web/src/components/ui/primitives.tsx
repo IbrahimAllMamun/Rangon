@@ -23,7 +23,12 @@ import { cn } from "@/lib/cn";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-semibold " +
-    "transition-colors duration-fast ease-rangon disabled:pointer-events-none disabled:opacity-50 " +
+    // `transform` joins the transition for press feedback: a 3% dip on :active
+    // acknowledges the tap before the network does. It is the cheapest possible
+    // reassurance on a slow connection, and it is a transform, so it costs no
+    // layout. Reduced motion drops it via the global block.
+    "transition-[color,background-color,border-color,transform] duration-fast ease-rangon " +
+    "active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 " +
     "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] " +
     "focus-visible:border-brand-500 [&_svg]:shrink-0",
   {

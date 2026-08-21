@@ -99,11 +99,20 @@ const config: Config = {
         shimmer: {
           "100%": { transform: "translateX(100%)" },
         },
+        // Entrance for hero lines, sections and grid items. translate3d keeps it
+        // on the compositor; nothing here can shift layout, so CLS stays at 0.
+        "rise-in": {
+          from: { opacity: "0", transform: "translate3d(0, 12px, 0)" },
+          to: { opacity: "1", transform: "none" },
+        },
       },
       animation: {
         "fade-in": "fade-in 200ms cubic-bezier(0.2,0.8,0.2,1)",
         "slide-up": "slide-up 200ms cubic-bezier(0.2,0.8,0.2,1)",
         "slide-in-right": "slide-in-right 200ms cubic-bezier(0.2,0.8,0.2,1)",
+        // `both` so a stagger delay holds the from-state instead of flashing
+        // the finished element first. 320ms is the "slow" tier of CLAUDE.md §10.
+        "rise-in": "rise-in 320ms cubic-bezier(0.2,0.8,0.2,1) both",
       },
     },
   },

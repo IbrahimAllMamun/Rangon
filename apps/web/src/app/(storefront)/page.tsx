@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { ProductGrid } from "@/components/commerce/product-card";
 import { Button } from "@/components/ui/primitives";
+import { Reveal } from "@/components/ui/reveal";
 import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 
@@ -38,16 +39,22 @@ export default async function HomePage() {
       <section className="relative isolate overflow-hidden bg-neutral-950">
         <div className="container-rangon grid items-center gap-10 py-16 sm:py-24 lg:grid-cols-2 lg:py-28">
           <div className="max-w-xl">
-            <p className="text-caption font-semibold uppercase tracking-[0.28em] text-brand-400">
+            {/* Hero stagger: 60ms apart, 320ms each. Pure CSS so it needs no JS
+                and cannot strand text invisible; `both` fill-mode holds the
+                from-state through the delay. Reduced motion zeroes both. */}
+            <p className="motion-safe:animate-rise-in text-caption font-semibold uppercase tracking-[0.28em] text-brand-400">
               New season
             </p>
-            <h1 className="font-display mt-4 text-[2.25rem] font-bold leading-[1.05] text-white sm:text-[3rem] lg:text-display-xl">
+            <h1
+              style={{ animationDelay: "60ms" }}
+              className="font-display motion-safe:animate-rise-in mt-4 text-[2.25rem] font-bold leading-[1.05] text-white sm:text-[3rem] lg:text-display-xl"
+            >
               Elevate your everyday
             </h1>
-            <p className="mt-5 text-body-lg text-neutral-300">
+            <p style={{ animationDelay: "120ms" }} className="motion-safe:animate-rise-in mt-5 text-body-lg text-neutral-300">
               Clothing, shoes, bags and cosmetics — chosen for how Dhaka actually dresses.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div style={{ animationDelay: "180ms" }} className="motion-safe:animate-rise-in mt-8 flex flex-wrap gap-3">
               <Button asChild size="lg">
                 <Link href="/shop">
                   Shop now <ArrowRight className="size-4" aria-hidden />
@@ -59,7 +66,10 @@ export default async function HomePage() {
             </div>
           </div>
 
-          <div className="relative hidden aspect-[4/3] overflow-hidden rounded-xl lg:block">
+          <div
+            style={{ animationDelay: "120ms" }}
+            className="motion-safe:animate-rise-in relative hidden aspect-[4/3] overflow-hidden rounded-xl lg:block"
+          >
             {data?.new_arrivals?.[0]?.images?.[0] ? (
               <Image
                 src={data.new_arrivals[0].images[0].url}
@@ -78,11 +88,11 @@ export default async function HomePage() {
 
       {/* Trust strip */}
       <section className="border-b border-border bg-surface">
-        <div className="container-rangon grid gap-6 py-6 sm:grid-cols-3">
+        <Reveal className="container-rangon grid gap-6 py-6 sm:grid-cols-3">
           <Trust icon={<Truck className="size-5" aria-hidden />} title="Delivery nationwide" body="Inside Dhaka in 1–2 days" />
           <Trust icon={<RotateCcw className="size-5" aria-hidden />} title="14-day returns" body="Unworn, with the receipt" />
           <Trust icon={<ShieldCheck className="size-5" aria-hidden />} title="Cash on delivery" body="Pay when it arrives" />
-        </div>
+        </Reveal>
       </section>
 
       {data?.featured_categories?.length ? (
@@ -152,8 +162,11 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
+    // Reveal wraps the heading row only. The product grid inside staggers its
+    // own cards, and nesting one reveal inside another would delay the grid
+    // behind the heading's own transition for no visible benefit.
     <section className="container-rangon py-12 sm:py-16">
-      <div className="mb-6 flex items-end justify-between gap-4">
+      <Reveal className="mb-6 flex items-end justify-between gap-4">
         <h2 className="font-display text-h2">{title}</h2>
         {href && (
           <Link
@@ -163,7 +176,7 @@ function Section({
             View all
           </Link>
         )}
-      </div>
+      </Reveal>
       {children}
     </section>
   );

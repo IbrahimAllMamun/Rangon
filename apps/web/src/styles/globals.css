@@ -206,6 +206,12 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+    /* Duration alone is not enough. A staggered entrance also carries a delay,
+       and `animation-fill-mode: both` holds the from-state (opacity 0) for the
+       whole of it — so without this, reduced-motion users watch elements sit
+       invisible and then pop in. Collapse the delay too. */
+    animation-delay: 0ms !important;
+    transition-delay: 0ms !important;
   }
   .skeleton::after {
     display: none;

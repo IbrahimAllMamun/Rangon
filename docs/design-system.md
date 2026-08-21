@@ -112,6 +112,41 @@ toasts, gallery changes — never decoration. POS animations are limited to inst
   animation-duration:.01ms !important; transition-duration:.01ms !important; } }
 ```
 
+### Storefront motion: what moves, and why
+
+Five touchpoints, no more. The rule of thumb is that four well-chosen animations read as polished and
+twenty read as a demo reel.
+
+| What | Motion | Trigger | Why it earns its place |
+|---|---|---|---|
+| Hero | `rise-in`, 320 ms, staggered 0/60/120/180 ms | Page load | The one place personality is worth paying for. Eyebrow → headline → copy → buttons is the reading order |
+| Buttons | `active:scale-[0.97]`, 140 ms | Press | Acknowledges the tap before the network can. Cheapest reassurance on a slow connection |
+| Product card | Lift 4 px + shadow, 200 ms; photo `scale-1.03`, 320 ms | Hover | Says "this is one clickable object" — the card rises while the photo pushes in behind it |
+| Section headings | Fade + 12 px rise | Scroll into view, once | Paces a long home page instead of dumping it all at once |
+| Product grid | Same, staggered 50 ms, **capped at 400 ms** | Scroll into view, once | The cap matters: a 40-product page must not make the last card wait four seconds |
+
+Everything animates `transform` and `opacity` only — both composited, neither able to shift layout, so
+CLS stays at zero. Never animate `width`, `height`, `margin` or `top` in this codebase.
+
+**The POS animates nothing.** No hero, no reveals, no entrance. A cashier mid-scan waits for nothing
+(`CLAUDE.md` §10, §13). Its pending states are the exception, and they are feedback, not decoration.
+
+#### The resting state must always be visible
+
+The failure mode of an entrance animation is content that never arrives. Three defences, all shipped:
+
+- **`motion-safe:` gates the hero.** The animation applies only when motion is welcome; when it does
+  not apply, the element renders normally rather than being held invisible by `animation-fill-mode`.
+- **`useScrollReveal` starts visible** when `prefers-reduced-motion` is set, and also when
+  `IntersectionObserver` is missing. It unobserves after firing, so a long catalogue is not paying for
+  dozens of live observers.
+- **A `<noscript>` rule forces `[data-reveal]` visible.** The hidden state is server-rendered, so
+  without this a shopper with scripts blocked would get a blank catalogue.
+
+The global reduced-motion block also zeroes `animation-delay` and `transition-delay`, not just
+duration. Duration alone is not enough: a staggered entrance holds its from-state for the length of its
+delay, so without that line a reduced-motion user watches elements sit invisible and then pop in.
+
 ### Waiting: which loader, and when
 
 The brand mark is the only loading animation in the product (`LogoLoader`). What differs is *where*
