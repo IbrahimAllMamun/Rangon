@@ -1,7 +1,8 @@
+import { Plus } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
-import { Badge, Card, EmptyState } from "@/components/ui/primitives";
+import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, money } from "@/lib/format";
@@ -48,6 +49,14 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
         description={
           products ? `${products.count} product${products.count === 1 ? "" : "s"}` : undefined
         }
+        actions={
+          <Button asChild>
+            <Link href="/admin/products/new">
+              <Plus className="size-4" aria-hidden />
+              New product
+            </Link>
+          </Button>
+        }
       />
 
       <Card className="overflow-hidden">
@@ -58,7 +67,15 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
         ) : !products || products.results.length === 0 ? (
           <EmptyState
             title="No products yet"
-            description="Products appear here once they are created, or after running the demo seed."
+            description="Create the first one, or run the demo seed to populate the catalogue."
+            action={
+              <Button asChild>
+                <Link href="/admin/products/new">
+                  <Plus className="size-4" aria-hidden />
+                  New product
+                </Link>
+              </Button>
+            }
           />
         ) : (
           <div className="overflow-x-auto">
@@ -79,7 +96,14 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                 {products.results.map((product) => (
                   <tr key={product.id} className="hover:bg-neutral-50">
                     <td className="px-4 py-2.5">
-                      <span className="block font-medium">{product.name}</span>
+                      {/* The name is the way in to editing; the storefront link
+                          stays as a secondary action. */}
+                      <Link
+                        href={`/admin/products/${product.id}`}
+                        className="block font-medium hover:text-brand-600 hover:underline"
+                      >
+                        {product.name}
+                      </Link>
                       <Link
                         href={`/product/${product.slug}`}
                         className="text-caption text-brand-600 hover:underline"

@@ -3,7 +3,7 @@
 Two lists: decisions only the owner can make, and things no one has proven yet.
 Do not let either quietly become "done".
 
-Last reviewed: **2026-08-18** (diagnosis pass on commit `423cdf4`).
+Last reviewed: **2026-08-21** (after the product form / D2 / D3 / D16 build pass).
 
 ---
 
@@ -50,9 +50,9 @@ in `../docs/roadmap.md`.
 
 | Area | State |
 |---|---|
-| Playwright (`npm run test:e2e`) | **Blocked.** The dev image is `node:22-alpine`; Playwright has no musl browser builds and none are installed. Needs a glibc runner or a host run |
+| Playwright (`npm run test:e2e`) | **Still blocked** in the dev image (`node:22-alpine`, no musl browsers), but browser verification itself is no longer blocked: `apps/web/e2e/browser-walk.mjs` runs in `mcr.microsoft.com/playwright` joined to the compose network. The committed spec suite has still never been executed |
 | Vitest / Playwright in CI | Neither is in `ci.yml`. The frontend job is `npm ci` → lint → typecheck → build |
-| Admin write screens, signed in | Organization + branch editors exist in code and anonymous requests correctly redirect, but nobody has signed in and used them |
+| Admin write screens, signed in | **Partly closed.** The product form was walked signed-in through Chromium on 2026-08-21: create → variant matrix → opening stock → publish. The organization and branch editors still have no signed-in click-through |
 | Payment gateway | No live provider; the card option is visibly **disabled**, not faked |
 | Backup restore | Scripts and runbook written; **never rehearsed**. A backup that has never been restored is not a backup |
 | Load / performance | Query budgets documented in `docs/database/indexing.md` but **not asserted in tests**; no load test |

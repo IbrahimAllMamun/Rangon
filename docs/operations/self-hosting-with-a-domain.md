@@ -318,7 +318,8 @@ renewal and you have published your home IP address.
 
 Beyond this document — these are product gaps, not hosting gaps:
 
-- [ ] **CSP fixed properly** (D16) — currently `unsafe-inline`
+- [x] **CSP fixed properly** (D16) — a per-request nonce from Next middleware; `script-src`
+      carries neither `unsafe-inline` nor `unsafe-eval`, and Nginx no longer sends the header
 - [ ] **Payment gateway** — COD only today; the card option is deliberately disabled
 - [ ] **Backups running and a restore rehearsed** — never done ([roadmap.md](../roadmap.md#still-unproven))
 - [ ] **VAT settled** — changing it later rewrites every historical total
