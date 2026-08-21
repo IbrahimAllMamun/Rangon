@@ -72,6 +72,7 @@ LOCAL_APPS = [
     "inventory",
     "purchasing",
     "customers",
+    "finance",
     "orders",
     "shipping",
     "promotions",

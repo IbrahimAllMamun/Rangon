@@ -37,6 +37,10 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "purchases.create": ("purchases", "Create purchase orders"),
     "purchases.receive": ("purchases", "Receive stock"),
     "purchases.pay": ("purchases", "Pay suppliers"),
+    "finance.view": ("finance", "View accounts and the cash book"),
+    "finance.manage": ("finance", "Open and edit accounts"),
+    "finance.transfer": ("finance", "Move money between accounts"),
+    "finance.adjust": ("finance", "Record a manual cash-book entry"),
     "customers.view": ("customers", "View customers"),
     "customers.create": ("customers", "Create customers"),
     "customers.update": ("customers", "Update customers"),
@@ -77,6 +81,12 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "purchases.view",
         "purchases.create",
         "purchases.receive",
+        # A manager runs the shop's money day to day: banks the takings and
+        # corrects the drawer. Opening a new account is an owner/accountant
+        # decision, so `finance.manage` is deliberately withheld.
+        "finance.view",
+        "finance.transfer",
+        "finance.adjust",
         "customers.view",
         "customers.create",
         "customers.update",
@@ -96,6 +106,9 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "sales.create",
         "sales.discount",
         "sales.payment_record",
+        # A cashier needs to see which account a sale's money is going into,
+        # but may not move money between accounts or correct a balance.
+        "finance.view",
         "orders.view",
         "customers.view",
         "customers.create",
@@ -126,6 +139,11 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "orders.view",
         "purchases.view",
         "purchases.pay",
+        # The cash book is the accountant's own instrument.
+        "finance.view",
+        "finance.manage",
+        "finance.transfer",
+        "finance.adjust",
         "customers.view",
         "reports.view",
         "reports.financial",

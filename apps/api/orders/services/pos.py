@@ -51,6 +51,10 @@ class PaymentInput:
     amount: Decimal
     tendered_amount: Decimal | None = None
     reference: str = ""
+    #: Which account this tender lands in.  Per-payment rather than per-sale so
+    #: a split of cash + card puts the cash in the drawer and the card takings
+    #: in the bank, instead of both in whichever was picked for the sale.
+    account: Any = None
 
 
 @dataclass
@@ -226,6 +230,7 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
             status=PaymentState.CAPTURED,
             reference=payment_input.reference,
             tendered_amount=payment_input.tendered_amount,
+            account=payment_input.account,
         )
         total_paid += amount
 

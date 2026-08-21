@@ -64,6 +64,18 @@ class InsufficientStock(BusinessError):
     default_message = "The requested quantity is not available."
 
 
+class InsufficientFunds(BusinessError):
+    """A cash drawer cannot pay out money it does not hold.
+
+    The money equivalent of InsufficientStock, and refused in the same place:
+    inside the service, under SELECT ... FOR UPDATE on the account row.
+    """
+
+    code = "INSUFFICIENT_FUNDS"
+    status_code = 409
+    default_message = "That account does not hold enough money for this movement."
+
+
 class InvalidStatusTransition(BusinessError):
     code = "INVALID_STATUS_TRANSITION"
     status_code = 409

@@ -293,21 +293,57 @@ def record_supplier_payment(
     paid_at: Any = None,
     actor: User | None = None,
     notes: str = "",
+    account: Any = None,
+    branch: Any = None,
 ) -> SupplierPayment:
+    """Pay a supplier, taking the money out of one of our own accounts.
+
+    ``account`` names it explicitly; otherwise the branch's default account for
+    the method's kind is used.  ``branch`` is only needed when there is no
+    purchase order to take it from.
+    """
+    from finance import services as finance_services
+    from finance.models import AccountTransactionType
+
     amount = quantize(amount)
     if amount <= 0:
         raise ValidationError("Payment amount must be positive.")
 
+    when = paid_at or timezone.now()
     payment = SupplierPayment.objects.create(
         supplier=supplier,
         purchase_order=purchase_order,
         amount=amount,
         method=method,
         reference=reference,
-        paid_at=paid_at or timezone.now(),
+        paid_at=when,
         notes=notes,
+        account=account,
         created_by=actor,
     )
+
+    # Paying a supplier is money leaving the business, so it comes out of an
+    # account.  A cash drawer that does not hold enough refuses here
+    # (InsufficientFunds) rather than going quietly negative.
+    # The goods' branch is the one that pays for them; `branch` is only a
+    # fallback for a payment made against no particular order.
+    source_branch = purchase_order.branch if purchase_order else branch
+    if source_branch is not None:
+        entry = finance_services.record_for_reference(
+            branch=source_branch,
+            transaction_type=AccountTransactionType.SUPPLIER_PAYMENT,
+            amount=amount,
+            account=account,
+            method=method,
+            reference_type="supplier_payment",
+            reference_id=payment.pk,
+            actor=actor,
+            notes=f"{supplier.name}{' ' + purchase_order.number if purchase_order else ''}",
+            occurred_at=when,
+        )
+        if entry is not None and payment.account_id != entry.account_id:
+            payment.account_id = entry.account_id
+            payment.save(update_fields=["account", "updated_at"])
 
     if purchase_order is not None:
         locked = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)

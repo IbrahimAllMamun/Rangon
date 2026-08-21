@@ -183,6 +183,7 @@ class PosSaleViewSet(viewsets.GenericViewSet):
                         amount=quantize(payment["amount"]),
                         tendered_amount=payment.get("tendered_amount"),
                         reference=payment.get("reference", ""),
+                        account=payment.get("account"),
                     )
                     for payment in data["payments"]
                 ],

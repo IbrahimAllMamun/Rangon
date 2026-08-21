@@ -32,6 +32,58 @@ from orders.services.lifecycle import log_event
 CAPTURED_STATES = {PaymentState.CAPTURED, PaymentState.PARTIALLY_REFUNDED, PaymentState.REFUNDED}
 
 
+def _already_posted(reference_type: str, reference_id: Any) -> bool:
+    """Has this money event already moved an account balance?
+
+    Checked against the cash book rather than against a flag on the row,
+    because the cash book is the thing that must not be double-counted.
+    """
+    from finance.models import AccountTransaction
+
+    return AccountTransaction.objects.filter(
+        reference_type=reference_type, reference_id=str(reference_id)
+    ).exists()
+
+
+def _post_payment_to_cash_book(
+    *,
+    payment: Payment,
+    order: Order,
+    account: Any = None,
+    actor: Any = None,
+) -> None:
+    """Move the money into the account it actually landed in.
+
+    Called only once a payment is CAPTURED -- an authorised-but-uncaptured card
+    payment has not put money anywhere yet, and a COD order's cash arrives when
+    the courier remits, not when the order is placed.
+
+    Posts nothing when the branch has no account able to hold this method's
+    money.  The sale still completes; ``verify_accounts`` reports the gap.
+    """
+    from finance import services as finance_services
+    from finance.models import AccountTransactionType
+
+    if _already_posted("payment", payment.pk):
+        return
+
+    entry = finance_services.record_for_reference(
+        branch=order.branch,
+        transaction_type=AccountTransactionType.SALE_PAYMENT,
+        amount=payment.amount,
+        account=account or payment.account,
+        method=payment.method,
+        reference_type="payment",
+        reference_id=payment.pk,
+        actor=actor,
+        notes=f"{order.number} - {payment.method}",
+        occurred_at=payment.captured_at,
+    )
+    if entry is not None and payment.account_id != entry.account_id:
+        payment.account_id = entry.account_id
+        payment.save(update_fields=["account", "updated_at"])
+
+
 def refresh_payment_status(order: Order) -> Order:
     """Derive the order's payment status from its payment and refund rows."""
     captured = ZERO
@@ -78,8 +130,14 @@ def record_payment(
     reference: str = "",
     tendered_amount: Decimal | None = None,
     payload: dict[str, Any] | None = None,
+    account: Any = None,
 ) -> Payment:
-    """Record a payment against an order (cash, card slip, MFS, bank, COD)."""
+    """Record a payment against an order (cash, card slip, MFS, bank, COD).
+
+    ``account`` names which of the business's own accounts the money goes into.
+    Omit it and the branch's default account for the method's kind is used
+    (finance.services.resolve_account).
+    """
     order = Order.objects.select_for_update().get(pk=order.pk)
     amount = quantize(amount)
     if amount <= ZERO:
@@ -108,8 +166,15 @@ def record_payment(
         captured_at=now if status == PaymentState.CAPTURED else None,
         authorized_at=now if status == PaymentState.AUTHORIZED else None,
         failed_at=now if status == PaymentState.FAILED else None,
+        account=account,
         created_by=actor,
     )
+
+    # Money moves only on capture.  A PENDING or AUTHORIZED payment keeps the
+    # chosen account on the row so capture knows where to post, but puts
+    # nothing in it yet.
+    if status == PaymentState.CAPTURED:
+        _post_payment_to_cash_book(payment=payment, order=order, account=account, actor=actor)
 
     refresh_payment_status(order)
     log_event(
@@ -127,6 +192,31 @@ def record_payment(
         branch=order.branch,
     )
     return payment
+
+
+def _post_refund_to_cash_book(*, refund: Refund, order: Order, actor: Any = None) -> None:
+    """Take the refunded money back out of the account that holds it."""
+    from finance import services as finance_services
+    from finance.models import AccountTransactionType
+
+    if _already_posted("refund", refund.pk):
+        return
+
+    entry = finance_services.record_for_reference(
+        branch=order.branch,
+        transaction_type=AccountTransactionType.REFUND,
+        amount=refund.amount,
+        account=refund.account,
+        method=refund.method,
+        reference_type="refund",
+        reference_id=refund.pk,
+        actor=actor,
+        reason=refund.reason,
+        notes=f"{order.number} refund",
+    )
+    if entry is not None and refund.account_id != entry.account_id:
+        refund.account_id = entry.account_id
+        refund.save(update_fields=["account", "updated_at"])
 
 
 @transaction.atomic
@@ -155,6 +245,9 @@ def capture_payment(
     )
 
     order = Order.objects.select_for_update().get(pk=payment.order_id)
+    # Capture is the moment the money is really ours — this is where a COD
+    # order's cash and a gateway's settled card payment enter the cash book.
+    _post_payment_to_cash_book(payment=payment, order=order, actor=actor)
     refresh_payment_status(order)
     log_event(
         order,
@@ -196,6 +289,7 @@ def refund_order(
     method: str | None = None,
     return_request: Any = None,
     idempotency_key: str | None = None,
+    account: Any = None,
 ) -> Refund:
     """Refund money against an order.
 
@@ -228,6 +322,11 @@ def refund_order(
     source_payment = order.payments.filter(status__in=CAPTURED_STATES).order_by("-amount").first()
     refund_method = method or (source_payment.method if source_payment else PaymentMethod.CASH)
 
+    # Refund the money out of the account it came in through, unless the caller
+    # names another one.  Paying a card refund out of the cash drawer would
+    # leave both accounts wrong.
+    refund_account = account or (source_payment.account if source_payment else None)
+
     try:
         refund = Refund.objects.create(
             order=order,
@@ -238,6 +337,7 @@ def refund_order(
             status=RefundStatus.COMPLETED,
             reason=reason[:255],
             idempotency_key=idempotency_key,
+            account=refund_account,
             created_by=actor,
         )
     except IntegrityError:
@@ -246,6 +346,8 @@ def refund_order(
         if existing is not None:
             return existing
         raise
+
+    _post_refund_to_cash_book(refund=refund, order=order, actor=actor)
 
     if source_payment is not None:
         source_payment.refunded_total = quantize(source_payment.refunded_total + amount)

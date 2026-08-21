@@ -13,7 +13,9 @@ from decimal import Decimal
 import pytest
 from django.db import connections
 
-from core.exceptions import BusinessError
+from core.exceptions import BusinessError, InsufficientFunds
+from finance import services as finance_services
+from finance.models import AccountKind
 from inventory import services as inventory_services
 from inventory.models import Inventory
 from orders.models import Order, PaymentMethod, PaymentState
@@ -266,3 +268,141 @@ def test_return_processed_twice_refunds_once(last_unit):
     assert order.refunds.count() == 1
     assert order.refunded_total == Decimal("1000.00")
     assert inventory_services.verify_integrity() == []
+
+
+# ---------------------------------------------------------------------------
+# Money: the same races, one layer up
+# ---------------------------------------------------------------------------
+
+
+def test_simultaneous_sales_all_land_in_one_drawer(last_unit):
+    """Six registers taking cash at once must sum exactly, with no lost update.
+
+    Without SELECT ... FOR UPDATE on the account row, read-modify-write on
+    `balance` loses increments here — the classic bug this app is shaped to
+    prevent.
+    """
+    branch = last_unit["branch"]
+    drawer = finance_services.create_account(
+        branch=branch, name="Shared Drawer", kind=AccountKind.CASH, is_default=True
+    )
+    variant = factories.variant(price="100.00")
+    factories.stock(variant, branch, 50, "40.00")
+
+    def sell(index: int) -> str:
+        order = pos.create_pos_sale(
+            branch=branch,
+            actor=last_unit["cashier"],
+            data=SaleInput(
+                lines=[SaleLineInput(variant_id=variant.pk, quantity=1)],
+                payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("100.00"))],
+                idempotency_key=f"drawer-{index}",
+            ),
+        )
+        return order.number
+
+    results, errors = run_together(sell, 6)
+
+    assert not errors, f"failures: {errors}"
+    assert len(results) == 6
+    drawer.refresh_from_db()
+    assert drawer.balance == Decimal("600.00")
+    assert finance_services.verify_integrity() == []
+
+
+def test_concurrent_withdrawals_cannot_overdraw_a_drawer(last_unit):
+    """Only as many withdrawals as the drawer can cover may succeed."""
+    drawer = finance_services.create_account(
+        branch=last_unit["branch"],
+        name="Small Drawer",
+        kind=AccountKind.CASH,
+        opening_balance=Decimal("300.00"),
+    )
+
+    def withdraw(index: int) -> str:
+        finance_services.record_movement(
+            account=drawer,
+            transaction_type="WITHDRAWAL",
+            amount=Decimal("100.00"),
+            reason=f"race-{index}",
+        )
+        return "withdrawn"
+
+    results, errors = run_together(withdraw, 5)
+
+    assert len(results) == 3, f"expected exactly 3 to succeed, got {len(results)}"
+    assert len(errors) == 2
+    assert all(isinstance(error, InsufficientFunds) for error in errors)
+    drawer.refresh_from_db()
+    assert drawer.balance == Decimal("0.00")
+    assert finance_services.verify_integrity() == []
+
+
+def test_transfers_in_opposite_directions_do_not_deadlock(last_unit):
+    """Locking accounts in primary-key order is what prevents this."""
+    branch = last_unit["branch"]
+    first = finance_services.create_account(
+        branch=branch,
+        name="Drawer A",
+        kind=AccountKind.CASH,
+        opening_balance=Decimal("1000.00"),
+    )
+    second = finance_services.create_account(
+        branch=branch,
+        name="Bank B",
+        kind=AccountKind.BANK,
+        opening_balance=Decimal("1000.00"),
+    )
+
+    def move(index: int) -> str:
+        source, target = (first, second) if index % 2 == 0 else (second, first)
+        finance_services.transfer(
+            source_account=source, target_account=target, amount=Decimal("50.00")
+        )
+        return "moved"
+
+    results, errors = run_together(move, 6)
+
+    assert not errors, f"deadlock or failure: {errors}"
+    assert len(results) == 6
+    first.refresh_from_db()
+    second.refresh_from_db()
+    # Three each way: money is conserved whatever order they interleaved in.
+    assert first.balance + second.balance == Decimal("2000.00")
+    assert finance_services.verify_integrity() == []
+
+
+def test_a_replayed_capture_webhook_banks_the_money_once(last_unit):
+    """A gateway that retries its webhook must not credit the account twice."""
+    branch = last_unit["branch"]
+    bank = finance_services.create_account(
+        branch=branch, name="Settlement", kind=AccountKind.BANK, is_default=True
+    )
+    finance_services.create_account(
+        branch=branch, name="Drawer", kind=AccountKind.CASH, is_default=True
+    )
+    order = pos.create_pos_sale(
+        branch=branch,
+        actor=last_unit["cashier"],
+        data=SaleInput(
+            lines=[SaleLineInput(variant_id=last_unit["variant"].pk, quantity=1)],
+            payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("1000.00"))],
+            idempotency_key="webhook-race",
+        ),
+    )
+    pending = payment_services.record_payment(
+        order=order,
+        method=PaymentMethod.CARD,
+        amount=Decimal("250.00"),
+        status=PaymentState.PENDING,
+    )
+
+    def capture(_index: int) -> str:
+        payment_services.capture_payment(payment=pending)
+        return "captured"
+
+    run_together(capture, 4)
+
+    bank.refresh_from_db()
+    assert bank.balance == Decimal("250.00")
+    assert finance_services.verify_integrity() == []

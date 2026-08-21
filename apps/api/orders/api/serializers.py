@@ -4,6 +4,7 @@ from typing import Any
 
 from rest_framework import serializers
 
+from finance.models import Account
 from orders.models import (
     Cart,
     CartItem,
@@ -58,6 +59,7 @@ class OrderItemCostSerializer(OrderItemSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     created_by_email = serializers.CharField(source="created_by.email", read_only=True, default="")
+    account_name = serializers.CharField(source="account.name", read_only=True, default="")
 
     class Meta:
         model = Payment
@@ -76,6 +78,8 @@ class PaymentSerializer(serializers.ModelSerializer):
             "captured_at",
             "failed_at",
             "refunded_total",
+            "account",
+            "account_name",
             "created_by_email",
             "created_at",
         ]
@@ -205,6 +209,9 @@ class PosPaymentSerializer(serializers.Serializer):
         max_digits=14, decimal_places=2, required=False, allow_null=True
     )
     reference = serializers.CharField(required=False, allow_blank=True, max_length=128)
+    account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.filter(is_active=True), required=False, allow_null=True
+    )
 
 
 class PosSaleSerializer(serializers.Serializer):
@@ -322,12 +329,21 @@ class RecordPaymentSerializer(serializers.Serializer):
     method = serializers.ChoiceField(choices=PaymentMethod.choices)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
     reference = serializers.CharField(required=False, allow_blank=True, max_length=128)
+    # Which of our own accounts the money goes into. Omitted, the branch's
+    # default account for the method's kind is used (finance.resolve_account).
+    account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.filter(is_active=True), required=False, allow_null=True
+    )
 
 
 class RefundRequestSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
     method = serializers.ChoiceField(choices=PaymentMethod.choices, required=False)
+    #: Omitted, the refund comes out of the account the payment came in through.
+    account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.filter(is_active=True), required=False, allow_null=True
+    )
 
 
 class StatusChangeSerializer(serializers.Serializer):
