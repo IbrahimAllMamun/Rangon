@@ -49,6 +49,26 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 33 | Dynamic navigation          | ✅      | ✅       | Category-driven navbar with a one-table override,`/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5 |
 | 34 | Colour-linked product media | ✅ | ✅ | Images bind to a colour `AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image; clicking another colour's thumbnail repairs the other axes. Phases B1–B3 all done — **B3 landed 2026-08-21** with the admin product form it was blocked on — [architecture/product-media.md](architecture/product-media.md#6-phases) |
 
+| 35 | Financial accounts + cash book | ⬜ | ⬜ | **F1** of the money layer. `finance` app: `Account` (cash/bank/MFS, per branch), append-only `AccountTransaction`, `AccountTransfer`. Balance is a reconciled cache with a `verify_accounts` command, exactly as `Inventory.on_hand` sits over `InventoryTransaction`. Every existing money event gains an account and posts a movement inside its service's atomic block. **Blocks 36–39** |
+| 36 | Expenses | ⬜ | ⬜ | **F2.** `ExpenseCategory` + `Expense` posted through `finance.services`; admin screen with period filter, category-wise totals, CSV. Without this, "profit" is only gross margin |
+| 37 | Party ledger — receivable / payable | ⬜ | ⬜ | **F3.** Derived from rows that already exist — **no balance column on `Customer`** — plus an `OPENING` entry type for shops migrating from paper. Ledger tabs and ageing buckets. **Conditional on decision D-A below** |
+| 38 | Business report → net profit | ⬜ | ⬜ | **F4.** `business_summary(period, branch)` over sales, gross margin from the frozen `unit_cost` (ADR-0006), purchases, damage, expenses, returns, discounts, VAT. Only figures we can compute honestly — Salary/Warranty/Service stay off until those features exist. **Blocked by the VAT decision** |
+| 39 | Trade documents | ⬜ | ⬜ | **F5**, parallel with 36–38. Damage/write-off, stock count and stock transfer screens (services already built and tested — pure form work), quotation → order, cheque register with a Pending→Deposited→Cleared/Bounce lifecycle, barcode label sheets, SR attribution |
+
+Phases 35–39 come from a signed-in, read-only walk of all 56 screens of the **Bseba ERP**
+(`erp.bseba.com`, Dostishop tenant) on 2026-08-21 — written up with a have-it / build-it / decline-it
+verdict per feature in [planning/bseba-erp-feature-audit.md](planning/bseba-erp-feature-audit.md).
+
+The finding: Rangon matches or beats that ERP on catalogue, purchasing, POS, returns, stock and
+reports — and has a storefront it has no equivalent of — but **has no financial layer at all**. Rangon
+records a payment *method* and never which account the money landed in; there are no expenses, no
+receivable/payable, and therefore no net profit. That is what 35–39 close.
+
+Deliberately declined, with reasons in the audit: the ERP's marketplace, EMI/instalments, investor
+register and attendance/payroll. Also declined, because they break rules this codebase is built on:
+typing `Stock QTY` on a product form (CLAUDE.md §3.2), setting sale price inside the goods-receipt
+screen with no record of why, and the single-product-no-variants model.
+
 Phases 33 and 34 were designed from external design input reviewed 2026-08-21 (the navbar specification
 in `rangon_fashion_dynamic_navbar_design.md` and a read of the Dosti Shop codebase) and implemented
 2026-08-21. The wider backlog drawn from that review — CSV import, media library, four-state variant
@@ -265,17 +285,47 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
 8. **SMS provider** for order notifications.
 9. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired), and real
     product photography for the seed (D9).
-10. **Nine owner decisions** are still open — `docs/business-rules.md` carries 9 `DECISION REQUIRED`
-    markers, plus the payment-gateway and courier choices. VAT must be settled before the first real
-    sale, because changing it rewrites every historical total.
+10. **Eleven owner decisions** are still open — `docs/business-rules.md` carries 11 `DECISION REQUIRED`
+    markers (nine from the original build, plus D-A credit sales and D-B chart-of-accounts from the
+    Bseba audit), and on top of those the payment-gateway and courier choices. VAT must be settled
+    before the first real sale, because changing it rewrites every historical total — and it now also
+    blocks phase 38.
+
+## Decisions owed for phases 35–39
+
+The money layer cannot be designed around an unanswered question, so these four are recorded here as
+well as in [business-rules.md](business-rules.md). Each changes the shape of the code, not just the
+schedule.
+
+| # | Decision | Blocks | Default if unanswered |
+|---|---|---|---|
+| D-A | **Does the business sell on credit?** | Phase 37 entirely, and how orders relate to payment | Assume no: build 35 + 36 only, which still deliver most of the value |
+| D-B | **A flat list of cash/bank/MFS accounts, or a real chart of accounts?** | Phase 35's schema | Flat list — honest and sufficient; a chart of accounts is an accounting product |
+| D-C | **VAT: inclusive or exclusive, and at what rate?** | Phase 38 **outright** | Already exclusive at 0%. Net profit cannot be computed until this is settled, and settling it later rewrites every historical total |
+| D-D | **Build EMI, investors, marketplace or attendance at all?** | Nothing — they are declined | No. See the audit for why each is a different product |
+
+D-C is the same VAT decision the go-live list has carried since 2026-08-18. It has now grown a second
+consequence: it no longer only blocks the first real sale, it blocks the report the owner manages by.
 
 ## Suggested next task
 
-**Purchase order create → send → receive.** It is now the largest everyday job still done through the
+Two candidates, depending on whether you want reach or depth. The Bseba audit did not displace the
+first; it added the second.
+
+**Reach — purchase order create → send → receive.** Still the largest everyday job done through the
 API: `POST /purchase-orders/`, `/send/` and `/receive/` are built and tested, the admin list already
 exists, and receiving is what puts stock on the shelf through the ledger. The product form is the
 pattern — a line-item table with per-row quantities and costs is the same shape as the variant matrix,
 including the rule that receiving writes an `InventoryTransaction` rather than a column.
+
+**Depth — phase 35, financial accounts and the cash book.** The largest *structural* gap in the
+platform, and it blocks 36, 37, 38 and the cheque register in 39. Nothing else in the money layer can
+be built first, and every week it is deferred is another week of payments recorded without an account.
+
+**If you want a quick win before either**, take the phase 39 screens for damage/write-off, stock count
+and stock transfer. `inventory.services.write_off`, the stock-count apply flow and `transfer` are all
+built, tested and currently unreachable from the UI — so it is pure form work with no new business
+rules, exactly like the product form that shipped on 2026-08-21.
 
 Two smaller ones, each about an afternoon:
 

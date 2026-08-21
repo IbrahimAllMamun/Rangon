@@ -3963,3 +3963,163 @@ The Rangon Fashion application should visually balance:
 The overall design should feel **bold and fashionable without becoming visually loud**.
 
 The black + white + Rangon red combination should remain the recognizable visual signature across the storefront, POS, admin dashboard, invoices, and future mobile/desktop applications.
+
+---
+
+# 87. Roadmap Additions After the Original Plan
+
+Sections 1–86 are the original specification. Everything below was added later, from sources outside
+this document, and is recorded here so the plan stays the single place to read what Rangon is meant
+to be. Status for all of them lives in `docs/roadmap.md`; this section is the *spec*, not the tracker.
+
+## 87.1 Phases 33–34 — navigation and product media
+
+| # | Phase | Source |
+|---|---|---|
+| 33 | Dynamic navigation — category-driven navbar, one-table overrides, `/category/[...slug]`, announcement bar, search suggest | `rangon_fashion_dynamic_navbar_design.md`, reviewed 2026-08-21 |
+| 34 | Colour-linked product media — images bind to a colour `AttributeValue`, not a variant | `docs/architecture/product-media.md` |
+
+Both shipped 2026-08-21. Decisions in ADR-0009, ADR-0010.
+
+## 87.2 Phases 35–39 — the financial layer
+
+Source: a signed-in, read-only walk of all 56 screens of the **Bseba ERP** (`erp.bseba.com`, Dostishop
+tenant) on 2026-08-21. Full audit with a per-feature verdict:
+`docs/planning/bseba-erp-feature-audit.md`.
+
+**Why this exists.** Rangon matches or beats that ERP on catalogue, purchasing, POS, returns, stock
+and reports, and has a storefront it has no equivalent of. But Rangon has **no financial layer**: it
+records a payment *method* and never which account the money landed in, has no expenses, no
+receivable/payable, and therefore cannot produce net profit — the one figure an owner manages by.
+
+```text
+32. Production Launch
+        ↓
+33. Dynamic Navigation          ✅
+        ↓
+34. Colour-Linked Product Media ✅
+        ↓
+35. Financial Accounts + Cash Book   ← blocks 36, 37, 38 and the cheque register in 39
+        ↓
+36. Expenses
+        ↓
+37. Party Ledger (Receivable / Payable)      ← only if the business sells on credit
+        ↓
+38. Business Report → Net Profit             ← blocked by the VAT decision
+        ↓
+39. Trade Documents                          ← parallel with 36–38
+```
+
+### 35. Financial Accounts + Cash Book
+
+New Django app `finance`, modelled on the inventory engine because it protects the same class of
+invariant.
+
+```text
+Account             name, kind (CASH | BANK | MFS | OTHER), number, branch, opening balance, is_active
+AccountTransaction  APPEND-ONLY. signed amount, type, reference_type + reference_id, actor,
+                    occurred_at, reason
+AccountTransfer     one movement out, one movement in, in a single transaction
+```
+
+Rules, all of them non-negotiable:
+
+```text
+[ ] No balance column is ever written directly. The balance is a transactional cache over the
+    append-only table, reconciled by `manage.py verify_accounts`, which replays the ledger exactly
+    as `verify_inventory` does.
+[ ] Every existing money event gains an optional account FK and posts its movement INSIDE the
+    service's existing transaction.atomic() block — order payments, supplier payments, refunds.
+[ ] Money crossing any boundary is Decimal. Never float.
+[ ] Every movement is audit-logged: actor, before, after, reason, reference.
+[ ] Rows are never hard-deleted. Reverse, refund, or compensate.
+[ ] Tests: replay-equals-cache invariant, insufficient-balance failure path, two concurrent payments
+    into one account, permission enforcement.
+```
+
+POS and the payment-capture dialog gain an account selector, defaulting to the branch's cash account.
+
+### 36. Expenses
+
+```text
+ExpenseCategory   name, code, is_active
+Expense           category, account, amount, spent_at, note, attachment, branch, created_by
+```
+
+Posting an expense writes an `AccountTransaction` through `finance.services` — never a bare row.
+Admin screen with a period filter, category-wise totals and CSV export. Report endpoint grouped by
+category and period.
+
+### 37. Party Ledger — Receivable and Payable
+
+Only if the owner confirms the business sells on credit (decision D-A in `docs/roadmap.md`).
+
+```text
+[ ] Do NOT add a balance column to Customer. Derive the balance from rows that already exist.
+    Materialise a cache only if measurement proves the query too slow, and then reconcile it the
+    way inventory does.
+[ ] One new row type: an OPENING entry, so a shop migrating from paper can state what a customer
+    already owed.
+[ ] Ledger tab on customer and supplier detail; receivable and payable reports with 0–30 / 31–60 /
+    61–90 / 90+ ageing buckets.
+[ ] Storefront: nothing. Credit is a counter relationship.
+```
+
+### 38. Business Report → Net Profit
+
+`reports/services.py` gains `business_summary(period, branch)`:
+
+```text
+Sales        total · paid · due · gross margin from the frozen unit_cost on order lines (ADR-0006)
+Purchases    total · paid · due · other costs
+Losses       damage / write-off value · returns · return loss
+Outgoings    expenses · discounts given
+Incoming     discounts received · total received · total paid
+Tax          VAT
+Position     receivable · payable · stock value · account balances
+Result       NET PROFIT
+```
+
+Build only the figures Rangon can compute honestly. Salary, warranty and service stay **off** the
+report until those features exist — a figure that is always zero is worse than an absent one, because
+it reads as "we have that".
+
+### 39. Trade Documents
+
+Independent of the money layer; may run in parallel.
+
+```text
+[ ] Damage / write-off screen      inventory.services.write_off exists and is tested — form work only
+[ ] Stock count screen             the apply flow exists — form work only
+[ ] Stock transfer screen          inventory.services.transfer exists — form work only
+[ ] Quotation                      Quotation + QuotationLine, DRAFT → SENT → ACCEPTED → EXPIRED /
+                                   CONVERTED, printable A4, and convert_to_order() reusing the
+                                   existing checkout path so pricing and stock rules cannot diverge
+[ ] Cheque register                Pending → Deposited → Cleared / Bounce. A cleared cheque posts to
+                                   phase 35; a bounced one reverses. Requires 35.
+[ ] Barcode label sheets           multi-product sheet + single label, reusing the existing generator
+[ ] SR attribution                 optional sales_rep FK on Order, plus a sales-report filter
+```
+
+## 87.3 Explicitly out of scope
+
+Present in the Bseba ERP, deliberately **not** built. Reasons in full in the audit.
+
+```text
+Marketplace              a multi-vendor B2B product; Branch + the storefront cover the real need
+EMI / instalments        real in BD electronics retail, rare in fashion; cheap to add after 35–38
+Investor register        a capital-account feature; ask the owner first
+Attendance / payroll     HR, not retail. A salary EXPENSE captures the money without an HR module
+```
+
+And three that would break rules this platform is built on:
+
+```text
+Stock QTY typed on the product form   violates §3.2 of CLAUDE.md — stock moves through
+                                      inventory.services with a reason, never a column write
+Sale price set inside the purchase    edits the catalogue from a goods-receipt document with no
+screen                                record of why the price moved. If wanted, make it an explicit
+                                      "reprice from this receipt" action that writes audit rows
+One product = one stock row,          the variant model is the reason Rangon can sell fashion at all
+no variants
+```

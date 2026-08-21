@@ -290,6 +290,48 @@ business rule and belongs on the server.
 
 ---
 
+## 6b. Money accounts and credit
+
+**Not built yet** — this section states the rules phases 35–37 must implement, so the decisions are
+settled before the schema is. See [roadmap.md](roadmap.md) and
+[planning/bseba-erp-feature-audit.md](planning/bseba-erp-feature-audit.md).
+
+### 6b.1 Where money is held
+
+Every payment, refund and supplier payment names the **account** it moved through — a cash drawer, a
+bank account or an MFS wallet — not merely a *method*. Today the system records `PaymentMethod` and
+loses the destination, so there is no cash position and no bank balance.
+
+An account's balance is a **transactional cache over an append-only transaction table**, reconciled
+by replaying the ledger, exactly as `Inventory.on_hand` sits over `InventoryTransaction`
+(§1.1). No code writes a balance column directly.
+
+*`DECISION REQUIRED` — a flat list of cash/bank/MFS accounts is assumed, not a chart of accounts. A
+flat list is sufficient for a retailer; a chart of accounts is an accounting product and changes the
+schema materially. Roadmap decision D-B.*
+
+### 6b.2 Selling on credit
+
+*`DECISION REQUIRED` — assumed **no**: every sale is paid in full at the point of sale or is a COD
+order that settles on delivery. If the business does sell on credit ("বাকি"), phase 37 builds a party
+ledger and this section grows the rules for credit limits, ageing and dunning. Roadmap decision D-A.*
+
+If credit is enabled, a customer's balance is **derived** from orders and payments that already
+exist — no balance column on `Customer` — and an `OPENING` entry states what a customer owed before
+the system was adopted.
+
+### 6b.3 Net profit
+
+Net profit is only reported from figures the system can compute honestly: sales, gross margin from
+the `unit_cost` frozen onto the order line at sale time (§4, ADR-0006), purchases, damage, expenses,
+returns, discounts and VAT. Figures for features that do not exist — salary, warranty, service — are
+**omitted rather than reported as zero**, because a permanent zero reads as a working feature.
+
+Net profit cannot be reported at all until the VAT decision in §3.4 is settled, since VAT changes
+every historical total.
+
+---
+
 ## 7. Permissions
 
 Roles: `OWNER`, `ADMIN`, `MANAGER`, `CASHIER`, `INVENTORY_MANAGER`, `ACCOUNTANT`, `CUSTOMER`.
