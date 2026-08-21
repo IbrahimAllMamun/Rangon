@@ -194,13 +194,18 @@ Textarea.displayName = "Textarea";
 
 export const Select = React.forwardRef<
   HTMLSelectElement,
-  React.SelectHTMLAttributes<HTMLSelectElement>
->(({ className, children, ...props }, ref) => (
+  React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }
+>(({ className, children, invalid, ...props }, ref) => (
   <select
     ref={ref}
+    // `invalid` matches Input and Textarea. Without it a select could not be
+    // marked up as failing validation, so callers passed the prop anyway and it
+    // silently vanished into the DOM.
+    aria-invalid={invalid || undefined}
     className={cn(
-      "h-11 w-full rounded-md border border-neutral-300 bg-white px-3 text-body sm:h-10",
+      "h-11 w-full rounded-md border bg-white px-3 text-body sm:h-10",
       "focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-[var(--ring)]",
+      invalid ? "border-[var(--error)]" : "border-neutral-300",
       className,
     )}
     {...props}

@@ -46,8 +46,13 @@ async function forward(request: NextRequest, path: string[]) {
     if (cartToken) headers.set("x-cart-token", cartToken);
   }
 
+  // arrayBuffer, not text: product-image uploads are multipart/form-data, and
+  // decoding a JPEG as UTF-8 and re-encoding it corrupts every byte outside
+  // ASCII. JSON survives either way.
   const body =
-    request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
 
   const send = (token?: string) =>
     fetch(target, {

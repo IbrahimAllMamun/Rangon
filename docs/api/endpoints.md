@@ -39,6 +39,11 @@ Extras:
 | POST | `variants/{id}/barcode/` | generate a barcode if missing |
 | POST | `products/import/` · GET `products/export/` | CSV bulk (`products.create`) |
 
+`DELETE` on a product or a variant **archives rather than deletes** when it has stock, ledger rows or
+sales: `OrderItem`, `Inventory` and `InventoryTransaction` all reference `ProductVariant` with
+`on_delete=PROTECT`, so financial history keeps resolving. Either way the response is `204`; check
+`status` if you need to know which happened. A clean row with no history is deleted outright.
+
 ## Inventory — `/api/v1/inventory/`
 
 | Method | Path | Perm |

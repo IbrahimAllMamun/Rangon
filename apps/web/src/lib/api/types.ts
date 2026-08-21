@@ -359,3 +359,18 @@ export interface SessionUser {
   permissions: string[];
   organization: { name: string; currency: string; receipt_footer: string } | null;
 }
+
+/** In-app staff notification (`/notifications/`). */
+export interface StaffNotification {
+  id: string;
+  notification_type: string;
+  level: "INFO" | "SUCCESS" | "WARNING" | "ERROR";
+  title: string;
+  body: string;
+  /** In-app path such as "/admin/orders/…"; blank when there is nowhere to go. */
+  link: string;
+  data: Record<string, unknown>;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}

@@ -27,8 +27,8 @@ should not be read as coverage that exists:
 | Row | Reality |
 |---|---|
 | Performance | `apps/api/tests/test_performance.py` now exists and asserts the storefront listing's query budget. It was written after that listing was found issuing **363 queries** for one page. Other endpoints in `docs/database/indexing.md` still have no assertions, and there is no load test |
-| Component | The only frontend tests are `src/lib/format.test.ts` and `src/lib/api/server.test.ts` — 17 tests, no component or form-validation tests |
-| E2E | The specs exist but have **never been executed**; they cannot run in the dev image (`node:22-alpine` has no Playwright browsers). Use a glibc runner such as `mcr.microsoft.com/playwright`, and set `E2E_BASE_URL` — the config default is port 3000, which is not where the storefront runs on Windows |
+| Component | Frontend tests are all pure-logic: `lib/format`, `lib/api/server`, `lib/use-debounced-callback` and `lib/commerce/variant-matrix` — 39 tests. Still no component or form-validation tests; the product form's rendering is covered only by the browser walk |
+| E2E | The committed specs still have **never been executed**; they cannot run in the dev image (`node:22-alpine` has no Playwright browsers). What does work here is `apps/web/e2e/browser-walk.mjs`, a scripted browser walk run from `mcr.microsoft.com/playwright` joined to the compose network — see the command in its header. Set `E2E_BASE_URL` for the committed specs; the config default is port 3000, which is not where the storefront runs on Windows |
 
 CI runs the backend suite on every push. It runs **neither** frontend suite — the frontend job stops
 at `npm ci` → lint → typecheck → build.

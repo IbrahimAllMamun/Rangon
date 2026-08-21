@@ -135,10 +135,19 @@ to stock counts.
 |---|---|---|
 | B1 | `attribute_value` migration, validation, payload grouping, pytest | done. Expand/contract: `catalog/migrations/0002_productimage_attribute_value.py` backfills from `variant`, `0003_remove_productimage_variant.py` drops it |
 | B2 | `ProductDetail` wrapper, colour-linked gallery, bidirectional strip | done |
-| B3 | Per-colour upload in the admin product form | not started — blocked on the admin product form itself not existing yet (roadmap phase 05) |
+| B3 | Per-colour upload in the admin product form | done — `components/admin/product-images.tsx`, mounted on `/admin/products/[id]`. Uploads go through `apiUpload` (multipart) to `POST /product-images/`; the colour list is built from the colours the product's variants actually use, so the API's "this product has no variant in that colour" rule cannot be tripped from the UI |
 
-B1 and B2 ship independently of B3: images can be attached through the Django admin first, and
-customers get the behaviour before the product form exists.
+B1 and B2 shipped independently of B3, so images could be attached through the Django admin while
+customers already had the colour-linked gallery.
+
+Two details of B3 worth recording:
+
+- **Uploads needed the proxy to stop decoding bodies as text.** `/api/proxy/[...path]` read every
+  request body with `await request.text()`; a JPEG round-tripped through UTF-8 decode/encode is
+  corrupt. It now uses `arrayBuffer()`, which is a superset — JSON is unaffected.
+- **The colour dropdown is derived, not free.** It lists only colours the product has a variant in,
+  because `ProductImage.clean()` refuses anything else. Offering the full colour registry would put
+  a validation error behind an ordinary-looking choice.
 
 B2 should be done **together with the variant-picker rework**, since both rewrite `ProductBuyPanel`
 and colour switching reuses the same "does this combination exist" resolution.

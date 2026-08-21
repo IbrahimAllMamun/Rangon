@@ -19,6 +19,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { NotificationBell } from "@/components/admin/notification-bell";
 import { LogoLink } from "@/components/brand/logo";
 import { PendingRegion } from "@/components/ui/pending-region";
 import { Button } from "@/components/ui/primitives";
@@ -149,6 +150,8 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
           </Button>
 
           <div className="ml-auto flex items-center gap-3">
+            {/* Staff alerts: low stock, new online orders, returns (D3). */}
+            <NotificationBell />
             <div className="text-right">
               <p className="text-body-sm font-medium leading-tight">{user.full_name}</p>
               <p className="text-caption text-muted">

@@ -118,20 +118,23 @@ Backend APIs are complete and tested for all of these; what is missing is the ad
 | Missing | Why it is safe to be missing | Where the API is |
 |---|---|---|
 | Live payment gateway | COD works; the card option is visibly **disabled**, not faked | `orders/payments/providers/base.py` |
-| Admin product/purchase/customer/returns/coupon screens | Every operation is available through the API and tested. Organization and branch settings **are** now editable at `/admin/settings` | `docs/api/endpoints.md` |
+| Admin purchase/customer/returns/coupon screens | Every operation is available through the API and tested. **Products are done** — create, edit, variant matrix, photography and publish at `/admin/products` — as are organization and branch settings at `/admin/settings` | `docs/api/endpoints.md` |
 | Offline POS | Explicitly V2 in the plan; needs an oversell exception report first | `architecture/offline-pos.md` |
 | SMS notifications | Email + in-app work | `notifications/tasks.py` |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
 
-### Not deliberate — three features are dead ends in the UI
+### The three UI dead ends are closed (2026-08-21)
 
-These look shipped and are not. Fix them or hide the entry points; do not leave them as they are.
+All three looked shipped and were not: a rendered page with no way to reach the endpoint behind it.
 
-| Feature | What is wrong |
+| Feature | Fixed by |
 |---|---|
-| Wishlist | The page exists and is linked from the account page and the mobile nav, but nothing can add to it — there is no save control anywhere |
-| Reviews | They render on the product page and feed the JSON-LD rating, but no customer can write one |
-| Notifications | Model, feed API and email tasks all exist; the frontend has no bell and no screen |
+| Wishlist | `WishlistHeart` on the product card, backed by a shared `useWishlist` store |
+| Reviews | `ReviewForm` on the product page; the section now renders even at zero reviews, because hiding it made the only way to write the first one invisible |
+| Notifications | A polling bell in the admin header and `/admin/notifications` |
+
+Worth keeping in mind when adding anything else: **a route that 404s gets noticed; a page that renders
+and does nothing does not.** "The API is tested" and "the feature works" are different claims.
 
 ## 6. Decisions someone must confirm
 
@@ -166,12 +169,10 @@ before implementing anything that depends on them.
 
 ## 8. Next four tasks, in order
 
-1. **Admin product create/edit.** The last everyday job that still forces someone into the API.
-   `POST /products/`, `/generate-variants/` and `/publish/` are built and tested — this is a form,
-   not new business logic.
-2. **Close the dead ends** — a save button for the wishlist, a review form, a notification bell. Each
-   is small, each has a tested endpoint already, and each is currently a feature the customer can see
-   but cannot use.
+1. **Purchase order create → send → receive.** The largest everyday job still done through the API.
+   `POST /purchase-orders/`, `/send/` and `/receive/` are built and tested; receiving is what puts
+   stock on the shelf through the ledger. `components/admin/product-form.tsx` is the pattern.
+2. **Return approve / reject / receive / refund** — four buttons on a list that already renders.
 3. **Unblock E2E and widen CI.** Playwright cannot run in the Alpine dev image; move it to a
    glibc-based runner, then add both `npm run test` and `npm run test:e2e` to `ci.yml` — today CI
    builds and type-checks the frontend but runs none of its tests.

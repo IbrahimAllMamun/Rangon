@@ -107,3 +107,23 @@ export async function apiClient<T>(
 
   return handle<T>(response);
 }
+
+/**
+ * Multipart upload from the browser (product images).
+ *
+ * Deliberately separate from `apiClient`: that helper forces
+ * `Content-Type: application/json`, and a multipart body must carry the
+ * boundary the browser generates, which means letting `fetch` set the header
+ * itself. The proxy forwards content-type and the raw bytes untouched.
+ */
+export async function apiUpload<T>(path: string, form: FormData, method = "POST"): Promise<T> {
+  const [pathname, query = ""] = path.split("?");
+  const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  const response = await fetch(`/api/proxy${trimmed}${query ? `?${query}` : ""}`, {
+    method,
+    body: form,
+  });
+
+  return handle<T>(response);
+}

@@ -12,11 +12,11 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Authorization | Role → permission codes enforced by DRF permission classes on **every** endpoint; branch scoping on every branch-bearing queryset; `OWNER` bypass is explicit and audited |
 | Brute force | Throttle 10/min per IP on login/register/password-reset; failed logins audit-logged |
 | Input | DRF serializers validate and coerce everything; the ORM parameterises all SQL; no raw string SQL anywhere |
-| XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP set by Nginx |
+| XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP sent by the web app itself (`apps/web/src/middleware.ts`) with a per-request nonce — **not** by Nginx, which would append a second policy and block the nonced scripts |
 | CSRF | Cookie-borne auth on same-origin Next routes uses `SameSite=Lax` + a double-submit token on state-changing routes; the API itself is token-authenticated and CSRF-exempt by construction |
 | CORS | Explicit allow-list (`DJANGO_CORS_ALLOWED_ORIGINS`), credentials allowed only for those origins; wildcard is forbidden in production |
 | Transport | HTTPS only; HSTS 1 year with preload; `Secure` cookies; HTTP redirected |
-| Headers | `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, CSP with no `unsafe-eval` |
+| Headers | `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, CSP with `'nonce-…' 'strict-dynamic'` and no `unsafe-inline`/`unsafe-eval` in `script-src` |
 | Uploads | Extension + MIME + magic-byte check, 10 MB cap, images re-encoded, stored in object storage, served from a separate origin, never executed |
 | Secrets | Environment only; `.env` git-ignored; no secret in an image layer or a frontend bundle; `NEXT_PUBLIC_*` reviewed as public by definition |
 | Payments | No card data stored, logged or forwarded; only provider references; capture requires a verified webhook or a server-side verification call |

@@ -129,6 +129,97 @@ template. Check seams, not components.
 
 ---
 
+## Build pass, 2026-08-21 — the four dead ends (D2, D3, D16) and phase 05
+
+Four features that each had a *tested endpoint and no screen*. None of them
+needed new business logic; all of them needed someone to notice the seam.
+
+### 1. Admin product create/edit, with the variant matrix (phase 05)
+
+`/admin/products/new` and `/admin/products/[id]`. Details → tick the attribute
+values the product comes in → a row per combination with its own price, cost,
+SKU and barcode → publish. Per-colour photography on the edit screen unblocked
+phase 34's B3, which had been waiting on this form existing.
+
+Two rules shaped it, and both are worth keeping when the next form is written:
+
+- **The stock column never writes stock.** A row that does not exist yet takes an
+  *opening* figure, which the form posts as `POST /inventory/adjust/` with a
+  reason once the variant has an id. A row that exists shows stock read-only with
+  an Adjust action that writes a reasoned `ADJUSTMENT` to the ledger. There is no
+  path from the table to `on_hand = on_hand - 1` (CLAUDE.md §3.2, §13).
+- **Un-ticking never destroys a row.** `lib/commerce/variant-matrix.ts` keeps a
+  saved variant whose value was un-ticked, flags it amber as *not selected*, and
+  leaves deletion an explicit act. 17 Vitest cases cover it.
+
+The interesting bug was in that pure function, caught by a test rather than a
+browser: matching a saved variant to a row on a *subset* of its attributes made
+two variants collapse onto one row when a whole axis was un-ticked — one of them
+silently vanished from the table. Identity now uses the variant's **full**
+attribute set, which is also exactly what `catalog.services.generate_variants`
+compares server-side.
+*Lesson: when the client decides "does this already exist?", it must use the same
+test the server uses, or the two disagree at the worst moment.*
+
+### 2. Deleting a variant could not work (found while building, not reported)
+
+`OrderItem`, `Inventory` and `InventoryTransaction` all point at
+`ProductVariant` with `on_delete=PROTECT`. So the "remove this row" button the
+matrix needed would have raised `ProtectedError` on any variant that had ever
+been *stocked* — not just sold — and the handler turns that into a bare 409 that
+explains nothing. `ProductViewSet.perform_destroy` had the same hole: it checked
+for sales but not for stock.
+
+Both now archive instead: `status = ARCHIVED`, audit-logged with a reason, which
+is what "remove it" means for a shop that must keep its ledger resolvable.
+*Lesson: a PROTECT is a design decision about history. Any UI that offers delete
+has to answer it, and "archive" is usually the answer.*
+
+### 3. Reviews (D2) and notifications (D3)
+
+Both were the wishlist bug again: a rendered page and an unreachable endpoint.
+The review section used to be hidden entirely when `count === 0`, which meant the
+one place a first review could be written was invisible until a first review
+existed. It now always renders.
+
+The review form does **not** re-implement the verified-purchase rule; it submits
+and shows what the API says. That rule is a business rule and belongs on the
+server — and it was already written and tested there.
+
+### 4. The CSP blank page (D16)
+
+`apps/web/src/middleware.ts` mints a per-request nonce and sends the policy
+itself. Next reads the nonce off the `content-security-policy` *request* header
+and stamps it onto every script it emits — 42 of 42 in the production build.
+
+The half that is easy to get wrong: **Nginx had to stop sending the header.**
+`add_header` appends rather than replaces, and a browser enforces the
+*intersection* of every policy it receives, so leaving the old directive in place
+would have blocked the nonced scripts and restored the blank page. Both configs
+now carry a comment saying so instead of a header.
+
+*Lesson: two correct CSP headers are one broken CSP.*
+
+### A verification trap worth recording
+
+The in-app browser pane showed **every** streamed page stuck on its loading
+spinner — `<template id="B:0">` never swapped in — which looks exactly like the
+CSP failure being fixed. It was not: it reproduced with the middleware deleted,
+on both the dev and production stacks. Chromium via
+`mcr.microsoft.com/playwright` on the same Docker network rendered all of them
+correctly.
+
+Also: **Turbopack does not notice new route directories** created after the dev
+server started, over a Windows bind mount. `/admin/notifications` 404'd with
+`PageNotFoundError` while the file sat there in the container. `docker restart
+rangon-web-1` fixes it — and note it must be a *restart*, not a recreate, because
+`rangon-web:latest` may be pointing at the production image (environment.md §8).
+
+*Lesson: before believing a browser about a rendering bug, reproduce it with the
+suspected cause removed.*
+
+---
+
 ## Deviations from the plan (all have ADRs)
 
 | Plan said | Built | ADR |

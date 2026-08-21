@@ -31,6 +31,7 @@ from catalog.models import (
     Product,
     ProductImage,
     ProductVariant,
+    PublishStatus,
 )
 from catalog.services import generate_barcode, generate_variants
 from core import audit
@@ -167,9 +168,15 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
 
     def perform_destroy(self, instance: Product) -> None:
-        # A product that has ever been sold is archived, not deleted: order
-        # history holds a PROTECTed reference to its variants.
-        if instance.variants.filter(order_items__isnull=False).exists():
+        # A product that has ever been sold *or stocked* is archived, not
+        # deleted: order history and the inventory ledger both hold PROTECTed
+        # references to its variants, so a hard delete would raise
+        # ProtectedError and surface as an unexplained 409.
+        if (
+            instance.variants.filter(order_items__isnull=False).exists()
+            or instance.variants.filter(inventory__isnull=False).exists()
+            or instance.variants.filter(inventory_transactions__isnull=False).exists()
+        ):
             instance.status = "ARCHIVED"
             instance.published = False
             instance.save(update_fields=["status", "published", "updated_at"])
@@ -178,7 +185,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 entity=instance,
                 actor=self.request.user,
                 new_values={"status": "ARCHIVED"},
-                reason="Archived instead of deleted: the product has sales history.",
+                reason="Archived instead of deleted: the product has stock or sales history.",
             )
             return
         audit.record(
@@ -286,6 +293,44 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
             variant.barcode = generate_barcode(variant)
             variant.save(update_fields=["barcode"])
         return Response({"barcode": variant.barcode})
+
+    def perform_destroy(self, instance: ProductVariant) -> None:
+        """Archive a variant with history; only ever hard-delete a clean one.
+
+        `OrderItem`, `Inventory` and `InventoryTransaction` all point here with
+        `on_delete=PROTECT`, so deleting a variant that has been stocked or sold
+        raises `ProtectedError`. That surfaces as a bare 409 telling the user
+        nothing, and the row they were trying to retire stays sellable.
+
+        Archiving is also the answer CLAUDE.md §3.3 asks for: the ledger and the
+        order lines that reference this SKU are financial history and must keep
+        resolving. An ARCHIVED variant is not sellable (`is_sellable`), which is
+        what "remove it" actually means for a shop.
+        """
+        has_history = (
+            instance.order_items.exists()
+            or instance.inventory.exists()
+            or instance.inventory_transactions.exists()
+        )
+        if has_history:
+            instance.status = PublishStatus.ARCHIVED
+            instance.save(update_fields=["status", "updated_at"])
+            audit.record(
+                action=audit.AuditAction.UPDATE,
+                entity=instance,
+                actor=self.request.user,
+                new_values={"status": PublishStatus.ARCHIVED},
+                reason="Archived instead of deleted: the variant has stock or sales history.",
+            )
+            return
+
+        audit.record(
+            action=audit.AuditAction.DELETE,
+            entity=instance,
+            actor=self.request.user,
+            old_values={"sku": instance.sku},
+        )
+        instance.delete()
 
 
 class ProductImageViewSet(viewsets.ModelViewSet):

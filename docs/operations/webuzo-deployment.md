@@ -281,11 +281,12 @@ add_header X-Content-Type-Options    "nosniff" always;
 add_header X-Frame-Options           "DENY" always;
 add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy        "camera=(), microphone=(), geolocation=(), payment=()" always;
-# 'unsafe-inline' for styles is required by Next.js's inlined critical CSS.
-# NOTE: `script-src 'self'` renders a blank page — Next streams through inline
-# scripts. Use a nonce from Next middleware, or add 'unsafe-inline' knowing the
-# cost. See D16 in docs/roadmap.md.
-add_header Content-Security-Policy   "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+# Do NOT add a Content-Security-Policy header here. The web app sends its own,
+# built around a per-request nonce minted in `apps/web/src/middleware.ts`, so
+# the App Router's inline RSC scripts run without 'unsafe-inline'. `add_header`
+# appends rather than replaces, and a browser enforces the intersection of every
+# policy it receives, so a second header would block the nonced scripts and
+# render a blank page — the failure recorded as D16 in docs/roadmap.md.
 
 # These four headers are not optional. Django's prod settings set
 # SECURE_SSL_REDIRECT=True and trust X-Forwarded-Proto; if Webuzo proxies over

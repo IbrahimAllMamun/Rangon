@@ -67,11 +67,11 @@ all 10 admin routes ................... no dead sidebar links
 
 ### Known defects found on 2026-08-18
 
-Nine, none of them touching money or stock. Full table in `../docs/roadmap.md`:
-dead-end wishlist / reviews / notifications UI, a doubled brand suffix in product
-titles, a cart dialog with no description, 98 non-blocking mypy errors, Playwright
-blocked by Alpine, both web images sharing one tag, and a seed with no product
-images.
+Nine, none of them touching money or stock. Full table in `../docs/roadmap.md`.
+The three dead ends (wishlist, reviews, notifications) and the production CSP are
+now fixed. Still open: a doubled brand suffix in product titles (D4), 98
+non-blocking mypy errors (D6), Playwright blocked by Alpine (D7), both web images
+sharing one tag (D8), and a seed with no product images (D9).
 
 ## Commit history
 
@@ -93,13 +93,28 @@ ce9df26  fix(web): split API module so client code cannot pull in next/headers
 (23 commits total; the ones between `03c9a45` and `423cdf4` are small frontend
 fixes and CI-workflow repairs.)
 
+## Done since (2026-08-21)
+
+- **Admin product create/edit** with the variant matrix, opening stock through
+  the ledger, publish/unpublish, delete-or-archive and per-colour photography.
+- **The dead ends closed**: a review form (D2) and a notification bell + feed
+  (D3). The wishlist (D1) was closed earlier the same day.
+- **The CSP blank page (D16) fixed** with a per-request nonce from Next
+  middleware — and Nginx stopped sending its own header, which is the half that
+  would otherwise have re-broken it.
+
+Details and the lessons are in `session-history.md`.
+
 ## Next four tasks
 
-1. **Admin product create/edit** — the last screen that forces someone into the API
-   for everyday work. Every endpoint exists and is tested; this is form work.
-2. **Close the dead ends** — a save button, a review form, a notification bell.
-   Small, and each has a tested endpoint waiting.
+1. **Purchase order create → send → receive** — the largest everyday job still
+   done through the API. Same shape as the variant matrix; receiving writes the
+   ledger.
+2. **Return approve / reject / receive / refund** — four buttons on a list that
+   already renders.
 3. **Unblock Playwright** (glibc runner), then put both `npm run test` and
    `npm run test:e2e` into CI. CI currently runs no frontend tests at all.
+   `apps/web/e2e/browser-walk.mjs` is the working pattern: `mcr.microsoft.com/playwright`
+   joined to the compose network.
 4. **One real payment gateway** end to end, with webhook signature verification
    and replay tests.

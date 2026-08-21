@@ -3,8 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ProductDetail } from "@/components/commerce/product-detail";
+import { ReviewForm } from "@/components/commerce/review-form";
 import { ProductGrid } from "@/components/commerce/product-card";
-import { apiServer } from "@/lib/api/server";
+import { apiServer, isAuthenticated } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 import { dateOnly } from "@/lib/format";
 
@@ -43,7 +44,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
 export default async function ProductPage({ params }: { params: Params }) {
   const { slug } = await params;
-  const product = await getProduct(slug);
+  const [product, signedIn] = await Promise.all([getProduct(slug), isAuthenticated()]);
   if (!product) notFound();
 
   const rating = product.reviews?.average ?? null;
@@ -155,11 +156,19 @@ export default async function ProductPage({ params }: { params: Params }) {
         </aside>
       </div>
 
-      {product.reviews && product.reviews.count > 0 && (
-        <section aria-labelledby="reviews-heading" className="mt-14">
+      {/* Always rendered: the form is the only way a review can ever be
+          written, so hiding the section until one exists made it unreachable
+          (D2). */}
+      <section aria-labelledby="reviews-heading" className="mt-14 grid gap-10 lg:grid-cols-[2fr_1fr]">
+        <div>
           <h2 id="reviews-heading" className="font-display text-h3">
-            Reviews ({product.reviews.count})
+            Reviews{product.reviews?.count ? ` (${product.reviews.count})` : ""}
           </h2>
+          {!product.reviews?.count ? (
+            <p className="mt-4 text-body-sm text-muted">
+              No reviews yet. If you have bought this, yours would be the first.
+            </p>
+          ) : (
           <ul className="mt-6 space-y-6">
             {product.reviews.items.map((review) => (
               <li key={review.id} className="border-b border-border pb-6">
@@ -179,8 +188,11 @@ export default async function ProductPage({ params }: { params: Params }) {
               </li>
             ))}
           </ul>
-        </section>
-      )}
+          )}
+        </div>
+
+        <ReviewForm slug={product.slug} signedIn={signedIn} />
+      </section>
 
       {product.related && product.related.length > 0 && (
         <section aria-labelledby="related-heading" className="mt-14">

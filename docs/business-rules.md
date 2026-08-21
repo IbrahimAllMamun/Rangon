@@ -264,6 +264,32 @@ verification call may capture a payment.
 
 ---
 
+## 6a. Reviews
+
+A review is a **claim about a purchase**, so the API treats it as one rather than as free-form
+comment. `POST /shop/products/{slug}/reviews/` accepts a review only when all of these hold:
+
+- the caller is signed in **as a customer** (`IsAuthenticated` + `IsCustomer`);
+- that customer has an order containing the product in status `DELIVERED`, `RETURNED` or `REFUNDED`
+  — you may only review something you actually received;
+- they have not already reviewed **that purchase**. A second, later order of the same product earns a
+  second review.
+
+Every accepted review is stored `verified_purchase = True` and `status = PENDING`. **Nothing appears
+on the storefront until a human approves it** through `POST /reviews/{id}/approve/`, which needs
+`content.review_moderate`. Rejection takes the same shape and both record the moderator, the time and
+an optional note.
+
+Ratings are whole numbers 1–5. The aggregate shown on a product page (and in its JSON-LD
+`AggregateRating`) counts approved reviews only, so a pending or rejected review can never move the
+score.
+
+The storefront form lives on the product page (`components/commerce/review-form.tsx`). It does not
+try to predict eligibility — it submits and shows what the API says — because the purchase test is a
+business rule and belongs on the server.
+
+---
+
 ## 7. Permissions
 
 Roles: `OWNER`, `ADMIN`, `MANAGER`, `CASHIER`, `INVENTORY_MANAGER`, `ACCOUNTANT`, `CUSTOMER`.
