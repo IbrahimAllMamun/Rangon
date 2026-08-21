@@ -102,14 +102,17 @@ fixes and CI-workflow repairs.)
 - **The CSP blank page (D16) fixed** with a per-request nonce from Next
   middleware — and Nginx stopped sending its own header, which is the half that
   would otherwise have re-broken it.
+- **Purchase orders and suppliers** (2026-08-22): raise → send → receive, with
+  partial deliveries, plus supplier create/edit. Receiving is the only step that
+  writes stock, and it goes through `inventory.services`.
 
 Details and the lessons are in `session-history.md`.
 
 ## Next four tasks
 
-1. **Purchase order create → send → receive** — the largest everyday job still
-   done through the API. Same shape as the variant matrix; receiving writes the
-   ledger.
+1. **Financial accounts + cash book** (roadmap phase 35) — the largest
+   structural gap, and it blocks phases 36–38. Payments name a *method* but
+   never an account, so there is no cash position and no net profit.
 2. **Return approve / reject / receive / refund** — four buttons on a list that
    already renders.
 3. **Unblock Playwright** (glibc runner), then put both `npm run test` and

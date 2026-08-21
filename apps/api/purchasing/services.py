@@ -7,6 +7,7 @@ correct (ADR-0006, ADR-0008).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
@@ -31,6 +32,24 @@ from purchasing.models import (
     Supplier,
     SupplierPayment,
 )
+
+
+def unique_supplier_code(name: str) -> str:
+    """A short, readable, unique code derived from the supplier's name.
+
+    `Supplier.code` is unique and has no default, so without this every caller
+    has to invent one — which in practice means an admin form asking a buyer to
+    make up an identifier, and two branches inventing the same one. Mirrors
+    `catalog.services.unique_slug`, but uppercase, because a supplier code is
+    read aloud off a delivery note rather than put in a URL.
+    """
+    base = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").upper()[:24] or "SUPPLIER"
+    candidate, counter = base, 1
+    while Supplier.objects.filter(code=candidate).exists():
+        counter += 1
+        suffix = f"-{counter}"
+        candidate = f"{base[: 32 - len(suffix)]}{suffix}"
+    return candidate
 
 
 @dataclass(frozen=True)

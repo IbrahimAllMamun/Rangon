@@ -44,6 +44,14 @@ sales: `OrderItem`, `Inventory` and `InventoryTransaction` all reference `Produc
 `on_delete=PROTECT`, so financial history keeps resolving. Either way the response is `204`; check
 `status` if you need to know which happened. A clean row with no history is deleted outright.
 
+`?search=` works on `suppliers/` (name, code, phone) and `variants/` (SKU, barcode, product name).
+`SearchFilter` is **not** one of the global `DEFAULT_FILTER_BACKENDS`, so it is named explicitly on
+those two viewsets; declaring `search_fields` alone does nothing.
+
+`POST /suppliers/` derives `code` from `name` when it is omitted
+(`purchasing.services.unique_supplier_code`), so no caller has to invent one. An explicit `code` is
+kept as given, and editing a supplier never regenerates it.
+
 ## Inventory — `/api/v1/inventory/`
 
 | Method | Path | Perm |

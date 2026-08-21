@@ -20,7 +20,7 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 04 | Auth + RBAC                 | ✅      | ✅       | JWT in httpOnly cookies, 7 roles, branch scoping, audit log, sign-in page. Admin settings can now**edit** the organization and create/edit branches                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 05 | Product catalog | ✅ | ✅ | Full CRUD API. **Admin create/edit shipped 2026-08-21** — `/admin/products/new` and `/admin/products/[id]`: details, attribute tick-lists, a variant matrix with per-row price/cost/SKU/barcode, opening stock, publish/unpublish, delete-or-archive, and per-colour photography |
 | 06 | Inventory engine | ✅ | 🟡 | Ledger, reservations, transfers, WAC, `verify_inventory`. The product form can now open stock and write a reasoned adjustment per variant. The inventory **screen** is still read-only, and there is no stock-count or transfer UI |
-| 07 | Suppliers + purchasing      | ✅      | 🟡       | PO → receive → ledger → cost recalculation. Admin purchase list built; creating/receiving is still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 07 | Suppliers + purchasing | ✅ | ✅ | PO → receive → ledger → cost recalculation. **Admin screens shipped 2026-08-22** — `/admin/purchases/new` (supplier picker with inline create, debounced variant search, line table, live totals), `/admin/purchases/[id]` (send, cancel, partial receive, delivery history) and `/admin/suppliers` (list + inline create/edit). Receiving is the only step that writes stock, and it goes through `inventory.services` |
 | 08 | POS                         | ✅      | ✅       | Barcode-first register, split payment, hold/resume, receipt, F2/F4/F8 shortcuts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 09 | Payments                    | ✅      | ✅       | Generic model + provider registry;`manual` provider (cash/card/MFS/COD) shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 10 | Returns                     | ✅      | 🟡       | Full request→approve→receive→restock→refund + POS one-step return. Admin returns list built; approve/receive/refund still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -230,30 +230,31 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 
 Every endpoint below exists and is tested. What is missing is the screen.
 
-- purchase order create → send → receive
 - customer create/edit, addresses, notes
 - return approve / reject / receive / complete
 - coupon management, review moderation
 - inventory write-off / stock count / stock transfer
 - shipping zones, methods, shipments
-- suppliers, categories, brands, attributes
+- categories, brands, attributes
 - users and roles
 
 Recently built, so no longer on this list: **organization settings and branch create/edit**
 (`/admin/settings`); **product create/edit, variant-matrix generation, publish/unpublish and
 per-colour image upload** (`/admin/products/new`, `/admin/products/[id]`); **stock adjustment**, which
-the product form can now write per variant (the standalone inventory screen is still read-only); and
-the **notification feed** (`/admin/notifications`).
+the product form can now write per variant (the standalone inventory screen is still read-only); the
+**notification feed** (`/admin/notifications`); and **purchase orders and suppliers** — create, send,
+cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admin/purchases/[id]`,
+`/admin/suppliers`).
 
 ## Gaps to close before go-live
 
 1. **Payment gateway.** Implement a real provider against
    `orders.payments.providers.base.PaymentProvider`, with signature verification and webhook replay
    tests. COD works today; the card option is visibly disabled rather than pretending to work.
-2. **The remaining admin *write* screens.** Products are done (create, edit, variant matrix, images,
-   publish, opening stock). Still API-only: purchase orders, customers, coupons, return approvals,
-   shipping, and users/roles. The endpoints are complete and tested — this is form work, not backend
-   work, and `components/admin/product-form.tsx` is now the pattern to copy.
+2. **The remaining admin *write* screens.** Products and purchasing are done. Still API-only:
+   customers, coupons, return approvals, shipping, and users/roles. The endpoints are complete and
+   tested — this is form work, not backend work, and `product-form.tsx` and `purchase-order-form.tsx`
+   are the patterns to copy.
 3. **Unblock and run E2E** (D7), then wire **both** Vitest and Playwright into `ci.yml`.
 4. **Restore rehearsal.** A backup that has never been restored is not a backup.
 5. **Load test** product listing, checkout and POS search at expected peak; add the

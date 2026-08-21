@@ -118,7 +118,7 @@ Backend APIs are complete and tested for all of these; what is missing is the ad
 | Missing | Why it is safe to be missing | Where the API is |
 |---|---|---|
 | Live payment gateway | COD works; the card option is visibly **disabled**, not faked | `orders/payments/providers/base.py` |
-| Admin purchase/customer/returns/coupon screens | Every operation is available through the API and tested. **Products are done** — create, edit, variant matrix, photography and publish at `/admin/products` — as are organization and branch settings at `/admin/settings` | `docs/api/endpoints.md` |
+| Admin customer/returns/coupon screens | Every operation is available through the API and tested. **Products and purchasing are done** — products at `/admin/products`, purchase orders and suppliers at `/admin/purchases` and `/admin/suppliers` — as are organization and branch settings at `/admin/settings` | `docs/api/endpoints.md` |
 | Offline POS | Explicitly V2 in the plan; needs an oversell exception report first | `architecture/offline-pos.md` |
 | SMS notifications | Email + in-app work | `notifications/tasks.py` |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
@@ -169,9 +169,9 @@ before implementing anything that depends on them.
 
 ## 8. Next four tasks, in order
 
-1. **Purchase order create → send → receive.** The largest everyday job still done through the API.
-   `POST /purchase-orders/`, `/send/` and `/receive/` are built and tested; receiving is what puts
-   stock on the shelf through the ledger. `components/admin/product-form.tsx` is the pattern.
+1. **Financial accounts and the cash book** (roadmap phase 35). The largest structural gap: Rangon
+   records a payment *method* and never which account the money landed in, so there is no cash
+   position, no expenses and no net profit. Blocks phases 36–38.
 2. **Return approve / reject / receive / refund** — four buttons on a list that already renders.
 3. **Unblock E2E and widen CI.** Playwright cannot run in the Alpine dev image; move it to a
    glibc-based runner, then add both `npm run test` and `npm run test:e2e` to `ci.yml` — today CI

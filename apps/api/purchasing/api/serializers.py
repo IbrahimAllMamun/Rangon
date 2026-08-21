@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from rest_framework import serializers
 
 from purchasing.models import (
@@ -10,6 +12,7 @@ from purchasing.models import (
     Supplier,
     SupplierPayment,
 )
+from purchasing.services import unique_supplier_code
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -17,6 +20,7 @@ class SupplierSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Supplier
+        extra_kwargs = {"code": {"required": False}}
         fields = [
             "id",
             "name",
@@ -34,6 +38,14 @@ class SupplierSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        # `code` is unique with no default. Deriving it from the name keeps the
+        # admin form from asking a buyer to invent an identifier — the same
+        # treatment `slug` gets on Category, Brand and Product.
+        if not attrs.get("code") and not self.instance:
+            attrs["code"] = unique_supplier_code(attrs.get("name", ""))
+        return attrs
 
 
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):

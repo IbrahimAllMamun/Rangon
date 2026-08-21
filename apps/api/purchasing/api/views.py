@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, Q
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -35,6 +37,9 @@ class SupplierViewSet(viewsets.ModelViewSet):
         "partial_update": ["purchases.create"],
         "destroy": ["settings.manage"],
     }
+    # `search_fields` below was declared but inert: SearchFilter is not one of
+    # the global DEFAULT_FILTER_BACKENDS, so `?search=` was silently ignored.
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ["status"]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["name", "created_at"]

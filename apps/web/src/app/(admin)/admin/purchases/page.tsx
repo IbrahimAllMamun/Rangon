@@ -1,6 +1,9 @@
+import { Plus } from "lucide-react";
+import Link from "next/link";
+
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
-import { Badge } from "@/components/ui/primitives";
+import { Badge, Button } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, humanise, money } from "@/lib/format";
@@ -59,7 +62,12 @@ export default async function PurchasesPage({ searchParams }: { searchParams: Se
       header: "Purchase",
       cell: (row) => (
         <>
-          <span className="block font-medium">{row.number}</span>
+          <Link
+            href={`/admin/purchases/${row.id}`}
+            className="block font-medium hover:text-brand-600 hover:underline"
+          >
+            {row.number}
+          </Link>
           {row.invoice_number && (
             <span className="block text-caption text-muted">Invoice {row.invoice_number}</span>
           )}
@@ -91,6 +99,19 @@ export default async function PurchasesPage({ searchParams }: { searchParams: Se
       <PageHeader
         title="Purchases"
         description="Receiving is the only step that adds stock — it writes PURCHASE ledger rows and recalculates weighted average cost."
+        actions={
+          <>
+            <Button variant="secondary" asChild>
+              <Link href="/admin/suppliers">Suppliers</Link>
+            </Button>
+            <Button asChild>
+              <Link href="/admin/purchases/new">
+                <Plus className="size-4" aria-hidden />
+                New purchase order
+              </Link>
+            </Button>
+          </>
+        }
       />
       <ResourceTable
         rows={data?.results ?? []}
@@ -98,12 +119,10 @@ export default async function PurchasesPage({ searchParams }: { searchParams: Se
         caption="Purchase orders"
         error={error}
         emptyTitle="No purchase orders"
-        emptyDescription="Create one to bring stock in from a supplier."
+        emptyDescription="Raise one to bring stock in from a supplier."
         rowKey={(row) => row.id}
         footer={
-          data
-            ? `Showing ${data.results.length} of ${data.count}. Creating and receiving is API-only for now (POST /purchase-orders/ and /receive/).`
-            : undefined
+          data ? `Showing ${data.results.length} of ${data.count}.` : undefined
         }
       />
     </>

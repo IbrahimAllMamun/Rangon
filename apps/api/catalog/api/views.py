@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, Max, Min, Q
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -260,7 +262,15 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         "lookup": ["products.view"],
         "barcode": ["products.update"],
     }
+    # SearchFilter is not a global backend, so it is named here. The purchasing
+    # screens need to find a variant by SKU, barcode or product name under
+    # `products.view` — the POS grid search needs `sales.create` and shows only
+    # ACTIVE products, neither of which suits a buyer raising an order for stock
+    # that is still a draft.
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ["sku", "barcode", "product__name"]
     filterset_fields = ["product", "status"]
+    ordering_fields = ["sku", "created_at"]
 
     @action(detail=False, methods=["get"])
     def lookup(self, request: Request) -> Response:
