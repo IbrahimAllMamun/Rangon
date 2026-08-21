@@ -4,9 +4,9 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Banknote, CreditCard, Smartphone, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Button, Input, Label } from "@/components/ui/primitives";
+import { Button, Input, Label, Select } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Order, PaymentMethod } from "@/lib/api/types";
+import type { AccountKind, Order, PaymentMethod, PosSession } from "@/lib/api/types";
 import { money } from "@/lib/format";
 import { usePos } from "@/lib/store/pos";
 
@@ -15,7 +15,22 @@ interface Tender {
   amount: number;
   tendered?: number;
   reference?: string;
+  /** Which account this tender lands in. Blank lets the server resolve it. */
+  account?: string;
+  accountName?: string;
 }
+
+/**
+ * Where each tender's money goes.
+ *
+ * Cash into a drawer, card settlements into a bank, bKash into the wallet —
+ * so a split payment does not dump the card takings into the till.
+ */
+const METHOD_KIND: Record<string, AccountKind> = {
+  CASH: "CASH",
+  CARD: "BANK",
+  MOBILE_MFS: "MFS",
+};
 
 const METHODS: { method: PaymentMethod; label: string; icon: React.ReactNode }[] = [
   { method: "CASH", label: "Cash", icon: <Banknote className="size-5" aria-hidden /> },
@@ -28,10 +43,12 @@ const QUICK_CASH = [100, 200, 500, 1000, 2000];
 
 export function PaymentPanel({
   total,
+  accounts,
   onClose,
   onCompleted,
 }: {
   total: number;
+  accounts: PosSession["accounts"];
   onClose: () => void;
   onCompleted: (order: Order) => void;
 }) {
@@ -40,6 +57,7 @@ export function PaymentPanel({
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [amount, setAmount] = useState<string>(total.toFixed(2));
   const [reference, setReference] = useState("");
+  const [account, setAccount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
@@ -49,6 +67,19 @@ export function PaymentPanel({
     () => `pos-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     [],
   );
+
+  // Only the accounts that can hold this method's money. One candidate is
+  // shown as a line of text; two or more become a choice. Zero means the
+  // branch has no account of that kind — the sale still completes and
+  // `verify_accounts` reports it, rather than the register blocking.
+  const candidates = accounts.filter((row) => row.kind === METHOD_KIND[method]);
+
+  useEffect(() => {
+    const preferred = candidates.find((row) => row.is_default) ?? candidates[0];
+    setAccount(preferred?.id ?? "");
+    // `method` is what changes the candidate set; candidates is derived from it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [method, accounts]);
 
   const paid = tenders.reduce((sum, tender) => sum + tender.amount, 0);
   const due = Math.max(0, total - paid);
@@ -84,6 +115,8 @@ export function PaymentPanel({
         amount: applied,
         tendered: method === "CASH" ? value : undefined,
         reference: reference || undefined,
+        account: account || undefined,
+        accountName: candidates.find((row) => row.id === account)?.name,
       },
     ]);
     setReference("");
@@ -114,6 +147,7 @@ export function PaymentPanel({
             amount: tender.amount.toFixed(2),
             tendered_amount: tender.tendered?.toFixed(2),
             reference: tender.reference ?? "",
+            account: tender.account ?? null,
           })),
           customer: pos.customerId,
           manual_discount: pos.orderDiscount.toFixed(2),
@@ -232,6 +266,28 @@ export function PaymentPanel({
                   />
                 </div>
               )}
+
+              {candidates.length > 1 ? (
+                <div className="mt-3">
+                  <Label htmlFor="tender-account">Goes into</Label>
+                  <Select
+                    id="tender-account"
+                    className="mt-1.5"
+                    value={account}
+                    onChange={(event) => setAccount(event.target.value)}
+                  >
+                    {candidates.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              ) : candidates.length === 1 ? (
+                <p className="mt-3 text-body-sm text-muted">
+                  Goes into <span className="font-medium">{candidates[0].name}</span>
+                </p>
+              ) : null}
             </div>
 
             {tenders.length > 0 && (
@@ -240,6 +296,7 @@ export function PaymentPanel({
                   <li key={index} className="flex items-center justify-between text-body-sm">
                     <span>
                       {tender.method === "MOBILE_MFS" ? "bKash / Nagad" : tender.method}
+                      {tender.accountName ? ` → ${tender.accountName}` : ""}
                       {tender.reference ? ` · ${tender.reference}` : ""}
                     </span>
                     <span className="flex items-center gap-2">

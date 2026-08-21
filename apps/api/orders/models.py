@@ -363,6 +363,21 @@ class Payment(BaseModel):
     failed_at = models.DateTimeField(null=True, blank=True)
     refunded_total = money_field()
 
+    # Which of the business's own accounts the money landed in.
+    #
+    # Nullable, and it must stay nullable: every payment taken before the
+    # finance app existed has no honest answer, and CLAUDE.md section 3.3
+    # forbids inventing one after the fact.  `verify_accounts` reports the
+    # rows that carry no account rather than hiding them.
+    account = models.ForeignKey(
+        "finance.Account",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="payments",
+        help_text="Where this money landed. Set when the payment is captured.",
+    )
+
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -451,6 +466,15 @@ class Refund(BaseModel):
     reason = models.CharField(max_length=255, blank=True)
     provider_reference = models.CharField(max_length=128, blank=True)
     idempotency_key = models.CharField(max_length=80, null=True, blank=True, unique=True)
+    #: Which account the refunded money came out of.  See Payment.account.
+    account = models.ForeignKey(
+        "finance.Account",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="refunds",
+        help_text="Where this money came out of.",
+    )
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )

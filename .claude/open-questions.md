@@ -3,7 +3,7 @@
 Two lists: decisions only the owner can make, and things no one has proven yet.
 Do not let either quietly become "done".
 
-Last reviewed: **2026-08-21** (after the product form / D2 / D3 / D16 build pass).
+Last reviewed: **2026-08-22** (after phase 35, the financial layer).
 
 ---
 
@@ -13,8 +13,15 @@ Each is implemented with a documented default so the system runs. Each is a
 business call, not a technical one. Full detail in `../docs/business-rules.md`,
 which carries **11** `DECISION REQUIRED` markers. Rows 1–11 are surfaced in the
 app at `/admin/settings` so they are visible rather than buried; rows 12–13 are
-new (from the Bseba audit) and are **not** on that screen yet — add them when
-phase 35 starts, or they will stay buried in a document.
+new (from the Bseba audit). **Row 13 is now settled by construction.** Row 12 is
+still owed and is **not** on `/admin/settings` — it should be added there before
+phase 37 is scoped, or it will stay buried in a document.
+
+One new item this pass, not a decision but a number only the live data can give:
+**run `manage.py verify_accounts` on the first real deployment and record what it
+reports as unposted.** Every payment taken before phase 35 carries no account and
+cannot be backfilled honestly. That count is a permanent, known gap — it should
+be written down when it is first measured, not discovered later.
 
 | # | Decision | Current default | Why it matters |
 |---|---|---|---|
@@ -27,8 +34,8 @@ phase 35 starts, or they will stay buried in a document.
 | 7 | Where stock is deducted in the order lifecycle | at `PACKED` | Alternative is `CONFIRMED`; changes what "available" means online |
 | 8 | Formal in-transit location for transfers | none in V1 | Multi-branch transfer accuracy |
 | 9 | Whether coupons may stack | one per order | Discount maths |
-| 12 | **Does the business sell on credit?** (D-A) | assumed no | Decides whether phase 37 (party ledger) is built at all, and how orders relate to payment |
-| 13 | **Flat account list or a chart of accounts?** (D-B) | flat list | Phase 35's schema. A chart of accounts is an accounting product |
+| 12 | **Does the business sell on credit?** (D-A) | assumed no | Decides whether phase 37 (party ledger) is built at all, and how orders relate to payment. **Still owed** — 35 shipped without it, 36 does not need it, 37 cannot start without it |
+| 13 | ~~Flat account list or a chart of accounts?~~ (D-B) | **built on the default: flat list** | Settled by construction 2026-08-22. Changing it is now a migration, not a choice — [ADR-0011](../docs/architecture/decisions/0011-append-only-cash-book.md) |
 | 10 | Which payment gateway | none — COD only | Blocks prepaid online orders |
 | 11 | Which courier, and API or manual | manual tracking | Shipping integration |
 

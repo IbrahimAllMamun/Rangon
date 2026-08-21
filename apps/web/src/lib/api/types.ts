@@ -347,6 +347,11 @@ export interface PosSession {
     vat_registration: string;
   };
   holds: { id: string; label: string; payload: unknown; created_at: string }[];
+  /**
+   * Accounts this branch's takings can land in, sent with the session so
+   * opening the register stays a single request.
+   */
+  accounts: { id: string; name: string; kind: AccountKind; is_default: boolean }[];
 }
 
 export interface SessionUser {
@@ -373,4 +378,85 @@ export interface StaffNotification {
   is_read: boolean;
   read_at: string | null;
   created_at: string;
+}
+
+// --- finance (phase 35) ----------------------------------------------------
+// Money is a string everywhere, never a JS number: 0.1 + 0.2 !== 0.3, and a
+// balance that drifts by a paisa is a balance nobody trusts. Format with
+// `money()`; arithmetic belongs on the server.
+
+export type AccountKind = "CASH" | "BANK" | "MFS" | "OTHER";
+
+export type AccountTransactionType =
+  | "OPENING"
+  | "SALE_PAYMENT"
+  | "REFUND"
+  | "SUPPLIER_PAYMENT"
+  | "EXPENSE"
+  | "TRANSFER_IN"
+  | "TRANSFER_OUT"
+  | "DEPOSIT"
+  | "WITHDRAWAL"
+  | "ADJUSTMENT";
+
+/** Somewhere money actually sits: a drawer, a bank account, an MFS wallet. */
+export interface Account {
+  id: string;
+  branch: string;
+  branch_code: string;
+  branch_name: string;
+  name: string;
+  kind: AccountKind;
+  kind_display: string;
+  account_number: string;
+  bank_name: string;
+  /** Cache over the cash book, reconciled by `verify_accounts`. Read-only. */
+  balance: string;
+  is_active: boolean;
+  is_default: boolean;
+  allow_overdraft: boolean;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One movement. `amount` is signed: positive in, negative out. */
+export interface AccountTransaction {
+  id: string;
+  account: string;
+  account_name: string;
+  account_kind: AccountKind;
+  branch_code: string;
+  transaction_type: AccountTransactionType;
+  type_display: string;
+  amount: string;
+  balance_after: string;
+  reference_type: string;
+  reference_id: string;
+  reason: string;
+  notes: string;
+  occurred_at: string;
+  created_by_email: string;
+  created_at: string;
+}
+
+export interface AccountTransfer {
+  id: string;
+  number: string;
+  source_account: string;
+  source_account_name: string;
+  target_account: string;
+  target_account_name: string;
+  amount: string;
+  occurred_at: string;
+  notes: string;
+  created_by_email: string;
+  created_at: string;
+}
+
+export interface CashPosition {
+  total: string;
+  by_kind: { kind: AccountKind; total: string }[];
+  accounts: { id: string; name: string; kind: AccountKind; branch: string; balance: string }[];
+  movements: { money_in: string; money_out: string; net: string };
 }

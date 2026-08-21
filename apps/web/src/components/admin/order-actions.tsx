@@ -14,7 +14,7 @@ import {
   Select,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Order, OrderStatus } from "@/lib/api/types";
+import type { Account, Order, OrderStatus } from "@/lib/api/types";
 import { humanise, money } from "@/lib/format";
 
 /**
@@ -35,15 +35,20 @@ const NEXT_STATUS: Partial<Record<OrderStatus, OrderStatus[]>> = {
 export function OrderActions({
   order,
   permissions,
+  accounts = [],
 }: {
   order: Order;
   permissions: string[];
+  /** Accounts the money can land in / come out of. Empty hides the choice. */
+  accounts?: Account[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refundAmount, setRefundAmount] = useState("");
   const [refundReason, setRefundReason] = useState("");
+  const [captureAccount, setCaptureAccount] = useState("");
+  const [refundAccount, setRefundAccount] = useState("");
 
   const can = (code: string) => permissions.includes("*") || permissions.includes(code);
   const transitions = NEXT_STATUS[order.status] ?? [];
@@ -78,6 +83,8 @@ export function OrderActions({
         body: {
           method: order.payments?.[0]?.method ?? "CASH",
           amount: outstanding.toFixed(2),
+          // Blank lets the server pick the branch default for this method.
+          account: captureAccount || null,
         },
       }),
     );
@@ -87,7 +94,12 @@ export function OrderActions({
       apiClient(`/orders/${order.id}/refunds/`, {
         method: "POST",
         idempotencyKey: `refund-${order.id}-${refundAmount}-${Date.now()}`,
-        body: { amount: Number(refundAmount).toFixed(2), reason: refundReason },
+        body: {
+          amount: Number(refundAmount).toFixed(2),
+          reason: refundReason,
+          // Blank refunds out of the account the payment came in through.
+          account: refundAccount || null,
+        },
       }),
     );
 
@@ -128,6 +140,22 @@ export function OrderActions({
             <p className="text-body-sm">
               Outstanding: <span className="tabular font-semibold">{money(outstanding)}</span>
             </p>
+            {accounts.length > 1 && (
+              <Field label="Money goes into" htmlFor="capture-account" className="mt-2">
+                <Select
+                  id="capture-account"
+                  value={captureAccount}
+                  onChange={(event) => setCaptureAccount(event.target.value)}
+                >
+                  <option value="">Branch default for this method</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
             <Button
               full
               variant="secondary"
@@ -172,6 +200,22 @@ export function OrderActions({
                 <option value="Goodwill">Goodwill</option>
               </Select>
             </Field>
+            {accounts.length > 1 && (
+              <Field label="Money comes out of" htmlFor="refund-account">
+                <Select
+                  id="refund-account"
+                  value={refundAccount}
+                  onChange={(event) => setRefundAccount(event.target.value)}
+                >
+                  <option value="">The account the payment came into</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
             <Button
               full
               variant="destructive"

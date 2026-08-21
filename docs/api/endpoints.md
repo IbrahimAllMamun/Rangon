@@ -76,6 +76,36 @@ kept as given, and editing a supplier never regenerates it.
 | GET | `purchase-orders/{id}/receipts/` | `purchases.view` |
 | POST | `supplier-payments/` | `purchases.pay` |
 
+## Finance — `/api/v1/`
+
+Accounts and the append-only cash book (phase 35). See
+[architecture/finance.md](../architecture/finance.md) and
+[ADR-0011](../architecture/decisions/0011-append-only-cash-book.md).
+
+| Method | Path | Perm |
+|---|---|---|
+| GET | `accounts/` | `finance.view` — filters: `branch`, `kind`, `is_active`, `search` |
+| POST | `accounts/` | `finance.manage` — `opening_balance` posts an `OPENING` entry |
+| PATCH | `accounts/{id}/` | `finance.manage` — descriptive fields only; `balance` is read-only |
+| GET | `accounts/{id}/transactions/` | `finance.view` — that account's cash book |
+| GET | `accounts/cash-position/` | `finance.view` — totals by kind + money in/out |
+| POST | `accounts/record-movement/` | `finance.adjust` — `DEPOSIT`/`WITHDRAWAL`/`ADJUSTMENT` only |
+| POST | `accounts/verify-integrity/` | `settings.manage` — cache vs cash-book drift report |
+| GET | `account-transactions/` | `finance.view` — every movement, filterable by account/type/date |
+| GET/POST | `account-transfers/` | `finance.view` / `finance.transfer` |
+
+There is deliberately **no `DELETE /accounts/{id}/`**: an account with movements is financial
+history. Close it with `PATCH {"is_active": false}`.
+
+`SALE_PAYMENT`, `REFUND`, `SUPPLIER_PAYMENT` and `EXPENSE` are rejected by `record-movement/` — those
+are posted by the services that cause them, and entering one by hand would double-count the money.
+
+Overdrawing an account that does not allow overdraft returns **409 `INSUFFICIENT_FUNDS`**.
+
+Three existing endpoints now accept an optional `account` (omit it and the branch default for the
+method's kind is used): `POST orders/{id}/payments/`, `POST orders/{id}/refunds/` and
+`POST supplier-payments/`. `POST pos/sales/` accepts one per tender line.
+
 ## Customers — `/api/v1/customers/`
 
 CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,

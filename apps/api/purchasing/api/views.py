@@ -198,5 +198,7 @@ class SupplierPaymentViewSet(
             paid_at=data.get("paid_at"),
             actor=request.user,
             notes=data.get("notes", ""),
+            account=data.get("account"),
+            branch=resolve_branch(request.user, request.data.get("branch")),
         )
         return Response(SupplierPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)

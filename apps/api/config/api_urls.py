@@ -30,6 +30,11 @@ from catalog.api.views import (
 from content.api.views import NavigationItemViewSet, StorefrontBannerViewSet
 from customers.api.views import CustomerViewSet
 from engagement.api.views import ReviewModerationViewSet
+from finance.api.views import (
+    AccountTransactionViewSet,
+    AccountTransferViewSet,
+    AccountViewSet,
+)
 from inventory.api.views import (
     InventoryTransactionViewSet,
     InventoryViewSet,
@@ -80,6 +85,11 @@ router.register("stock-counts", StockCountViewSet, basename="stockcount")
 router.register("suppliers", SupplierViewSet, basename="supplier")
 router.register("purchase-orders", PurchaseOrderViewSet, basename="purchaseorder")
 router.register("supplier-payments", SupplierPaymentViewSet, basename="supplierpayment")
+
+# --- finance ---------------------------------------------------------------
+router.register("accounts", AccountViewSet, basename="account")
+router.register("account-transactions", AccountTransactionViewSet, basename="accounttransaction")
+router.register("account-transfers", AccountTransferViewSet, basename="accounttransfer")
 
 # --- customers -------------------------------------------------------------
 router.register("customers", CustomerViewSet, basename="customer")

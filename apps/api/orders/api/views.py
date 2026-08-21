@@ -108,6 +108,12 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
 
         pending = order.payments.filter(method=data["method"], status="PENDING").first()
         if pending is not None and pending.amount == data["amount"]:
+            # The account is chosen at capture, because that is when the money
+            # actually arrives — a COD order's cash lands when the courier
+            # remits, not when the order was placed.
+            if data.get("account") is not None:
+                pending.account = data["account"]
+                pending.save(update_fields=["account", "updated_at"])
             payment = payment_services.capture_payment(payment=pending, actor=request.user)
         else:
             payment = payment_services.record_payment(
@@ -116,6 +122,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
                 amount=data["amount"],
                 actor=request.user,
                 reference=data.get("reference", ""),
+                account=data.get("account"),
             )
         return Response(OrderDetailSerializer(payment.order).data, status=status.HTTP_201_CREATED)
 
@@ -131,6 +138,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
             actor=request.user,
             reason=data.get("reason", ""),
             method=data.get("method"),
+            account=data.get("account"),
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(RefundSerializer(refund).data, status=status.HTTP_201_CREATED)

@@ -220,6 +220,74 @@ suspected cause removed.*
 
 ---
 
+## Build pass, 2026-08-22 — phase 35, the financial layer
+
+Rangon recorded a payment **method** and never which account the money landed
+in. No cash position, no bank balance, no expenses, no net profit. Phase 35
+closes that; it was the platform's largest structural gap and it blocked 36-39.
+
+### The shape, and why it is a copy of the inventory engine
+
+`Account.balance` is a cache over an append-only `AccountTransaction`, exactly
+as `Inventory.on_hand` sits over `InventoryTransaction`. That was not a
+stylistic choice — it means the concurrency tests could be written by analogy,
+and the reconciliation habit (`verify_accounts` beside `verify_inventory`) is
+one staff already have.
+
+**There is no opening-balance column.** An account opened with ৳20,000 gets an
+`OPENING` row. With a column the invariant would be
+`balance == opening + SUM(rows)` and every check would special-case it. Without
+one it is just `balance == SUM(amount)`, provable in a single `GROUP BY`.
+
+### Three refusals worth remembering
+
+1. **Money moves on capture, never on record.** An authorised card payment has
+   settled nothing, and a COD order's cash arrives when the courier remits —
+   possibly a week later. Posting at record time invents money that is not in
+   the drawer.
+2. **`resolve_account` returns `None` rather than guessing.** If a branch has no
+   `BANK` account, card takings post *nowhere* — they do not fall back to the
+   cash drawer. A drawer that silently absorbs card money can never be
+   reconciled again, and that is the commonest defect in the ERPs the Bseba
+   audit surveyed. `verify_accounts` counts the unposted events so the gap is
+   stated.
+3. **A missing account never blocks a sale.** A shop that has not set its
+   accounts up must still be able to trade.
+
+The consequence of (2) and (3) together: `Payment.account` is nullable
+permanently. Every payment taken before the app existed has no honest answer,
+and §3.3 forbids inventing one. **Run `verify_accounts` on the first real
+deployment and record the number** — that is the size of the permanent gap.
+
+### Found only by the browser walk (the lesson repeats)
+
+`pytest`, `tsc` and `eslint` were all clean when this bug was live:
+
+**`ApiError.fieldErrors()` rendered any business error's `details` as field
+errors.** The docstring already said "from a VALIDATION_ERROR"; the code never
+checked. So an `INSUFFICIENT_FUNDS` on the transfer form printed a list reading
+`e6622e4d-…`, `Counter Cash Drawer`, `65450.00`, `100000.00` — the error's
+diagnostic context, each item linked to a form field that does not exist — where
+the sentence the service wrote belonged.
+
+It was **pre-existing and shared**: every admin form had it for any
+non-validation error, and nothing had surfaced it because most forms only ever
+hit serializer validation. Fixed in `lib/api/client.ts`, pinned by five Vitest
+cases. A second, smaller one: the cash-book balance tile counted the *filtered*
+rows, so filtering to "Transfers out" made a ten-movement account read
+"1 movement recorded" beside its unfiltered balance.
+
+That is now four separate occasions where the browser walk caught what the test
+suite could not. It is not optional.
+
+### A pre-existing breakage found while reseeding
+
+`seed_demo --reset` had been broken since phase 33 made the category tree
+nested: `Category.parent` is `PROTECT`, so a flat `Category.objects.all()
+.delete()` raises `ProtectedError` on the top-level rows. Nobody had run it
+since. It now deletes leaves first. Worth noting because it means **the seed was
+unrunnable for a whole phase and no check noticed** — nothing in CI reseeds.
+
 ## Deviations from the plan (all have ADRs)
 
 | Plan said | Built | ADR |

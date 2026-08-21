@@ -5,8 +5,9 @@ import { notFound } from "next/navigation";
 import { OrderActions } from "@/components/admin/order-actions";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
+import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
-import type { Order, SessionUser } from "@/lib/api/types";
+import type { Account, Order, SessionUser } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 
 type Params = Promise<{ id: string }>;
@@ -33,6 +34,16 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
 
   const user = await currentUser<SessionUser>();
   const permissions = user?.permissions ?? [];
+
+  // Allowed to fail on its own: a user without `finance.view` still gets the
+  // order, just without the choice of which account the money moves through.
+  let accounts: Account[] = [];
+  try {
+    const page = await apiServer<Paginated<Account>>("/accounts/?is_active=true&page_size=50");
+    accounts = page.results;
+  } catch {
+    accounts = [];
+  }
 
   return (
     <>
@@ -155,7 +166,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
         </div>
 
         <div className="space-y-6">
-          <OrderActions order={order} permissions={permissions} />
+          <OrderActions order={order} permissions={permissions} accounts={accounts} />
 
           <Card>
             <CardHeader>

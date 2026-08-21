@@ -190,6 +190,7 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
     purchase_number = serializers.CharField(
         source="purchase_order.number", read_only=True, default=""
     )
+    account_name = serializers.CharField(source="account.name", read_only=True, default="")
 
     class Meta:
         model = SupplierPayment
@@ -204,6 +205,8 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
             "reference",
             "paid_at",
             "notes",
+            "account",
+            "account_name",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "account_name", "created_at"]

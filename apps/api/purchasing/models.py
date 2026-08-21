@@ -210,6 +210,16 @@ class SupplierPayment(BaseModel):
     reference = models.CharField(max_length=120, blank=True)
     paid_at = models.DateTimeField()
     notes = models.TextField(blank=True)
+    #: Which of the business's own accounts this money came out of.
+    #: Nullable for the same reason as orders.Payment.account.
+    account = models.ForeignKey(
+        "finance.Account",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="supplier_payments",
+        help_text="Where this money came out of.",
+    )
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )

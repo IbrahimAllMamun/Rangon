@@ -137,6 +137,8 @@ docker compose exec api python manage.py makemigrations
 docker compose exec api python manage.py migrate
 docker compose exec api python manage.py createsuperuser
 docker compose exec api python manage.py seed_demo --reset
+docker compose exec api python manage.py verify_inventory   # stock cache vs ledger
+docker compose exec api python manage.py verify_accounts    # balances vs cash book
 docker compose exec api pytest                        # full suite
 docker compose exec api pytest -m "not slow"          # fast suite
 docker compose exec api ruff check .                  # lint

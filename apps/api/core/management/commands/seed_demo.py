@@ -250,6 +250,7 @@ class Command(BaseCommand):
 
         organization, branch = self._organization()
         users = self._users(branch)
+        accounts = self._accounts(branch, users["owner@rangon.test"])
         brands = self._brands()
         categories = self._categories()
         attributes = self._attributes(categories)
@@ -269,6 +270,13 @@ class Command(BaseCommand):
             f"  Variants     : {sum(p.variants.count() for p in Product.objects.all())}"
         )
         self.stdout.write(f"  Stock rows   : {Inventory.objects.count()}")
+        # Re-read: the seeded orders posted into these after they were opened,
+        # so the in-memory copies are stale by now.
+        for account in accounts.values():
+            account.refresh_from_db()
+        self.stdout.write(
+            "  Accounts     : " + ", ".join(f"{a.name} {a.balance}" for a in accounts.values())
+        )
         self.stdout.write("\n  Logins (password: rangon12345)")
         for email, role, *_ in STAFF:
             self.stdout.write(f"    {role:<20} {email}")
@@ -279,19 +287,26 @@ class Command(BaseCommand):
     def _reset(self) -> None:
         from core.models import AuditLog, NumberSequence
         from engagement.models import Review, Wishlist
+        from finance.models import Account, AccountTransaction, AccountTransfer
         from inventory.models import InventoryTransaction
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
-        from purchasing.models import PurchaseOrder, PurchaseReceipt
+        from purchasing.models import PurchaseOrder, PurchaseReceipt, SupplierPayment
 
         self.stdout.write(self.style.WARNING("Deleting existing data…"))
         # Order matters: financial rows reference catalogue rows with PROTECT.
         for model in (
             Review,
             Wishlist,
+            # Finance first: Payment/SupplierPayment reference Account with
+            # PROTECT, and AccountTransaction references Account the same way.
+            AccountTransfer,
+            AccountTransaction,
+            SupplierPayment,
             Refund,
             ReturnRequest,
             Payment,
+            Account,
             CouponRedemption,
             HeldSale,
             Cart,
@@ -307,7 +322,16 @@ class Command(BaseCommand):
         AttributeValue.objects.all().delete()
         Attribute.objects.all().delete()
         CategoryAttribute.objects.all().delete()
-        Category.objects.all().delete()
+        # `Category.parent` is PROTECT and the demo tree is nested (ADR-0009),
+        # so a flat `Category.objects.all().delete()` raises ProtectedError on
+        # the top-level rows. Delete the leaves first and work upwards.
+        while Category.objects.exists():
+            leaves = list(
+                Category.objects.filter(children__isnull=True).values_list("pk", flat=True)
+            )
+            if not leaves:
+                break  # a cycle, which the data model should make impossible
+            Category.objects.filter(pk__in=leaves).delete()
         Brand.objects.all().delete()
         Coupon.objects.all().delete()
         Supplier.objects.all().delete()
@@ -385,6 +409,56 @@ class Command(BaseCommand):
                 customer_type=CustomerType.REGISTERED,
             )
         return users
+
+    def _accounts(self, branch: Branch, owner: User) -> dict[str, Any]:
+        """Open the accounts the demo's sales and purchases post into.
+
+        Without these, every seeded payment would land in the "no account
+        could be resolved" gap and the finance screens would be empty — which
+        is exactly the state phase 35 exists to end.
+
+        The opening balances are the demo shop's float, posted as OPENING rows
+        through the service so the seed satisfies the same invariant the
+        production code does.
+        """
+        from finance import services as finance_services
+        from finance.models import Account, AccountKind
+
+        self.stdout.write("Opening financial accounts…")
+        specs = [
+            ("cash", "Counter Cash Drawer", AccountKind.CASH, "20000.00", {}),
+            (
+                "bank",
+                "City Bank Current",
+                AccountKind.BANK,
+                "450000.00",
+                {"bank_name": "City Bank PLC", "account_number": "1402-33-901882"},
+            ),
+            (
+                "mfs",
+                "bKash Merchant",
+                AccountKind.MFS,
+                "35000.00",
+                {"account_number": "01711000000"},
+            ),
+        ]
+
+        accounts: dict[str, Any] = {}
+        for key, name, kind, opening, extra in specs:
+            existing = Account.objects.filter(branch=branch, name=name).first()
+            if existing is not None:
+                accounts[key] = existing
+                continue
+            accounts[key] = finance_services.create_account(
+                branch=branch,
+                name=name,
+                kind=kind,
+                opening_balance=Decimal(opening),
+                is_default=True,
+                actor=owner,
+                **extra,
+            )
+        return accounts
 
     def _brands(self) -> dict[str, Brand]:
         data = [

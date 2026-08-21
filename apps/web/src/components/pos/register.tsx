@@ -526,6 +526,7 @@ export function PosRegister({ session }: { session: PosSession }) {
       {paymentOpen && (
         <PaymentPanel
           total={pos.total()}
+          accounts={session.accounts ?? []}
           onClose={() => {
             setPaymentOpen(false);
             focusScan();

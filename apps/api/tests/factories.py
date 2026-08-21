@@ -146,6 +146,34 @@ def stock(
     return inventory_services.get_or_create_inventory(branch_obj, variant_obj)
 
 
+def account(
+    branch_obj: Branch,
+    *,
+    kind: str = "CASH",
+    opening_balance: Any = None,
+    is_default: bool = True,
+    **kwargs: Any,
+):
+    """An account with its opening balance posted through the service.
+
+    Deliberately goes through finance.services rather than Account.objects so
+    the test data satisfies the same invariant the production code does.
+    """
+    from finance import services as finance_services
+
+    defaults: dict[str, Any] = {
+        "name": f"{kind.title()} {unique()}",
+        "kind": kind,
+        "is_default": is_default,
+    }
+    defaults.update(kwargs)
+    return finance_services.create_account(
+        branch=branch_obj,
+        opening_balance=Decimal(str(opening_balance)) if opening_balance is not None else None,
+        **defaults,
+    )
+
+
 def customer(**kwargs: Any) -> Customer:
     defaults = {
         "name": f"Customer {unique()}",
