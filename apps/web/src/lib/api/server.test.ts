@@ -11,6 +11,10 @@ function jsonResponse(payload: unknown): Response {
   return {
     status: 200,
     ok: true,
+    // A real Response always carries headers, and apiServer reads the
+    // content-type so it can name the upstream when something other than the
+    // API answers. The double has to have them.
+    headers: new Headers({ "content-type": "application/json" }),
     text: async () => JSON.stringify(payload),
   } as Response;
 }

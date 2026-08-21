@@ -73,22 +73,76 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
   idempotencyKey?: string;
 }
 
-async function handle<T>(response: Response): Promise<T> {
-  if (response.status === 204) return undefined as T;
+/**
+ * Parse a response body that is *supposed* to be JSON but might not be.
+ *
+ * It might not be whenever something other than the API answers: Django's own
+ * 404 page, an nginx 502, a proxy that routed the path to the wrong upstream.
+ * All of those are HTML.
+ *
+ * Parsing before checking the status turned every one of those into
+ * `SyntaxError: Unexpected token '<', "<!doctype "... is not valid JSON`,
+ * thrown from deep inside a bundled chunk — which says nothing about the
+ * status, the URL, or which upstream answered. Checking the status first, and
+ * treating an unparseable body as "no structured detail", turns it back into
+ * the ordinary ApiError every caller already handles.
+ */
+export function parseApiResponse<T>(
+  status: number,
+  ok: boolean,
+  text: string,
+  contentType: string | null,
+  path: string,
+): T {
+  let payload: unknown = null;
+  let parsed = false;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+      parsed = true;
+    } catch {
+      parsed = false;
+    }
+  } else {
+    parsed = true;
+  }
 
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    const body = payload as ApiErrorBody | null;
+  if (!ok) {
+    const body = parsed ? (payload as ApiErrorBody | null) : null;
     throw new ApiError(
-      response.status,
+      status,
       body?.error?.code ?? "SERVER_ERROR",
-      body?.error?.message ?? `Request failed with status ${response.status}`,
+      body?.error?.message ?? `Request failed with status ${status}: ${path}`,
       body?.error?.details,
     );
   }
+
+  if (!parsed) {
+    // A 2xx that is not JSON means the request reached something that is not
+    // the API. Naming the content type and the path is the whole point.
+    throw new ApiError(
+      502,
+      "UPSTREAM_NOT_JSON",
+      `Expected JSON from ${path} but received ${contentType ?? "an unknown content type"}. ` +
+        "Something other than the API answered this request.",
+      { path, contentType, preview: text.slice(0, 120) },
+    );
+  }
+
   return payload as T;
+}
+
+async function handle<T>(response: Response, path = ""): Promise<T> {
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  return parseApiResponse<T>(
+    response.status,
+    response.ok,
+    text,
+    response.headers.get("content-type"),
+    path,
+  );
 }
 
 /**
@@ -119,7 +173,7 @@ export async function apiClient<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  return handle<T>(response);
+  return handle<T>(response, path);
 }
 
 /**
@@ -139,5 +193,5 @@ export async function apiUpload<T>(path: string, form: FormData, method = "POST"
     body: form,
   });
 
-  return handle<T>(response);
+  return handle<T>(response, path);
 }
