@@ -242,6 +242,7 @@ Staging/production procedures, migration strategy, rollback and backups are docu
 
 - [docs/operations/deployment.md](docs/operations/deployment.md)
 - [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — single-server Webuzo VPS
+- [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md) — your own machine + your own domain
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)
 

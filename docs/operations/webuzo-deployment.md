@@ -5,6 +5,9 @@
 > compose files, Dockerfiles and settings — not a transcript of a working deploy. Expect to correct it
 > the first time you run it, and edit this file as you go.
 >
+> Hosting on hardware you own instead of a rented VPS:
+> [self-hosting-with-a-domain.md](self-hosting-with-a-domain.md).
+>
 > General release procedure, rollback and expand/contract migrations live in
 > [deployment.md](deployment.md). This file covers only what is **specific to Webuzo**.
 
