@@ -70,7 +70,10 @@ def user(
 
 def category(**kwargs: Any) -> Category:
     name = kwargs.pop("name", f"Category {unique()}")
-    return Category.objects.create(name=name, slug=f"cat-{unique()}", **kwargs)
+    # Slugs are unique and part of the URL, so a test that asserts on
+    # `/category/women` can pass its own rather than accept a generated one.
+    slug = kwargs.pop("slug", f"cat-{unique()}")
+    return Category.objects.create(name=name, slug=slug, **kwargs)
 
 
 def brand(**kwargs: Any) -> Brand:

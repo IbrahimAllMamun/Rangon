@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from catalog.models import (
@@ -110,13 +112,15 @@ class BrandSerializer(serializers.ModelSerializer):
 class ProductImageSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
     alt = serializers.CharField(source="effective_alt", read_only=True)
+    color = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductImage
         fields = [
             "id",
             "product",
-            "variant",
+            "attribute_value",
+            "color",
             "image",
             "url",
             "alt_text",
@@ -132,6 +136,32 @@ class ProductImageSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         url = image.image.url
         return request.build_absolute_uri(url) if request else url
+
+    def get_color(self, image: ProductImage) -> dict[str, str] | None:
+        return colour_payload(image.attribute_value if image.attribute_value_id else None)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        # The colour rules live on the model so the Django admin obeys them too.
+        candidate = copy.copy(self.instance) if self.instance else ProductImage()
+        for key, value in attrs.items():
+            setattr(candidate, key, value)
+        try:
+            candidate.clean()
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(error.message_dict) from error
+        return attrs
+
+
+def colour_payload(value: Any) -> dict[str, str] | None:
+    """The colour an image or variant carries, or None for a shared image."""
+    if value is None:
+        return None
+    return {
+        "code": value.attribute.code,
+        "value": value.value,
+        "label": value.display,
+        "swatch": value.swatch,
+    }
 
 
 class VariantAttributeValueSerializer(serializers.ModelSerializer):

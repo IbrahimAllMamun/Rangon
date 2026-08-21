@@ -26,14 +26,14 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 10 | Returns | ✅ | 🟡 | Full request→approve→receive→restock→refund + POS one-step return. Admin returns list built; approve/receive/refund still API-only |
 | 11 | Customers | ✅ | 🟡 | Phone-first identity, addresses, notes, history. Admin customer list built; editing still API-only |
 | 12 | Online store | ✅ | ✅ | Home, shop, product, cart, checkout, order tracking, account, policies. Browser journey verified end to end |
-| 13 | Search + filters | ✅ | ✅ | Postgres trigram + indexed facets; facet UI with colour swatches |
+| 13 | Search + filters | ✅ | ✅ | Postgres trigram + indexed facets; facet UI with colour swatches; navbar type-ahead suggest (products / categories / popular searches) backed by a `SearchTerm` log |
 | 14 | Cart | ✅ | ✅ | Server-authoritative, re-priced on every read, drawer + full page |
 | 15 | Checkout | ✅ | ✅ | Idempotency keys, reservation, COD, server-side totals, error summary |
 | 16 | Online payments | 🟡 | 🟡 | Abstraction + COD complete. **No live gateway** — the card option is disabled in the UI |
 | 17 | Orders | ✅ | ✅ | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip |
 | 18 | Shipping | ✅ | 🟡 | Zones, methods, shipments, courier-ready interface. Checkout picks a method; no admin screens |
 | 19 | Coupons | ✅ | 🟡 | Full engine + API; cart can apply/remove. No admin coupon screens |
-| 20 | Wishlist + reviews | ✅ | 🟡 | **Both are dead ends in the UI** — the wishlist page and its nav links exist but nothing can add to it, and reviews render without a way to write one. See [Known defects](#known-defects) D1/D2 |
+| 20 | Wishlist + reviews | ✅ | 🟡 | **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. D1 struck through below. **Reviews are still a dead end** — rendered with no submit form. See [Known defects](#known-defects) D2 |
 | 21 | Dashboard | ✅ | ✅ | Server-aggregated KPIs, sales chart with a table alternative |
 | 22 | Reports | ✅ | ✅ | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven) |
 | 23 | Offline POS | ⬜ | ⬜ | Deliberately V2 (plan §29). Design recorded in `architecture/offline-pos.md` |
@@ -46,13 +46,15 @@ Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with
 | 30 | Deployment | 🟡 | 🟡 | Compose prod stack; **CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment** |
 | 31 | Backup/recovery | 🟡 | — | Scripts + runbook written; **restore never rehearsed** |
 | 32 | Production launch | ⬜ | ⬜ | Blocked on `docs/operations/go-live-checklist.md` |
-| 33 | Dynamic navigation | ⬜ | ⬜ | Designed, not started. Category-driven navbar with a one-table override, `/category/[...slug]` URLs, announcement bar. Phases N0–N6 in [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md) |
-| 34 | Colour-linked product media | ⬜ | ⬜ | Designed, not started. Images bind to a colour `AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image. Phases B1–B3 in [architecture/product-media.md](architecture/product-media.md#6-phases) |
+| 33 | Dynamic navigation | ✅ | ✅ | Category-driven navbar with a one-table override, `/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5 |
+| 34 | Colour-linked product media | ✅ | ✅ | Images bind to a colour `AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image; clicking another colour's thumbnail repairs the other axes. Phases B1–B2 done, B3 (per-colour upload in the admin product form) blocked on phase 05 — [architecture/product-media.md](architecture/product-media.md#6-phases) |
 
-Phases 33 and 34 come from external design input, reviewed 2026-08-21: the navbar specification in
-`rangon_fashion_dynamic_navbar_design.md` and a read of the Dosti Shop codebase. Nothing in either
-phase is implemented — the documents record decisions and scope only. The wider backlog drawn from
-that review is in [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
+Phases 33 and 34 were designed from external design input reviewed 2026-08-21 (the navbar specification
+in `rangon_fashion_dynamic_navbar_design.md` and a read of the Dosti Shop codebase) and implemented
+2026-08-21. The wider backlog drawn from that review — CSV import, media library, four-state variant
+availability (now partly folded into the buy panel rewrite above), Quick View, Meta feed, and the rest —
+is still open and tracked in
+[planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
 
@@ -85,6 +87,43 @@ production page latency ............... measured from the built image on the sam
 API query counts after the N+1 sweep .. home 29 · listing 13 · purchase orders 15 · detail 13;
                                         every other list endpoint 4-7
 ```
+
+Phases 33 (dynamic navigation) and 34 (colour-linked product media) were built and verified on
+2026-08-21, against a working tree past `18e418b`:
+
+```text
+migrations (catalog 0002-0004, content 0001) .. applied clean, `makemigrations --check` clean
+pytest ......................................... 220 passed (37 new: tests/api/test_navigation.py,
+                                                  tests/api/test_product_media.py,
+                                                  tests/api/test_search_suggest.py)
+ruff check + ruff format ....................... clean
+frontend eslint (npx eslint src) ............... clean
+frontend typecheck (tsc --noEmit) .............. clean, twice (before and after the final fixes)
+vitest .......................................... 22 passed, unchanged
+browser walk, scripted Playwright container .... mcr.microsoft.com/playwright joined to the
+                                                  compose network (the dev container itself cannot
+                                                  run it, D7): desktop mega/dropdown menu opens and
+                                                  navigates by mouse (hover+click) and by keyboard
+                                                  (Tab/Enter) at 1280px; mobile drawer accordion at
+                                                  375px; search suggest returns real products,
+                                                  categories and a popular term; /category/men
+                                                  renders breadcrumbs, subcategory chips, filters,
+                                                  wishlist hearts; /shop?category=men 308s to
+                                                  /category/men; product detail colour/capacity
+                                                  selection and add-to-cart work
+```
+
+Two real bugs were caught and fixed by that browser walk, not by pytest or typecheck — worth recording
+because they show why the walk matters:
+
+1. `lib/navigation/navigation.ts` (server-only, imports `apiServer`/`next/headers`) was imported from
+   the client component `primary-nav.tsx` for one pure helper (`resolveLayout`). Next's bundler correctly
+   refused to build it. Fixed by splitting the helper into `lib/navigation/layout.ts`, which has no
+   server-only import.
+2. `NavigationMenu.Link asChild` around a `next/link` silently swallowed navigation on both mouse click
+   and keyboard Enter — no console error, no failed request that Playwright's network listeners would
+   catch by exception. Recorded in [navigation.md §7](architecture/navigation.md#a-radix-gotcha-worth-recording)
+   with the fix (a plain `<Link>`, panel closed explicitly via controlled state).
 
 ### CI is real now
 
@@ -122,12 +161,12 @@ Do not describe any of these as working.
 ## Known defects
 
 Found by diagnosis on 2026-08-18. None is a data-integrity or money bug; all are user-visible or
-process gaps. D5, D10, D11, D12, D13 and D17 have since been fixed and are struck through. **D16 blocks
+process gaps. D1, D5, D10, D11, D12, D13 and D17 have since been fixed and are struck through. **D16 blocks
 any deployment** — the production CSP renders a blank page.
 
 | # | Defect | Where | Impact |
 |---|---|---|---|
-| D1 | **Wishlist cannot be filled.** `/wishlist` renders and is linked from the account page and the mobile nav, but nothing anywhere calls `POST /shop/wishlist/`. There is no save/heart control on the product card or the product page | `apps/web/src/components/commerce/` | The page is permanently empty for every customer — a visibly dead feature |
+| ~~D1~~ | ~~**Wishlist cannot be filled.**~~ **Fixed 2026-08-21** — `WishlistHeart` on the product card calls `POST`/`DELETE /shop/wishlist/`; a shared `useWishlist` Zustand store backs it, the header count, and `/wishlist` | `apps/web/src/components/commerce/wishlist-heart.tsx`, `apps/web/src/lib/store/wishlist.ts` | — |
 | D2 | **Reviews cannot be written.** The product page renders reviews and JSON-LD ratings, and `POST /reviews/` exists and is tested, but there is no submit form | `apps/web/src/app/(storefront)/product/[slug]/page.tsx` | Review counts can never grow, and moderation has nothing to moderate |
 | D3 | **Notifications have no UI.** The model, the in-app feed API and the Celery email tasks exist; the string "notification" does not appear anywhere in `apps/web/src` | frontend | Staff cannot see low-stock or order alerts in the app |
 | D4 | **The brand appears twice in product titles.** `seed_demo` writes `seo_title = "<name> \| Rangon Fashion"` while the root layout applies `template: "%s \| Rangon Fashion"`, producing `Classic Oxford Shirt \| Rangon Fashion \| Rangon Fashion` | `apps/api/core/management/commands/seed_demo.py:475` and `apps/web/src/app/layout.tsx:22` | Any product with an `seo_title` gets a doubled suffix in the tab, the OG card and search results |

@@ -42,6 +42,27 @@ export interface ShopVariant {
   attributes: Record<string, { value: string; label: string; swatch: string }>;
 }
 
+/** The colour an image is bound to; `null` marks a shared image. */
+export interface ImageColor {
+  code: string;
+  value: string;
+  label: string;
+  swatch: string;
+}
+
+export interface ShopImage {
+  url: string;
+  alt: string;
+  color: ImageColor | null;
+}
+
+export interface ShopCategoryRef {
+  name: string;
+  slug: string;
+  /** Full path for `/category/[...slug]`, e.g. `women/kurti`. */
+  path: string;
+}
+
 export interface ShopProduct {
   id: string;
   name: string;
@@ -50,9 +71,9 @@ export interface ShopProduct {
   description: string;
   material: string;
   care_instructions: string;
-  category: { name: string; slug: string };
+  category: ShopCategoryRef;
   brand: { name: string; slug: string } | null;
-  images: { url: string; alt: string; variant: string | null }[];
+  images: ShopImage[];
   variants: ShopVariant[];
   price_min: string;
   price_max: string;
@@ -74,6 +95,58 @@ export interface ShopProduct {
     }[];
   };
   related?: ShopProduct[];
+}
+
+/* ------------------------------------------------------- navigation ------ */
+
+export type NavigationItemType = "CATEGORY" | "LINK" | "PROMO";
+export type NavigationLayout = "AUTO" | "DROPDOWN" | "MEGA";
+
+/**
+ * One navbar entry. The tree is resolved server-side (ADR-0009) — the frontend
+ * never decides whether an item is visible, only how to draw it.
+ */
+export interface NavigationNode {
+  id: string;
+  label: string;
+  url: string;
+  type: NavigationItemType;
+  badge: string | null;
+  layout: NavigationLayout;
+  description: string;
+  image: string | null;
+  children: NavigationNode[];
+}
+
+export interface StorefrontBanner {
+  id: string;
+  placement: "ANNOUNCEMENT" | "HOME_HERO";
+  message: string;
+  title: string;
+  subtitle: string;
+  cta_label: string;
+  url: string;
+  image: string | null;
+  dismissible: boolean;
+}
+
+export interface NavigationPayload {
+  announcement: StorefrontBanner | null;
+  items: NavigationNode[];
+  footer: NavigationNode[];
+}
+
+export interface ShopCategory {
+  id: string;
+  name: string;
+  slug: string;
+  path: string;
+  description: string;
+  image: string;
+  breadcrumbs: { name: string; slug: string; path: string }[];
+  children: { name: string; slug: string; path: string }[];
+  seo_title: string;
+  seo_description: string;
 }
 
 export interface CartItem {

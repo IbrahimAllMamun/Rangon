@@ -27,6 +27,7 @@ from catalog.api.views import (
     ProductVariantViewSet,
     ProductViewSet,
 )
+from content.api.views import NavigationItemViewSet, StorefrontBannerViewSet
 from customers.api.views import CustomerViewSet
 from engagement.api.views import ReviewModerationViewSet
 from inventory.api.views import (
@@ -94,6 +95,8 @@ router.register("couriers", CourierViewSet, basename="courier")
 router.register("shipments", ShipmentViewSet, basename="shipment")
 router.register("coupons", CouponViewSet, basename="coupon")
 router.register("reviews", ReviewModerationViewSet, basename="review-moderation")
+router.register("navigation-items", NavigationItemViewSet, basename="navigationitem")
+router.register("storefront-banners", StorefrontBannerViewSet, basename="storefrontbanner")
 
 urlpatterns = [
     path("auth/", include("accounts.api.urls")),

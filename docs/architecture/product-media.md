@@ -133,9 +133,9 @@ to stock counts.
 
 | # | Scope | State |
 |---|---|---|
-| B1 | `attribute_value` migration, validation, payload grouping, pytest | not started |
-| B2 | `ProductDetail` wrapper, colour-linked gallery, bidirectional strip | not started |
-| B3 | Per-colour upload in the admin product form | not started |
+| B1 | `attribute_value` migration, validation, payload grouping, pytest | done. Expand/contract: `catalog/migrations/0002_productimage_attribute_value.py` backfills from `variant`, `0003_remove_productimage_variant.py` drops it |
+| B2 | `ProductDetail` wrapper, colour-linked gallery, bidirectional strip | done |
+| B3 | Per-colour upload in the admin product form | not started — blocked on the admin product form itself not existing yet (roadmap phase 05) |
 
 B1 and B2 ship independently of B3: images can be attached through the Django admin first, and
 customers get the behaviour before the product form exists.

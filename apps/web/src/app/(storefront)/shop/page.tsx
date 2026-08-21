@@ -1,15 +1,48 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { permanentRedirect } from "next/navigation";
 
 import { FilterPanel } from "@/components/commerce/filter-panel";
+import {
+  type Facets,
+  type ListingParams,
+  ListingPagination,
+  toQuery,
+} from "@/components/commerce/listing";
 import { ProductGrid } from "@/components/commerce/product-card";
 import { PendingRegion } from "@/components/ui/pending-region";
 import { EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
-import type { ShopProduct } from "@/lib/api/types";
+import type { ShopCategory, ShopProduct } from "@/lib/api/types";
 
-type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+type SearchParams = Promise<ListingParams>;
+
+/**
+ * `/shop` browses everything and runs search. Category browsing moved to
+ * `/category/[...slug]` (navigation.md §5); `?category=` still arrives from
+ * old links and anything already indexed, and is permanently redirected.
+ */
+async function redirectTargetFor(params: ListingParams): Promise<string | null> {
+  const slug = typeof params.category === "string" ? params.category : "";
+  if (!slug) return null;
+
+  let path = slug;
+  try {
+    const category = await apiServer<ShopCategory>(`/shop/categories/${slug}/`, {
+      auth: false,
+      revalidate: 300,
+      tags: ["categories"],
+    });
+    path = category.path;
+  } catch {
+    // Unknown slug: still leave the query string behind. `/category/<slug>`
+    // renders the 404 rather than a listing that silently ignores the filter.
+  }
+
+  const rest = toQuery({ ...params, category: undefined });
+  return `/category/${path}${rest ? `?${rest}` : ""}`;
+}
 
 export async function generateMetadata({
   searchParams,
@@ -18,61 +51,39 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const params = await searchParams;
   const query = typeof params.q === "string" ? params.q : "";
-  const category = typeof params.category === "string" ? params.category : "";
 
-  const title = query ? `Search: ${query}` : category ? titleise(category) : "Shop";
   return {
-    title,
-    description: `Browse ${title.toLowerCase()} at Rangon Fashion.`,
+    title: query ? `Search: ${query}` : "Shop",
+    description: query
+      ? `Search results for “${query}” at Rangon Fashion.`
+      : "Browse everything at Rangon Fashion.",
     // Filtered permutations must not compete with the canonical listing.
-    robots: query || Object.keys(params).some((key) => key.startsWith("attr_"))
-      ? { index: false, follow: true }
-      : undefined,
-    alternates: { canonical: category ? `/shop?category=${category}` : "/shop" },
+    robots:
+      query || Object.keys(params).some((key) => key.startsWith("attr_"))
+        ? { index: false, follow: true }
+        : undefined,
+    alternates: { canonical: "/shop" },
   };
-}
-
-interface Facets {
-  brands: { slug: string; name: string; count: number }[];
-  attributes: {
-    code: string;
-    name: string;
-    kind: string;
-    values: { value: string; label: string; swatch: string; count: number }[];
-  }[];
-  price: { min: string; max: string };
-}
-
-function toQuery(params: Record<string, string | string[] | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
-    for (const entry of Array.isArray(value) ? value : [value]) search.append(key, entry);
-  }
-  return search.toString();
 }
 
 export default async function ShopPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
+
+  const redirectTarget = await redirectTargetFor(params);
+  if (redirectTarget) permanentRedirect(redirectTarget);
+
   const query = toQuery(params);
 
   const [productsResult, facetsResult] = await Promise.allSettled([
     apiServer<Paginated<ShopProduct>>(`/shop/products/?${query}`, { auth: false }),
-    apiServer<Facets>(
-      `/shop/facets/?${toQuery({ q: params.q, category: params.category })}`,
-      { auth: false },
-    ),
+    apiServer<Facets>(`/shop/facets/?${toQuery({ q: params.q })}`, { auth: false }),
   ]);
 
   const products = productsResult.status === "fulfilled" ? productsResult.value : null;
   const facets = facetsResult.status === "fulfilled" ? facetsResult.value : null;
 
   const heading =
-    typeof params.q === "string" && params.q
-      ? `Results for “${params.q}”`
-      : typeof params.category === "string" && params.category
-        ? titleise(params.category)
-        : "All products";
+    typeof params.q === "string" && params.q ? `Results for “${params.q}”` : "All products";
 
   return (
     <div className="container-rangon py-8 sm:py-10">
@@ -118,7 +129,12 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
             // the new set arrives visibly rather than swapping in silently.
             <div key={JSON.stringify(params)} className="route-fade">
               <ProductGrid products={products.results} />
-              <Pagination params={params} count={products.count} hasNext={Boolean(products.next)} />
+              <ListingPagination
+                basePath="/shop"
+                params={params}
+                count={products.count}
+                hasNext={Boolean(products.next)}
+              />
             </div>
           ) : (
             <EmptyState
@@ -135,60 +151,4 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
       </div>
     </div>
   );
-}
-
-function Pagination({
-  params,
-  count,
-  hasNext,
-}: {
-  params: Record<string, string | string[] | undefined>;
-  count: number;
-  hasNext: boolean;
-}) {
-  const page = Number(params.page ?? 1);
-  const pageSize = 25;
-  const totalPages = Math.max(1, Math.ceil(count / pageSize));
-  if (totalPages <= 1) return null;
-
-  const build = (target: number) => {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (key === "page" || value === undefined) continue;
-      for (const entry of Array.isArray(value) ? value : [value]) search.append(key, entry);
-    }
-    search.set("page", String(target));
-    return `/shop?${search.toString()}`;
-  };
-
-  return (
-    <nav aria-label="Pagination" className="mt-10 flex items-center justify-center gap-2">
-      {page > 1 && (
-        <Link
-          href={build(page - 1)}
-          className="rounded-md border border-neutral-300 px-4 py-2 text-body-sm hover:bg-neutral-100"
-        >
-          Previous
-        </Link>
-      )}
-      <span className="px-3 text-body-sm text-muted">
-        Page {page} of {totalPages}
-      </span>
-      {hasNext && (
-        <Link
-          href={build(page + 1)}
-          className="rounded-md border border-neutral-300 px-4 py-2 text-body-sm hover:bg-neutral-100"
-        >
-          Next
-        </Link>
-      )}
-    </nav>
-  );
-}
-
-function titleise(slug: string) {
-  return slug
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }

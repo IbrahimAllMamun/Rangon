@@ -76,6 +76,7 @@ LOCAL_APPS = [
     "shipping",
     "promotions",
     "engagement",
+    "content",
     "notifications",
     "reports",
 ]
@@ -291,6 +292,14 @@ RANGON = {
     "DEFAULT_PAYMENT_PROVIDER": env("PAYMENT_DEFAULT_PROVIDER", "manual"),
     "GUEST_ORDER_TOKEN_DAYS": 90,
 }
+
+# --------------------------------------------------------------------------- storefront cache
+# Next caches the navigation payload against a tag; a menu edit pings this URL
+# so the change is visible before the ISR window expires
+# (docs/architecture/navigation.md §3). Unset = no-op, and the storefront simply
+# refreshes on its own schedule — a fresh install needs no configuration.
+WEB_REVALIDATE_URL = env("WEB_REVALIDATE_URL")
+WEB_REVALIDATE_SECRET = env("WEB_REVALIDATE_SECRET")
 
 # --------------------------------------------------------------------------- logging
 LOG_LEVEL = env("DJANGO_LOG_LEVEL", "INFO")

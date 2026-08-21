@@ -25,16 +25,22 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         auth: false,
         revalidate: 3600,
       }),
-      apiServer<{ slug: string; children: { slug: string }[] }[]>("/shop/categories/", {
-        auth: false,
-        revalidate: 3600,
-      }),
+      apiServer<{ path: string; slug: string; children: { path: string; slug: string }[] }[]>(
+        "/shop/categories/",
+        { auth: false, revalidate: 3600 },
+      ),
     ]);
 
+    // Only the canonical path form is listed: `/shop?category=` permanently
+    // redirects here, and a sitemap must never advertise a redirect.
     const categoryUrls = categories.flatMap((category) => [
-      { url: `${SITE}/shop?category=${category.slug}`, changeFrequency: "weekly" as const, priority: 0.7 },
+      {
+        url: `${SITE}/category/${category.path ?? category.slug}`,
+        changeFrequency: "weekly" as const,
+        priority: 0.7,
+      },
       ...category.children.map((child) => ({
-        url: `${SITE}/shop?category=${child.slug}`,
+        url: `${SITE}/category/${child.path ?? child.slug}`,
         changeFrequency: "weekly" as const,
         priority: 0.6,
       })),

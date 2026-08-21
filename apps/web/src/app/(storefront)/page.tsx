@@ -6,10 +6,11 @@ import { ProductGrid } from "@/components/commerce/product-card";
 import { Button } from "@/components/ui/primitives";
 import { Reveal } from "@/components/ui/reveal";
 import { apiServer } from "@/lib/api/server";
-import type { ShopProduct } from "@/lib/api/types";
+import type { ShopProduct, StorefrontBanner } from "@/lib/api/types";
 
 interface HomePayload {
-  featured_categories: { name: string; slug: string; image: string }[];
+  hero: StorefrontBanner | null;
+  featured_categories: { name: string; slug: string; path: string; image: string }[];
   new_arrivals: ShopProduct[];
   featured: ShopProduct[];
   best_sellers: ShopProduct[];
@@ -33,6 +34,12 @@ async function getHome(): Promise<HomePayload | null> {
 export default async function HomePage() {
   const data = await getHome();
 
+  // A merchandiser's hero banner wins; without one the page keeps the copy it
+  // has always had and borrows a new arrival's photograph
+  // (docs/architecture/navigation.md §2).
+  const hero = data?.hero ?? null;
+  const heroImage = hero?.image ?? data?.new_arrivals?.[0]?.images?.[0]?.url ?? "";
+
   return (
     <>
       {/* Hero: photography-led, concise copy, one clear CTA in brand red. */}
@@ -49,15 +56,16 @@ export default async function HomePage() {
               style={{ animationDelay: "60ms" }}
               className="font-display motion-safe:animate-rise-in mt-4 text-[2.25rem] font-bold leading-[1.05] text-white sm:text-[3rem] lg:text-display-xl"
             >
-              Elevate your everyday
+              {hero?.title || "Elevate your everyday"}
             </h1>
             <p style={{ animationDelay: "120ms" }} className="motion-safe:animate-rise-in mt-5 text-body-lg text-neutral-300">
-              Clothing, shoes, bags and cosmetics — chosen for how Dhaka actually dresses.
+              {hero?.subtitle ||
+                "Clothing, shoes, bags and cosmetics — chosen for how Dhaka actually dresses."}
             </p>
             <div style={{ animationDelay: "180ms" }} className="motion-safe:animate-rise-in mt-8 flex flex-wrap gap-3">
               <Button asChild size="lg">
-                <Link href="/shop">
-                  Shop now <ArrowRight className="size-4" aria-hidden />
+                <Link href={hero?.url || "/shop"}>
+                  {hero?.cta_label || "Shop now"} <ArrowRight className="size-4" aria-hidden />
                 </Link>
               </Button>
               <Button asChild size="lg" variant="secondary" className="border-neutral-700 bg-transparent text-white hover:bg-neutral-800">
@@ -70,9 +78,9 @@ export default async function HomePage() {
             style={{ animationDelay: "120ms" }}
             className="motion-safe:animate-rise-in relative hidden aspect-[4/3] overflow-hidden rounded-xl lg:block"
           >
-            {data?.new_arrivals?.[0]?.images?.[0] ? (
+            {heroImage ? (
               <Image
-                src={data.new_arrivals[0].images[0].url}
+                src={heroImage}
                 alt=""
                 fill
                 priority
@@ -101,7 +109,7 @@ export default async function HomePage() {
             {data.featured_categories.map((category) => (
               <Link
                 key={category.slug}
-                href={`/shop?category=${category.slug}`}
+                href={`/category/${category.path ?? category.slug}`}
                 className="group relative aspect-square overflow-hidden rounded-xl bg-neutral-200"
               >
                 {category.image && (

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.text import slugify
@@ -332,15 +333,53 @@ class VariantAttributeValue(BaseModel):
         return f"{self.variant.sku}: {self.attribute_value}"
 
 
+class SearchTerm(BaseModel):
+    """What shoppers type, and whether it found anything.
+
+    One row per distinct term rather than per search: the merchandising question
+    is "47 people searched *saree* and got nothing", which an aggregate answers
+    without growing a row per visitor. It also supplies the "popular searches"
+    group in the navbar suggestions (docs/architecture/navigation.md §7 N4).
+    """
+
+    term = models.CharField(max_length=120, unique=True)
+    hits = models.PositiveIntegerField(default=0)
+    last_result_count = models.IntegerField(default=0)
+    last_searched_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "catalog_searchterm"
+        ordering = ("-hits", "term")
+        indexes = [
+            models.Index(fields=["-hits"], name="catalog_searchterm_hits_idx"),
+            models.Index(fields=["last_result_count"], name="catalog_searchterm_res_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.term} ({self.hits})"
+
+
 class ProductImage(BaseModel):
+    """A photograph, bound to a *colour* rather than to a variant.
+
+    A shirt in 3 colours and 4 sizes has 12 variants but 3 photo shoots.  Binding
+    to the colour `AttributeValue` means the black photo is uploaded once, every
+    size in black shows it, and adding XXL later inherits it instead of shipping
+    a variant with no images (docs/architecture/product-media.md §1).
+
+    `attribute_value = None` means the image is *shared*: a flat-lay, a size
+    chart, packaging.  Shared images show for every colour.
+    """
+
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="images")
-    variant = models.ForeignKey(
-        ProductVariant,
+    attribute_value = models.ForeignKey(
+        AttributeValue,
         null=True,
         blank=True,
-        on_delete=models.CASCADE,
-        related_name="images",
-        help_text="Set to show this image when a specific variant is selected.",
+        # Losing the grouping is recoverable; losing the photograph is not.
+        on_delete=models.SET_NULL,
+        related_name="product_images",
+        help_text="The colour this image shows. Blank means it applies to every colour.",
     )
     image = models.ImageField(upload_to="products/%Y/%m/")
     alt_text = models.CharField(max_length=200, blank=True)
@@ -352,14 +391,45 @@ class ProductImage(BaseModel):
     class Meta:
         db_table = "catalog_productimage"
         ordering = ("position", "created_at")
-        indexes = [models.Index(fields=["product", "position"])]
+        indexes = [
+            models.Index(fields=["product", "position"]),
+            models.Index(fields=["attribute_value", "position"], name="catalog_image_colour_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.product.name} #{self.position}"
 
+    def clean(self) -> None:
+        """Only a variant-defining colour may group images, and only one the
+        product actually comes in (product-media.md §2)."""
+        if self.attribute_value_id is None:
+            return
+        value = self.attribute_value
+        if value.attribute.kind != AttributeKind.COLOR:
+            raise ValidationError(
+                {"attribute_value": "Images group by colour; that is not a colour attribute."}
+            )
+        if not value.attribute.is_variant_defining:
+            raise ValidationError(
+                {"attribute_value": "That colour attribute does not define variants."}
+            )
+        if (
+            self.product_id
+            and not VariantAttributeValue.objects.filter(
+                variant__product_id=self.product_id, attribute_value_id=value.pk
+            ).exists()
+        ):
+            raise ValidationError(
+                {"attribute_value": "This product has no variant in that colour."}
+            )
+
+    @property
+    def colour_label(self) -> str:
+        return self.attribute_value.display if self.attribute_value_id else ""
+
     @property
     def effective_alt(self) -> str:
-        return (
-            self.alt_text
-            or f"{self.product.name}{' ' + self.variant.label if self.variant else ''}"
-        )
+        if self.alt_text:
+            return self.alt_text
+        colour = self.colour_label
+        return f"{self.product.name} in {colour}" if colour else self.product.name

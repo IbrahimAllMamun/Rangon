@@ -289,11 +289,11 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
 
 class ProductImageViewSet(viewsets.ModelViewSet):
-    queryset = ProductImage.objects.select_related("product").all()
+    queryset = ProductImage.objects.select_related("product", "attribute_value__attribute").all()
     serializer_class = ProductImageSerializer
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = PRODUCT_PERMISSIONS
-    filterset_fields = ["product", "variant"]
+    filterset_fields = ["product", "attribute_value"]
 
     def perform_create(self, serializer: Any) -> None:
         image = serializer.save()

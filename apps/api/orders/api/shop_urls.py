@@ -1,5 +1,6 @@
 from django.urls import path
 
+from content.api.views import ShopNavigationView
 from orders.api.shop_views import (
     AccountAddressView,
     AccountOrdersView,
@@ -13,6 +14,7 @@ from orders.api.shop_views import (
     ShopFacetsView,
     ShopHomeView,
     ShopProductViewSet,
+    ShopSearchSuggestView,
     WishlistView,
 )
 
@@ -25,9 +27,11 @@ urlpatterns = [
     path("products/", product_list, name="shop-products"),
     path("products/<slug:slug>/", product_detail, name="shop-product-detail"),
     path("products/<slug:slug>/reviews/", product_reviews, name="shop-product-reviews"),
+    path("navigation/", ShopNavigationView.as_view(), name="shop-navigation"),
     path("categories/", ShopCategoryView.as_view(), name="shop-categories"),
     path("categories/<slug:slug>/", ShopCategoryView.as_view(), name="shop-category-detail"),
     path("facets/", ShopFacetsView.as_view(), name="shop-facets"),
+    path("search/suggest/", ShopSearchSuggestView.as_view(), name="shop-search-suggest"),
     path("cart/", CartView.as_view(), name="shop-cart"),
     path("cart/coupon/", CartCouponView.as_view(), name="shop-cart-coupon"),
     path("shipping-options/", ShippingOptionsView.as_view(), name="shop-shipping-options"),

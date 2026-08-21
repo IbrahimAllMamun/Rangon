@@ -6,21 +6,30 @@ import { useMemo, useState } from "react";
 import { Badge, Button } from "@/components/ui/primitives";
 import type { ShopProduct, ShopVariant } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
+import { buildAxes, findVariant } from "@/lib/commerce/variants";
 import { money } from "@/lib/format";
 import { useCart } from "@/lib/store/cart";
 
 /**
  * Variant selection + add to cart.
  *
+ * Selection is **controlled** by `ProductDetail`, because picking a colour also
+ * moves the gallery (docs/architecture/product-media.md §4).
+ *
  * Availability shown here is advisory; the server re-checks stock under a lock
- * at checkout (docs/business-rules.md §1.4). Out-of-stock options are disabled
- * rather than hidden, so the shopper can see the size exists.
+ * at checkout (docs/business-rules.md §1.4). Options are never hidden — a
+ * shopper needs to see that the size exists before concluding it does not.
  */
-export function ProductBuyPanel({ product }: { product: ShopProduct }) {
+export function ProductBuyPanel({
+  product,
+  selected,
+  onSelect,
+}: {
+  product: ShopProduct;
+  selected: ShopVariant | null;
+  onSelect: (variant: ShopVariant) => void;
+}) {
   const { add, loading } = useCart();
-  const [selected, setSelected] = useState<ShopVariant | null>(
-    product.variants.find((variant) => variant.in_stock) ?? product.variants[0] ?? null,
-  );
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
 
@@ -73,6 +82,8 @@ export function ProductBuyPanel({ product }: { product: ShopProduct }) {
           <fieldset key={axis.code}>
             <legend className="text-body-sm font-semibold">
               {axis.name}
+              {/* The chosen value is printed, so a swatch is never the only
+                  carrier of the answer (CLAUDE.md §11). */}
               {selected?.attributes[axis.code] && (
                 <span className="ml-2 font-normal text-muted">
                   {selected.attributes[axis.code].label}
@@ -84,29 +95,26 @@ export function ProductBuyPanel({ product }: { product: ShopProduct }) {
               {axis.values.map((value) => {
                 const candidate = findVariant(product.variants, selected, axis.code, value.value);
                 const isSelected = selected?.attributes[axis.code]?.value === value.value;
-                const unavailable = !candidate || !candidate.in_stock;
+                const state = availability(candidate);
+                const reason = describe(value.label, state);
 
                 if (axis.kind === "COLOR") {
                   return (
                     <button
                       key={value.value}
                       type="button"
-                      onClick={() => candidate && setSelected(candidate)}
-                      disabled={!candidate}
+                      onClick={() => candidate && onSelect(candidate)}
+                      disabled={state === "dead"}
                       aria-pressed={isSelected}
-                      title={`${value.label}${unavailable ? " — out of stock" : ""}`}
+                      aria-label={reason}
+                      title={reason}
                       className={cn(
                         "relative size-10 rounded-full border-2 transition-transform duration-fast",
                         isSelected ? "border-brand-500 scale-110" : "border-neutral-300",
-                        unavailable && "opacity-40",
+                        state !== "fits" && "opacity-40",
                       )}
                       style={{ backgroundColor: value.swatch || "var(--neutral-200)" }}
-                    >
-                      <span className="sr-only">
-                        {value.label}
-                        {unavailable ? " (out of stock)" : ""}
-                      </span>
-                    </button>
+                    />
                   );
                 }
 
@@ -114,19 +122,21 @@ export function ProductBuyPanel({ product }: { product: ShopProduct }) {
                   <button
                     key={value.value}
                     type="button"
-                    onClick={() => candidate && setSelected(candidate)}
-                    disabled={!candidate}
+                    onClick={() => candidate && onSelect(candidate)}
+                    disabled={state === "dead"}
                     aria-pressed={isSelected}
+                    aria-label={reason}
                     className={cn(
                       "min-w-12 rounded-md border px-4 py-2.5 text-body-sm font-medium transition-colors duration-fast",
                       isSelected
                         ? "border-brand-500 bg-brand-50 text-brand-700"
                         : "border-neutral-300 hover:bg-neutral-100",
-                      unavailable && "text-neutral-400 line-through",
+                      // Struck through only when it cannot be bought at all.
+                      state === "dead" && "text-neutral-400 line-through",
+                      state === "soldOut" && "text-neutral-400",
                     )}
                   >
                     {value.label}
-                    {unavailable && <span className="sr-only"> (out of stock)</span>}
                   </button>
                 );
               })}
@@ -209,56 +219,24 @@ export function ProductBuyPanel({ product }: { product: ShopProduct }) {
   );
 }
 
-interface Axis {
-  code: string;
-  name: string;
-  kind: string;
-  values: { value: string; label: string; swatch: string }[];
-}
-
-function buildAxes(variants: ShopVariant[]): Axis[] {
-  const axes = new Map<string, Axis>();
-
-  for (const variant of variants) {
-    for (const [code, attribute] of Object.entries(variant.attributes)) {
-      if (!axes.has(code)) {
-        axes.set(code, {
-          code,
-          name: code.charAt(0).toUpperCase() + code.slice(1).replace(/-/g, " "),
-          kind: attribute.swatch ? "COLOR" : "TEXT",
-          values: [],
-        });
-      }
-      const axis = axes.get(code)!;
-      if (!axis.values.some((value) => value.value === attribute.value)) {
-        axis.values.push({
-          value: attribute.value,
-          label: attribute.label,
-          swatch: attribute.swatch,
-        });
-      }
-    }
-  }
-  return [...axes.values()];
-}
-
 /**
- * Pick the variant that keeps every other chosen axis fixed and changes only
- * this one — so choosing "Large" keeps the colour the shopper already picked.
+ * Four states, not two: "out of stock" and "we do not make that combination"
+ * are different facts, and a shopper deserves to be told which one they hit.
+ *
+ *  - `fits`    — buyable with the current picks
+ *  - `soldOut` — the combination exists but has no stock; still clickable, so
+ *                the shopper can land on it and read why
+ *  - `dead`    — nothing carries this value at all; the only disabled state
  */
-function findVariant(
-  variants: ShopVariant[],
-  current: ShopVariant | null,
-  code: string,
-  value: string,
-): ShopVariant | undefined {
-  const exact = variants.find((variant) => {
-    if (variant.attributes[code]?.value !== value) return false;
-    if (!current) return true;
-    return Object.entries(current.attributes).every(
-      ([otherCode, attribute]) =>
-        otherCode === code || variant.attributes[otherCode]?.value === attribute.value,
-    );
-  });
-  return exact ?? variants.find((variant) => variant.attributes[code]?.value === value);
+type Availability = "fits" | "soldOut" | "dead";
+
+function availability(candidate: ShopVariant | undefined): Availability {
+  if (!candidate) return "dead";
+  return candidate.in_stock ? "fits" : "soldOut";
+}
+
+function describe(label: string, state: Availability): string {
+  if (state === "fits") return label;
+  if (state === "soldOut") return `${label} — out of stock`;
+  return `${label} — not available`;
 }

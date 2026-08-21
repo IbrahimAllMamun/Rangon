@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { ProductBuyPanel } from "@/components/commerce/product-buy-panel";
-import { ProductGallery } from "@/components/commerce/product-gallery";
+import { ProductDetail } from "@/components/commerce/product-detail";
 import { ProductGrid } from "@/components/commerce/product-card";
 import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
@@ -48,6 +47,9 @@ export default async function ProductPage({ params }: { params: Params }) {
   if (!product) notFound();
 
   const rating = product.reviews?.average ?? null;
+  // The category's canonical path, so the crumb and the JSON-LD agree with the
+  // sitemap rather than pointing at a redirect (navigation.md §5).
+  const categoryHref = `/category/${product.category.path || product.category.slug}`;
 
   // Structured data so the product can appear as a rich result.
   const jsonLd = {
@@ -83,7 +85,7 @@ export default async function ProductPage({ params }: { params: Params }) {
         "@type": "ListItem",
         position: 3,
         name: product.category.name,
-        item: `/shop?category=${product.category.slug}`,
+        item: categoryHref,
       },
       { "@type": "ListItem", position: 4, name: product.name },
     ],
@@ -105,7 +107,7 @@ export default async function ProductPage({ params }: { params: Params }) {
           </li>
           <li aria-hidden>/</li>
           <li>
-            <Link href={`/shop?category=${product.category.slug}`} className="hover:text-brand-600">
+            <Link href={categoryHref} className="hover:text-brand-600">
               {product.category.name}
             </Link>
           </li>
@@ -116,10 +118,7 @@ export default async function ProductPage({ params }: { params: Params }) {
         </ol>
       </nav>
 
-      <div className="grid gap-8 lg:grid-cols-2 lg:gap-12">
-        <ProductGallery images={product.images} productName={product.name} />
-        <ProductBuyPanel product={product} />
-      </div>
+      <ProductDetail product={product} />
 
       <div className="mt-14 grid gap-10 lg:grid-cols-[2fr_1fr]">
         <section aria-labelledby="details-heading">

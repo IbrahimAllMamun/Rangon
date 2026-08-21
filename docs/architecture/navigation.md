@@ -202,13 +202,26 @@ Navigation must never take the storefront down (spec §37).
 
 | # | Scope | State |
 |---|---|---|
-| N0 | Category URLs -> `/category/[...slug]`, redirects, sitemap, canonical, breadcrumbs | not started |
-| N1 | `NavigationItem` + `StorefrontBanner`, `/shop/navigation/`, fallback, pytest | not started |
-| N2 | Desktop navbar — Radix, adaptive layout, badges, announcement, compact-on-scroll | not started |
-| N3 | Mobile drawer — single-open accordion, search overlay, account block | not started |
-| N4 | Search suggest (products / categories / popular searches), wishlist count | not started |
-| N5 | Admin — category reorder + icon, navigation override editor, announcement editor | not started |
-| N6 | Verification — pytest, browser walk at 375/768/1280, axe pass | not started |
+| N0 | Category URLs -> `/category/[...slug]`, redirects, sitemap, canonical, breadcrumbs | done |
+| N1 | `NavigationItem` + `StorefrontBanner`, `/shop/navigation/`, fallback, pytest | done |
+| N2 | Desktop navbar — Radix, adaptive layout, badges, announcement, compact-on-scroll | done |
+| N3 | Mobile drawer — single-open accordion, search overlay, account block | done |
+| N4 | Search suggest (products / categories / popular searches), wishlist count | done |
+| N5 | Admin — navigation override editor, announcement/hero editor | done. Category reorder + icon (a separate, category-scoped admin screen that does not yet exist) is not part of this — see §9 below |
+| N6 | Verification — pytest (37 tests, `tests/api/test_navigation.py` + `tests/api/test_search_suggest.py`), browser walk at 375/1280 via a scripted Playwright container (Playwright cannot run in the dev container itself, [D7](../roadmap.md#known-defects)) | done |
+
+### A Radix gotcha worth recording
+
+`NavigationMenu.Link asChild` around a `next/link` looks correct and renders correctly, but its composed
+`onClick` — a synthetic "dismiss" event dispatched alongside Next's own router navigation — races the
+click handler that actually changes the route. The panel (and the anchor inside it) can unmount
+mid-click, which silently swallows the navigation on **both** mouse click and keyboard Enter with no
+console error. `PrimaryNav` uses a plain `<Link>` inside `NavigationMenu.Content` instead, closing the
+panel explicitly via the controlled `value`/`onValueChange` on `NavigationMenu.Root` rather than relying
+on `NavigationMenu.Link`'s built-in dismiss-on-select. `NavigationMenu.Trigger` has the same shape of
+issue for a different reason: it intercepts its *first* activation to open the panel rather than
+navigate, so it is rendered as a pure disclosure button (no `asChild`/anchor); the panel's own
+"All {category}" row is the real, always-reachable link to the landing page.
 
 N0 is self-contained and reviewable alone. Doing it first means every navigation link in N2 and N3 is
 written once.

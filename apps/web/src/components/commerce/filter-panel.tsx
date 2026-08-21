@@ -207,12 +207,13 @@ export function FilterPanel({ facets }: { facets: Facets | null }) {
           variant="secondary"
           full
           onClick={() => {
+            // The category is part of the path now, so clearing filters is just
+            // dropping the query string — only the search term survives.
             const next = new URLSearchParams();
             const q = params.get("q");
-            const category = params.get("category");
             if (q) next.set("q", q);
-            if (category) next.set("category", category);
-            navigate(`${pathname}?${next.toString()}`);
+            const query = next.toString();
+            navigate(query ? `${pathname}?${query}` : pathname);
           }}
         >
           Clear filters ({activeCount})

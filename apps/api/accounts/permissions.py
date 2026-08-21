@@ -49,6 +49,7 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "settings.manage": ("settings", "Change settings"),
     "content.review_moderate": ("content", "Moderate reviews"),
     "content.coupons_manage": ("content", "Manage coupons"),
+    "content.navigation_manage": ("content", "Manage navigation and banners"),
     "audit.view": ("audit", "View the audit log"),
 }
 
@@ -86,6 +87,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "settings.view",
         "content.review_moderate",
         "content.coupons_manage",
+        "content.navigation_manage",
     ],
     RoleCode.CASHIER: [
         "products.view",

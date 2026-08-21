@@ -6,6 +6,7 @@ import {
   ClipboardList,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   Menu,
   Package,
   Settings,
@@ -40,6 +41,12 @@ const NAV: NavItem[] = [
   { href: "/admin/customers", label: "Customers", icon: Users, permission: "customers.view" },
   { href: "/admin/returns", label: "Returns", icon: Truck, permission: "orders.view" },
   { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
+  {
+    href: "/admin/navigation",
+    label: "Navigation",
+    icon: Megaphone,
+    permission: "content.navigation_manage",
+  },
   { href: "/admin/settings", label: "Settings", icon: Settings, permission: "settings.view" },
 ];
 

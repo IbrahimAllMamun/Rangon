@@ -7,11 +7,14 @@ is one file.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Any
 
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+from django.db import DatabaseError, IntegrityError
 from django.db.models import Count, F, Max, Min, Q, QuerySet
+from django.utils import timezone
 
 from catalog.models import (
     Attribute,
@@ -20,7 +23,10 @@ from catalog.models import (
     Product,
     ProductVariant,
     PublishStatus,
+    SearchTerm,
 )
+
+logger = logging.getLogger("rangon.catalog")
 
 SORTS = {
     "relevance": None,
@@ -186,6 +192,80 @@ def facets(*, products: QuerySet[Product], branch: Any = None) -> dict[str, Any]
             "max": price_range["max"] or Decimal("0.00"),
         },
     }
+
+
+MAX_TERM_LENGTH = 120
+
+
+def normalise_term(query: str) -> str:
+    return " ".join((query or "").strip().lower().split())[:MAX_TERM_LENGTH]
+
+
+def log_search(query: str, *, result_count: int) -> None:
+    """Record a search term. Fire-and-forget: never fails a shopper's search.
+
+    Aggregated per term, so the table stays small however busy the shop gets.
+    """
+    term = normalise_term(query)
+    if not term:
+        return
+    try:
+        updated = SearchTerm.objects.filter(term=term).update(
+            hits=F("hits") + 1,
+            last_result_count=result_count,
+            last_searched_at=timezone.now(),
+        )
+        if not updated:
+            SearchTerm.objects.create(
+                term=term,
+                hits=1,
+                last_result_count=result_count,
+                last_searched_at=timezone.now(),
+            )
+    except (DatabaseError, IntegrityError):  # pragma: no cover - analytics only
+        logger.warning("Could not log the search term %r", term)
+
+
+def popular_terms(*, limit: int = 5) -> list[str]:
+    """Terms shoppers actually search *and* find something for.
+
+    A popular term that returns nothing is a merchandising signal, not a
+    suggestion — offering it would send the next shopper to an empty page.
+    """
+    return list(
+        SearchTerm.objects.filter(last_result_count__gt=0, hits__gt=0)
+        .order_by("-hits", "term")
+        .values_list("term", flat=True)[:limit]
+    )
+
+
+def suggest(query: str, *, limit: int = 5) -> dict[str, Any]:
+    """Type-ahead for the navbar: products, categories, popular searches."""
+    cleaned = (query or "").strip()
+    if len(cleaned) < 2:
+        return {"products": [], "categories": [], "popular": popular_terms()}
+
+    # Substring, not full text, and deliberately not trigram. `search_products`
+    # ranks whole words, so "shi" scores nothing against "Cotton Shirt" —
+    # correct for a results page, wrong for a box being typed into. Trigram goes
+    # the other way and offers "Embroidered Panjabi" for "shi"; a suggestion
+    # list that is merely plausible is worse than a short one.
+    products = list(
+        visible_products()
+        .filter(Q(name__icontains=cleaned) | Q(brand__name__icontains=cleaned))
+        .select_related("brand")
+        .prefetch_related("images")
+        .annotate(price_from=Min("variants__price"))
+        .order_by("name")[:limit]
+    )
+
+    categories = list(
+        Category.objects.filter(is_active=True, name__icontains=cleaned).select_related(
+            "parent", "parent__parent"
+        )[:limit]
+    )
+
+    return {"products": products, "categories": categories, "popular": popular_terms()}
 
 
 def admin_search_variants(query: str, *, limit: int = 20) -> QuerySet[ProductVariant]:

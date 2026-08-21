@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -16,8 +16,13 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsCustomer
 from accounts.services import default_branch
-from catalog.models import Brand, Category, Product, ProductVariant, PublishStatus
+from catalog import search
+from catalog.api.serializers import colour_payload
+from catalog.models import Brand, Category, Product, ProductImage, ProductVariant, PublishStatus
 from catalog.search import facets, search_products, visible_products
+from content.api.serializers import serialise_banner
+from content.models import BannerPlacement, StorefrontBanner
+from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
 from core.pagination import StandardPagination
 from customers.api.serializers import CustomerAddressSerializer
@@ -57,16 +62,30 @@ def _cart_for(request: Request):
 #: Budgets: docs/database/indexing.md. Guard: tests/test_performance.py.
 _PAYLOAD_SELECT_RELATED = ("category", "brand")
 _PAYLOAD_PREFETCH_RELATED = (
-    "images",
+    # The image's colour rides along on the existing images prefetch: one added
+    # join, no extra query (docs/architecture/product-media.md §3).
+    Prefetch(
+        "images",
+        queryset=ProductImage.objects.select_related("attribute_value__attribute"),
+    ),
     "variants__attribute_values__attribute",
     "variants__attribute_values__attribute_value",
 )
 
 
 def _payload_queryset(queryset: Any) -> Any:
-    """Attach every relation `_product_payload` reads. Safe before slicing."""
-    return queryset.select_related(*_PAYLOAD_SELECT_RELATED).prefetch_related(
-        *_PAYLOAD_PREFETCH_RELATED
+    """Attach every relation `_product_payload` reads. Safe before slicing.
+
+    `prefetch_related(None)` first because this is the authority: `search_products`
+    also prefetches `images`, and Django refuses two prefetches of one lookup
+    when either carries a custom queryset ("'images' lookup was already seen
+    with a different queryset"). Clearing keeps that single-authority property
+    true rather than making every caller reason about what it must not add.
+    """
+    return (
+        queryset.select_related(*_PAYLOAD_SELECT_RELATED)
+        .prefetch_related(None)
+        .prefetch_related(*_PAYLOAD_PREFETCH_RELATED)
     )
 
 
@@ -75,7 +94,9 @@ def _product_payload(product: Product, *, request: Request, snapshots: dict) -> 
         {
             "url": request.build_absolute_uri(image.image.url) if image.image else "",
             "alt": image.effective_alt,
-            "variant": str(image.variant_id) if image.variant_id else None,
+            # `null` marks a shared image — a flat-lay or a size chart — which
+            # shows for every colour and never changes the selection.
+            "color": colour_payload(image.attribute_value if image.attribute_value_id else None),
         }
         for image in product.images.all()
     ]
@@ -168,6 +189,17 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         payload = [
             _product_payload(product, request=request, snapshots=snapshots) for product in products
         ]
+
+        # Merchandising signal, logged once per search rather than per page.
+        query = request.query_params.get("q", "")
+        if query and str(request.query_params.get("page", "1")) == "1":
+            search.log_search(
+                query,
+                result_count=self.paginator.page.paginator.count
+                if page is not None
+                else len(payload),
+            )
+
         return self.get_paginated_response(payload) if page is not None else Response(payload)
 
     def retrieve(self, request: Request, slug: str | None = None) -> Response:
@@ -262,21 +294,36 @@ class ShopCategoryView(APIView):
     def get(self, request: Request, slug: str | None = None) -> Response:
         if slug:
             category = get_object_or_404(Category, slug=slug, is_active=True)
+            ancestors = category.ancestors()
+            # `path` is what /category/[...slug] canonicalises against: the last
+            # segment resolves the category, the rest must match this
+            # (docs/architecture/navigation.md §5).
+            crumb_paths: list[str] = []
+            for ancestor in ancestors:
+                crumb_paths.append(
+                    f"{crumb_paths[-1]}/{ancestor.slug}" if crumb_paths else ancestor.slug
+                )
+            path = f"{crumb_paths[-1]}/{category.slug}" if crumb_paths else category.slug
             return Response(
                 {
                     "id": str(category.pk),
                     "name": category.name,
                     "slug": category.slug,
+                    "path": path,
                     "description": category.description,
                     "image": request.build_absolute_uri(category.image.url)
                     if category.image
                     else "",
                     "breadcrumbs": [
-                        {"name": ancestor.name, "slug": ancestor.slug}
-                        for ancestor in category.ancestors()
+                        {"name": ancestor.name, "slug": ancestor.slug, "path": crumb_path}
+                        for ancestor, crumb_path in zip(ancestors, crumb_paths, strict=True)
                     ],
                     "children": [
-                        {"name": child.name, "slug": child.slug}
+                        {
+                            "name": child.name,
+                            "slug": child.slug,
+                            "path": f"{path}/{child.slug}",
+                        }
                         for child in category.children.filter(is_active=True)
                     ],
                     "seo_title": category.seo_title or category.name,
@@ -292,14 +339,67 @@ class ShopCategoryView(APIView):
                 {
                     "name": root.name,
                     "slug": root.slug,
+                    "path": root.slug,
                     "image": request.build_absolute_uri(root.image.url) if root.image else "",
                     "children": [
-                        {"name": child.name, "slug": child.slug}
+                        {
+                            "name": child.name,
+                            "slug": child.slug,
+                            "path": f"{root.slug}/{child.slug}",
+                        }
                         for child in root.children.filter(is_active=True)
                     ],
                 }
                 for root in roots
             ]
+        )
+
+
+class ShopSearchSuggestView(APIView):
+    """Type-ahead for the navbar search (navigation.md §7 N4).
+
+    Deliberately small: five products, five categories and the popular terms.
+    A suggestion list is a shortcut, not a results page.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "search"
+
+    def get(self, request: Request) -> Response:
+        query = request.query_params.get("q", "")
+        result = search.suggest(query)
+
+        return Response(
+            {
+                "query": query.strip(),
+                "products": [
+                    {
+                        "name": product.name,
+                        "slug": product.slug,
+                        "url": f"/product/{product.slug}",
+                        "brand": product.brand.name if product.brand else "",
+                        "price": str(product.price_from or Decimal("0.00")),
+                        "image": next(
+                            (
+                                request.build_absolute_uri(image.image.url)
+                                for image in product.images.all()
+                                if image.image
+                            ),
+                            "",
+                        ),
+                    }
+                    for product in result["products"]
+                ],
+                "categories": [
+                    {
+                        "name": category.name,
+                        "slug": category.slug,
+                        "url": category_url(category_path(category)),
+                    }
+                    for category in result["categories"]
+                ],
+                "popular": result["popular"],
+            }
         )
 
 
@@ -340,12 +440,23 @@ class ShopHomeView(APIView):
             .order_by("-sold")[:8]
         )
 
+        hero = (
+            StorefrontBanner.objects.live()
+            .filter(placement=BannerPlacement.HOME_HERO)
+            .order_by("-priority", "-created_at")
+            .first()
+        )
+
         return Response(
             {
+                # Merchandised hero, or None — the page keeps its previous
+                # behaviour of falling back to a new arrival's photograph.
+                "hero": serialise_banner(hero, request=request),
                 "featured_categories": [
                     {
                         "name": category.name,
                         "slug": category.slug,
+                        "path": category.slug,
                         "image": request.build_absolute_uri(category.image.url)
                         if category.image
                         else "",
