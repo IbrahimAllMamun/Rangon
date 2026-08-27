@@ -36,6 +36,7 @@ from catalog.models import (
 )
 from catalog.services import create_variant
 from customers.models import Customer, CustomerAddress, CustomerType
+from finance.models import Expense
 from inventory.models import Inventory
 from orders.models import Channel, OrderStatus, PaymentMethod
 from orders.services import checkout as checkout_services
@@ -261,6 +262,7 @@ class Command(BaseCommand):
         self._coupons()
         customers = self._customers()
         self._orders(branch, users, customers, options["orders"])
+        self._expenses(branch, accounts, users["manager@rangon.test"])
 
         self.stdout.write(self.style.SUCCESS("\nDemo data ready."))
         self.stdout.write(f"  Organisation : {organization.name}")
@@ -270,6 +272,7 @@ class Command(BaseCommand):
             f"  Variants     : {sum(p.variants.count() for p in Product.objects.all())}"
         )
         self.stdout.write(f"  Stock rows   : {Inventory.objects.count()}")
+        self.stdout.write(f"  Expenses     : {Expense.objects.count()}")
         # Re-read: the seeded orders posted into these after they were opened,
         # so the in-memory copies are stale by now.
         for account in accounts.values():
@@ -287,7 +290,12 @@ class Command(BaseCommand):
     def _reset(self) -> None:
         from core.models import AuditLog, NumberSequence
         from engagement.models import Review, Wishlist
-        from finance.models import Account, AccountTransaction, AccountTransfer
+        from finance.models import (
+            Account,
+            AccountTransaction,
+            AccountTransfer,
+            Expense,
+        )
         from inventory.models import InventoryTransaction
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
@@ -300,6 +308,9 @@ class Command(BaseCommand):
             Wishlist,
             # Finance first: Payment/SupplierPayment reference Account with
             # PROTECT, and AccountTransaction references Account the same way.
+            # Expense goes before AccountTransaction because it PROTECTs both
+            # the movement it posted and the reversal that voided it.
+            Expense,
             AccountTransfer,
             AccountTransaction,
             SupplierPayment,
@@ -335,6 +346,9 @@ class Command(BaseCommand):
         Brand.objects.all().delete()
         Coupon.objects.all().delete()
         Supplier.objects.all().delete()
+        # ExpenseCategory is deliberately NOT deleted: the nine heads come from
+        # migration 0004, not from this command, and dropping them would leave
+        # /admin/expenses with an empty picker after every --reset.
         Customer.objects.all().delete()
         ShippingMethod.objects.all().delete()
         ShippingZone.objects.all().delete()
@@ -459,6 +473,46 @@ class Command(BaseCommand):
                 **extra,
             )
         return accounts
+
+    def _expenses(self, branch: Branch, accounts: dict[str, Any], actor: User) -> None:
+        """A month of ordinary running costs, so the expenses screen has shape.
+
+        Posted through ``finance.services.record_expense`` rather than written
+        directly, so each one takes real money out of a real account and the
+        seeded cash book balances exactly as production would.
+        """
+        from finance import services as finance_services
+        from finance.models import ExpenseCategory
+
+        self.stdout.write("Recording demo expenses…")
+        now = timezone.now()
+        # (category code, account key, amount, days ago, note)
+        specs = [
+            ("RENT", "bank", "45000.00", 26, "Shop rent, Panthapath"),
+            ("SALARY", "bank", "128000.00", 25, "Staff salaries"),
+            ("UTILITIES", "cash", "8450.00", 24, "Electricity and water"),
+            ("TRANSPORT", "cash", "1250.00", 18, "Courier run to Gulshan"),
+            ("MARKETING", "mfs", "6500.00", 14, "Facebook boost, autumn range"),
+            ("SUPPLIES", "cash", "2380.00", 11, "Carrier bags and tissue"),
+            ("MAINTENANCE", "cash", "3900.00", 7, "Air-conditioner service"),
+            ("TRANSPORT", "cash", "980.00", 4, "Delivery van fuel"),
+            ("BANK_CHARGES", "bank", "575.00", 2, "Monthly account charges"),
+        ]
+
+        for code, account_key, amount, days_ago, note in specs:
+            category = ExpenseCategory.objects.filter(code=code).first()
+            account = accounts.get(account_key)
+            if category is None or account is None:
+                continue
+            finance_services.record_expense(
+                branch=branch,
+                category=category,
+                account=account,
+                amount=Decimal(amount),
+                spent_at=now - timedelta(days=days_ago),
+                note=note,
+                actor=actor,
+            )
 
     def _brands(self) -> dict[str, Brand]:
         data = [

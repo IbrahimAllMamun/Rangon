@@ -14,16 +14,19 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from core.dates import parse_window
 from finance import selectors
 from finance import services as finance_services
 from finance.api.serializers import (
     AccountSerializer,
     AccountTransactionSerializer,
     AccountTransferSerializer,
+    CashPositionSerializer,
     CreateExpenseSerializer,
     CreateTransferSerializer,
     ExpenseCategorySerializer,
     ExpenseSerializer,
+    ExpenseTotalsSerializer,
     RecordMovementSerializer,
     VoidExpenseSerializer,
 )
@@ -137,13 +140,12 @@ class AccountViewSet(
         elif not request.user.can_cross_branch and request.user.branch_id:
             branch = request.user.branch
 
+        date_from, date_to = parse_window(request.query_params)
         position = selectors.cash_position(branch=branch)
         position["movements"] = selectors.movement_totals(
-            branch=branch,
-            date_from=request.query_params.get("date_from") or None,
-            date_to=request.query_params.get("date_to") or None,
+            branch=branch, date_from=date_from, date_to=date_to
         )
-        return Response(position)
+        return Response(CashPositionSerializer(position).data)
 
     @action(detail=False, methods=["post"], url_path="record-movement")
     def record_movement(self, request: Request) -> Response:
@@ -353,9 +355,10 @@ class ExpenseViewSet(
         params = self.request.query_params
         # `branch`, `category`, `account` and `status` come from the filterset;
         # only the date window needs doing here, because it spans two params.
+        date_from, date_to = parse_window(params)
         queryset = selectors.expenses(
-            date_from=params.get("date_from") or None,
-            date_to=params.get("date_to") or None,
+            date_from=date_from,
+            date_to=date_to,
             # The list shows voided rows so a correction stays visible; every
             # total still excludes them (finance.selectors.expense_totals).
             include_void=params.get("include_void", "true").lower() != "false",
@@ -407,10 +410,6 @@ class ExpenseViewSet(
         elif not request.user.can_cross_branch and request.user.branch_id:
             branch = request.user.branch
 
-        return Response(
-            selectors.expense_totals(
-                branch=branch,
-                date_from=request.query_params.get("date_from") or None,
-                date_to=request.query_params.get("date_to") or None,
-            )
-        )
+        date_from, date_to = parse_window(request.query_params)
+        totals = selectors.expense_totals(branch=branch, date_from=date_from, date_to=date_to)
+        return Response(ExpenseTotalsSerializer(totals).data)

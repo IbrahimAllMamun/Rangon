@@ -11,6 +11,7 @@ import {
   Megaphone,
   Menu,
   Package,
+  Receipt,
   Settings,
   ShoppingCart,
   Truck,
@@ -45,6 +46,7 @@ const NAV: NavItem[] = [
   { href: "/admin/customers", label: "Customers", icon: Users, permission: "customers.view" },
   { href: "/admin/returns", label: "Returns", icon: Truck, permission: "orders.view" },
   { href: "/admin/finance", label: "Finance", icon: Landmark, permission: "finance.view" },
+  { href: "/admin/expenses", label: "Expenses", icon: Receipt, permission: "finance.view" },
   { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
   {
     href: "/admin/navigation",

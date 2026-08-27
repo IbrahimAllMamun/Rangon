@@ -13,9 +13,13 @@ const MANAGER = { email: "manager@rangon.test", password: "rangon12345" };
 
 async function signIn(page: import("@playwright/test").Page, user: typeof CASHIER) {
   await page.goto("/login");
-  await page.getByLabel("Email address").fill(user.email);
-  await page.getByLabel("Password").fill(user.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  // Scoped to the form on purpose: the storefront header on this page carries
+  // its own "Sign in" entry in the account menu, so an unscoped role lookup
+  // matches two elements and fails Playwright's strict mode.
+  const form = page.locator("form");
+  await form.getByLabel("Email address").fill(user.email);
+  await form.getByLabel("Password").fill(user.password);
+  await form.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 }
 
@@ -72,7 +76,7 @@ test.describe("Storefront", () => {
   });
 });
 
-test.describe("POS", () => {
+test.describe("POS", { tag: "@desktop-only" }, () => {
   test("cashier sells an item by SKU and gets a receipt", async ({ page, request }) => {
     await signIn(page, CASHIER);
     await page.goto("/pos");
@@ -119,14 +123,16 @@ test.describe("POS", () => {
   });
 });
 
-test.describe("Admin", () => {
+test.describe("Admin", { tag: "@desktop-only" }, () => {
   test("manager sees the dashboard with server-aggregated KPIs", async ({ page }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin");
 
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByText("Revenue")).toBeVisible();
-    await expect(page.getByText("Gross profit")).toBeVisible();
+    // "Revenue" is both a KPI tile label and a column header in the table
+    // alternative to the chart, so match the tile rather than either loosely.
+    await expect(page.getByText("Revenue", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Gross profit").first()).toBeVisible();
   });
 
   test("inventory reflects the ledger", async ({ page }) => {
@@ -135,6 +141,53 @@ test.describe("Admin", () => {
 
     await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "Available" })).toBeVisible();
+  });
+
+  test("recording an expense moves the account it was paid from", async ({ page }) => {
+    // The invariant phase 36 exists to protect: the document and the cash-book
+    // movement are written together, so the balance can never disagree with
+    // what the shop recorded spending.
+    await signIn(page, MANAGER);
+    await page.goto("/admin/expenses");
+    await expect(page.getByRole("heading", { name: "Expenses", level: 1 })).toBeVisible();
+
+    const drawer = page.locator("#ex-account option", { hasText: /Cash Drawer/ });
+    const balanceOf = async () => Number((await drawer.innerText()).replace(/[^0-9.]/g, ""));
+    const before = await balanceOf();
+
+    const note = `E2E courier run ${Date.now()}`;
+    await page.selectOption("#ex-category", { label: "Transport" });
+    await page.locator("#ex-amount").fill("125.25");
+    await page.locator("#ex-note").fill(note);
+    await page.getByRole("button", { name: "Record expense" }).click();
+
+    const row = page.locator("tr", { hasText: note });
+    await expect(row).toBeVisible();
+    // The picker re-renders from the server after router.refresh(), so poll
+    // rather than reading once — the assertion is about the figure settling on
+    // the right number, not about how fast the round-trip is.
+    await expect.poll(balanceOf).toBeCloseTo(before - 125.25, 2);
+
+    // Voiding asks why, then puts the money back without deleting anything.
+    await row.getByRole("button", { name: /Void expense/ }).click();
+    await page.locator('input[id^="void-"]').fill("Recorded in error by the E2E run");
+    await page.getByRole("button", { name: "Void it" }).click();
+
+    await expect(page.locator("tr", { hasText: note }).getByText("Voided")).toBeVisible();
+    await expect.poll(balanceOf).toBeCloseTo(before, 2);
+  });
+
+  test("an expense larger than the account holds is refused by the server", async ({ page }) => {
+    await signIn(page, MANAGER);
+    await page.goto("/admin/expenses");
+
+    await page.locator("#ex-amount").fill("99999999.00");
+    await page.getByRole("button", { name: "Record expense" }).click();
+
+    const summary = page.locator('[aria-labelledby="error-summary-title"]');
+    await expect(summary).toContainText(/which is less than/i);
+    // The form never claims success beside a refusal.
+    await expect(page.getByRole("status").filter({ hasText: "Recorded" })).toHaveCount(0);
   });
 
   test("a cashier cannot reach user management", async ({ page }) => {

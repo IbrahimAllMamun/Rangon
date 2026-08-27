@@ -13,7 +13,7 @@ Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` a
 | Sales | `sales.view` `sales.create` `sales.discount` `sales.discount_override` `sales.cancel` `sales.refund` `sales.refund_override` `sales.payment_record` |
 | Orders | `orders.view` `orders.update_status` `orders.fulfil` |
 | Purchases | `purchases.view` `purchases.create` `purchases.receive` `purchases.pay` |
-| Finance | `finance.view` `finance.manage` `finance.transfer` `finance.adjust` |
+| Finance | `finance.view` `finance.manage` `finance.transfer` `finance.adjust` `finance.expense` |
 | Customers | `customers.view` `customers.create` `customers.update` |
 | Reports | `reports.view` `reports.financial` `reports.export` |
 | Users | `users.view` `users.manage` |
@@ -50,6 +50,7 @@ Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` a
 | finance.manage | ✔ | ✔ | — | — | — | ✔ | — |
 | finance.transfer | ✔ | ✔ | ✔ | — | — | ✔ | — |
 | finance.adjust | ✔ | ✔ | ✔ | — | — | ✔ | — |
+| finance.expense | ✔ | ✔ | ✔ | — | — | ✔ | — |
 | customers.view | ✔ | ✔ | ✔ | ✔ | — | ✔ | — |
 | customers.create / update | ✔ | ✔ | ✔ | ✔ | — | — | — |
 | reports.view | ✔ | ✔ | ✔ | — | ✔ | ✔ | — |

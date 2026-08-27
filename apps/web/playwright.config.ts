@@ -17,10 +17,26 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    // Escape hatch for an environment that already ships a Chromium but not
+    // the exact build this Playwright version downloads (D7 in
+    // docs/roadmap.md). Unset in CI and locally, where `npx playwright
+    // install` is the right path.
+    ...(process.env.PW_CHROMIUM_PATH
+      ? { launchOptions: { executablePath: process.env.PW_CHROMIUM_PATH } }
+      : {}),
   },
 
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
-    { name: "mobile", use: { ...devices["Pixel 7"] }, testIgnore: /pos|admin/ },
+    {
+      name: "mobile",
+      use: { ...devices["Pixel 7"] },
+      // POS and Admin are desktop surfaces by design (CLAUDE.md section 10:
+      // POS is barcode-and-keyboard, Admin is dense and tabular), so they are
+      // not run at a phone viewport. The `@desktop-only` tag does this; the
+      // previous `testIgnore: /pos|admin/` matched file *paths*, and every
+      // flow lives in one spec file, so it never excluded anything.
+      grepInvert: /@desktop-only/,
+    },
   ],
 });

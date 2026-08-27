@@ -10,7 +10,8 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
 Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with `origin/main`).
-Phases 07 and 35 shipped after that diagnosis — see the 2026-08-22 entries in the verification log.
+Phases 07 and 35 shipped after that diagnosis — see the 2026-08-22 entries in the verification log —
+and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 
 | #   | Phase                                 | Backend | Frontend | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --- | ------------------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -50,8 +51,8 @@ Phases 07 and 35 shipped after that diagnosis — see the 2026-08-22 entries in 
 | 33  | Dynamic navigation                    | ✅      | ✅       | Category-driven navbar with a one-table override,`/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5                                                                                                                                                                                                                                                 |
 | 34  | Colour-linked product media           | ✅      | ✅       | Images bind to a colour`AttributeValue` rather than a variant; selecting a colour moves the gallery without hiding any image; clicking another colour's thumbnail repairs the other axes. Phases B1–B3 all done — **B3 landed 2026-08-21** with the admin product form it was blocked on — [architecture/product-media.md](architecture/product-media.md#6-phases)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 35  | Financial accounts + cash book        | ✅      | ✅       | **F1 shipped 2026-08-22.** `finance` app: `Account` (cash/bank/MFS, per branch), append-only `AccountTransaction`, `AccountTransfer`. Balance is a reconciled cache with a `verify_accounts` command, exactly as `Inventory.on_hand` sits over `InventoryTransaction`; an opening balance is an `OPENING` row, not a column. Sales, refunds and supplier payments post inside their service's atomic block — **on capture, never on record**. `/admin/finance` (cash position, accounts, cash book, transfers, manual entries), per-tender account in the POS, account pickers on COD capture and refunds. 61 new tests incl. 4 threaded. [architecture/finance.md](architecture/finance.md) · [ADR-0011](architecture/decisions/0011-append-only-cash-book.md). **Unblocks 36–39**  |
-| 36  | Expenses                              | ⬜      | ⬜       | **F2.** `ExpenseCategory` + `Expense` posted through `finance.services`; admin screen with period filter, category-wise totals, CSV. Without this, "profit" is only gross margin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 337 | Party ledger — receivable / payable  | ⬜      | ⬜       | **F3.** Derived from rows that already exist — **no balance column on `Customer`** — plus an `OPENING` entry type for shops migrating from paper. Ledger tabs and ageing buckets. **Conditional on decision D-A below**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 36  | Expenses                              | ✅      | ✅       | **F2 shipped 2026-08-27.** `ExpenseCategory` + `Expense` posted through `finance.services.record_expense()` — document and `EXPENSE` cash-book movement in one transaction, so neither can exist without the other. Voiding posts a compensating `ADJUSTMENT`; nothing is deleted. `/admin/expenses` with a period filter, spend tiles, category-wise split, receipt upload and CSV. Nine categories seeded by migration. New permission `finance.expense` (owner/admin/manager/accountant, **not** cashier). 57 tests |
+| 37  | Party ledger — receivable / payable  | ⬜      | ⬜       | **F3.** Derived from rows that already exist — **no balance column on `Customer`** — plus an `OPENING` entry type for shops migrating from paper. Ledger tabs and ageing buckets. **Conditional on decision D-A below**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 38  | Business report → net profit         | ⬜      | ⬜       | **F4.** `business_summary(period, branch)` over sales, gross margin from the frozen `unit_cost` (ADR-0006), purchases, damage, expenses, returns, discounts, VAT. Only figures we can compute honestly — Salary/Warranty/Service stay off until those features exist. **Blocked by the VAT decision**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 39  | Trade documents                       | ⬜      | ⬜       | **F5**, parallel with 36–38. Damage/write-off, stock count and stock transfer screens (services already built and tested — pure form work), quotation → order, cheque register with a Pending→Deposited→Cleared/Bounce lifecycle, barcode label sheets, SR attribution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -302,13 +303,52 @@ preload link (verified in the served HTML), which is why the count there is zero
 adds `'unsafe-eval'` only when `NODE_ENV !== "production"`, because the dev server compiles with
 `eval()`.
 
+### Phase 36 verified, 2026-08-27
+
+Executed against a real stack (PostgreSQL 16, Django dev server, `next dev`), seeded with
+`seed_demo --reset`:
+
+```text
+pytest ................................ 365 passed (was 308 before this phase; +57)
+ruff check + ruff format .............. clean
+tsc --noEmit .......................... clean
+next lint ............................. clean
+vitest ................................ 79 passed, 6 files
+migrations from the existing database . OK (core 0003, finance 0003 + 0004)
+makemigrations --check ................ no changes detected
+seed_demo --reset ..................... OK, 9 demo expenses, 12 products, 72 variants
+verify_accounts ....................... consistent; every money event names an account
+verify_inventory ...................... consistent, 0 drift
+browser walk-through .................. signed in as owner at /admin/expenses:
+                                        recorded 850.50 -> drawer 65,450.00 fell to 64,599.50,
+                                        voided it -> drawer back to 65,450.00 exactly,
+                                        overspend refused with the server's own message,
+                                        focus moved to the error summary
+Playwright ............................ RAN. See below — D7 is environment-specific, not a code defect
+```
+
+**Playwright ran for the first time.** On a Linux host with a Chromium already present, the suite
+executes: 17 tests (12 desktop + 5 mobile), and every one of them passes **in isolation**. Running
+them all sequentially is a different matter — see [D18](#known-defects). Three real bugs in the
+specs themselves were found by executing them, and are fixed:
+
+- the shared `signIn()` helper matched two `Sign in` buttons (the login form's, and the storefront
+  header's account menu), failing Playwright strict mode on **every** signed-in test;
+- the dashboard spec matched two `Revenue` elements (a KPI tile and a table column header);
+- the `mobile` project's `testIgnore: /pos|admin/` matched **file paths**, and all the flows live in
+  one file, so it never excluded anything — POS and Admin were being run at a phone viewport they
+  are explicitly not designed for (CLAUDE.md §10). Now an explicit `@desktop-only` tag.
+
+`PW_CHROMIUM_PATH` was added to `playwright.config.ts` so an environment that already ships a
+Chromium can point at it instead of downloading one.
+
 ## Still unproven
 
 Do not describe any of these as working.
 
 | Area                                    | State                                                                                                                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Playwright (`npm run test:e2e`)       | Specs written;**cannot run in the dev container** — see [D7](#known-defects)                                                                |
+| Playwright (`npm run test:e2e`) | **Now proven to run** — 17 tests, all passing individually, 2026-08-27. A full sequential run is still flaky ([D18](#known-defects)). `apps/web/Dockerfile.dev` is still alpine, so [D7](#known-defects) stands *for the dev container* |
 | Vitest and Playwright in CI             | Neither is wired into`ci.yml`                                                                                                                   |
 | Admin**write** screens, signed in | The organization and branch editors exist in code and the routes correctly redirect anonymous users, but no signed-in click-through has been done |
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
@@ -332,6 +372,9 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D5~~  | ~~**The cart drawer dialog has no description.**~~ **Fixed 2026-08-18** — `Dialog.Description` added; the drawer now renders `aria-describedby`, verified in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `apps/web/src/components/commerce/cart-drawer.tsx`                                                  | —                                                                                                                                              |
 | D6       | **mypy reports 98 errors in 29 files.** CI runs it with a trailing `                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                                                                       | echo ":⚠️:"`, so it never blocks. 60 are `arg-type`, mostly DRF's `request.user`typed`User \| AnonymousUser`where services want`User` |
 | D7       | **Playwright cannot run in the dev container.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds, and none are installed (`~/.cache/ms-playwright` is absent)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `apps/web/Dockerfile.dev`                                                                           | Phase 29 is blocked until E2E runs on a glibc image (`mcr.microsoft.com/playwright`) or on the host                                           |
+| ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
+| ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
+| D18      | **The E2E suite is order-coupled.** All 17 specs pass individually, but each full sequential run fails a *different* one — storefront checkout, a POS sale, an accessibility check. The config already says "these flows share one seeded database"; they also mutate it, and nothing resets between tests. Fixing it is phase 29 work: either reseed per describe-block or make each flow pick its own fixture. Found 2026-08-27, the first time the suite was ever executed |
 | D8       | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml`, `docker-compose.dev.yml`                                                    | A confusing, self-inflicted breakage after any production build. Also recorded in`.claude/environment.md`                                     |
 | D9       | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `seed_demo`                                                                                         | The photography-led storefront of`CLAUDE.md` §10 cannot actually be judged                                                                   |
 | ~~D16~~ | ~~**The production CSP renders a blank page.**~~ **Fixed 2026-08-21** — `apps/web/src/middleware.ts` mints a per-request nonce and sends the policy itself; Next stamps that nonce onto every script it emits (42 of 42 in the production build), so `script-src` is `'self' 'nonce-…' 'strict-dynamic'` with **no** `unsafe-inline` and **no** `unsafe-eval`. Both nginx configs had their `add_header Content-Security-Policy` **removed** — `add_header` appends, and a browser enforces the intersection of every policy it receives, so a second header would have re-broken hydration. Verified in Chromium against the production image: home page hydrates, 19 product cards, zero CSP violations | `apps/web/src/middleware.ts`, `infrastructure/docker/nginx/**`                                    | —                                                                                                                                              |
@@ -355,7 +398,8 @@ Every endpoint below exists and is tested. What is missing is the screen.
 - categories, brands, attributes
 - users and roles
 
-Recently built, so no longer on this list: **financial accounts and the cash book** —
+Recently built, so no longer on this list: **expenses** — `/admin/expenses`, with a period filter,
+category-wise totals, receipt upload, CSV and a void flow; **financial accounts and the cash book** —
 `/admin/finance` and `/admin/finance/[id]`, with account create/edit, transfers, manual cash-book
 entries, a cash position on the dashboard, a per-tender account in the POS and account pickers on COD
 capture and refunds; **organization settings and branch create/edit**
@@ -412,33 +456,32 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Both candidates this section carried have now shipped — purchase orders on 2026-08-22 (phase 07) and
-the financial accounts on 2026-08-22 (phase 35). What follows is what they unblocked.
+Phase 36 shipped 2026-08-27. What it changes about the order of what is left:
 
-**Phase 36 — expenses.** The natural next step and a small one: `ExpenseCategory` + `Expense` posted
-through `finance.services` as an `EXPENSE` movement, an admin screen with a period filter,
-category-wise totals and CSV. It needs no new decision, it exercises the cash book that now exists,
-and without it "profit" is still only gross margin. `finance.services.record_movement()` already
-takes the `EXPENSE` type — the phase is a model, a service wrapper, a screen and its tests.
+**Phase 39 — the trade-document screens.** Now the largest unblocked piece, and still pure form
+work: damage/write-off, stock count and stock transfer. `inventory.services.write_off`, the
+stock-count apply flow and `transfer` are built, tested and reachable only from the API. No new
+business rules, no owner decision. `expense-forms.tsx` and `purchase-order-form.tsx` are the two
+patterns to copy.
 
-**The phase 39 quick win** is still open and still pure form work: damage/write-off, stock count and
-stock transfer screens. `inventory.services.write_off`, the stock-count apply flow and `transfer` are
-built, tested and unreachable from the UI. No new business rules.
+**Return approve / reject / receive / refund** — four buttons on a list that already renders, and
+the last "API-only" item a shop hits weekly. About an afternoon.
 
-Two smaller ones, each about an afternoon:
+**Phase 38 is one decision away.** Expenses were the missing input; the only remaining blocker is
+**D-C, the VAT decision**. `finance.selectors.expense_totals()` was written to be the shape
+`business_summary()` subtracts, so once VAT is settled, 38 is mostly assembly. It is the report the
+owner actually manages by, so getting D-C answered is now the highest-value non-code action on this
+list.
 
-- **Return approve / reject / receive / refund** — four buttons on a list that already renders.
-- **D4, the doubled brand suffix** — one line in `seed_demo`, and the storefront tab titles stop
-  reading `… | Rangon Fashion | Rangon Fashion`.
+**D18 — make the E2E suite survive a full run.** The suite executes now and every spec passes
+alone, so this is no longer "blocked", it is "flaky": the flows share and mutate one seeded
+database. Reseed per describe-block, or give each flow its own fixture. That plus wiring Vitest and
+Playwright into `ci.yml` closes phase 29.
 
-**Phase 38 (net profit) is still blocked on the VAT decision (D-C)** and now also wants phase 36, so
-it is not next.
+The heavier follow-up is still the **payment gateway**: nothing prepaid can be sold until one
+exists, and a gateway's settled takings need a `BANK` account to land in — which `capture_payment()`
+will post to automatically once the provider calls it.
 
-The heavier follow-up is still the **payment gateway**: nothing prepaid can be sold until one exists.
-Note that it now has a finance consequence too — a gateway's settled takings need a `BANK` account to
-land in, which `capture_payment()` will post to automatically once the provider calls it.
-
-**Worth doing once, soon:** run `manage.py verify_accounts` against the real data whenever this ships
-to a live environment. Any payment taken before phase 35 carries no account, and that count is the
-size of the permanent gap — it cannot be backfilled honestly, so it should be recorded rather than
-discovered later.
+**Worth doing once, soon:** run `manage.py verify_accounts` against real data on first deploy. Any
+payment taken before phase 35 carries no account, and that count is the size of the permanent gap —
+it cannot be backfilled honestly, so it should be recorded rather than discovered later.

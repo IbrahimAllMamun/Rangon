@@ -160,12 +160,38 @@ class AccountTransferSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AccountKindTotalSerializer(serializers.Serializer):
+    kind = serializers.CharField()
+    total = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class AccountBalanceSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    kind = serializers.CharField()
+    branch = serializers.CharField()
+    balance = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class MovementTotalsSerializer(serializers.Serializer):
+    money_in = serializers.DecimalField(max_digits=16, decimal_places=2)
+    money_out = serializers.DecimalField(max_digits=16, decimal_places=2)
+    net = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
 class CashPositionSerializer(serializers.Serializer):
-    """Shape returned by /accounts/cash-position/, for the schema."""
+    """Shape returned by /accounts/cash-position/.
+
+    Every figure is a `DecimalField`, so it leaves as the string `"661480.00"`
+    rather than the JSON number `661480.0`.  Money crossing a boundary is never
+    a float (CLAUDE.md section 4) -- and `CashPosition` in the web app's
+    `types.ts` has always declared these as strings.
+    """
 
     total = serializers.DecimalField(max_digits=16, decimal_places=2)
-    by_kind = serializers.ListField(child=serializers.DictField())
-    accounts = serializers.ListField(child=serializers.DictField())
+    by_kind = AccountKindTotalSerializer(many=True)
+    accounts = AccountBalanceSerializer(many=True)
+    movements = MovementTotalsSerializer()
 
 
 ACCOUNT_KINDS = [{"value": value, "label": label} for value, label in AccountKind.choices]
@@ -293,9 +319,18 @@ class VoidExpenseSerializer(serializers.Serializer):
         return value
 
 
+class ExpenseCategoryTotalSerializer(serializers.Serializer):
+    category_id = serializers.CharField()
+    category = serializers.CharField()
+    code = serializers.CharField()
+    total = serializers.DecimalField(max_digits=16, decimal_places=2)
+    count = serializers.IntegerField()
+    share = serializers.DecimalField(max_digits=6, decimal_places=2)
+
+
 class ExpenseTotalsSerializer(serializers.Serializer):
-    """Shape returned by /expenses/summary/, for the schema."""
+    """Shape returned by /expenses/summary/. Money leaves as a string, not a float."""
 
     total = serializers.DecimalField(max_digits=16, decimal_places=2)
     count = serializers.IntegerField()
-    by_category = serializers.ListField(child=serializers.DictField())
+    by_category = ExpenseCategoryTotalSerializer(many=True)

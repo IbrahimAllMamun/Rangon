@@ -211,7 +211,7 @@ class TestListingAndTotals:
         summary = client.get("/api/v1/expenses/summary/")
 
         assert listing.data["count"] == 2
-        assert summary.data["total"] == Decimal("1000.00")
+        assert summary.data["total"] == "1000.00"
         assert summary.data["count"] == 1
 
     def test_the_summary_groups_by_category(self, shop, auth_client) -> None:
@@ -226,10 +226,11 @@ class TestListingAndTotals:
         response = auth_client(shop["manager"]).get("/api/v1/expenses/summary/")
 
         assert response.status_code == 200
-        assert response.data["total"] == Decimal("8000.00")
+        # Money leaves as a string, never a JSON float (CLAUDE.md section 4).
+        assert response.data["total"] == "8000.00"
         rows = {row["code"]: row for row in response.data["by_category"]}
-        assert rows["RENT"]["total"] == Decimal("6000.00")
-        assert rows["RENT"]["share"] == Decimal("75.00")
+        assert rows["RENT"]["total"] == "6000.00"
+        assert rows["RENT"]["share"] == "75.00"
 
     def test_the_period_filter_narrows_the_list(self, shop, auth_client) -> None:
         account = factories.account(shop["branch"], opening_balance="50000.00")
@@ -253,6 +254,22 @@ class TestListingAndTotals:
 
         assert response.status_code == 400
         assert response.data["error"]["code"] == "VALIDATION_ERROR"
+
+    def test_a_whole_day_window_includes_that_days_afternoon(self, shop, auth_client) -> None:
+        """`date_to=<today>` must not stop at midnight — the classic off-by-one."""
+        account = factories.account(shop["branch"], opening_balance="50000.00")
+        this_afternoon = timezone.localtime().replace(hour=15, minute=30, second=0, microsecond=0)
+        factories.expense(
+            shop["branch"], account, amount=Decimal("640.00"), spent_at=this_afternoon
+        )
+        today = this_afternoon.date().isoformat()
+
+        response = auth_client(shop["manager"]).get(
+            "/api/v1/expenses/", {"date_from": today, "date_to": today}
+        )
+
+        assert response.data["count"] == 1
+        assert response.data["results"][0]["amount"] == "640.00"
 
     def test_a_branch_scoped_user_sees_only_their_own_branch(self, shop, auth_client) -> None:
         other_branch = factories.branch(shop["organization"])
