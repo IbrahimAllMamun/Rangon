@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from rest_framework import serializers
@@ -308,6 +309,47 @@ class ReturnRequestSerializer(serializers.ModelSerializer):
             "completed_at",
         ]
         read_only_fields = fields
+
+
+class ReceiveReturnLineSerializer(serializers.Serializer):
+    """What was decided about one line once the goods were in hand."""
+
+    id = serializers.UUIDField()
+    restock_decision = serializers.ChoiceField(choices=RestockDecision.choices, required=False)
+    condition_note = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+
+class ReceiveReturnSerializer(serializers.Serializer):
+    """Receiving goods back, with the per-line decision made at that moment.
+
+    The decision lives here rather than at request time because this is the
+    first point anyone has the item in their hands (docs/business-rules.md
+    §2.1). Lines left out keep whatever was chosen when the return was raised.
+    """
+
+    items = ReceiveReturnLineSerializer(many=True, required=False)
+
+    def validate_items(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen = set()
+        for line in value:
+            if line["id"] in seen:
+                raise serializers.ValidationError(
+                    f"{line['id']} appears twice; send one decision per line."
+                )
+            seen.add(line["id"])
+        return value
+
+
+class CompleteReturnSerializer(serializers.Serializer):
+    refund_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, required=False, allow_null=True, min_value=Decimal("0.01")
+    )
+    refund_method = serializers.CharField(required=False, allow_blank=True)
+    account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.all(), required=False, allow_null=True
+    )
 
 
 class ReturnLineSerializer(serializers.Serializer):
