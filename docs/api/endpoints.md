@@ -178,7 +178,18 @@ CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
 | POST | `{id}/refunds/` | `sales.refund` — `Idempotency-Key` |
 | GET | `{id}/timeline/` | `orders.view` |
 | GET | `{id}/invoice/` · `packing-slip/` | `orders.view` — print payloads |
-| GET/POST | `returns/` · POST `returns/{id}/{approve,reject,receive,complete}/` | `sales.refund` |
+| GET/POST | `returns/` | `orders.view` / `sales.refund` |
+| POST | `returns/{id}/approve/` · `reject/` | `sales.refund` — `{comment}`, recorded either way |
+| POST | `returns/{id}/receive/` | `sales.refund` — `{items: [{id, restock_decision, condition_note}]}` |
+| POST | `returns/{id}/complete/` | `sales.refund` — `{refund_amount, refund_method, account}`, idempotent |
+
+`receive/` takes the per-line restock decision, because that is the first moment anyone has the goods
+in hand (business-rules §2.1). A line left out keeps whatever it was raised with. Decisions are
+applied *before* stock moves, so `DAMAGED` on inspection never reaches sellable stock.
+
+`complete/` accepts an `account`, so a refund can name the drawer the cash leaves from rather than
+falling back to the branch default for the method. It is idempotent on `Idempotency-Key` (and on the
+return itself), so a retried request cannot pay a customer twice.
 | GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` |
 
 ## Shipping & promotions — `/api/v1/`

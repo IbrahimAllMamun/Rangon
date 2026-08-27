@@ -38,7 +38,7 @@ from catalog.services import create_variant
 from customers.models import Customer, CustomerAddress, CustomerType
 from finance.models import Expense
 from inventory.models import Inventory
-from orders.models import Channel, OrderStatus, PaymentMethod
+from orders.models import Channel, Order, OrderStatus, PaymentMethod, ReturnRequest
 from orders.services import checkout as checkout_services
 from orders.services import pos as pos_services
 from orders.services.lifecycle import transition
@@ -263,6 +263,7 @@ class Command(BaseCommand):
         customers = self._customers()
         self._orders(branch, users, customers, options["orders"])
         self._expenses(branch, accounts, users["manager@rangon.test"])
+        self._returns(users["manager@rangon.test"])
 
         self.stdout.write(self.style.SUCCESS("\nDemo data ready."))
         self.stdout.write(f"  Organisation : {organization.name}")
@@ -273,6 +274,7 @@ class Command(BaseCommand):
         )
         self.stdout.write(f"  Stock rows   : {Inventory.objects.count()}")
         self.stdout.write(f"  Expenses     : {Expense.objects.count()}")
+        self.stdout.write(f"  Returns      : {ReturnRequest.objects.count()}")
         # Re-read: the seeded orders posted into these after they were opened,
         # so the in-memory copies are stale by now.
         for account in accounts.values():
@@ -296,7 +298,7 @@ class Command(BaseCommand):
             AccountTransfer,
             Expense,
         )
-        from inventory.models import InventoryTransaction
+        from inventory.models import InventoryTransaction, StockCount, StockTransfer
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
         from purchasing.models import PurchaseOrder, PurchaseReceipt, SupplierPayment
@@ -324,6 +326,12 @@ class Command(BaseCommand):
             Order,
             PurchaseReceipt,
             PurchaseOrder,
+            # Before InventoryTransaction and Product: StockCountItem and
+            # StockTransferItem hold PROTECT references to ProductVariant, so
+            # deleting the catalogue first raises ProtectedError. Their items
+            # cascade from the parent document.
+            StockCount,
+            StockTransfer,
             InventoryTransaction,
             Inventory,
             AuditLog,
@@ -513,6 +521,54 @@ class Command(BaseCommand):
                 note=note,
                 actor=actor,
             )
+
+    def _returns(self, actor: User) -> None:
+        """Two returns, so /admin/returns is not an empty page on a fresh seed.
+
+        One still awaiting a decision and one already closed, because the
+        screen's whole job is to move a return between those two states — an
+        empty list demonstrates neither.
+        """
+        from orders.models import OrderStatus, ReturnReason
+        from orders.services import returns as return_services
+
+        self.stdout.write("Raising demo returns…")
+        delivered = list(
+            Order.objects.filter(status=OrderStatus.DELIVERED)
+            .prefetch_related("items")
+            .order_by("-placed_at")[:2]
+        )
+        if len(delivered) < 2:
+            return
+
+        pending, closed = delivered
+        for order, finish in ((pending, False), (closed, True)):
+            item = order.items.first()
+            if item is None or item.quantity < 1:
+                continue
+            request = return_services.request_return(
+                order=order,
+                lines=[(item.pk, 1)],
+                reason=ReturnReason.WRONG_SIZE if not finish else ReturnReason.DEFECTIVE,
+                actor=actor,
+            )
+            if not finish:
+                continue
+            return_services.approve(return_request=request, actor=actor)
+            # Closed one came back damaged, so it demonstrates a line that did
+            # not go back on the shelf.
+            return_services.receive(
+                return_request=request,
+                actor=actor,
+                decisions={
+                    str(line.pk): {
+                        "restock_decision": "DAMAGED",
+                        "condition_note": "Zip broken in transit",
+                    }
+                    for line in request.items.all()
+                },
+            )
+            return_services.complete(return_request=request, actor=actor)
 
     def _brands(self) -> dict[str, Brand]:
         data = [

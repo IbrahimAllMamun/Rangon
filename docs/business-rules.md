@@ -147,6 +147,12 @@ Restock decision is per returned line:
 `DAMAGED` and `QUARANTINE` lines never increase `available`. A quarantined item that is later cleared
 is brought back with an explicit `ADJUSTMENT` carrying the return reference as its reason.
 
+**The decision is made at receipt**, not when the return is raised: that is the first moment anybody
+has the item in their hands. Whatever was chosen when the return was requested stands as the default
+for any line not decided at receipt, and the receipt event records the decision per SKU. Applying a
+decision happens before stock moves, so a line marked `DAMAGED` on inspection never touches sellable
+stock even if it was raised as `RESTOCK`.
+
 ### 2.4 Refunds
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −

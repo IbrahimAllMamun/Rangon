@@ -568,3 +568,36 @@ export interface BranchSummary {
   is_default: boolean;
   status: string;
 }
+
+export type ReturnStatus = "REQUESTED" | "APPROVED" | "RECEIVED" | "COMPLETED" | "REJECTED";
+export type RestockDecision = "RESTOCK" | "DAMAGED" | "QUARANTINE";
+
+export interface ReturnItem {
+  id: string;
+  order_item: string;
+  sku: string;
+  product_name: string;
+  quantity: number;
+  restock_decision: RestockDecision;
+  condition_note: string;
+  refund_amount: string;
+}
+
+export interface ReturnRequest {
+  id: string;
+  number: string;
+  order: string;
+  order_number: string;
+  customer_name: string;
+  status: ReturnStatus;
+  reason: string;
+  customer_comment: string;
+  staff_comment: string;
+  refund_amount: string;
+  refund_shipping: boolean;
+  items: ReturnItem[];
+  created_at: string;
+  approved_at: string | null;
+  received_at: string | null;
+  completed_at: string | null;
+}
