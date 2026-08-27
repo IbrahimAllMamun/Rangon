@@ -59,11 +59,29 @@ kept as given, and editing a supplier never regenerates it.
 | GET | `` | `inventory.view` — per branch × variant, filters: low stock, out of stock, category |
 | GET | `transactions/` | `inventory.view` — the ledger, filterable by type/variant/date |
 | POST | `adjust/` | `inventory.adjust` — `{variant, branch, new_on_hand, reason}` |
-| POST | `write-off/` | `inventory.adjust` — `DAMAGE`/`LOSS` + reason |
-| POST | `transfers/` · POST `transfers/{id}/receive/` | `inventory.transfer` |
-| GET/POST | `counts/` · POST `counts/{id}/apply/` | `inventory.count` — stock take → adjustments |
+| POST | `write-off/` | `inventory.adjust` — `DAMAGE`/`LOSS` + reason (both mandatory) |
 | GET | `low-stock/` · `valuation/` | `inventory.view` / `reports.financial` |
 | POST | `verify-integrity/` | `settings.manage` — ledger vs cache drift report |
+
+Stock transfers and counts are **top-level** resources, not nested under
+`inventory/` — they are documents in their own right, with their own numbers:
+
+| Method | Path | Perm |
+|---|---|---|
+| GET/POST | `/stock-transfers/` | `inventory.view` / `inventory.transfer` — writes `TRANSFER_OUT` + `TRANSFER_IN` in one transaction; cost travels with the goods (ADR-0006) |
+| GET/POST | `/stock-counts/` | `inventory.view` / `inventory.count` — creating one snapshots the branch's current on-hand as `expected_quantity` |
+| POST | `/stock-counts/{id}/record/` | `inventory.count` — `{lines: [{variant, counted_quantity, notes}]}` |
+| POST | `/stock-counts/{id}/apply/` | `inventory.count` — counted figures → `ADJUSTMENT` ledger rows |
+| POST | `/stock-counts/{id}/cancel/` | `inventory.count` — abandon without touching stock |
+
+`record/` is the only way `counted_quantity` can be written: `items` on the count serializer is
+read-only, because `expected_quantity` is the ledger's snapshot and editing it would make the
+variance — the one figure a count exists to produce — meaningless. It refuses a variant that is not
+on the sheet, and the same variant twice in one request.
+
+`apply/` refuses a count that is not `COUNTING`, and refuses one where nothing has been counted
+rather than marking it applied having adjusted nothing. An uncounted line is left alone; it is never
+treated as a count of zero.
 
 ## Purchasing — `/api/v1/`
 
