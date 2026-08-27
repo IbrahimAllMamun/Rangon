@@ -43,7 +43,17 @@ ENV NODE_ENV=production \
 # from anything this app declares -- no package.json pin can fix them. Dropping
 # npm from the runtime removes them along with the tooling itself. The guard
 # turns a silently-wrong path into a build failure rather than a quiet no-op.
-RUN apk add --no-cache curl \
+#
+# `apk upgrade` patches the OS layer to whatever Alpine has published at build
+# time. It is here because the base image lags its own security branch:
+# node:22-alpine shipped openssl 3.5.7-r0 while Alpine 3.24 already carried the
+# 3.5.8-r0 fix for CVE-2026-14456, and the scan gate is not something a
+# package.json can answer. This is safe to run unconditionally *because* the
+# gate sets `ignore-unfixed: true` -- it only ever fails on a CVE whose fix is
+# already published, which is exactly the set `apk upgrade` installs. Without
+# it, every image scan stays red until upstream rebuilds the base image.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache curl \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && ! command -v npm > /dev/null \
     && addgroup --system --gid 1001 nodejs \
