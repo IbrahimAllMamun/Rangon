@@ -240,6 +240,32 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     await expect(page.getByRole("button", { name: "Apply to stock" })).toHaveCount(0);
   });
 
+  test("a return is approved, received with a decision, and refunded", async ({ page }) => {
+    await signIn(page, MANAGER);
+    await page.goto("/admin/returns");
+
+    const pending = page.locator("tbody tr", { hasText: "Requested" }).first();
+    await pending.getByRole("link").first().click();
+    await page.waitForURL(/\/admin\/returns\/[0-9a-f-]{36}/);
+
+    // Rejecting is destructive and terminal, so it will not proceed unsaid.
+    await page.getByRole("button", { name: "Reject" }).click();
+    await expect(page.locator('[aria-labelledby="error-summary-title"]')).toContainText(/say why/i);
+
+    await page.locator("#rt-comment").fill("Within the window, tags intact");
+    await page.getByRole("button", { name: "Approve" }).click();
+    await expect(page.getByText("Receive the goods")).toBeVisible();
+
+    // The decision belongs here — this is the first moment anyone has the
+    // goods in hand (business-rules §2.1).
+    await page.locator('select[id^="rt-decision-"]').first().selectOption("DAMAGED");
+    await page.getByRole("button", { name: "Receive goods" }).click();
+    await expect(page.getByText("Issue the refund")).toBeVisible();
+
+    await page.getByRole("button", { name: /^Refund/ }).click();
+    await expect(page.getByText(/was refunded/)).toBeVisible();
+  });
+
   test("a cashier cannot reach user management", async ({ page }) => {
     await signIn(page, CASHIER);
     await page.goto("/admin");

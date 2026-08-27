@@ -1,27 +1,17 @@
+import Link from "next/link";
+
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { Badge } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
+import type { RestockDecision, ReturnRequest, ReturnStatus } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 
 export const metadata = { title: "Returns" };
 
-interface ReturnRequest {
-  id: string;
-  number: string;
-  order_number: string;
-  customer_name: string;
-  status: string;
-  reason: string;
-  refund_amount: string;
-  refund_shipping: boolean;
-  created_at: string;
-  completed_at: string | null;
-  items: { id: string; sku: string; product_name: string; quantity: number; restock_decision: string }[];
-}
 
-const STATUS_TONE: Record<string, "warning" | "info" | "success" | "error" | "neutral"> = {
+const STATUS_TONE: Record<ReturnStatus, "warning" | "info" | "success" | "error"> = {
   REQUESTED: "warning",
   APPROVED: "info",
   RECEIVED: "info",
@@ -29,7 +19,7 @@ const STATUS_TONE: Record<string, "warning" | "info" | "success" | "error" | "ne
   REJECTED: "error",
 };
 
-const RESTOCK_TONE: Record<string, "success" | "error" | "warning"> = {
+const RESTOCK_TONE: Record<RestockDecision, "success" | "error" | "warning"> = {
   RESTOCK: "success",
   DAMAGED: "error",
   QUARANTINE: "warning",
@@ -57,7 +47,12 @@ export default async function ReturnsPage({ searchParams }: { searchParams: Sear
       header: "Return",
       cell: (row) => (
         <>
-          <span className="block font-medium">{row.number}</span>
+          <Link
+            href={`/admin/returns/${row.id}`}
+            className="block font-medium text-brand-600 hover:underline"
+          >
+            {row.number}
+          </Link>
           <span className="block text-caption text-muted">Order {row.order_number}</span>
         </>
       ),
@@ -102,7 +97,7 @@ export default async function ReturnsPage({ searchParams }: { searchParams: Sear
         rowKey={(row) => row.id}
         footer={
           data
-            ? `Showing ${data.results.length} of ${data.count}. Approve / receive / refund are API-only for now; the POS handles in-store returns in one step.`
+            ? `Showing ${data.results.length} of ${data.count}. Open a return to approve, receive and refund it; the POS handles in-store returns in one step.`
             : undefined
         }
       />

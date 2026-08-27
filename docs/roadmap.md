@@ -25,7 +25,7 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 07  | Suppliers + purchasing                | ✅      | ✅       | PO → receive → ledger → cost recalculation.**Admin screens shipped 2026-08-22** — `/admin/purchases/new` (supplier picker with inline create, debounced variant search, line table, live totals), `/admin/purchases/[id]` (send, cancel, partial receive, delivery history) and `/admin/suppliers` (list + inline create/edit). Receiving is the only step that writes stock, and it goes through `inventory.services`                                                                                                                                                                                                                                                                                                                                                                                  |
 | 08  | POS                                   | ✅      | ✅       | Barcode-first register, split payment, hold/resume, receipt, F2/F4/F8 shortcuts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 09  | Payments                              | ✅      | ✅       | Generic model + provider registry;`manual` provider (cash/card/MFS/COD) shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 10  | Returns                               | ✅      | 🟡       | Full request→approve→receive→restock→refund + POS one-step return. Admin returns list built; approve/receive/refund still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 10  | Returns                               | ✅      | ✅       | Full request→approve→receive→restock→refund + POS one-step return. **Admin screens shipped 2026-08-27** — `/admin/returns/[id]` drives approve / reject / receive / refund, with the per-line restock decision made at receipt and an account picker on the refund |
 | 11  | Customers                             | ✅      | 🟡       | Phone-first identity, addresses, notes, history. Admin customer list built; editing still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 12  | Online store                          | ✅      | ✅       | Home, shop, product, cart, checkout, order tracking, account, policies. Browser journey verified end to end                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 13  | Search + filters                      | ✅      | ✅       | Postgres trigram + indexed facets; facet UI with colour swatches; navbar type-ahead suggest (products / categories / popular searches) backed by a`SearchTerm` log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -369,6 +369,33 @@ Two smaller things found by running it: the endpoints doc had `inventory/transfe
 the inventory table never rendered `branch_code`, so once a transfer existed the same SKU appeared
 twice with nothing to tell the rows apart.
 
+### Returns verified, 2026-08-27
+
+```text
+pytest ................................ 405 passed (385 before; +20)
+ruff / tsc / next lint / vitest ....... clean
+verify_inventory / verify_accounts .... consistent
+Playwright ............................ 1 new spec, passing
+browser walk-through .................. RET-000001 rejected-without-a-reason refused, approved,
+                                        received as DAMAGED with a condition note (stock stayed at
+                                        18 — a damaged line never returns to sellable), refunded
+                                        2,790.00 into a named account, and the REFUND movement
+                                        appeared in the cash book
+```
+
+**Two gaps closed before the screen was built**, both found by checking the endpoints against the
+documented behaviour rather than trusting the "form work only" label:
+
+- The **restock decision could not be made at receipt**, though §2.1 puts it there. It was settable
+  only at request time, so a screen would have asked "restock or damaged?" before anyone saw the
+  item. `receive/` now takes per-line decisions.
+- A **return refund could not name its account**, though an order refund could — and a return is
+  exactly the case where which drawer the cash leaves matters.
+
+Also fixed: `seed_demo --reset` died with `ProtectedError` whenever a stock count or transfer
+existed, which phase 39 made ordinary. Recorded as [D23](#known-defects), with a regression test that
+fails without the fix.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -403,6 +430,7 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
 | ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
 | ~~D22~~ | ~~**A stock count could never be counted.**~~ **Fixed 2026-08-27** — `counted_quantity` was write-protected by a `read_only=True` nested serializer and set by nothing, so `apply` adjusted nothing and silently marked the sheet APPLIED. No test covered stock counts at any level. Added `record/` and `cancel/`, made `apply/` refuse an empty or non-COUNTING sheet, and wrote the first 20 tests the feature has had |
+| ~~D23~~ | ~~**`seed_demo --reset` died once a stock count or transfer existed.**~~ **Fixed 2026-08-27** — `StockCountItem` and `StockTransferItem` hold PROTECT references to `ProductVariant`, and `_reset()` deleted the catalogue first. Harmless while those documents were unreachable from the UI; phase 39 made them ordinary. This is the second time the same omission has bitten (phase 36's `Expense` was the first), so it now has a regression test that creates one of each protecting document and resets |
 | D18      | **The E2E suite is order-coupled.** All 17 specs pass individually, but each full sequential run fails a *different* one — storefront checkout, a POS sale, an accessibility check. The config already says "these flows share one seeded database"; they also mutate it, and nothing resets between tests. Fixing it is phase 29 work: either reseed per describe-block or make each flow pick its own fixture. Found 2026-08-27, the first time the suite was ever executed |
 | D8       | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml`, `docker-compose.dev.yml`                                                    | A confusing, self-inflicted breakage after any production build. Also recorded in`.claude/environment.md`                                     |
 | D9       | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `seed_demo`                                                                                         | The photography-led storefront of`CLAUDE.md` §10 cannot actually be judged                                                                   |
@@ -420,13 +448,13 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 Every endpoint below exists and is tested. What is missing is the screen.
 
 - customer create/edit, addresses, notes
-- return approve / reject / receive / complete
 - coupon management, review moderation
 - shipping zones, methods, shipments
 - categories, brands, attributes
 - users and roles
 
-Recently built, so no longer on this list: **damage/write-off, stock counts and stock transfers** —
+Recently built, so no longer on this list: **return approve / reject / receive / refund** —
+`/admin/returns/[id]`; **damage/write-off, stock counts and stock transfers** —
 a write-off panel on `/admin/inventory`, plus `/admin/inventory/transfers` and
 `/admin/inventory/counts`; **expenses** — `/admin/expenses`, with a period filter,
 category-wise totals, receipt upload, CSV and a void flow; **financial accounts and the cash book** —
@@ -486,28 +514,25 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Phase 36 shipped 2026-08-27; the three inventory screens of phase 39 shipped the same day.
+Phases 36, 39 (part) and the returns screens all shipped 2026-08-27.
 
-**Return approve / reject / receive / refund.** Now the largest remaining "API-only" item, and the
-one a shop hits weekly. Four actions on a list that already renders at `/admin/returns`. About an
-afternoon, and `expense-forms.tsx` is the pattern for the reason-gated confirmations.
+**Customers, then coupons.** The last two "API-only" write screens a shop needs. Both look like
+ordinary form work — but check the endpoints against the documented behaviour first. That check has
+now paid for itself three times in a row: CSV export that had never worked, a stock count that could
+not be counted, and a restock decision that could not be made where the rules say it belongs.
 
-**Customers and coupons** are the other two write-screen gaps. Both are ordinary form work against
-tested endpoints — but check first whether they have a write path at all, because phase 39 taught us
-the roadmap's "form work only" is not always true.
+**Phase 38 is one decision away.** The only blocker is **D-C, the VAT decision**.
+`finance.selectors.expense_totals()` is already the shape `business_summary()` subtracts, so once
+VAT is settled 38 is mostly assembly. It remains the highest-value non-code action on this list, and
+it gets more expensive the longer it waits — settling it after the first real sale rewrites every
+historical total.
 
-**Phase 38 is one decision away.** Expenses were the missing input; the only remaining blocker is
-**D-C, the VAT decision**. `finance.selectors.expense_totals()` was written to be the shape
-`business_summary()` subtracts, so once VAT is settled 38 is mostly assembly. Getting D-C answered
-is still the highest-value non-code action on this list.
+**D18 — make the E2E suite survive a full run.** It executes and every spec passes alone; the flows
+share and mutate one seeded database. Reseed per describe-block or give each flow its own fixture,
+then wire Vitest and Playwright into `ci.yml`. That closes phase 29.
 
-**D18 — make the E2E suite survive a full run.** It executes now and every spec passes alone; the
-flows share and mutate one seeded database. Reseed per describe-block, or give each flow its own
-fixture. That plus wiring Vitest and Playwright into `ci.yml` closes phase 29.
-
-**The rest of phase 39** — quotation, cheque register, barcode label sheets — is genuinely new
-building rather than screens over existing services, so it is a bigger piece than the three that
-just shipped.
+**The rest of phase 39** — quotation, cheque register, barcode label sheets — is new building rather
+than screens over existing services.
 
 The heavier follow-up is still the **payment gateway**: nothing prepaid can be sold until one
 exists, and a gateway's settled takings need a `BANK` account to land in.

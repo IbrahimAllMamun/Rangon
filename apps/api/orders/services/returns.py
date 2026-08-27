@@ -213,12 +213,52 @@ def reject(*, return_request: ReturnRequest, actor: Any = None, comment: str = "
 
 
 @transaction.atomic
-def receive(*, return_request: ReturnRequest, actor: Any = None) -> ReturnRequest:
+def receive(
+    *,
+    return_request: ReturnRequest,
+    actor: Any = None,
+    decisions: dict[str, dict[str, str]] | None = None,
+) -> ReturnRequest:
     """Goods are physically back.  RESTOCK lines go back into sellable stock;
-    DAMAGED and QUARANTINE lines do not (docs/business-rules.md §2.3)."""
+    DAMAGED and QUARANTINE lines do not (docs/business-rules.md §2.3).
+
+    ``decisions`` maps a ``ReturnItem`` id to ``{"restock_decision", "condition_note"}``
+    and is applied *before* stock moves. The decision belongs here rather than
+    at request time because this is the first moment anybody has the goods in
+    their hands -- §2.1 puts it at RECEIVED for exactly that reason. Whatever
+    was chosen when the return was raised stands as the default for any line
+    not named here.
+    """
     return_request = ReturnRequest.objects.select_for_update().get(pk=return_request.pk)
     if return_request.status != ReturnStatus.APPROVED:
         raise Conflict("Only an approved return can be received.")
+
+    if decisions:
+        items = {str(item.pk): item for item in return_request.items.all()}
+        unknown = sorted(set(decisions) - set(items))
+        if unknown:
+            raise ValidationError(
+                "Some lines are not on this return.", details={"unknown": unknown}
+            )
+        valid = set(RestockDecision.values)
+        changed = []
+        for item_id, decision in decisions.items():
+            item = items[item_id]
+            wanted = decision.get("restock_decision")
+            if wanted is not None:
+                if wanted not in valid:
+                    raise ValidationError(
+                        f"{wanted} is not a restock decision.",
+                        details={"allowed": sorted(valid)},
+                    )
+                item.restock_decision = wanted
+            if "condition_note" in decision:
+                item.condition_note = decision["condition_note"] or ""
+            changed.append(item)
+        if changed:
+            ReturnItem.objects.bulk_update(
+                changed, ["restock_decision", "condition_note", "updated_at"]
+            )
 
     order = return_request.order
     restock_lines = [
@@ -249,7 +289,13 @@ def receive(*, return_request: ReturnRequest, actor: Any = None) -> ReturnReques
         order,
         OrderEventType.RETURN_UPDATED,
         f"Return {return_request.number} received",
-        data={"restocked_lines": len(restock_lines)},
+        data={
+            "restocked_lines": len(restock_lines),
+            "decisions": {
+                item.order_item.sku: item.restock_decision
+                for item in return_request.items.select_related("order_item")
+            },
+        },
         actor=actor,
     )
     return return_request
@@ -263,6 +309,7 @@ def complete(
     refund_amount: Decimal | None = None,
     refund_method: str | None = None,
     idempotency_key: str | None = None,
+    account: Any = None,
 ) -> ReturnRequest:
     """Issue the refund and close the return.  Idempotent."""
     return_request = ReturnRequest.objects.select_for_update().get(pk=return_request.pk)
@@ -283,6 +330,9 @@ def complete(
             method=refund_method,
             return_request=return_request,
             idempotency_key=idempotency_key or f"return:{return_request.pk}",
+            # Which drawer the cash actually leaves. Falls back to the branch's
+            # default for the method when the caller does not say (§12.2).
+            account=account,
         )
 
     return_request.status = ReturnStatus.COMPLETED

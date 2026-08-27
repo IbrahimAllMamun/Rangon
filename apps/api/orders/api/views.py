@@ -14,10 +14,12 @@ from rest_framework.response import Response
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset
 from orders.api.serializers import (
+    CompleteReturnSerializer,
     CreateReturnSerializer,
     OrderDetailSerializer,
     OrderEventSerializer,
     OrderListSerializer,
+    ReceiveReturnSerializer,
     RecordPaymentSerializer,
     RefundRequestSerializer,
     RefundSerializer,
@@ -255,16 +257,29 @@ class ReturnRequestViewSet(
 
     @action(detail=True, methods=["post"])
     def receive(self, request: Request, pk: str | None = None) -> Response:
-        result = return_services.receive(return_request=self.get_object(), actor=request.user)
+        """Goods are back, with the per-line decision made on inspection."""
+        serializer = ReceiveReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        decisions = {
+            str(line["id"]): {key: value for key, value in line.items() if key != "id"}
+            for line in serializer.validated_data.get("items", [])
+        }
+        result = return_services.receive(
+            return_request=self.get_object(), actor=request.user, decisions=decisions
+        )
         return Response(ReturnRequestSerializer(result).data)
 
     @action(detail=True, methods=["post"])
     def complete(self, request: Request, pk: str | None = None) -> Response:
+        serializer = CompleteReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         result = return_services.complete(
             return_request=self.get_object(),
             actor=request.user,
-            refund_amount=request.data.get("refund_amount"),
-            refund_method=request.data.get("refund_method"),
+            refund_amount=data.get("refund_amount"),
+            refund_method=data.get("refund_method") or None,
+            account=data.get("account"),
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(ReturnRequestSerializer(result).data)
