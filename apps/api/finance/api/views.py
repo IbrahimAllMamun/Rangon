@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db.models import Count, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -18,10 +20,20 @@ from finance.api.serializers import (
     AccountSerializer,
     AccountTransactionSerializer,
     AccountTransferSerializer,
+    CreateExpenseSerializer,
     CreateTransferSerializer,
+    ExpenseCategorySerializer,
+    ExpenseSerializer,
     RecordMovementSerializer,
+    VoidExpenseSerializer,
 )
-from finance.models import Account, AccountTransaction, AccountTransfer
+from finance.models import (
+    Account,
+    AccountTransaction,
+    AccountTransfer,
+    ExpenseCategory,
+    ExpenseStatus,
+)
 
 
 class AccountViewSet(
@@ -251,3 +263,154 @@ class AccountTransferViewSet(
             actor=request.user,
         )
         return Response(AccountTransferSerializer(record).data, status=status.HTTP_201_CREATED)
+
+
+class ExpenseCategoryViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """What money is spent on.
+
+    No `destroy`: a category an expense was filed under is part of that
+    expense's history.  Retire it with `is_active=false` and it disappears from
+    the picker while every past total stays readable.
+    """
+
+    serializer_class = ExpenseCategorySerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["finance.view"],
+        "retrieve": ["finance.view"],
+        "create": ["finance.manage"],
+        "update": ["finance.manage"],
+        "partial_update": ["finance.manage"],
+    }
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["is_active"]
+    search_fields = ["name", "code", "description"]
+    ordering_fields = ["name", "created_at"]
+
+    def get_queryset(self) -> Any:
+        return ExpenseCategory.objects.annotate(
+            expense_count=Count("expenses", filter=Q(expenses__status=ExpenseStatus.RECORDED))
+        ).order_by("name")
+
+    def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        category = finance_services.create_expense_category(
+            name=data["name"],
+            code=data.get("code", ""),
+            description=data.get("description", ""),
+            is_active=data.get("is_active", True),
+            actor=request.user,
+        )
+        return Response(ExpenseCategorySerializer(category).data, status=status.HTTP_201_CREATED)
+
+    def update(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        category = self.get_object()
+        serializer = self.get_serializer(category, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        category = finance_services.update_expense_category(
+            category=category, actor=request.user, **serializer.validated_data
+        )
+        return Response(ExpenseCategorySerializer(category).data)
+
+
+class ExpenseViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Money that left the business for something other than stock or a refund.
+
+    No `destroy` and no `update`: an expense posted to the cash book is
+    financial history (CLAUDE.md section 3.3).  Undo one with `void`, which
+    posts a compensating movement rather than erasing anything.
+    """
+
+    serializer_class = ExpenseSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["finance.view"],
+        "retrieve": ["finance.view"],
+        "create": ["finance.expense"],
+        "void": ["finance.expense"],
+        "summary": ["finance.view"],
+    }
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["branch", "category", "account", "status"]
+    search_fields = ["number", "note", "category__name"]
+    ordering_fields = ["spent_at", "amount", "created_at"]
+
+    def get_queryset(self) -> Any:
+        params = self.request.query_params
+        # `branch`, `category`, `account` and `status` come from the filterset;
+        # only the date window needs doing here, because it spans two params.
+        queryset = selectors.expenses(
+            date_from=params.get("date_from") or None,
+            date_to=params.get("date_to") or None,
+            # The list shows voided rows so a correction stays visible; every
+            # total still excludes them (finance.selectors.expense_totals).
+            include_void=params.get("include_void", "true").lower() != "false",
+        )
+        return branch_queryset(self.request.user, queryset)
+
+    def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        serializer = CreateExpenseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        submitted = data.get("branch")
+        branch = resolve_branch(
+            request.user, getattr(submitted, "pk", submitted) if submitted else None
+        )
+
+        expense = finance_services.record_expense(
+            branch=branch,
+            category=data["category"],
+            account=data["account"],
+            amount=data["amount"],
+            spent_at=data.get("spent_at"),
+            note=data.get("note", ""),
+            attachment=data.get("attachment"),
+            actor=request.user,
+        )
+        return Response(
+            ExpenseSerializer(expense, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def void(self, request: Request, pk: str | None = None) -> Response:
+        serializer = VoidExpenseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        expense = finance_services.void_expense(
+            expense=self.get_object(),
+            reason=serializer.validated_data["reason"],
+            actor=request.user,
+        )
+        return Response(ExpenseSerializer(expense, context={"request": request}).data)
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request: Request) -> Response:
+        """Total spent in a period, split by category."""
+        branch = None
+        if branch_id := request.query_params.get("branch"):
+            branch = resolve_branch(request.user, branch_id)
+        elif not request.user.can_cross_branch and request.user.branch_id:
+            branch = request.user.branch
+
+        return Response(
+            selectors.expense_totals(
+                branch=branch,
+                date_from=request.query_params.get("date_from") or None,
+                date_to=request.query_params.get("date_to") or None,
+            )
+        )

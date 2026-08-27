@@ -122,6 +122,8 @@ class AuditAction(models.TextChoices):
     ORDER_STATUS_CHANGED = "ORDER_STATUS_CHANGED", "Order status changed"
     ORDER_CANCELLED = "ORDER_CANCELLED", "Order cancelled"
     PAYMENT_RECORDED = "PAYMENT_RECORDED", "Payment recorded"
+    EXPENSE_RECORDED = "EXPENSE_RECORDED", "Expense recorded"
+    EXPENSE_VOIDED = "EXPENSE_VOIDED", "Expense voided"
     REFUND_ISSUED = "REFUND_ISSUED", "Refund issued"
     DISCOUNT_OVERRIDE = "DISCOUNT_OVERRIDE", "Discount override"
     PRICE_OVERRIDE = "PRICE_OVERRIDE", "Price override"

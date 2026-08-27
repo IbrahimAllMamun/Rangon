@@ -398,3 +398,27 @@ def inventory_movement(*, date_range: DateRange, branch: Any = None) -> list[dic
         )
         .order_by("transaction_type")
     )
+
+
+def expense_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
+    """Spending in a period, grouped by category.
+
+    Thin on purpose: the grouping lives in ``finance.selectors.expense_totals``
+    so the expenses screen, this report and (in phase 38) net profit cannot
+    disagree about what the shop spent.  Voided expenses are excluded there.
+    """
+    from finance import selectors as finance_selectors
+
+    totals = finance_selectors.expense_totals(
+        branch=branch, date_from=date_range.start, date_to=date_range.end
+    )
+    return [
+        {
+            "category": row["category"],
+            "code": row["code"],
+            "expenses": row["count"],
+            "total": row["total"],
+            "share_percent": row["share"],
+        }
+        for row in totals["by_category"]
+    ]
