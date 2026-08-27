@@ -80,6 +80,40 @@ present at the destination.
 *`DECISION REQUIRED` — a formal in-transit holding location was not requested; with one branch in V1
 this is adequate.*
 
+Cost travels with the goods: each line carries the source's weighted average cost at the moment of
+the move (ADR-0006), so neither branch's margin is distorted by relocating stock. Cost is therefore
+never an input to a transfer — a box for it would let someone change what stock is worth by moving
+it between shelves.
+
+### 1.7 Write-offs
+
+Stock that is damaged or lost leaves through `write_off()` as a `DAMAGE` or `LOSS` ledger row, never
+as an adjustment. The distinction is kept because the two are different figures to a business:
+damage is a cost of doing business, loss is shrinkage.
+
+**A reason is mandatory** and free text. An unexplained write-off is indistinguishable from theft by
+whoever recorded it, so the service refuses one without a reason and the row is audit-logged with
+actor, quantity and reason. Correcting a mistaken write-off means receiving the stock back in — the
+ledger keeps both movements rather than erasing either.
+
+### 1.8 Stock counts
+
+A count sheet snapshots what the ledger believes (`expected_quantity`) at the moment it is opened.
+That snapshot is what makes the variance meaningful, so **it is never editable**: the only figure a
+person may write back is `counted_quantity`.
+
+**Counting and applying are separate.** Counting a shop takes hours and more than one person, so
+figures are saved as they are gathered and nothing touches stock until the sheet is applied.
+Applying writes `ADJUSTMENT` rows through the ledger — it never sets `on_hand` directly (§1.1).
+
+**An uncounted line is left alone**, never treated as a count of zero: a line nobody reached is not
+evidence that the shelf is empty. A sheet where nothing has been counted cannot be applied at all,
+because marking it applied having adjusted nothing would record a stock take that never happened.
+
+A count that should not proceed is **cancelled**, which touches no stock. An applied count is
+history: it can be neither re-counted nor cancelled, and correcting it means a new count or an
+adjustment with its own reason.
+
 ---
 
 ## 2. Returns and refunds

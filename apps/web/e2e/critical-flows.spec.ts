@@ -190,6 +190,56 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     await expect(page.getByRole("status").filter({ hasText: "Recorded" })).toHaveCount(0);
   });
 
+  test("writing stock off reduces it and demands a reason", async ({ page }) => {
+    await signIn(page, MANAGER);
+    await page.goto("/admin/inventory");
+
+    const sku = (await page.locator("tbody tr").first().locator("td").nth(1).innerText()).trim();
+
+    // The reason is mandatory: an unexplained write-off is indistinguishable
+    // from theft by whoever recorded it.
+    await page.getByRole("button", { name: "Write stock off" }).click();
+    await page.locator("#wo-quantity").fill("1");
+    await page.getByRole("button", { name: "Write off" }).click();
+    await expect(page.locator('[aria-labelledby="error-summary-title"]')).toBeVisible();
+
+    await page.locator("#wo-search input").fill(sku);
+    await page.locator("#wo-search").getByText(sku).first().click();
+    await page.locator("#wo-quantity").fill("1");
+    await page.locator("#wo-reason").fill("Torn on the shop floor");
+    await page.getByRole("button", { name: "Write off" }).click();
+    // The route loader also carries role=status, so filter to the confirmation.
+    await expect(
+      page.getByRole("status").filter({ hasText: /written off/i }),
+    ).toBeVisible();
+  });
+
+  test("a stock count records a variance and only moves stock when applied", async ({ page }) => {
+    await signIn(page, MANAGER);
+    await page.goto("/admin/inventory/counts");
+    await page.getByRole("button", { name: /Start a count of/ }).click();
+    await page.waitForURL(/\/counts\/[0-9a-f-]{36}/);
+
+    const row = page.locator("tbody tr").first();
+    const expected = Number((await row.locator("td").nth(1).innerText()).trim());
+    await row.locator('input[id^="count-"]').fill(String(expected - 1));
+
+    // The variance is computed from the ledger's snapshot, which is why
+    // `expected_quantity` is not editable anywhere on this sheet.
+    await expect(row.locator("td").nth(3)).toContainText("-1");
+
+    await page.getByRole("button", { name: "Save progress" }).click();
+    await expect(page.getByText(/Saved 1 line/)).toBeVisible();
+    // Saving is not applying — a count takes hours and more than one person.
+    await expect(page.getByRole("button", { name: "Apply to stock" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Apply to stock" }).click();
+    // The header states the outcome; the status word alone appears in several
+    // places on this page, so assert the sentence rather than the badge.
+    await expect(page.getByText(/adjustments are in the ledger/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Apply to stock" })).toHaveCount(0);
+  });
+
   test("a cashier cannot reach user management", async ({ page }) => {
     await signIn(page, CASHIER);
     await page.goto("/admin");

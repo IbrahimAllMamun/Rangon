@@ -54,7 +54,7 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 36  | Expenses                              | ✅      | ✅       | **F2 shipped 2026-08-27.** `ExpenseCategory` + `Expense` posted through `finance.services.record_expense()` — document and `EXPENSE` cash-book movement in one transaction, so neither can exist without the other. Voiding posts a compensating `ADJUSTMENT`; nothing is deleted. `/admin/expenses` with a period filter, spend tiles, category-wise split, receipt upload and CSV. Nine categories seeded by migration. New permission `finance.expense` (owner/admin/manager/accountant, **not** cashier). 57 tests |
 | 37  | Party ledger — receivable / payable  | ⬜      | ⬜       | **F3.** Derived from rows that already exist — **no balance column on `Customer`** — plus an `OPENING` entry type for shops migrating from paper. Ledger tabs and ageing buckets. **Conditional on decision D-A below**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 38  | Business report → net profit         | ⬜      | ⬜       | **F4.** `business_summary(period, branch)` over sales, gross margin from the frozen `unit_cost` (ADR-0006), purchases, damage, expenses, returns, discounts, VAT. Only figures we can compute honestly — Salary/Warranty/Service stay off until those features exist. **Blocked by the VAT decision**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 39  | Trade documents                       | ⬜      | ⬜       | **F5**, parallel with 36–38. Damage/write-off, stock count and stock transfer screens (services already built and tested — pure form work), quotation → order, cheque register with a Pending→Deposited→Cleared/Bounce lifecycle, barcode label sheets, SR attribution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 39  | Trade documents                       | ✅      | 🟡       | **Damage, stock count and transfer shipped 2026-08-27.** `/admin/inventory` gains a write-off panel and a Branch column; `/admin/inventory/transfers` and `/admin/inventory/counts` are new, with a count sheet that shows variance live. The count was **not** the form work this row promised — `counted_quantity` had no write path at all, so `apply` was a no-op; `record/` and `cancel/` were added and `apply/` now refuses an empty or already-applied sheet. Still open: quotation, cheque register, barcode label sheets |
 
 Phases 35–39 come from a signed-in, read-only walk of all 56 screens of the **Bseba ERP**
 (`erp.bseba.com`, Dostishop tenant) on 2026-08-21 — written up with a have-it / build-it / decline-it
@@ -342,6 +342,33 @@ specs themselves were found by executing them, and are fixed:
 `PW_CHROMIUM_PATH` was added to `playwright.config.ts` so an environment that already ships a
 Chromium can point at it instead of downloading one.
 
+### Phase 39 (part) verified, 2026-08-27
+
+```text
+pytest ................................ 385 passed (365 before; +20)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint .............. clean
+vitest ................................ 79 passed
+verify_inventory ...................... consistent after 2 write-offs, a count and 2 transfers
+verify_accounts ....................... consistent
+Playwright ............................ 2 new specs, passing
+browser walk-through .................. write-off 10 -> 8 on the named SKU; count sheet snapshotted
+                                        72 lines, variance computed live, saving moved no stock,
+                                        applying wrote the adjustment (8 -> 5); transfer moved 3
+                                        units DHK1 -> DHK2 with none invented on either side
+```
+
+**The roadmap was wrong about stock counts.** This row said "the apply flow exists — form work
+only". In fact `counted_quantity` was exposed through a `read_only=True` nested serializer and
+written by nothing, so `apply` — which filters on `counted_quantity__isnull=False` — matched zero
+rows every time. There were also **no tests for stock counts at all**, at any level, which is why it
+went unnoticed. Recorded as [D22](#known-defects).
+
+Two smaller things found by running it: the endpoints doc had `inventory/transfers/` and
+`inventory/counts/` when the real routes are top-level `/stock-transfers/` and `/stock-counts/`; and
+the inventory table never rendered `branch_code`, so once a transfer existed the same SKU appeared
+twice with nothing to tell the rows apart.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -375,6 +402,7 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D21~~ | ~~**The image scan went red on a base-image CVE.**~~ **Fixed 2026-08-27** — `node:22-alpine` shipped openssl `3.5.7-r0` while Alpine 3.24 already carried the `3.5.8-r0` fix for CVE-2026-14456, so `Build & scan images` failed on every branch through no fault of any diff. The runtime stage now runs `apk upgrade --no-cache`, which is safe to do unconditionally because the gate sets `ignore-unfixed: true` — it only ever fails on a CVE whose fix is already published. Without this, the scan stays red until upstream rebuilds the base image |
 | ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
 | ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
+| ~~D22~~ | ~~**A stock count could never be counted.**~~ **Fixed 2026-08-27** — `counted_quantity` was write-protected by a `read_only=True` nested serializer and set by nothing, so `apply` adjusted nothing and silently marked the sheet APPLIED. No test covered stock counts at any level. Added `record/` and `cancel/`, made `apply/` refuse an empty or non-COUNTING sheet, and wrote the first 20 tests the feature has had |
 | D18      | **The E2E suite is order-coupled.** All 17 specs pass individually, but each full sequential run fails a *different* one — storefront checkout, a POS sale, an accessibility check. The config already says "these flows share one seeded database"; they also mutate it, and nothing resets between tests. Fixing it is phase 29 work: either reseed per describe-block or make each flow pick its own fixture. Found 2026-08-27, the first time the suite was ever executed |
 | D8       | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml`, `docker-compose.dev.yml`                                                    | A confusing, self-inflicted breakage after any production build. Also recorded in`.claude/environment.md`                                     |
 | D9       | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `seed_demo`                                                                                         | The photography-led storefront of`CLAUDE.md` §10 cannot actually be judged                                                                   |
@@ -394,12 +422,13 @@ Every endpoint below exists and is tested. What is missing is the screen.
 - customer create/edit, addresses, notes
 - return approve / reject / receive / complete
 - coupon management, review moderation
-- inventory write-off / stock count / stock transfer
 - shipping zones, methods, shipments
 - categories, brands, attributes
 - users and roles
 
-Recently built, so no longer on this list: **expenses** — `/admin/expenses`, with a period filter,
+Recently built, so no longer on this list: **damage/write-off, stock counts and stock transfers** —
+a write-off panel on `/admin/inventory`, plus `/admin/inventory/transfers` and
+`/admin/inventory/counts`; **expenses** — `/admin/expenses`, with a period filter,
 category-wise totals, receipt upload, CSV and a void flow; **financial accounts and the cash book** —
 `/admin/finance` and `/admin/finance/[id]`, with account create/edit, transfers, manual cash-book
 entries, a cash position on the dashboard, a per-tender account in the POS and account pickers on COD
@@ -457,32 +486,31 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Phase 36 shipped 2026-08-27. What it changes about the order of what is left:
+Phase 36 shipped 2026-08-27; the three inventory screens of phase 39 shipped the same day.
 
-**Phase 39 — the trade-document screens.** Now the largest unblocked piece, and still pure form
-work: damage/write-off, stock count and stock transfer. `inventory.services.write_off`, the
-stock-count apply flow and `transfer` are built, tested and reachable only from the API. No new
-business rules, no owner decision. `expense-forms.tsx` and `purchase-order-form.tsx` are the two
-patterns to copy.
+**Return approve / reject / receive / refund.** Now the largest remaining "API-only" item, and the
+one a shop hits weekly. Four actions on a list that already renders at `/admin/returns`. About an
+afternoon, and `expense-forms.tsx` is the pattern for the reason-gated confirmations.
 
-**Return approve / reject / receive / refund** — four buttons on a list that already renders, and
-the last "API-only" item a shop hits weekly. About an afternoon.
+**Customers and coupons** are the other two write-screen gaps. Both are ordinary form work against
+tested endpoints — but check first whether they have a write path at all, because phase 39 taught us
+the roadmap's "form work only" is not always true.
 
 **Phase 38 is one decision away.** Expenses were the missing input; the only remaining blocker is
 **D-C, the VAT decision**. `finance.selectors.expense_totals()` was written to be the shape
-`business_summary()` subtracts, so once VAT is settled, 38 is mostly assembly. It is the report the
-owner actually manages by, so getting D-C answered is now the highest-value non-code action on this
-list.
+`business_summary()` subtracts, so once VAT is settled 38 is mostly assembly. Getting D-C answered
+is still the highest-value non-code action on this list.
 
-**D18 — make the E2E suite survive a full run.** The suite executes now and every spec passes
-alone, so this is no longer "blocked", it is "flaky": the flows share and mutate one seeded
-database. Reseed per describe-block, or give each flow its own fixture. That plus wiring Vitest and
-Playwright into `ci.yml` closes phase 29.
+**D18 — make the E2E suite survive a full run.** It executes now and every spec passes alone; the
+flows share and mutate one seeded database. Reseed per describe-block, or give each flow its own
+fixture. That plus wiring Vitest and Playwright into `ci.yml` closes phase 29.
+
+**The rest of phase 39** — quotation, cheque register, barcode label sheets — is genuinely new
+building rather than screens over existing services, so it is a bigger piece than the three that
+just shipped.
 
 The heavier follow-up is still the **payment gateway**: nothing prepaid can be sold until one
-exists, and a gateway's settled takings need a `BANK` account to land in — which `capture_payment()`
-will post to automatically once the provider calls it.
+exists, and a gateway's settled takings need a `BANK` account to land in.
 
 **Worth doing once, soon:** run `manage.py verify_accounts` against real data on first deploy. Any
-payment taken before phase 35 carries no account, and that count is the size of the permanent gap —
-it cannot be backfilled honestly, so it should be recorded rather than discovered later.
+payment taken before phase 35 carries no account, and that count is the size of the permanent gap.

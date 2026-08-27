@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from rest_framework import serializers
 
 from inventory.models import (
@@ -161,6 +163,35 @@ class StockCountItemSerializer(serializers.ModelSerializer):
             "difference",
             "notes",
         ]
+
+
+class RecordCountLineSerializer(serializers.Serializer):
+    variant = serializers.UUIDField()
+    counted_quantity = serializers.IntegerField(min_value=0)
+    notes = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+
+
+class RecordCountSerializer(serializers.Serializer):
+    """What the counter actually found on the shelf.
+
+    Separate from `StockCountSerializer`, whose `items` are read-only: a count
+    sheet is generated from the ledger, and the only field a person may write
+    back is what they counted. Letting the sheet be PATCHed wholesale would let
+    `expected_quantity` be edited too, which would make the variance — the one
+    number the count exists to produce — meaningless.
+    """
+
+    lines = RecordCountLineSerializer(many=True, allow_empty=False)
+
+    def validate_lines(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen = set()
+        for line in value:
+            if line["variant"] in seen:
+                raise serializers.ValidationError(
+                    f"{line['variant']} appears twice; send one figure per variant."
+                )
+            seen.add(line["variant"])
+        return value
 
 
 class StockCountSerializer(serializers.ModelSerializer):

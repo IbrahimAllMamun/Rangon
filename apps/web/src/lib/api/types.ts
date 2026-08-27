@@ -512,3 +512,59 @@ export interface ExpenseTotals {
     share: string;
   }[];
 }
+
+export type StockCountStatus = "DRAFT" | "COUNTING" | "APPLIED" | "CANCELLED";
+
+export interface StockCountItem {
+  id: string;
+  variant: string;
+  sku: string;
+  product_name: string;
+  expected_quantity: number;
+  counted_quantity: number | null;
+  difference: number | null;
+  notes: string;
+}
+
+export interface StockCount {
+  id: string;
+  number: string;
+  branch: string;
+  branch_code: string;
+  status: StockCountStatus;
+  notes: string;
+  items: StockCountItem[];
+  created_at: string;
+  applied_at: string | null;
+}
+
+export interface StockTransferItem {
+  id: string;
+  variant: string;
+  sku: string;
+  product_name: string;
+  quantity: number;
+  unit_cost: string;
+}
+
+export interface StockTransfer {
+  id: string;
+  number: string;
+  source_branch: string;
+  source_code: string;
+  target_branch: string;
+  target_code: string;
+  status: string;
+  notes: string;
+  items: StockTransferItem[];
+  created_at: string;
+  received_at: string | null;
+}
+
+export interface BranchSummary {
+  id: string;
+  name: string;
+  code: string;
+  is_default: boolean;
+  status: string;
+}

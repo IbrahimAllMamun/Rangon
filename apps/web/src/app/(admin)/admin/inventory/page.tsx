@@ -1,11 +1,13 @@
+import { ArrowRightLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
 import { StockBadge } from "@/components/admin/status-badge";
+import { WriteOffPanel } from "@/components/admin/write-off-form";
 import { Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
-import { apiServer } from "@/lib/api/server";
-import type { InventoryRow } from "@/lib/api/types";
+import { apiServer, currentUser } from "@/lib/api/server";
+import type { InventoryRow, SessionUser } from "@/lib/api/types";
 import { money } from "@/lib/format";
 
 export const metadata = { title: "Inventory" };
@@ -21,6 +23,9 @@ const FILTERS = [
 
 export default async function InventoryPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
+  const user = await currentUser<SessionUser>();
+  const can = (permission: string) =>
+    Boolean(user?.permissions.includes("*") || user?.permissions.includes(permission));
   const query = new URLSearchParams();
   for (const key of ["filter", "search", "category", "page"]) {
     if (params[key]) query.set(key, params[key]!);
@@ -39,12 +44,40 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
     0,
   );
 
+  // One row per branch per variant, so the same SKU legitimately appears more
+  // than once for anyone who can see across branches. Without this column the
+  // duplicates are indistinguishable — which only became a real problem once
+  // transfers made multi-branch stock ordinary rather than theoretical.
+  const showBranch = new Set((rows?.results ?? []).map((row) => row.branch_code)).size > 1;
+
   return (
     <>
       <PageHeader
         title="Inventory"
-        description="Every figure here comes from the ledger. Stock changes only through an adjustment, a sale, a return or a receipt."
+        description="Every figure here comes from the ledger. Stock changes only through an adjustment, a sale, a return, a receipt, a count or a write-off."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/admin/inventory/counts"
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
+            >
+              <ClipboardList className="size-4" aria-hidden /> Stock counts
+            </Link>
+            <Link
+              href="/admin/inventory/transfers"
+              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
+            >
+              <ArrowRightLeft className="size-4" aria-hidden /> Transfers
+            </Link>
+          </div>
+        }
       />
+
+      {can("inventory.adjust") && user?.branch && (
+        <div className="mb-4">
+          <WriteOffPanel branchId={user.branch.id} branchLabel={user.branch.name} />
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap gap-2">
         {FILTERS.map((filter) => {
@@ -87,6 +120,9 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                   <tr>
                     <th scope="col" className="px-4 py-2.5 font-medium">Product</th>
                     <th scope="col" className="px-4 py-2.5 font-medium">SKU</th>
+                    {showBranch && (
+                      <th scope="col" className="px-4 py-2.5 font-medium">Branch</th>
+                    )}
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">On hand</th>
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Reserved</th>
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Available</th>
@@ -105,6 +141,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                         </span>
                       </td>
                       <td className="px-4 py-2.5 font-mono text-caption">{row.sku}</td>
+                      {showBranch && <td className="px-4 py-2.5">{row.branch_code}</td>}
                       <td className="tabular px-4 py-2.5 text-right">{row.on_hand}</td>
                       <td className="tabular px-4 py-2.5 text-right text-muted">{row.reserved}</td>
                       <td className="tabular px-4 py-2.5 text-right font-medium">{row.available}</td>
@@ -118,7 +155,10 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                 </tbody>
                 <tfoot className="border-t-2 border-border bg-neutral-50">
                   <tr>
-                    <td colSpan={6} className="px-4 py-2.5 text-right font-medium">
+                    <td
+                      colSpan={showBranch ? 7 : 6}
+                      className="px-4 py-2.5 text-right font-medium"
+                    >
                       Value on this page
                     </td>
                     <td className="tabular px-4 py-2.5 text-right font-bold">{money(totalValue)}</td>
