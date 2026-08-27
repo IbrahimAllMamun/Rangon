@@ -11,9 +11,12 @@
 # Differences from a real deployment, all of them intentional:
 #   * plain HTTP on localhost, so SECURE_SSL_REDIRECT is off (see below)
 #   * images are built locally rather than pulled by immutable tag
-#   * no Nginx: the two services are published directly on 4100 / 8100
 #   * container hardening from docker-compose.prod.yml (read_only, cap_drop) is
 #     not applied — it changes nothing about what you see in the browser
+#
+# Nginx fronts the whole thing on 4100 as a single origin, exactly as the
+# deployed topology does; the API is *also* published on 8100 so it can be
+# poked directly. Mailpit is on 8125.
 # For the real thing see docker-compose.prod.yml and docs/operations/.
 
 # docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml down
