@@ -130,6 +130,9 @@ docker compose down                                                        # sto
 docker compose down -v                                                     # stop + wipe volumes
 ```
 
+To run the **production** build on your own machine instead, see
+[Run the production build locally](#run-the-production-build-locally).
+
 Backend:
 
 ```bash
@@ -180,16 +183,8 @@ same seeded data:
 | `/product/[slug]` | **0.11 s** | 1.36 s |
 
 Production boots in ~0.35 s and serves pages in 11–320 ms. If you want a real number, measure the real
-thing:
-
-```bash
-docker compose build web
-docker run -d --name rangon-web-prod --network rangon_frontend \
-  -e API_INTERNAL_URL=http://api:8000/api/v1 -p 4100:3000 rangon-web:latest
-```
-
-Then compare `http://localhost:4100` against `http://localhost:4000`. Remove it with
-`docker rm -f rangon-web-prod` afterwards, and rebuild the dev image, because both share one tag.
+thing — see [Run the production build locally](#run-the-production-build-locally) below, then compare
+`http://localhost:4100` against `http://localhost:4000`.
 
 The dev script uses **Turbopack** (`next dev --turbopack`), which cut per-route compilation from
 ~5–16 s to ~2 s. It pays a one-off graph build (~30 s) on the first request after start. `npm run build`
@@ -221,6 +216,79 @@ Tests in a throwaway containerised environment (what CI runs):
 ```bash
 docker compose -f docker-compose.test.yml run --rm api-test
 ```
+
+## Run the production build locally
+
+`docker-compose.prodlocal.yml` runs the **production** images on your own machine — gunicorn, the
+production Next build, Celery and one Nginx origin — over plain HTTP. Use it to see what the app
+actually feels like, to reproduce something that only happens in a production build (a CSP failure, a
+server/client boundary error), or to rehearse a deploy. It is *not* a deployment; for that see
+[docs/operations/](docs/operations/deployment.md).
+
+It runs as a **separate compose project** (`-p rangon-prod`) with its own volumes and network, so it
+cannot collide with the dev stack or share a Postgres data directory with it. Two servers on one data
+directory is how you lose a database.
+
+**1. Create `.env.prod.local`** (gitignored). `config/settings/prod.py` refuses to boot without these:
+
+```bash
+DJANGO_SECRET_KEY=<a real secret — not one starting with dev-, test-, build- or insecure>
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,api,web,nginx   # must not be empty, must not contain "*"
+POSTGRES_PASSWORD=<any local password>
+```
+
+**2. Name the stack once**, because every command needs the same four flags and getting one wrong
+silently targets the dev stack instead:
+
+```bash
+alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
+```
+
+**3. Build and start:**
+
+```bash
+prodlocal up -d --build
+```
+
+**4. Migrate and seed** (its database is empty and separate from the dev one):
+
+```bash
+prodlocal exec api python manage.py migrate
+prodlocal exec api python manage.py seed_demo --reset
+```
+
+| | |
+|---|---|
+| Storefront / admin / POS | <http://localhost:4100> |
+| API (direct, bypassing Nginx) | <http://localhost:8100/api/v1/> |
+| Mailpit | <http://localhost:8125> |
+
+Everything goes through Nginx on **4100** as a single origin, which is what the deployed topology
+looks like and what `smoke-test.sh` assumes:
+
+```bash
+./scripts/smoke-test.sh http://localhost:4100
+```
+
+**Logs and stop**, leaving the dev stack untouched:
+
+```bash
+prodlocal logs -f api
+prodlocal down            # add -v to drop this stack's database too
+```
+
+Without the alias, spell the four flags out every time:
+
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local \
+  -f docker-compose.yml -f docker-compose.prodlocal.yml <command>
+```
+
+What this deliberately is *not*: no TLS (so `DJANGO_SECURE_SSL_REDIRECT` is forced off per service —
+leave it off, or nothing loads over `http://localhost`), images built locally rather than pulled by
+immutable tag, and none of the container hardening from `docker-compose.prod.yml`, which changes
+nothing about what you see in the browser. For a real deployment, and for exposing this on a domain,
+read [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md).
 
 ## Local run without Docker (fallback)
 
