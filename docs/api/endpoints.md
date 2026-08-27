@@ -100,6 +100,30 @@ history. Close it with `PATCH {"is_active": false}`.
 `SALE_PAYMENT`, `REFUND`, `SUPPLIER_PAYMENT` and `EXPENSE` are rejected by `record-movement/` — those
 are posted by the services that cause them, and entering one by hand would double-count the money.
 
+### Expenses (phase 36)
+
+| Method | Path | Perm |
+|---|---|---|
+| GET | `expense-categories/` | `finance.view` — filters: `is_active`, `search`; carries `expense_count` |
+| POST | `expense-categories/` | `finance.manage` — `code` derived from the name when omitted |
+| PATCH | `expense-categories/{id}/` | `finance.manage` — name/description/`is_active`; **`code` is immutable** |
+| GET | `expenses/` | `finance.view` — filters: `branch`, `category`, `account`, `status`, `date_from`, `date_to`, `include_void` |
+| POST | `expenses/` | `finance.expense` — JSON, or `multipart` when attaching a receipt |
+| POST | `expenses/{id}/void/` | `finance.expense` — `reason` required |
+| GET | `expenses/summary/` | `finance.view` — period total plus a per-category split and share |
+
+`POST expenses/` writes the document **and** its `EXPENSE` cash-book movement in one transaction.
+If the account cannot cover it the whole thing rolls back with `409 INSUFFICIENT_FUNDS` — no orphan
+document is left behind. An expense dated in the future is refused (`400`).
+
+There is deliberately **no `PATCH`/`DELETE` on `expenses/`**: the amount, account and date reached
+the ledger. Correct one with `void/`, which posts a compensating `ADJUSTMENT` rather than erasing
+anything. `date_from`/`date_to` accept either `YYYY-MM-DD` (widened to cover the whole day) or a
+full timestamp; anything else is a `400`, never a silently ignored filter.
+
+Money in every finance response is a **string** (`"12000.00"`), never a JSON number — including the
+computed figures in `accounts/cash-position/` and `expenses/summary/`.
+
 Overdrawing an account that does not allow overdraft returns **409 `INSUFFICIENT_FUNDS`**.
 
 Three existing endpoints now accept an optional `account` (omit it and the branch default for the
@@ -174,6 +198,7 @@ CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
 | `products/performance/` | `reports.view` |
 | `inventory/valuation/`, `inventory/movement/` | `reports.financial` |
 | `purchases/`, `returns/`, `profit/` | `reports.financial` |
+| `expenses/` — spend by category, with each category's share | `reports.financial` |
 | any of the above + `&format=csv` | `reports.export` |
 
 ## Infra

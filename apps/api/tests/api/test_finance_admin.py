@@ -112,6 +112,25 @@ class TestAccountEndpoints:
         assert response.status_code == 200
         assert Decimal(str(response.data["total"])) == Decimal("5000.00")
 
+    def test_cash_position_sends_money_as_strings_not_floats(
+        self, owner: Any, branch: Any, auth_client: Any
+    ) -> None:
+        """Money crossing a boundary is never a float (CLAUDE.md section 4).
+
+        This endpoint returns plain dicts from a selector, so without an
+        explicit serializer DRF encodes every Decimal as a JSON number --
+        which is also what `CashPosition` in the web app's types.ts has
+        always said it does not.
+        """
+        factories.account(branch, kind=AccountKind.CASH, opening_balance="1000.00")
+
+        data = auth_client(owner).get("/api/v1/accounts/cash-position/").data
+
+        assert data["total"] == "1000.00"
+        assert data["by_kind"][0]["total"] == "1000.00"
+        assert data["accounts"][0]["balance"] == "1000.00"
+        assert data["movements"]["money_in"] == "0.00"
+
     def test_a_manual_entry_moves_the_balance(
         self, owner: Any, branch: Any, auth_client: Any
     ) -> None:

@@ -194,6 +194,7 @@ python manage.py verify_accounts --fix --reason "DR-2026-08-22 reconciliation"
 |---|---|
 | `/admin/finance` | Cash position tiles, accounts table, recent movements, and every write action |
 | `/admin/finance/[id]` | One account's cash book, filterable by movement type |
+| `/admin/expenses` | Period filter, spend tiles, category-wise split, the record form, and CSV |
 | `/admin` | Cash position tiles, linking through |
 | `/pos` | Per-tender account, so a split of cash + card does not dump both in the till |
 | `/admin/orders/[id]` | Which account a COD remittance lands in, and which a refund comes out of |
@@ -201,6 +202,34 @@ python manage.py verify_accounts --fix --reason "DR-2026-08-22 reconciliation"
 The POS shows the destination as plain text when the branch has one account of that kind, and only
 becomes a `<select>` when there are two or more. The register is the one screen where a needless
 interaction costs real money in queue time.
+
+## 8a. Expenses (phase 36)
+
+An expense is the one money event that starts *here* rather than arriving from orders or purchasing:
+nothing else in the system knows the shop paid its rent.
+
+```text
+Expense           the document -- number, branch, category, account, amount, spent_at, receipt
+ExpenseCategory   organisation-wide label with a permanent `code`
+```
+
+`record_expense()` writes both the document and its `EXPENSE` movement inside one
+`transaction.atomic()`. The ordering matters: the `Expense` row is created first so the movement can
+carry `reference_type="expense"` and its id, then `Expense.transaction` is pointed at the movement.
+If `record_movement()` refuses — the account cannot cover it — the whole block rolls back and no
+document survives.
+
+Correction is `void_expense()`: a compensating `ADJUSTMENT` for the same amount, a mandatory reason,
+and `status = VOID` on the document. Both movements stay in the cash book, because that is what
+happened. Every total excludes voided rows; the list shows them, so the correction is visible.
+
+The `code` on a category is immutable by design. It is the key past expenses were filed under, and
+`expense_totals()` groups by it — re-keying would silently re-label history. Renaming and retiring
+are both fine.
+
+Nine categories are seeded by migration `0004`, not by `seed_demo`: recording an expense needs a
+category, and creating one needs `finance.manage`, which a branch manager does not hold. Without the
+seed the screen would open unusable for exactly the person meant to use it.
 
 ## 9. What this does not do
 
@@ -210,6 +239,5 @@ interaction costs real money in queue time.
   accounts change, not because of debits and credits.
 - **No receivable or payable.** That is phase 37, and only if the business sells on credit
   (decision D-A, currently assumed *no*).
-- **No expenses.** Phase 36.
 - **No net profit.** Phase 38, and blocked on the VAT decision (D-C).
 - **No multi-currency.** The organisation has one currency (`RANGON_CURRENCY`).

@@ -6,6 +6,7 @@ from typing import Any
 
 from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -39,8 +40,27 @@ def _csv_response(rows: list[dict[str, Any]], filename: str) -> HttpResponse:
     return response
 
 
+class CSVRenderer(BaseRenderer):
+    """Declares that these views answer to `?format=csv`.
+
+    It never renders anything: every CSV path returns a plain ``HttpResponse``
+    built by ``_csv_response``, which Django returns untouched.  What this
+    class is for is content negotiation -- without a renderer advertising the
+    `csv` format, DRF resolves `?format=csv` against nothing and answers 404,
+    which is exactly what the export links on /admin/reports were getting.
+    """
+
+    media_type = "text/csv"
+    format = "csv"
+    charset = "utf-8"
+
+    def render(self, data: Any, accepted_media_type: Any = None, renderer_context: Any = None):
+        return data
+
+
 class BaseReportView(APIView):
     permission_classes = [IsAuthenticated, RolePermission]
+    renderer_classes = [JSONRenderer, CSVRenderer]
     required_permissions = ["reports.view"]
     report: Callable[..., Any]
     filename = "report.csv"
@@ -126,3 +146,9 @@ class ProfitReportView(BaseReportView):
     required_permissions = ["reports.financial"]
     report = staticmethod(report_services.profit_report)
     filename = "profit.csv"
+
+
+class ExpenseReportView(BaseReportView):
+    required_permissions = ["reports.financial"]
+    report = staticmethod(report_services.expense_report)
+    filename = "expenses.csv"

@@ -174,6 +174,29 @@ def account(
     )
 
 
+def expense_category(**kwargs: Any):
+    """An expense category, created through the service like the API does."""
+    from finance import services as finance_services
+
+    label = unique()
+    defaults: dict[str, Any] = {"name": f"Category {label}", "code": f"CAT_{label}".upper()[:32]}
+    defaults.update(kwargs)
+    return finance_services.create_expense_category(**defaults)
+
+
+def expense(branch_obj: Branch, account_obj: Any = None, **kwargs: Any):
+    """An expense posted through the service, so its cash-book row exists."""
+    from finance import services as finance_services
+
+    defaults: dict[str, Any] = {
+        "category": kwargs.pop("category", None) or expense_category(),
+        "account": account_obj or account(branch_obj, opening_balance="10000.00"),
+        "amount": Decimal("500.00"),
+    }
+    defaults.update(kwargs)
+    return finance_services.record_expense(branch=branch_obj, **defaults)
+
+
 def customer(**kwargs: Any) -> Customer:
     defaults = {
         "name": f"Customer {unique()}",

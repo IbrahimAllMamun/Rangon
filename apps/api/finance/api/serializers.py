@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
+from django.conf import settings
+from django.utils import timezone
 from rest_framework import serializers
 
+from accounts.models import Branch
 from finance.models import (
     Account,
     AccountKind,
     AccountTransaction,
     AccountTransactionType,
     AccountTransfer,
+    Expense,
+    ExpenseCategory,
 )
 
 
@@ -154,12 +160,177 @@ class AccountTransferSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AccountKindTotalSerializer(serializers.Serializer):
+    kind = serializers.CharField()
+    total = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class AccountBalanceSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    kind = serializers.CharField()
+    branch = serializers.CharField()
+    balance = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
+class MovementTotalsSerializer(serializers.Serializer):
+    money_in = serializers.DecimalField(max_digits=16, decimal_places=2)
+    money_out = serializers.DecimalField(max_digits=16, decimal_places=2)
+    net = serializers.DecimalField(max_digits=16, decimal_places=2)
+
+
 class CashPositionSerializer(serializers.Serializer):
-    """Shape returned by /accounts/cash-position/, for the schema."""
+    """Shape returned by /accounts/cash-position/.
+
+    Every figure is a `DecimalField`, so it leaves as the string `"661480.00"`
+    rather than the JSON number `661480.0`.  Money crossing a boundary is never
+    a float (CLAUDE.md section 4) -- and `CashPosition` in the web app's
+    `types.ts` has always declared these as strings.
+    """
 
     total = serializers.DecimalField(max_digits=16, decimal_places=2)
-    by_kind = serializers.ListField(child=serializers.DictField())
-    accounts = serializers.ListField(child=serializers.DictField())
+    by_kind = AccountKindTotalSerializer(many=True)
+    accounts = AccountBalanceSerializer(many=True)
+    movements = MovementTotalsSerializer()
 
 
 ACCOUNT_KINDS = [{"value": value, "label": label} for value, label in AccountKind.choices]
+
+
+class ExpenseCategorySerializer(serializers.ModelSerializer):
+    expense_count = serializers.IntegerField(read_only=True, default=0)
+
+    class Meta:
+        model = ExpenseCategory
+        fields = [
+            "id",
+            "name",
+            "code",
+            "description",
+            "is_active",
+            "expense_count",
+            "created_at",
+            "updated_at",
+        ]
+        # The code is the stable key an expense was filed under. Renaming the
+        # category is fine; re-keying it would re-label history.
+        read_only_fields = ["id", "expense_count", "created_at", "updated_at"]
+        extra_kwargs = {"code": {"required": False}}
+
+
+class ExpenseSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_code = serializers.CharField(source="category.code", read_only=True)
+    account_name = serializers.CharField(source="account.name", read_only=True)
+    branch_code = serializers.CharField(source="branch.code", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    created_by_email = serializers.CharField(source="created_by.email", read_only=True, default="")
+    voided_by_email = serializers.CharField(source="voided_by.email", read_only=True, default="")
+    attachment_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Expense
+        fields = [
+            "id",
+            "number",
+            "branch",
+            "branch_code",
+            "category",
+            "category_name",
+            "category_code",
+            "account",
+            "account_name",
+            "amount",
+            "spent_at",
+            "note",
+            "attachment",
+            "attachment_url",
+            "status",
+            "status_display",
+            "transaction",
+            "reversal",
+            "voided_at",
+            "voided_by_email",
+            "void_reason",
+            "created_by_email",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_attachment_url(self, expense: Expense) -> str:
+        if not expense.attachment:
+            return ""
+        request = self.context.get("request")
+        url = expense.attachment.url
+        return request.build_absolute_uri(url) if request else url
+
+
+#: A receipt is a photo or a scanned bill. Anything executable is refused
+#: outright rather than stored and served back (CLAUDE.md section 8).
+ALLOWED_ATTACHMENT_TYPES = (*settings.RANGON_ALLOWED_IMAGE_TYPES, "application/pdf")
+ALLOWED_ATTACHMENT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".avif", ".pdf")
+
+
+class CreateExpenseSerializer(serializers.Serializer):
+    """Recording an expense: what was bought, from which account, when."""
+
+    branch = serializers.PrimaryKeyRelatedField(
+        queryset=Branch.objects.all(), required=False, allow_null=True
+    )
+    category = serializers.PrimaryKeyRelatedField(queryset=ExpenseCategory.objects.all())
+    account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.all())
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    spent_at = serializers.DateTimeField(required=False, allow_null=True)
+    note = serializers.CharField(allow_blank=True, required=False, default="")
+    attachment = serializers.FileField(required=False, allow_null=True)
+
+    def validate_amount(self, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise serializers.ValidationError("An expense must be greater than zero.")
+        return value
+
+    def validate_spent_at(self, value: Any) -> Any:
+        # A future-dated expense is money that has not left yet; posting it
+        # would put the cash book ahead of reality.
+        if value and value > timezone.now():
+            raise serializers.ValidationError("An expense cannot be dated in the future.")
+        return value
+
+    def validate_attachment(self, value: Any) -> Any:
+        if not value:
+            return value
+        if value.size > settings.RANGON_MAX_IMAGE_BYTES:
+            limit = settings.RANGON_MAX_IMAGE_BYTES // (1024 * 1024)
+            raise serializers.ValidationError(f"The receipt must be smaller than {limit} MB.")
+        content_type = (getattr(value, "content_type", "") or "").lower()
+        if content_type and content_type not in ALLOWED_ATTACHMENT_TYPES:
+            raise serializers.ValidationError("Attach an image or a PDF of the receipt.")
+        if not str(value.name).lower().endswith(ALLOWED_ATTACHMENT_EXTENSIONS):
+            raise serializers.ValidationError("Attach an image or a PDF of the receipt.")
+        return value
+
+
+class VoidExpenseSerializer(serializers.Serializer):
+    reason = serializers.CharField()
+
+    def validate_reason(self, value: str) -> str:
+        if not value.strip():
+            raise serializers.ValidationError("Say why this expense is being voided.")
+        return value
+
+
+class ExpenseCategoryTotalSerializer(serializers.Serializer):
+    category_id = serializers.CharField()
+    category = serializers.CharField()
+    code = serializers.CharField()
+    total = serializers.DecimalField(max_digits=16, decimal_places=2)
+    count = serializers.IntegerField()
+    share = serializers.DecimalField(max_digits=6, decimal_places=2)
+
+
+class ExpenseTotalsSerializer(serializers.Serializer):
+    """Shape returned by /expenses/summary/. Money leaves as a string, not a float."""
+
+    total = serializers.DecimalField(max_digits=16, decimal_places=2)
+    count = serializers.IntegerField()
+    by_category = ExpenseCategoryTotalSerializer(many=True)

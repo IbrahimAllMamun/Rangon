@@ -34,6 +34,8 @@ from finance.api.views import (
     AccountTransactionViewSet,
     AccountTransferViewSet,
     AccountViewSet,
+    ExpenseCategoryViewSet,
+    ExpenseViewSet,
 )
 from inventory.api.views import (
     InventoryTransactionViewSet,
@@ -90,6 +92,8 @@ router.register("supplier-payments", SupplierPaymentViewSet, basename="supplierp
 router.register("accounts", AccountViewSet, basename="account")
 router.register("account-transactions", AccountTransactionViewSet, basename="accounttransaction")
 router.register("account-transfers", AccountTransferViewSet, basename="accounttransfer")
+router.register("expense-categories", ExpenseCategoryViewSet, basename="expensecategory")
+router.register("expenses", ExpenseViewSet, basename="expense")
 
 # --- customers -------------------------------------------------------------
 router.register("customers", CustomerViewSet, basename="customer")

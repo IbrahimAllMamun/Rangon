@@ -39,6 +39,9 @@ from finance.models import (
     AccountTransaction,
     AccountTransactionType,
     AccountTransfer,
+    Expense,
+    ExpenseCategory,
+    ExpenseStatus,
 )
 
 
@@ -574,3 +577,240 @@ def repair_drift(*, issue: IntegrityIssue, actor: User | None = None, reason: st
         reason=reason,
         branch=account.branch,
     )
+
+
+# ---------------------------------------------------------------------------
+# Expenses
+# ---------------------------------------------------------------------------
+
+
+def _normalise_code(code: str) -> str:
+    """Codes are stable keys, so they are cased and spaced one way only."""
+    return "_".join((code or "").strip().upper().split())
+
+
+@transaction.atomic
+def create_expense_category(
+    *,
+    name: str,
+    code: str = "",
+    description: str = "",
+    is_active: bool = True,
+    actor: User | None = None,
+) -> ExpenseCategory:
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError("A category needs a name.")
+
+    code = _normalise_code(code) or _normalise_code(name)[:32]
+    if ExpenseCategory.objects.filter(code=code).exists():
+        raise ValidationError(f"The category code {code} is already in use.")
+    if ExpenseCategory.objects.filter(name__iexact=name).exists():
+        raise ValidationError(f"A category called {name} already exists.")
+
+    category = ExpenseCategory.objects.create(
+        name=name,
+        code=code,
+        description=description,
+        is_active=is_active,
+        created_by=actor,
+    )
+    audit.record(
+        action=audit.AuditAction.CREATE,
+        entity=category,
+        entity_label=category.name,
+        actor=actor,
+        new_values={"name": name, "code": code, "is_active": is_active},
+    )
+    return category
+
+
+@transaction.atomic
+def update_expense_category(
+    *,
+    category: ExpenseCategory,
+    actor: User | None = None,
+    **fields: Any,
+) -> ExpenseCategory:
+    """Rename or retire a category.
+
+    The ``code`` is deliberately not editable: it is the stable key an expense
+    was filed under, and rewriting it would silently re-label history.
+    """
+    editable = {"name", "description", "is_active"}
+    before = {key: getattr(category, key) for key in editable}
+
+    for key, value in fields.items():
+        if key not in editable:
+            continue
+        if key == "name":
+            value = (value or "").strip()
+            if not value:
+                raise ValidationError("A category needs a name.")
+            clash = ExpenseCategory.objects.filter(name__iexact=value).exclude(pk=category.pk)
+            if clash.exists():
+                raise ValidationError(f"A category called {value} already exists.")
+        setattr(category, key, value)
+
+    category.save()
+    after = {key: getattr(category, key) for key in editable}
+    if before != after:
+        audit.record(
+            action=audit.AuditAction.UPDATE,
+            entity=category,
+            entity_label=category.name,
+            actor=actor,
+            old_values=before,
+            new_values=after,
+        )
+    return category
+
+
+@transaction.atomic
+def record_expense(
+    *,
+    branch: Branch,
+    category: Any,
+    account: Any,
+    amount: Decimal,
+    spent_at: Any = None,
+    note: str = "",
+    attachment: Any = None,
+    actor: User | None = None,
+) -> Expense:
+    """File an expense and take the money out of an account, in one transaction.
+
+    The document and the movement are written together on purpose: an expense
+    with no cash-book row would be a claim about money that never moved, and a
+    movement with no document would be an unexplained withdrawal.  Both are the
+    failures this app exists to prevent.
+    """
+    from core.services import next_number
+
+    amount = quantize(amount)
+    if amount <= ZERO:
+        raise ValidationError("An expense must be greater than zero.")
+
+    category_obj = (
+        category
+        if isinstance(category, ExpenseCategory)
+        else ExpenseCategory.objects.filter(pk=category).first()
+    )
+    if category_obj is None:
+        raise ValidationError("That expense category does not exist.")
+    if not category_obj.is_active:
+        raise ValidationError(f"{category_obj.name} is retired; pick a category still in use.")
+
+    account_obj = (
+        account if isinstance(account, Account) else Account.objects.filter(pk=account).first()
+    )
+    if account_obj is None:
+        raise ValidationError("That account does not exist.")
+
+    # An expense at one branch cannot be paid out of another branch's drawer:
+    # the money would leave a balance nobody at that branch authorised.
+    if account_obj.branch_id != branch.pk:
+        raise ValidationError(
+            f"{account_obj.name} belongs to another branch. "
+            "Pay this from an account held by the branch spending the money."
+        )
+
+    expense = Expense.objects.create(
+        number=next_number("expense", prefix="EXP"),
+        branch=branch,
+        category=category_obj,
+        account=account_obj,
+        amount=amount,
+        spent_at=spent_at or timezone.now(),
+        note=note,
+        attachment=attachment or "",
+        created_by=actor,
+    )
+
+    # Raises InsufficientFunds if the drawer cannot cover it, rolling the whole
+    # thing back -- so a rejected expense leaves no orphan document behind.
+    entry = record_movement(
+        account=account_obj,
+        transaction_type=AccountTransactionType.EXPENSE,
+        amount=amount,
+        actor=actor,
+        reference_type="expense",
+        reference_id=expense.pk,
+        notes=note,
+        occurred_at=expense.spent_at,
+    )
+    expense.transaction = entry
+    expense.save(update_fields=["transaction", "updated_at"])
+
+    audit.record(
+        action=audit.AuditAction.EXPENSE_RECORDED,
+        entity=expense,
+        entity_label=f"{expense.number} {category_obj.name}",
+        actor=actor,
+        new_values={
+            "category": category_obj.name,
+            "account": account_obj.name,
+            "amount": amount,
+            "spent_at": expense.spent_at,
+            "balance_after": entry.balance_after,
+        },
+        reason=note,
+        branch=branch,
+    )
+    return expense
+
+
+@transaction.atomic
+def void_expense(*, expense: Expense, reason: str, actor: User | None = None) -> Expense:
+    """Reverse an expense that should not have been recorded.
+
+    The original row and its movement both stay -- an expense is financial
+    history (CLAUDE.md section 3.3).  What this adds is a compensating
+    ADJUSTMENT that puts the money back, so the cash book reads as what
+    actually happened: it went out, and then it came back.
+    """
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValidationError("Say why this expense is being voided.")
+
+    locked = Expense.objects.select_for_update().get(pk=expense.pk)
+    if locked.status == ExpenseStatus.VOID:
+        raise ValidationError(f"{locked.number} has already been voided.")
+
+    reversal = record_movement(
+        account=locked.account,
+        transaction_type=AccountTransactionType.ADJUSTMENT,
+        amount=locked.amount,
+        actor=actor,
+        reference_type="expense",
+        reference_id=locked.pk,
+        reason=f"Void of {locked.number}: {reason}",
+    )
+
+    locked.status = ExpenseStatus.VOID
+    locked.reversal = reversal
+    locked.voided_at = timezone.now()
+    locked.voided_by = actor
+    locked.void_reason = reason
+    locked.save(
+        update_fields=[
+            "status",
+            "reversal",
+            "voided_at",
+            "voided_by",
+            "void_reason",
+            "updated_at",
+        ]
+    )
+
+    audit.record(
+        action=audit.AuditAction.EXPENSE_VOIDED,
+        entity=locked,
+        entity_label=f"{locked.number} {locked.category.name}",
+        actor=actor,
+        old_values={"status": ExpenseStatus.RECORDED, "amount": locked.amount},
+        new_values={"status": ExpenseStatus.VOID, "balance_after": reversal.balance_after},
+        reason=reason,
+        branch=locked.branch,
+    )
+    return locked

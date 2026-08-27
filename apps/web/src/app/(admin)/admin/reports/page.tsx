@@ -37,6 +37,7 @@ const REPORTS = [
   { path: "/reports/purchases/", label: "Purchases", description: "Purchase orders and supplier balances" },
   { path: "/reports/returns/", label: "Returns", description: "Reasons, quantities and refunds" },
   { path: "/reports/profit/", label: "Profit", description: "Revenue minus frozen COGS, by day" },
+  { path: "/reports/expenses/", label: "Expenses", description: "Spending by category, with each category's share" },
 ];
 
 type Search = Promise<{ range?: string }>;

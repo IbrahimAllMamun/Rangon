@@ -110,14 +110,14 @@ export default async function FinancePage() {
                 <StatCard
                   label="Money out"
                   value={money(position.movements.money_out)}
-                  context="Refunds and supplier payments"
+                  context="Refunds, supplier payments and expenses"
                   tone="warning"
                   icon={<TrendingDown className="size-4" aria-hidden />}
                 />
                 <StatCard
                   label="Net movement"
                   value={money(position.movements.net)}
-                  context="Not profit — expenses arrive in phase 36"
+                  context="Cash in minus cash out — not profit, which also needs stock cost"
                   tone={Number(position.movements.net) < 0 ? "error" : "neutral"}
                 />
               </div>

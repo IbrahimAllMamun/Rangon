@@ -292,7 +292,7 @@ business rule and belongs on the server.
 
 ## 6b. Money accounts and credit
 
-**§6b.1 is built** (phase 35, `finance` app — see
+**§6b.1 and §6b.1a are built** (phases 35 and 36, `finance` app — see
 [architecture/finance.md](architecture/finance.md) and [ADR-0011](architecture/decisions/0011-append-only-cash-book.md)).
 §6b.2 and §6b.3 are not: they state the rules phases 37 and 38 must implement, so the decisions are
 settled before the schema is. See [roadmap.md](roadmap.md) and
@@ -348,6 +348,46 @@ it would inflate both sides by the same amount.
 **Accounts are never deleted.** An account with movements against it is financial history. Closing
 one sets `is_active = false`; the balance and the cash book stay readable, and no new movement may
 pass through it.
+
+### 6b.1a Expenses
+
+Money that leaves the business for something other than stock or a refund — rent, salary, utilities,
+transport — is an **expense**, and it is recorded as a document *and* a movement written in one
+transaction (phase 36).
+
+**An expense is never just a row.** `record_expense()` creates the `Expense` and posts an `EXPENSE`
+movement through §6b.1's engine inside the same `transaction.atomic()` block. An expense with no
+cash-book row would claim money moved when it did not; a movement with no document would be an
+unexplained withdrawal. Neither can exist.
+
+**An expense larger than the account holds is refused**, under the same `INSUFFICIENT_FUNDS` rule as
+any other outgoing, and the refusal rolls the document back with it — a rejected expense leaves
+nothing behind.
+
+**An expense is paid from its own branch's account.** Spending recorded at one branch cannot be
+drawn from another branch's drawer; the money would leave a balance nobody there authorised.
+
+**Posted figures are frozen.** `amount`, `account` and `spent_at` reach the ledger, so they are never
+edited afterwards. The category may be corrected (it re-labels, it does not re-post). Everything else
+is corrected by **voiding**: `void_expense()` posts a compensating `ADJUSTMENT` that puts the money
+back and marks the document `VOID`, with a mandatory reason. Nothing is deleted, and the cash book
+still reads as what happened — it went out, then it came back.
+
+**A voided expense is excluded from every total** but stays on the list, so the correction is visible
+rather than silent.
+
+**Categories are organisation-wide, and their `code` is permanent.** A category may be renamed or
+retired (`is_active = false`), never re-keyed and never deleted: the code is the key past expenses
+were filed under, and rewriting it would re-label history. Nine heads are seeded on install so the
+screen is usable on day one.
+
+**Future-dating is refused.** An expense dated ahead of now is money that has not left yet; posting
+it would put the cash book ahead of reality. Back-dating is allowed, because a receipt often arrives
+after the payment.
+
+*Recording and voiding need `finance.expense`, held by the owner, an admin, a manager and the
+accountant — deliberately not by a cashier. Opening or retiring a **category** needs
+`finance.manage`, because categories shape every report.*
 
 ### 6b.2 Selling on credit
 

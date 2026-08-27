@@ -460,3 +460,55 @@ export interface CashPosition {
   accounts: { id: string; name: string; kind: AccountKind; branch: string; balance: string }[];
   movements: { money_in: string; money_out: string; net: string };
 }
+
+export type ExpenseStatus = "RECORDED" | "VOID";
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  is_active: boolean;
+  expense_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Expense {
+  id: string;
+  number: string;
+  branch: string;
+  branch_code: string;
+  category: string;
+  category_name: string;
+  category_code: string;
+  account: string;
+  account_name: string;
+  amount: string;
+  spent_at: string;
+  note: string;
+  attachment: string | null;
+  attachment_url: string;
+  status: ExpenseStatus;
+  status_display: string;
+  transaction: string | null;
+  reversal: string | null;
+  voided_at: string | null;
+  voided_by_email: string;
+  void_reason: string;
+  created_by_email: string;
+  created_at: string;
+}
+
+export interface ExpenseTotals {
+  total: string;
+  count: number;
+  by_category: {
+    category_id: string;
+    category: string;
+    code: string;
+    total: string;
+    count: number;
+    share: string;
+  }[];
+}
