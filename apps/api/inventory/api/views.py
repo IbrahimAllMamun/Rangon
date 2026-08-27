@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from accounts.models import Branch
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from core.exceptions import Conflict, ValidationError
 from core.services import next_number
 from inventory import services as inventory_services
 from inventory.api.serializers import (
@@ -20,6 +21,7 @@ from inventory.api.serializers import (
     CreateTransferSerializer,
     InventorySerializer,
     InventoryTransactionSerializer,
+    RecordCountSerializer,
     StockCountSerializer,
     WriteOffSerializer,
 )
@@ -263,6 +265,8 @@ class StockCountViewSet(viewsets.ModelViewSet):
         "update": ["inventory.count"],
         "partial_update": ["inventory.count"],
         "apply": ["inventory.count"],
+        "record": ["inventory.count"],
+        "cancel": ["inventory.count"],
     }
 
     def get_queryset(self) -> Any:
@@ -293,14 +297,79 @@ class StockCountViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
+    def record(self, request: Request, pk: str | None = None) -> Response:
+        """Write down what was actually on the shelf.
+
+        The counting step itself, which had no endpoint before: `items` on
+        `StockCountSerializer` is read-only, so nothing could set
+        `counted_quantity` and `apply` therefore always adjusted nothing.
+        """
+        count = self.get_object()
+        if count.status != StockCountStatus.COUNTING:
+            raise Conflict(
+                f"{count.number} is {count.get_status_display().lower()}; "
+                "figures can only be recorded while it is still being counted.",
+                details={"status": count.status},
+            )
+
+        serializer = RecordCountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        lines = serializer.validated_data["lines"]
+
+        by_variant = {str(line["variant"]): line for line in lines}
+        items = list(count.items.filter(variant_id__in=by_variant.keys()))
+        if len(items) != len(by_variant):
+            found = {str(item.variant_id) for item in items}
+            raise ValidationError(
+                "Some variants are not on this count sheet.",
+                details={"unknown": sorted(set(by_variant) - found)},
+            )
+
+        for item in items:
+            line = by_variant[str(item.variant_id)]
+            item.counted_quantity = line["counted_quantity"]
+            item.notes = line.get("notes", "")
+        StockCountItem.objects.bulk_update(items, ["counted_quantity", "notes", "updated_at"])
+
+        return Response(
+            {
+                "recorded": len(items),
+                "counted": count.items.filter(counted_quantity__isnull=False).count(),
+                "total": count.items.count(),
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request: Request, pk: str | None = None) -> Response:
+        """Abandon a count without touching stock."""
+        count = self.get_object()
+        if count.status == StockCountStatus.APPLIED:
+            raise Conflict(
+                f"{count.number} has already been applied; its adjustments are in the ledger.",
+                details={"status": count.status},
+            )
+        count.status = StockCountStatus.CANCELLED
+        count.save(update_fields=["status", "updated_at"])
+        return Response(StockCountSerializer(count).data)
+
+    @action(detail=True, methods=["post"])
     def apply(self, request: Request, pk: str | None = None) -> Response:
         """Turn counted figures into ADJUSTMENT ledger rows."""
         count = self.get_object()
-        if count.status == StockCountStatus.APPLIED:
-            return Response({"detail": "This count has already been applied."}, status=409)
+        if count.status != StockCountStatus.COUNTING:
+            raise Conflict(
+                f"{count.number} is {count.get_status_display().lower()} and cannot be applied.",
+                details={"status": count.status},
+            )
+
+        counted = count.items.filter(counted_quantity__isnull=False).select_related("variant")
+        if not counted.exists():
+            raise ValidationError(
+                f"Nothing has been counted on {count.number} yet, so there is nothing to apply."
+            )
 
         applied = 0
-        for item in count.items.filter(counted_quantity__isnull=False).select_related("variant"):
+        for item in counted:
             entry = inventory_services.adjust(
                 branch=count.branch,
                 variant=item.variant_id,
