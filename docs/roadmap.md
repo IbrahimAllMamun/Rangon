@@ -34,7 +34,7 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 16  | Online payments                       | 🟡      | 🟡       | Abstraction + COD complete.**No live gateway** — the card option is disabled in the UI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 17  | Orders                                | ✅      | ✅       | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 18  | Shipping                              | ✅      | 🟡       | Zones, methods, shipments, courier-ready interface. Checkout picks a method; no admin screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 19  | Coupons                               | ✅      | 🟡       | Full engine + API; cart can apply/remove. No admin coupon screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 19  | Coupons                               | ✅      | ✅       | Full engine + API; cart can apply/remove. **Admin screens shipped 2026-08-28** — `/admin/coupons`, with a type-aware form and a state column that separates live from scheduled, expired and used up. The endpoint audit found a money race and three validation gaps — D28–D31 |
 | 20  | Wishlist + reviews                    | ✅      | ✅       | **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. **Reviews fixed 2026-08-21** — the section always renders and carries a star-rating form (`ReviewForm`) posting to `POST /shop/products/{slug}/reviews/`. D1 and D2 struck through below                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 21  | Dashboard                             | ✅      | ✅       | Server-aggregated KPIs, sales chart with a table alternative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 22  | Reports                               | ✅      | ✅       | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -433,6 +433,38 @@ which holds the invariant under `select_for_update`.
 environment, so the stack was never started. The screens are typechecked, linted and built, and the
 API beneath them is tested — but nobody has used them.
 
+### Coupon screens verified, 2026-08-28
+
+Same environment caveat as the customer pass: no Docker daemon, so PostgreSQL 16 and the venv were
+built directly and the README's `docker compose` commands were **not** what ran.
+
+```text
+pytest ................................ 445 passed (428 before; +17)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint / next build . clean
+vitest ................................ 79 passed, 6 files
+makemigrations --check ................ one new migration, promotions/0002
+```
+
+**The audit found a money bug this time**, not just validation gaps — [D28](#known-defects). A coupon
+limited to one use per customer could be redeemed twice by placing two orders concurrently:
+`redeem()` holds the coupon row lock and re-checks the *total* limit, but the *per-customer* limit was
+only ever checked in `validate_coupon`, which runs while the cart is priced — before the lock exists.
+Both checkouts passed validation, both redeemed, no refusal.
+
+It is proven rather than argued: `tests/test_concurrency.py` gained
+`test_one_customer_cannot_spend_a_one_per_customer_coupon_twice`, which against the old code reports
+*"a one-per-customer coupon was redeemed 2 times … refusals: []"*. The fix re-reads the per-customer
+count inside the lock `redeem()` already takes, so the existing serialisation does the work.
+
+`usage_limit_per_customer` defaults to **1**. The default configuration was the exposed one.
+
+Three smaller gaps came from the same instance-blind validation as [D27](#known-defects): an edit
+checked its payload rather than the resulting coupon ([D29](#known-defects), [D30](#known-defects)),
+and free shipping was forced to carry a meaningless amount ([D31](#known-defects)).
+
+**Not verified:** no signed-in browser click-through, for the same reason as the customer screens.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -484,6 +516,11 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D26~~ | ~~**A customer could hold several default addresses.**~~ **Fixed 2026-08-28** — nothing demoted the previous default on either surface. `CustomerAddress` is ordered `("-is_default", "-created_at")` and checkout pre-fills from the first row, so the pre-filled delivery address was whichever row PostgreSQL returned. `customers.services` now owns the invariant under `select_for_update`, and both surfaces go through it |
 | ~~D27~~ | ~~**An edit could leave a customer with no phone and no email.**~~ **Fixed 2026-08-28** — `CustomerSerializer.validate()` skipped its contact-detail check whenever `self.instance` was set, so a PATCH clearing both fields produced exactly the unfindable record phone-first identity exists to prevent. The check now runs against the resulting record, on create and update alike |
 
+| ~~D28~~ | ~~**A once-per-customer coupon could be spent twice.**~~ **Fixed 2026-08-28** — `redeem()` re-checked the *total* usage limit under the coupon row lock but never the *per-customer* one, which is checked only in `validate_coupon` — and that runs while the cart is priced, before the lock exists. Two concurrent checkouts both passed validation and both redeemed. `usage_limit_per_customer` defaults to **1**, so the default configuration was the vulnerable one. Proven by a new threaded test that redeemed twice with zero refusals; the per-customer count is now re-read inside the existing lock |
+| ~~D29~~ | ~~**An edit could invert a coupon's active window.**~~ **Fixed 2026-08-28** — `validate()` read `starts_at`/`ends_at` from the payload alone, so a PATCH sending only `ends_at` skipped the ordering check. No database constraint covered this, so the coupon was stored with a window `active_coupons` can never satisfy: it silently never applies. Rules are now checked against the resulting coupon |
+| ~~D30~~ | ~~**Invalid coupon edits returned 409 instead of a field error.**~~ **Fixed 2026-08-28** — a PATCH changing only `value` skipped the percentage check (which reads `discount_type` from the payload), and a value of 0 was never checked at all. Both reached the database `CheckConstraint` and came back as a generic `CONFLICT` — data was safe and nothing leaked, but the form had no field to attach the message to |
+| ~~D31~~ | ~~**A free-shipping coupon had to invent an amount.**~~ **Fixed 2026-08-28** — `value` is meaningless for `FREE_SHIPPING` (the discount is the shipping line being zeroed in `price_cart`), but the `value > 0` constraint applied to every row, so creating one meant submitting a number that would then mislead whoever read the coupon. Migration `0002` exempts the type; the serializer normalises the value to 0 and the form hides the field |
+
 
 ## Still API-only (no UI)
 
@@ -492,7 +529,7 @@ behaviour before building over it.** Doing that has now paid for itself four tim
 had never worked, a stock count that could not be counted, a restock decision in the wrong place, and
 the four customer defects D24–D27. "Exists" is not "tested": the customers API had no tests at all.
 
-- coupon management, review moderation
+- review moderation
 - shipping zones, methods, shipments
 - categories, brands, attributes
 - users and roles
@@ -558,16 +595,23 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Phases 36, 39 (part) and the returns screens shipped 2026-08-27; the **customer screens shipped
-2026-08-28**, with four API defects fixed on the way (D24–D27).
+Phases 36, 39 (part) and the returns screens shipped 2026-08-27; the **customer screens** (D24–D27)
+and the **coupon screens** (D28–D31) both shipped 2026-08-28.
 
-**Coupons.** The last "API-only" write screen a shop needs day to day. As always, check the endpoints
-against the documented behaviour first — that check has now paid for itself four times in a row: a
-CSV export that had never worked, a stock count that could not be counted, a restock decision that
-could not be made where the rules say it belongs, and the four customer defects. Note what the
-customer pass showed about the phrase "the endpoints are complete and tested": for customers, they
-were neither. Read `docs/business-rules.md` §7 against `promotions/` before assuming coupon
-management is form work.
+**Keep auditing the endpoints before building over them.** Five passes, five sets of defects — and
+the fifth was the first to touch money ([D28](#known-defects): a once-per-customer coupon redeemable
+twice under a race). The pattern is now specific enough to look for deliberately:
+
+- *Validation that reads the payload instead of the resulting record.* D27, D29 and D30 are the same
+  bug in three places. Any `validate()` using `attrs.get(...)` without falling back to
+  `self.instance` will let a PATCH through with a half-payload.
+- *A limit checked during pricing but not re-checked under the lock that protects it.* D28. Worth
+  grepping for wherever a service validates then mutates.
+- *A constraint that applies to a type it does not describe.* D31.
+
+**Remaining API-only screens:** review moderation, shipping zones/methods/shipments, categories and
+brands and attributes, and users and roles. Shipping is the most valuable of those — checkout picks a
+method today with no way to manage the zones behind it.
 
 **Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
 typechecked and covered by API tests, but no browser has touched them — the environment they were

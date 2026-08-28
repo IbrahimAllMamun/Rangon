@@ -14,6 +14,7 @@ import {
   Receipt,
   Settings,
   ShoppingCart,
+  Ticket,
   Truck,
   Users,
   X,
@@ -48,6 +49,12 @@ const NAV: NavItem[] = [
   { href: "/admin/finance", label: "Finance", icon: Landmark, permission: "finance.view" },
   { href: "/admin/expenses", label: "Expenses", icon: Receipt, permission: "finance.view" },
   { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
+  {
+    href: "/admin/coupons",
+    label: "Coupons",
+    icon: Ticket,
+    permission: "content.coupons_manage",
+  },
   {
     href: "/admin/navigation",
     label: "Navigation",
