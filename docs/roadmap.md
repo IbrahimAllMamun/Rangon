@@ -581,6 +581,46 @@ tested is not a constraint. "Docker is unavailable, so this cannot be verified" 
 four passes and cost five screens their verification, and it took one `ls /opt/pw-browsers` to
 disprove.
 
+### E2E made repeatable, and a production-only defect found, 2026-08-28
+
+Ran with `scripts/dev-stack-native.sh` (new) — one command for postgres, redis, api and web.
+
+```text
+vitest wired into ci.yml ............... 79 tests now actually protect something
+playwright, 3 consecutive full runs .... 15/15, 15/15, 15/15 against next dev
+                                         (the 2nd run used to fail, every time)
+tsc --noEmit / next lint / vitest ...... clean
+```
+
+**[D18](#known-defects)'s diagnosis was wrong.** "The E2E suite is order-coupled" — it is not. Run in
+any order against a fresh database, every spec passes. The suite was *not repeatable*, which looks
+identical from the outside and is fixed differently: by restoring what the specs consume, not by
+reordering anything. Two distinct causes, and the second only became visible after fixing the first:
+
+1. The returns spec approves, receives and refunds the single seeded `REQUESTED` return. A second run
+   finds none and waits 60s for a table row that will never appear. `e2e/global-setup.ts` reseeds.
+2. Reseeding regenerates every id, but Next kept serving the cached product page, so "add to cart"
+   posted a variant that no longer existed — a 200 in the logs and a cart drawer that never opened.
+
+Cause 2 turned out to be a real defect in its own right, [D39](#known-defects): `/api/revalidate`
+allowed a `products` tag that **nothing emits**, while the product page tagged `product:<slug>`, which
+the endpoint **refused**. The one page the endpoint existed to keep fresh was the one page it could
+not touch. That matters beyond tests — restoring a backup behind a running storefront has exactly the
+same effect.
+
+**The E2E job is not in CI, deliberately.** Wiring it up meant running the suite against a production
+build for the first time, and `Admin › recording an expense…` fails there consistently while passing
+consistently in dev ([D40](#known-defects)). The money is fine — the void posts its compensating
+adjustment and `verify_accounts` is clean — but the screen is not, and it reproduces with the D39 fix
+reverted, so it is pre-existing rather than collateral. Adding a CI job that is knowingly red would
+turn every future build red for a defect unrelated to whatever the build is checking, and skipping the
+spec to get green is what CLAUDE.md §9 forbids. **Vitest is wired in now; the E2E job is written and
+waits on D40.**
+
+Worth stating plainly: five verification passes ran the suite against `next dev` and called it
+verified. One run against a production build found a defect none of them could. The gap between "it
+works" and "it works the way it ships" was a whole class of bug wide.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -616,7 +656,7 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
 | ~~D22~~ | ~~**A stock count could never be counted.**~~ **Fixed 2026-08-27** — `counted_quantity` was write-protected by a `read_only=True` nested serializer and set by nothing, so `apply` adjusted nothing and silently marked the sheet APPLIED. No test covered stock counts at any level. Added `record/` and `cancel/`, made `apply/` refuse an empty or non-COUNTING sheet, and wrote the first 20 tests the feature has had |
 | ~~D23~~ | ~~**`seed_demo --reset` died once a stock count or transfer existed.**~~ **Fixed 2026-08-27** — `StockCountItem` and `StockTransferItem` hold PROTECT references to `ProductVariant`, and `_reset()` deleted the catalogue first. Harmless while those documents were unreachable from the UI; phase 39 made them ordinary. This is the second time the same omission has bitten (phase 36's `Expense` was the first), so it now has a regression test that creates one of each protecting document and resets |
-| D18      | **The E2E suite is order-coupled.** All 17 specs pass individually, but each full sequential run fails a *different* one — storefront checkout, a POS sale, an accessibility check. The config already says "these flows share one seeded database"; they also mutate it, and nothing resets between tests. Fixing it is phase 29 work: either reseed per describe-block or make each flow pick its own fixture. Found 2026-08-27, the first time the suite was ever executed |
+| ~~D18~~ | ~~**The E2E suite is order-coupled.**~~ **Diagnosis corrected and fixed 2026-08-28** — the specs are *not* order-coupled: run in any order against a fresh database they all pass. They were **not repeatable**, which looks identical from outside and is fixed differently. Two causes: (1) the returns spec *consumes* the single seeded `REQUESTED` return, so a second run finds none — `e2e/global-setup.ts` now restores the fixtures; (2) `seed_demo --reset` regenerates every id while Next keeps serving the cached product page, so "add to cart" posted a variant that no longer existed — see [D39](#known-defects). Three consecutive full runs now pass 15/15 against `next dev`, where the second used to fail |
 | D8       | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml`, `docker-compose.dev.yml`                                                    | A confusing, self-inflicted breakage after any production build. Also recorded in`.claude/environment.md`                                     |
 | D9       | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `seed_demo`                                                                                         | The photography-led storefront of`CLAUDE.md` §10 cannot actually be judged                                                                   |
 | ~~D16~~ | ~~**The production CSP renders a blank page.**~~ **Fixed 2026-08-21** — `apps/web/src/middleware.ts` mints a per-request nonce and sends the policy itself; Next stamps that nonce onto every script it emits (42 of 42 in the production build), so `script-src` is `'self' 'nonce-…' 'strict-dynamic'` with **no** `unsafe-inline` and **no** `unsafe-eval`. Both nginx configs had their `add_header Content-Security-Policy` **removed** — `add_header` appends, and a browser enforces the intersection of every policy it receives, so a second header would have re-broken hydration. Verified in Chromium against the production image: home page hydrates, 19 product cards, zero CSP violations | `apps/web/src/middleware.ts`, `infrastructure/docker/nginx/**`                                    | —                                                                                                                                              |
@@ -645,6 +685,9 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D36~~ | ~~**A repeat buyer got one review, ever.**~~ **Fixed 2026-08-28** — §6a says "a second, later order of the same product earns a second review", but the code resolved the eligible order as simply the most recent one. A customer's second attempt therefore always landed on the order they had already reviewed and was refused, however many times they had bought the product. The most recent **unreviewed** eligible order is now chosen. Code and documentation disagreed; both were wrong to leave |
 | ~~D37~~ | ~~**A non-numeric rating returned 500.**~~ **Fixed 2026-08-28** — `int(request.data.get("rating", 0))` raised `ValueError` on `"excellent"` and escaped unhandled; `4.7` was silently truncated to `4`, though §6a says ratings are whole numbers. Both are refused as validation errors now |
 | ~~D38~~ | ~~**Moderation left no audit trail, and erased its own notes.**~~ **Fixed 2026-08-28** — approving or rejecting decides what the public sees, yet wrote no `AuditLog` entry, while the neighbouring `content` app logs every navigation change. The review row holds only the *latest* moderator and note, so reversing a decision erased the previous one — and `request.data.get("note", "")` wiped a rejection reason on re-approval. Each decision now writes an entry, and an omitted note keeps the existing one |
+
+| ~~D39~~ | ~~**`/api/revalidate` could not bust the one page that needed it.**~~ **Fixed 2026-08-28** — the allow-list permitted `products`, which **nothing emitted**, while the product page tagged `product:<slug>`, which the endpoint **refused**. So the product page was the only page the endpoint could not invalidate: a merchandiser changing a price had no way to force it, and any operation that regenerates ids (a reseed, a restore from backup) left the storefront serving variant ids that no longer existed. The page now emits both tags and the endpoint admits the targeted form, bounded by a slug pattern so the allow-list stays an allow-list |
+| D40      | **The expenses screen fails against a production build.** Found 2026-08-28 by running the E2E suite against `npm run build && npm run start` — something no pass had done before; every previous run used `next dev`. `Admin › recording an expense…` fails consistently in production and passes consistently in dev. **The money is correct**: the expense and its void are written, the compensating adjustment posts, and `verify_accounts` is clean. What fails is the screen — after a reseed the recorded row does not appear, and in one sequence the account balance stayed down after a void while the database showed it restored. **Confirmed pre-existing**, not caused by the D39 fix: it reproduces with those changes reverted. Not root-caused; this is what blocks the E2E job from being added to CI |
 
 
 ## Still API-only (no UI)
@@ -745,7 +788,12 @@ at setup. Both are worth doing, but neither blocks a shop from trading.
   correct, and the code contradicted it (D36). Reading the doc is not enough; the rules have to be
   executed against the endpoint.
 
-**Six passes, 15 defects, no exceptions so far.** Every area audited has had at least three.
+**Seven passes, 17 defects, no exceptions so far.** Every area audited has had at least two.
+
+**The immediate next task is [D40](#known-defects)** — root-cause the expenses screen's
+production-only failure. It is the one thing standing between the E2E suite and CI, the job is already
+written, and until it lands the five admin screens shipped on this branch have no regression cover
+beyond their API tests.
 
 **Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
 typechecked and covered by API tests, but no browser has touched them — the environment they were
