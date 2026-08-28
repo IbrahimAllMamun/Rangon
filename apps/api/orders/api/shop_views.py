@@ -25,6 +25,7 @@ from content.models import BannerPlacement, StorefrontBanner
 from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
 from core.pagination import StandardPagination
+from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
 from engagement.models import Review, ReviewStatus, Wishlist, WishlistItem
@@ -648,25 +649,32 @@ class AccountAddressView(APIView):
 
     def post(self, request: Request) -> Response:
         customer = _customer_for(request)
-        serializer = CustomerAddressSerializer(data={**request.data, "customer": customer.pk})
+        serializer = CustomerAddressSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Same service as the admin surface: the one-default-per-customer rule
+        # is enforced in one place, and it is this surface that checkout
+        # pre-fills from.
+        address = customer_services.add_address(
+            customer=customer, data=serializer.validated_data, actor=request.user
+        )
+        return Response(CustomerAddressSerializer(address).data, status=status.HTTP_201_CREATED)
 
     def patch(self, request: Request) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(CustomerAddress, pk=request.data.get("id"), customer=customer)
         serializer = CustomerAddressSerializer(address, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+        updated = customer_services.update_address(
+            address=address, data=serializer.validated_data, actor=request.user
+        )
+        return Response(CustomerAddressSerializer(updated).data)
 
     def delete(self, request: Request) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(
             CustomerAddress, pk=request.query_params.get("id"), customer=customer
         )
-        address.delete()
+        customer_services.delete_address(address=address, actor=request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

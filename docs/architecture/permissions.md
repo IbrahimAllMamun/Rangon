@@ -79,7 +79,19 @@ class ProductViewSet(viewsets.ModelViewSet):
     }
 ```
 
+A single `@action` may serve both a safe and an unsafe method. One list for such an action would
+authorise the write with whatever the read needs, so it scopes its requirement **per HTTP method**:
+
+```python
+required_permissions = {
+    # `customers.view` is read-only. Writing an address needs `customers.update`,
+    # which is what stops an ACCOUNTANT — view without update — writing one.
+    "addresses": {"GET": ["customers.view"], "POST": ["customers.update"]},
+}
+```
+
 - `OWNER` short-circuits to allowed.
+- A method missing from a per-method mapping is denied, the same way a missing action is.
 - Permission codes are resolved once per request and cached on the user object.
 - Branch scope: `accounts.scoping.branch_queryset(request, qs)` narrows any branch-bearing queryset to
   the user's branch unless the user is `OWNER`/`ADMIN` or holds an explicit cross-branch grant.

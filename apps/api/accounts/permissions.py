@@ -169,8 +169,17 @@ class RolePermission(BasePermission):
 
         required_permissions = ["inventory.view"]
 
+    A single `@action` may serve both a safe and an unsafe method.  Declaring
+    one list for it would authorise the write with whatever the read needs, so
+    such an action scopes its requirement by HTTP method instead::
+
+        required_permissions = {
+            "addresses": {"GET": ["customers.view"], "POST": ["customers.update"]},
+        }
+
     An action with no declared requirement is denied for staff endpoints — a
-    missing entry must fail closed, not open.
+    missing entry must fail closed, not open.  So is a method missing from a
+    per-method mapping.
     """
 
     message = "You do not have permission to perform this action."
@@ -193,6 +202,15 @@ class RolePermission(BasePermission):
                 codes = required.get("list") or required.get("retrieve")
             if codes is None:
                 return False
+            if isinstance(codes, dict):
+                # Per-method scoping: the write verb must not inherit the
+                # read verb's (weaker) requirement.  DRF routes HEAD to the GET
+                # handler and OPTIONS to the metadata probe, so both are reads
+                # and answer to whatever GET requires.
+                method = "GET" if request.method in ("HEAD", "OPTIONS") else request.method
+                codes = codes.get(method)
+                if codes is None:
+                    return False
         else:
             codes = list(required)
 

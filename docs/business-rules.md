@@ -301,6 +301,32 @@ verification call may capture a payment.
   later registers with the same phone, the records are linked rather than duplicated.
 - Customers are never hard-deleted while they have orders; they are deactivated. A data-deletion request
   is handled by anonymising personal fields and keeping the financial rows.
+- Phone-first identity is enforced on **create and on edit**: a customer must always keep at least one
+  of phone or email. An edit that would clear both is refused, because it produces exactly the
+  unfindable record the rule exists to prevent. Swapping one for the other is allowed.
+
+### 6.1 Addresses
+
+- A customer has **at most one default address, and never zero while any address exists.**
+  `CustomerAddress` is ordered `("-is_default", "-created_at")` and checkout pre-fills from the first
+  row, so a second default would make the pre-filled delivery address arbitrary.
+- The rule is held by `customers.services`, not by callers, and applies to both surfaces (the admin
+  screens and the storefront account page):
+  - the first address a customer gets becomes the default whatever the caller asked for;
+  - setting a new default demotes the previous one in the same transaction;
+  - deleting the default promotes the next address (newest first);
+  - un-setting the default on the **only** address is refused — add another and promote that instead.
+- Addresses and notes are deletable. They are contact details and staff commentary, not financial
+  records: an order stores its own frozen `as_snapshot()` copy at checkout, so editing or deleting an
+  address never rewrites history (CLAUDE.md §3.3).
+- The owning customer is never read from the request body. It comes from the URL (admin) or the
+  session (storefront), so an address cannot be written onto another customer's record.
+
+### 6.2 Who may edit a customer
+
+`customers.view` grants **read only**. Writing an address or a note requires `customers.update` — the
+same permission as editing the customer. This matters for the `ACCOUNTANT` role, which deliberately
+holds `customers.view` without create or update.
 
 ---
 
