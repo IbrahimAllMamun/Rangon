@@ -26,7 +26,7 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 08  | POS                                   | ✅      | ✅       | Barcode-first register, split payment, hold/resume, receipt, F2/F4/F8 shortcuts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 09  | Payments                              | ✅      | ✅       | Generic model + provider registry;`manual` provider (cash/card/MFS/COD) shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 10  | Returns                               | ✅      | ✅       | Full request→approve→receive→restock→refund + POS one-step return. **Admin screens shipped 2026-08-27** — `/admin/returns/[id]` drives approve / reject / receive / refund, with the per-line restock decision made at receipt and an account picker on the refund |
-| 11  | Customers                             | ✅      | 🟡       | Phone-first identity, addresses, notes, history. Admin customer list built; editing still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 11  | Customers                             | ✅      | ✅       | Phone-first identity, addresses, notes, history. **Admin create/edit shipped 2026-08-28** — `/admin/customers/new` and `/admin/customers/[id]`: profile, addresses with a managed default, notes and order history. The endpoint audit that preceded it found four defects — see D24–D27 |
 | 12  | Online store                          | ✅      | ✅       | Home, shop, product, cart, checkout, order tracking, account, policies. Browser journey verified end to end                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 13  | Search + filters                      | ✅      | ✅       | Postgres trigram + indexed facets; facet UI with colour swatches; navbar type-ahead suggest (products / categories / popular searches) backed by a`SearchTerm` log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 14  | Cart                                  | ✅      | ✅       | Server-authoritative, re-priced on every read, drawer + full page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -396,6 +396,43 @@ Also fixed: `seed_demo --reset` died with `ProtectedError` whenever a stock coun
 existed, which phase 39 made ordinary. Recorded as [D23](#known-defects), with a regression test that
 fails without the fix.
 
+### Customer screens verified, 2026-08-28
+
+Run on a Linux container without Docker — PostgreSQL 16 and the venv were built directly, so the
+`docker compose` commands in the README were **not** the ones executed. What ran:
+
+```text
+pytest ................................ 427 passed (405 before; +22)
+ruff check + ruff format .............. clean
+tsc --noEmit .......................... clean
+next lint ............................. clean
+vitest ................................ 79 passed, 6 files
+next build ............................ passes
+```
+
+**Four defects were found before a line of UI was written**, by checking the endpoints against the
+documented behaviour. All four are proven: reverting the source with the new tests in place fails
+**12 of the 22**, and each failure names its defect.
+
+- [D24](#known-defects) — `customers.view` could write an address or a note. An `ACCOUNTANT` holds
+  that code deliberately *without* update, and could still write. The action served GET and POST
+  under one permission list.
+- [D25](#known-defects) — addresses could be created but never edited or deleted. The storefront had
+  full CRUD; the admin surface did not, so the edit screen had no endpoints to call.
+- [D26](#known-defects) — nothing demoted the previous default address, on either surface. Checkout
+  pre-fills from `addresses.first()` under `("-is_default", "-created_at")`, so with two defaults the
+  pre-filled delivery address was arbitrary.
+- [D27](#known-defects) — an edit could clear both phone and email, producing the unfindable customer
+  phone-first identity exists to prevent.
+
+D26 is the one that reached a customer: it is the storefront's own account page, and the wrong
+address could have been pre-filled at checkout. Both surfaces now go through `customers.services`,
+which holds the invariant under `select_for_update`.
+
+**Not verified:** no signed-in browser click-through of these screens. Docker is unavailable in this
+environment, so the stack was never started. The screens are typechecked, linted and built, and the
+API beneath them is tested — but nobody has used them.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -442,12 +479,19 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D12~~ | ~~**POS searched on every keystroke.**~~ **Fixed 2026-08-18** — the scan field fired `/pos/products/?q=` per character with no debounce. A keyboard-wedge scanner types a 13-character barcode in ~100 ms, so **one scan issued 13 parallel requests** at ~700 ms each; six saturated the browser's per-origin connection limit and the `lookup` that Enter fires queued behind them. Now debounced at 220 ms with request cancellation, so a scan issues **none**. Five Vitest cases cover it                                                                                                                                                                                                                              | `apps/web/src/components/pos/register.tsx`                                                          | The register appeared to freeze on every scan — the most severe user-facing defect found                                                       |
 | ~~D13~~ | ~~**Admin product list paginated without ordering.**~~ **Fixed 2026-08-18** — Django warned `UnorderedObjectListWarning`; PostgreSQL may return unordered rows in any order, so page 2 could repeat or skip products page 1 already showed. Now `-created_at, pk`                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `apps/api/catalog/api/views.py`                                                                     | Correctness, not just speed                                                                                                                     |
 | ~~D11~~ | ~~**Dev container ran a different Next than CI.**~~ **Fixed 2026-08-18** — `/app/node_modules` is an anonymous volume, so it kept a pre-upgrade install (15.1.4) while the lockfile, image and CI were all on 15.5.23; image rebuilds could not dislodge it. Recorded in [.claude/environment.md](../.claude/environment.md) §7                                                                                                                                                                                                                                                                                                                                                                                                           | `docker-compose.dev.yml`                                                                            | Local behaviour diverged from CI with no signal                                                                                                 |
+| ~~D24~~ | ~~**`customers.view` could write.**~~ **Fixed 2026-08-28** — the `addresses` and `notes` actions each served GET *and* POST but declared one permission list, `customers.view`, so the write inherited the read's requirement. `ACCOUNTANT` holds `customers.view` deliberately without update, and could add an address or a note to any customer. `RolePermission` now accepts a per-method mapping and fails closed on an undeclared method; both actions declare `{"GET": [view], "POST": [update]}` |
+| ~~D25~~ | ~~**A customer's addresses could be created but never edited or deleted.**~~ **Fixed 2026-08-28** — `CustomerViewSet` exposed `addresses` and `notes` as GET/POST only, and it is the only router registration, so no update or delete route existed on the admin surface. The *storefront* had full CRUD (`AccountAddressView`), making admin strictly weaker than the customer-facing page. Added `addresses/{id}/` (PATCH, DELETE) and `notes/{id}/` (DELETE) |
+| ~~D26~~ | ~~**A customer could hold several default addresses.**~~ **Fixed 2026-08-28** — nothing demoted the previous default on either surface. `CustomerAddress` is ordered `("-is_default", "-created_at")` and checkout pre-fills from the first row, so the pre-filled delivery address was whichever row PostgreSQL returned. `customers.services` now owns the invariant under `select_for_update`, and both surfaces go through it |
+| ~~D27~~ | ~~**An edit could leave a customer with no phone and no email.**~~ **Fixed 2026-08-28** — `CustomerSerializer.validate()` skipped its contact-detail check whenever `self.instance` was set, so a PATCH clearing both fields produced exactly the unfindable record phone-first identity exists to prevent. The check now runs against the resulting record, on create and update alike |
+
 
 ## Still API-only (no UI)
 
-Every endpoint below exists and is tested. What is missing is the screen.
+What is missing is the screen. The endpoints exist — but **check each one against the documented
+behaviour before building over it.** Doing that has now paid for itself four times: a CSV export that
+had never worked, a stock count that could not be counted, a restock decision in the wrong place, and
+the four customer defects D24–D27. "Exists" is not "tested": the customers API had no tests at all.
 
-- customer create/edit, addresses, notes
 - coupon management, review moderation
 - shipping zones, methods, shipments
 - categories, brands, attributes
@@ -514,12 +558,20 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Phases 36, 39 (part) and the returns screens all shipped 2026-08-27.
+Phases 36, 39 (part) and the returns screens shipped 2026-08-27; the **customer screens shipped
+2026-08-28**, with four API defects fixed on the way (D24–D27).
 
-**Customers, then coupons.** The last two "API-only" write screens a shop needs. Both look like
-ordinary form work — but check the endpoints against the documented behaviour first. That check has
-now paid for itself three times in a row: CSV export that had never worked, a stock count that could
-not be counted, and a restock decision that could not be made where the rules say it belongs.
+**Coupons.** The last "API-only" write screen a shop needs day to day. As always, check the endpoints
+against the documented behaviour first — that check has now paid for itself four times in a row: a
+CSV export that had never worked, a stock count that could not be counted, a restock decision that
+could not be made where the rules say it belongs, and the four customer defects. Note what the
+customer pass showed about the phrase "the endpoints are complete and tested": for customers, they
+were neither. Read `docs/business-rules.md` §7 against `promotions/` before assuming coupon
+management is form work.
+
+**Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
+typechecked and covered by API tests, but no browser has touched them — the environment they were
+written in had no Docker. That is the same "written but unproven" gap this file exists to name.
 
 **Phase 38 is one decision away.** The only blocker is **D-C, the VAT decision**.
 `finance.selectors.expense_totals()` is already the shape `business_summary()` subtracts, so once
