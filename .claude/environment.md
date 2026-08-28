@@ -240,3 +240,46 @@ MSYS_NO_PATHCONV=1 docker exec rangon-web-1 sh /app/yourscript.sh
 Config changes (ports, env) need `--force-recreate`; `restart` reuses the old
 container and silently keeps the old settings. That is how a stale container ran
 for 20 minutes with no published port.
+
+---
+
+## 8. The stack runs without Docker — and that is how it was verified
+
+Added 2026-08-28, after "Docker is unavailable, so this cannot be verified" was
+repeated through four working sessions and cost five admin screens their
+sign-in verification. Docker is how the README *documents* running the stack;
+it is not what running it requires.
+
+A Linux box with PostgreSQL, Redis, Python and Node runs the whole thing:
+
+```bash
+pg_ctl -D <data-dir> -o '-p 5432 -k /tmp' start
+redis-server --daemonize yes --port 6379 --save ''      # NOT optional, see below
+
+cd apps/api
+DATABASE_URL=postgresql://rangon:rangon@127.0.0.1:5432/rangon \
+DJANGO_SECRET_KEY=<anything> DJANGO_DEBUG=1 \
+python manage.py migrate && python manage.py seed_demo --reset
+... runserver 8000 --noreload
+
+cd apps/web
+API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 npx next dev --port 4000
+```
+
+Two traps, both of which cost time:
+
+1. **Redis is not optional.** The auth throttle is Redis-backed, so with no
+   Redis `POST /api/v1/auth/login/` returns **500**, not a throttling error —
+   and the login page shows only "An unexpected error occurred". Nothing points
+   at Redis. `redis-cli ping` first.
+
+2. **`API_INTERNAL_URL` is the variable that matters**, not
+   `NEXT_PUBLIC_API_URL`. It defaults to `http://api:8000/api/v1` — the compose
+   service hostname — which does not resolve outside compose, so every
+   server-side fetch fails while the pages still render.
+
+For a browser pass, this environment ships Chromium at
+`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`. `playwright.config.ts`
+already honours `PW_CHROMIUM_PATH` for exactly this. **D7 does not mean
+"Playwright cannot run here"** — it means the *dev container's* Alpine base
+ships no musl browser.

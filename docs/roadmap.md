@@ -429,9 +429,8 @@ D26 is the one that reached a customer: it is the storefront's own account page,
 address could have been pre-filled at checkout. Both surfaces now go through `customers.services`,
 which holds the invariant under `select_for_update`.
 
-**Not verified:** no signed-in browser click-through of these screens. Docker is unavailable in this
-environment, so the stack was never started. The screens are typechecked, linted and built, and the
-API beneath them is tested — but nobody has used them.
+~~**Not verified:** no signed-in browser click-through.~~ **Verified 2026-08-28** — see
+[§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Coupon screens verified, 2026-08-28
 
@@ -463,7 +462,7 @@ Three smaller gaps came from the same instance-blind validation as [D27](#known-
 checked its payload rather than the resulting coupon ([D29](#known-defects), [D30](#known-defects)),
 and free shipping was forced to carry a meaningless amount ([D31](#known-defects)).
 
-**Not verified:** no signed-in browser click-through, for the same reason as the customer screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Shipping screens verified, 2026-08-28
 
@@ -495,7 +494,7 @@ changed rather than doing it silently. **Rehearsed rather than assumed:** a prob
 migrated to `0001`, seeded with exactly the two bad rows the old API allowed, and migrated forward.
 Both were repaired, both constraints then rejected fresh violations, and the probe was dropped.
 
-**Not verified:** no signed-in browser click-through, as with the customer and coupon screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Review moderation verified, 2026-08-28
 
@@ -523,7 +522,64 @@ the neighbouring `content` app logs every navigation change. Since the review ro
 *latest* moderator and note, reversing a decision erased the previous one, and re-approving a rejected
 review wiped the reason it was rejected.
 
-**Not verified:** no signed-in browser click-through, as with the other four screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
+
+### The screens were finally used, 2026-08-28
+
+Five verification entries above each ended "no signed-in browser click-through — Docker is
+unavailable". **That reasoning was wrong**, and it was repeated four times before anyone checked it.
+Docker is how this project *documents* running the stack; it is not what running it requires. The
+container has PostgreSQL 16, Python, Node and a pre-installed Chromium, which is enough.
+
+Run natively, the whole stack came up:
+
+```bash
+# postgres + redis (redis is not optional: the auth throttle is Redis-backed,
+# and without it POST /auth/login/ returns 500)
+pg_ctl -D <data> -o '-p 5432 -k /tmp' start
+redis-server --daemonize yes --port 6379 --save ''
+
+# api
+DATABASE_URL=postgresql://rangon:rangon@127.0.0.1:5432/rangon \
+DJANGO_SECRET_KEY=... DJANGO_DEBUG=1 python manage.py runserver 8000 --noreload
+
+# web — API_INTERNAL_URL is the one that matters; it defaults to the compose
+# hostname http://api:8000/api/v1, which does not resolve outside compose
+API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 npx next dev --port 4000
+```
+
+Then a real Chromium (`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`, the escape hatch
+`playwright.config.ts` already provides for via `PW_CHROMIUM_PATH`) signed in as `owner@rangon.test`
+and drove the screens:
+
+```text
+sign in as owner ....................... /admin
+all five screens render signed in ...... 200, correct <h1>, no console errors
+create a customer ...................... saved
+add an address ......................... saved, and became the default automatically (D26)
+add a note ............................. saved, attributed to owner@rangon.test
+create a coupon ........................ WALK415942, 15% off
+free shipping hides the amount field ... yes (D31), and saved with no value
+create a shipping zone ................. saved; cities stored "sylhet, rajshahi" (D34)
+a backwards estimate is refused ........ "The longest estimate cannot be shorter…" (D35)
+create a shipping method ............... saved, renders "5–7 days"
+reject a review with a note ............ note kept
+re-approve it .......................... earlier note survived (D38)
+the approved review reaches the shop ... count 1, average 4.0
+verify_inventory / verify_accounts ..... consistent; every money event names an account
+```
+
+13 writes, all landing. The only failing request in the whole run was `401 GET /shop/wishlist` on the
+anonymous login page, which is the correct answer for a signed-out wishlist check.
+
+Five of the fixes were confirmed through the UI rather than only in tests: D26, D31, D34, D35 and
+D38. **[D7](#known-defects) is also stale** — Playwright's Chromium runs here; the blocker was only
+ever the *dev container's* Alpine base.
+
+The lesson is the same one this file keeps recording, turned on itself: a constraint nobody has
+tested is not a constraint. "Docker is unavailable, so this cannot be verified" was carried through
+four passes and cost five screens their verification, and it took one `ls /opt/pw-browsers` to
+disprove.
 
 ## Still unproven
 
@@ -533,7 +589,7 @@ Do not describe any of these as working.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Playwright (`npm run test:e2e`) | **Now proven to run** — 17 tests, all passing individually, 2026-08-27. A full sequential run is still flaky ([D18](#known-defects)). `apps/web/Dockerfile.dev` is still alpine, so [D7](#known-defects) stands *for the dev container* |
 | Vitest and Playwright in CI             | Neither is wired into`ci.yml`                                                                                                                   |
-| Admin**write** screens, signed in | The organization and branch editors exist in code and the routes correctly redirect anonymous users, but no signed-in click-through has been done |
+| ~~Admin**write** screens, signed in~~ | **Proven 2026-08-28.** A real Chromium signed in as the owner and drove all five new screens: a customer created, an address and a note added, two coupons created, a zone and a method created, a review rejected and re-approved. 13 writes, all landing. The organization and branch editors are still only read-anonymously-redirected |
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets documented in`docs/database/indexing.md` but **not asserted in tests**; no load test                                        |
@@ -554,7 +610,7 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | D4       | **The brand appears twice in product titles.** `seed_demo` writes `seo_title = "<name> \| Rangon Fashion"` while the root layout applies `template: "%s \| Rangon Fashion"`, producing `Classic Oxford Shirt \| Rangon Fashion \| Rangon Fashion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `apps/api/core/management/commands/seed_demo.py:475` and `apps/web/src/app/layout.tsx:22`         | Any product with an`seo_title` gets a doubled suffix in the tab, the OG card and search results                                               |
 | ~~D5~~  | ~~**The cart drawer dialog has no description.**~~ **Fixed 2026-08-18** — `Dialog.Description` added; the drawer now renders `aria-describedby`, verified in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `apps/web/src/components/commerce/cart-drawer.tsx`                                                  | —                                                                                                                                              |
 | D6       | **mypy reports 98 errors in 29 files.** CI runs it with a trailing `                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                                                                       | echo ":⚠️:"`, so it never blocks. 60 are `arg-type`, mostly DRF's `request.user`typed`User \| AnonymousUser`where services want`User` |
-| D7       | **Playwright cannot run in the dev container.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds, and none are installed (`~/.cache/ms-playwright` is absent)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `apps/web/Dockerfile.dev`                                                                           | Phase 29 is blocked until E2E runs on a glibc image (`mcr.microsoft.com/playwright`) or on the host                                           |
+| D7       | **Playwright cannot run in the *dev container*.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds. **Narrowed 2026-08-28** — this was being read as "Playwright cannot run here", which is false: a pre-installed Chromium drove the full signed-in walk-through (see the verification log). The defect is the Alpine dev image alone, and `playwright.config.ts` already carries the `PW_CHROMIUM_PATH` escape hatch |
 | ~~D21~~ | ~~**The image scan went red on a base-image CVE.**~~ **Fixed 2026-08-27** — `node:22-alpine` shipped openssl `3.5.7-r0` while Alpine 3.24 already carried the `3.5.8-r0` fix for CVE-2026-14456, so `Build & scan images` failed on every branch through no fault of any diff. The runtime stage now runs `apk upgrade --no-cache`, which is safe to do unconditionally because the gate sets `ignore-unfixed: true` — it only ever fails on a CVE whose fix is already published. Without this, the scan stays red until upstream rebuilds the base image |
 | ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
 | ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
