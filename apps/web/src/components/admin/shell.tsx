@@ -15,6 +15,7 @@ import {
   Settings,
   ShoppingCart,
   Ticket,
+  Truck as TruckIcon,
   Truck,
   Users,
   X,
@@ -60,6 +61,12 @@ const NAV: NavItem[] = [
     label: "Navigation",
     icon: Megaphone,
     permission: "content.navigation_manage",
+  },
+  {
+    href: "/admin/shipping",
+    label: "Shipping",
+    icon: TruckIcon,
+    permission: "settings.view",
   },
   { href: "/admin/settings", label: "Settings", icon: Settings, permission: "settings.view" },
 ];

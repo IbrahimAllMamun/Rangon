@@ -33,7 +33,7 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 15  | Checkout                              | ✅      | ✅       | Idempotency keys, reservation, COD, server-side totals, error summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 16  | Online payments                       | 🟡      | 🟡       | Abstraction + COD complete.**No live gateway** — the card option is disabled in the UI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 17  | Orders                                | ✅      | ✅       | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 18  | Shipping                              | ✅      | 🟡       | Zones, methods, shipments, courier-ready interface. Checkout picks a method; no admin screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 18  | Shipping                              | ✅      | ✅       | Zones, methods, shipments, courier-ready interface. Checkout picks a method. **Admin screens shipped 2026-08-28** — `/admin/shipping`: zones with nested methods, couriers, and a warning when no fallback zone exists. The endpoint audit found four defects — D32–D35 |
 | 19  | Coupons                               | ✅      | ✅       | Full engine + API; cart can apply/remove. **Admin screens shipped 2026-08-28** — `/admin/coupons`, with a type-aware form and a state column that separates live from scheduled, expired and used up. The endpoint audit found a money race and three validation gaps — D28–D31 |
 | 20  | Wishlist + reviews                    | ✅      | ✅       | **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. **Reviews fixed 2026-08-21** — the section always renders and carries a star-rating form (`ReviewForm`) posting to `POST /shop/products/{slug}/reviews/`. D1 and D2 struck through below                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 21  | Dashboard                             | ✅      | ✅       | Server-aggregated KPIs, sales chart with a table alternative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -465,6 +465,38 @@ and free shipping was forced to carry a meaningless amount ([D31](#known-defects
 
 **Not verified:** no signed-in browser click-through, for the same reason as the customer screens.
 
+### Shipping screens verified, 2026-08-28
+
+Same environment caveat: no Docker, so PostgreSQL 16 and the venv were built directly.
+
+```text
+pytest ................................ 464 passed (445 before; +19)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint / next build . clean
+vitest ................................ 79 passed, 6 files
+migration repair rehearsed ............ against a probe database holding the bad rows
+```
+
+**Shipping had no section in `business-rules.md` at all.** That is the finding behind the other four:
+an area nobody wrote down is an area nobody checks, and it was the only area of the system with
+neither documented rules nor a single API test. §8a now states the rules, reconstructed from the code
+and asserted in `tests/api/test_shipping_admin.py`.
+
+The money one is [D32](#known-defects): `free_over` accepted a negative number, and `price_for()`
+returns 0 whenever `subtotal >= free_over` — so one mistyped minus sign makes **every order ship
+free**, quietly, forever. [D33](#known-defects) is the durable one: `events` never used the serializer
+that already existed, so `status: "BANANA"` was stored with a 201 into an append-only log, and because
+that status drives `PACKED → SHIPPED → DELIVERED` the order also stopped progressing.
+
+Unlike the previous migrations, `shipping/0002` **tightens** two constraints, so a database written
+before today may hold rows that violate them and `AddConstraint` would fail outright. It repairs
+first — clearing a negative `free_over` to NULL, widening a backwards `max_days` — and prints what it
+changed rather than doing it silently. **Rehearsed rather than assumed:** a probe database was
+migrated to `0001`, seeded with exactly the two bad rows the old API allowed, and migrated forward.
+Both were repaired, both constraints then rejected fresh violations, and the probe was dropped.
+
+**Not verified:** no signed-in browser click-through, as with the customer and coupon screens.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -521,6 +553,11 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D30~~ | ~~**Invalid coupon edits returned 409 instead of a field error.**~~ **Fixed 2026-08-28** — a PATCH changing only `value` skipped the percentage check (which reads `discount_type` from the payload), and a value of 0 was never checked at all. Both reached the database `CheckConstraint` and came back as a generic `CONFLICT` — data was safe and nothing leaked, but the form had no field to attach the message to |
 | ~~D31~~ | ~~**A free-shipping coupon had to invent an amount.**~~ **Fixed 2026-08-28** — `value` is meaningless for `FREE_SHIPPING` (the discount is the shipping line being zeroed in `price_cart`), but the `value > 0` constraint applied to every row, so creating one meant submitting a number that would then mislead whoever read the coupon. Migration `0002` exempts the type; the serializer normalises the value to 0 and the form hides the field |
 
+| ~~D32~~ | ~~**A negative `free_over` made every order ship free.**~~ **Fixed 2026-08-28** — `ShippingMethod.price_for()` returns 0 whenever `subtotal >= free_over`, so a negative threshold is satisfied by every order. The API accepted `-100.00` with a 201. A mistyped minus sign would have given away the shipping revenue on every sale, silently. Refused by the serializer and by a new database constraint |
+| ~~D33~~ | ~~**A tracking update could write any status string.**~~ **Fixed 2026-08-28** — `ShipmentViewSet.events` read `request.data` directly and never used `ShipmentEventSerializer`, which existed and was only used to render the response. `status: "BANANA"` was stored with a 201. `ShipmentEvent` is append-only and its status drives `PACKED → SHIPPED → DELIVERED`, so the garbage was permanent *and* stopped the order progressing. Input now goes through the serializer |
+| ~~D34~~ | ~~**A zone's city list could be a bare string.**~~ **Fixed 2026-08-28** — `cities` is a `JSONField`, so `"Dhaka"` passed. `ShippingZone.matches()` iterates the value, and iterating a string yields characters: the zone matched the city `"d"` and never `"Dhaka"`. It looks correct in the database and silently routes every order to the wrong zone. The serializer now requires a list and stores names normalised |
+| ~~D35~~ | ~~**A delivery estimate could read backwards, and a malformed date 500'd.**~~ **Fixed 2026-08-28** — `min_days=5, max_days=2` was accepted and renders to a shopper as "5–2 days"; a non-date `occurred_at` reached the model and escaped as an unhandled `ValidationError` mid-transaction rather than a 400. Both refused now, the day order by a database constraint too |
+
 
 ## Still API-only (no UI)
 
@@ -530,7 +567,6 @@ had never worked, a stock count that could not be counted, a restock decision in
 the four customer defects D24–D27. "Exists" is not "tested": the customers API had no tests at all.
 
 - review moderation
-- shipping zones, methods, shipments
 - categories, brands, attributes
 - users and roles
 
@@ -609,9 +645,14 @@ twice under a race). The pattern is now specific enough to look for deliberately
   grepping for wherever a service validates then mutates.
 - *A constraint that applies to a type it does not describe.* D31.
 
-**Remaining API-only screens:** review moderation, shipping zones/methods/shipments, categories and
-brands and attributes, and users and roles. Shipping is the most valuable of those — checkout picks a
-method today with no way to manage the zones behind it.
+**Remaining API-only screens:** review moderation, categories/brands/attributes, and users and roles.
+None is as load-bearing as the four now done; review moderation is probably next, since reviews are
+already writable from the storefront and nothing moderates them.
+
+**The gap worth closing is documentation, not screens.** Shipping had no section in
+`business-rules.md`, and that is exactly where the worst defect of the five passes was found. Before
+building over any remaining area, check it has documented rules at all — `content` (reviews,
+banners) and `accounts` (users, roles) are the two that still do not.
 
 **Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
 typechecked and covered by API tests, but no browser has touched them — the environment they were
