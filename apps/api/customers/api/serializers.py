@@ -6,6 +6,14 @@ from customers.models import Customer, CustomerAddress, CustomerNote
 
 
 class CustomerAddressSerializer(serializers.ModelSerializer):
+    """Validates an address. The owning customer is never taken from the body.
+
+    Both callers (the admin viewset and the storefront account view) know whose
+    address this is from the URL or the session, so `customer` is read-only —
+    a client cannot write an address onto somebody else's record by posting an
+    id.  `customers.services` attaches the customer.
+    """
+
     class Meta:
         model = CustomerAddress
         fields = [
@@ -25,7 +33,7 @@ class CustomerAddressSerializer(serializers.ModelSerializer):
             "is_default",
             "notes",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "customer"]
 
 
 class CustomerNoteSerializer(serializers.ModelSerializer):
@@ -34,7 +42,8 @@ class CustomerNoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerNote
         fields = ["id", "customer", "body", "is_pinned", "created_by_email", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        # As with addresses: the customer comes from the URL, not the body.
+        read_only_fields = ["id", "created_at", "customer"]
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -78,7 +87,15 @@ class CustomerSerializer(serializers.ModelSerializer):
     def validate(self, attrs: dict) -> dict:
         # Phone-first identity: a customer with neither contact detail cannot be
         # found again, which defeats the point of creating the record.
-        if not attrs.get("phone") and not attrs.get("email") and not self.instance:
+        #
+        # This is checked against the *resulting* record, not just the payload:
+        # an edit that clears both fields leaves exactly the unfindable customer
+        # the rule exists to prevent, so it is refused on update as well as on
+        # create.  A partial update that touches neither field keeps whatever
+        # the record already has.
+        phone = attrs.get("phone", getattr(self.instance, "phone", None))
+        email = attrs.get("email", getattr(self.instance, "email", None))
+        if not phone and not email:
             raise serializers.ValidationError(
                 {"phone": ["Provide a phone number or an email address."]}
             )

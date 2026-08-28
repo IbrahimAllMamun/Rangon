@@ -1,8 +1,13 @@
+import { Plus } from "lucide-react";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
-import { Badge } from "@/components/ui/primitives";
+import { Badge, Button } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
-import { apiServer } from "@/lib/api/server";
+import { apiServer, currentUser } from "@/lib/api/server";
+import type { SessionUser } from "@/lib/api/types";
 import { dateOnly, humanise, money } from "@/lib/format";
 
 export const metadata = { title: "Customers" };
@@ -23,6 +28,12 @@ interface Customer {
 type Search = Promise<Record<string, string | undefined>>;
 
 export default async function CustomersPage({ searchParams }: { searchParams: Search }) {
+  const user = await currentUser<SessionUser>();
+  if (!user) redirect("/login?next=/admin/customers");
+
+  const canCreate =
+    user.permissions.includes("*") || user.permissions.includes("customers.create");
+
   const params = await searchParams;
   const query = new URLSearchParams();
   for (const key of ["search", "customer_type", "page"]) {
@@ -42,7 +53,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
       header: "Customer",
       cell: (row) => (
         <>
-          <span className="block font-medium">{row.name}</span>
+          <Link
+            href={`/admin/customers/${row.id}`}
+            className="block font-medium text-brand-600 hover:underline"
+          >
+            {row.name}
+          </Link>
           <span className="block text-caption text-muted">{humanise(row.customer_type)}</span>
         </>
       ),
@@ -71,6 +87,16 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
             ? `${data.count} customer${data.count === 1 ? "" : "s"}. Identity is phone-first — many walk-in shoppers have no email.`
             : undefined
         }
+        actions={
+          canCreate ? (
+            <Button asChild>
+              <Link href="/admin/customers/new">
+                <Plus className="size-4" aria-hidden />
+                New customer
+              </Link>
+            </Button>
+          ) : undefined
+        }
       />
       <ResourceTable
         rows={data?.results ?? []}
@@ -78,7 +104,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         caption="Customers"
         error={error}
         emptyTitle="No customers yet"
-        emptyDescription="Customers appear here after their first sale, online or at the counter."
+        emptyDescription="Customers appear here after their first sale, online or at the counter — or add one now."
         rowKey={(row) => row.id}
         footer={data ? `Showing ${data.results.length} of ${data.count}.` : undefined}
       />

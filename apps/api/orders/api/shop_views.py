@@ -25,6 +25,7 @@ from content.models import BannerPlacement, StorefrontBanner
 from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
 from core.pagination import StandardPagination
+from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
 from engagement.models import Review, ReviewStatus, Wishlist, WishlistItem
@@ -250,21 +251,32 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         if customer is None:
             raise ValidationError("A customer account is required to review.")
 
-        order = (
-            Order.objects.filter(
-                customer=customer,
-                items__variant__product=product,
-                status__in=["DELIVERED", "RETURNED", "REFUNDED"],
-            )
-            .order_by("-placed_at")
-            .first()
+        received = Order.objects.filter(
+            customer=customer,
+            items__variant__product=product,
+            status__in=["DELIVERED", "RETURNED", "REFUNDED"],
         )
-        if order is None:
+        if not received.exists():
             raise ValidationError("You can only review a product you have received.")
-        if Review.objects.filter(product=product, customer=customer, order=order).exists():
+
+        # One review per *purchase* (business-rules §6a): a second, later order
+        # of the same product earns a second review. Resolving simply to the
+        # most recent order would land on one already reviewed and refuse, so a
+        # repeat buyer got one review however many times they bought.
+        reviewed = Review.objects.filter(product=product, customer=customer).values_list(
+            "order_id", flat=True
+        )
+        order = received.exclude(pk__in=reviewed).order_by("-placed_at").first()
+        if order is None:
             raise ValidationError("You have already reviewed this purchase.")
 
-        rating = int(request.data.get("rating", 0))
+        # `int()` on the raw value let "excellent" escape as a 500 and silently
+        # truncated 4.7 to 4. Ratings are whole numbers, so anything that is not
+        # one is refused rather than coerced.
+        try:
+            rating = int(str(request.data.get("rating")).strip())
+        except (TypeError, ValueError):
+            raise ValidationError("Rating must be a whole number between 1 and 5.") from None
         if not 1 <= rating <= 5:
             raise ValidationError("Rating must be between 1 and 5.")
 
@@ -648,25 +660,32 @@ class AccountAddressView(APIView):
 
     def post(self, request: Request) -> Response:
         customer = _customer_for(request)
-        serializer = CustomerAddressSerializer(data={**request.data, "customer": customer.pk})
+        serializer = CustomerAddressSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Same service as the admin surface: the one-default-per-customer rule
+        # is enforced in one place, and it is this surface that checkout
+        # pre-fills from.
+        address = customer_services.add_address(
+            customer=customer, data=serializer.validated_data, actor=request.user
+        )
+        return Response(CustomerAddressSerializer(address).data, status=status.HTTP_201_CREATED)
 
     def patch(self, request: Request) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(CustomerAddress, pk=request.data.get("id"), customer=customer)
         serializer = CustomerAddressSerializer(address, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+        updated = customer_services.update_address(
+            address=address, data=serializer.validated_data, actor=request.user
+        )
+        return Response(CustomerAddressSerializer(updated).data)
 
     def delete(self, request: Request) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(
             CustomerAddress, pk=request.query_params.get("id"), customer=customer
         )
-        address.delete()
+        customer_services.delete_address(address=address, actor=request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

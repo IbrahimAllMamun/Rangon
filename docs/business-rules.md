@@ -204,6 +204,19 @@ sums). Money is `Decimal`; `float` is forbidden.
   *`DECISION REQUIRED` — assumed.*
 - Coupon usage is counted when the order is **created**, and released if the order is cancelled before
   fulfilment.
+- **Both usage limits are re-checked inside `promotions.services.redeem()`**, under the coupon row's
+  `select_for_update` lock — not only in `validate_coupon`. Validation runs while the cart is priced,
+  which is before that lock exists, so two concurrent checkouts can both pass it. The lock serialises
+  them and the re-read is what actually enforces the limit. `usage_limit_per_customer` defaults to 1,
+  so the common configuration is the one a race would give away twice.
+- A **free-shipping** coupon carries **no amount**: its `value` is always `0.00`, and the discount is
+  the shipping line being zeroed in `checkout.price_cart`. Every other discount type must have a
+  `value` above 0 — a coupon giving away nothing is a coupon that silently does nothing. The database
+  constraint exempts `FREE_SHIPPING` from the "above zero" rule for exactly this reason.
+- A coupon's rules are validated against the **resulting** coupon on edit, not just the submitted
+  fields: a PATCH sending only `ends_at` is still checked against the stored `starts_at`, and one
+  sending only `value` against the stored `discount_type`. Editing a coupon never changes orders
+  already placed — they keep the discount they were given.
 
 ### 3.4 Tax
 
@@ -301,6 +314,32 @@ verification call may capture a payment.
   later registers with the same phone, the records are linked rather than duplicated.
 - Customers are never hard-deleted while they have orders; they are deactivated. A data-deletion request
   is handled by anonymising personal fields and keeping the financial rows.
+- Phone-first identity is enforced on **create and on edit**: a customer must always keep at least one
+  of phone or email. An edit that would clear both is refused, because it produces exactly the
+  unfindable record the rule exists to prevent. Swapping one for the other is allowed.
+
+### 6.1 Addresses
+
+- A customer has **at most one default address, and never zero while any address exists.**
+  `CustomerAddress` is ordered `("-is_default", "-created_at")` and checkout pre-fills from the first
+  row, so a second default would make the pre-filled delivery address arbitrary.
+- The rule is held by `customers.services`, not by callers, and applies to both surfaces (the admin
+  screens and the storefront account page):
+  - the first address a customer gets becomes the default whatever the caller asked for;
+  - setting a new default demotes the previous one in the same transaction;
+  - deleting the default promotes the next address (newest first);
+  - un-setting the default on the **only** address is refused — add another and promote that instead.
+- Addresses and notes are deletable. They are contact details and staff commentary, not financial
+  records: an order stores its own frozen `as_snapshot()` copy at checkout, so editing or deleting an
+  address never rewrites history (CLAUDE.md §3.3).
+- The owning customer is never read from the request body. It comes from the URL (admin) or the
+  session (storefront), so an address cannot be written onto another customer's record.
+
+### 6.2 Who may edit a customer
+
+`customers.view` grants **read only**. Writing an address or a note requires `customers.update` — the
+same permission as editing the customer. This matters for the `ACCOUNTANT` role, which deliberately
+holds `customers.view` without create or update.
 
 ---
 
@@ -313,12 +352,22 @@ comment. `POST /shop/products/{slug}/reviews/` accepts a review only when all of
 - that customer has an order containing the product in status `DELIVERED`, `RETURNED` or `REFUNDED`
   — you may only review something you actually received;
 - they have not already reviewed **that purchase**. A second, later order of the same product earns a
-  second review.
+  second review — the API resolves the most recent eligible order the customer has **not** yet
+  reviewed, so a repeat buyer gets one review per purchase rather than one review ever.
+
+Ratings are whole numbers. A fractional or non-numeric rating is refused rather than coerced: `4.7`
+is not silently stored as `4`.
 
 Every accepted review is stored `verified_purchase = True` and `status = PENDING`. **Nothing appears
 on the storefront until a human approves it** through `POST /reviews/{id}/approve/`, which needs
 `content.review_moderate`. Rejection takes the same shape and both record the moderator, the time and
 an optional note.
+
+A decision is **reversible and audit-logged**. The review row carries only the latest moderator, note
+and time, so a reversal would otherwise erase the previous decision; each one writes an `AuditLog`
+entry instead, and the sequence of a contested review survives. Omitting a note on re-moderation
+means "no new note" and keeps the existing one — re-approving a rejected review must not erase why it
+was rejected.
 
 Ratings are whole numbers 1–5. The aggregate shown on a product page (and in its JSON-LD
 `AggregateRating`) counts approved reviews only, so a pending or rejected review can never move the
@@ -475,6 +524,67 @@ settings changes.
 
 Each entry stores actor, action, entity type/id, `old_values`, `new_values`, reason, IP, user agent,
 request id, timestamp. Passwords, tokens and full card data are never logged.
+
+---
+
+## 8a. Shipping
+
+Shipping had no section here until 2026-08-28. That absence is why four rules
+below were enforceable nowhere: an area nobody wrote down is an area nobody
+checks. What follows was reconstructed from `shipping/` and is now asserted in
+`tests/api/test_shipping_admin.py`.
+
+### 8a.1 Zones
+
+- A delivery address is matched to a **zone** by city name, comparing lower-cased
+  on both sides. Zones are tried in `position` order and the first match wins.
+- A zone whose city list is empty matches nothing — **unless** it is the
+  `is_default` zone, which is the fallback for any city no other zone claims.
+- **With no default zone, a shopper in an unlisted city is offered no delivery
+  options and cannot check out.** This is a configuration hazard rather than a
+  bug, so the admin screen warns about it rather than the API refusing it: a shop
+  that genuinely only delivers to listed cities is entitled to that setup.
+- `cities` must be a **list of names**. It is a `JSONField`, so a bare string
+  passes type-checking and then breaks matching silently: `matches()` iterates
+  the value, and iterating `"Dhaka"` yields characters, making the zone match
+  the city `"d"` and never `"Dhaka"`. The serializer refuses anything but a list
+  and stores the names stripped and lower-cased.
+
+### 8a.2 Methods and rates
+
+- A **method** belongs to one zone; `code` is unique per zone. Checkout offers
+  the active methods of the matched zone in `position`, then `price` order.
+- `price` is what the shopper pays, **computed server-side** by
+  `ShippingMethod.price_for(subtotal)`. The browser never sends a shipping cost.
+- `free_over` is the subtotal at or above which shipping is free. **Blank means
+  shipping is never free** — not 0, which would make it always free. A negative
+  threshold is refused by both the serializer and a database constraint, because
+  `subtotal >= free_over` would then hold for every order and silently give the
+  shipping revenue away.
+- `min_days`/`max_days` are the delivery estimate and must read forwards;
+  `max_days < min_days` renders to a shopper as "5–2 days" and is refused.
+- A free-shipping **coupon** (§3.3) zeroes the shipping line independently of
+  `free_over`.
+
+### 8a.3 Shipments and tracking
+
+- A `Shipment` records what physically left: courier, tracking number, cost.
+  `ShipmentEvent` is **append-only** — a tracking update is never edited or
+  deleted, only followed by another.
+- An event's status drives the order: `DISPATCHED` moves a `PACKED` order to
+  `SHIPPED`, and `DELIVERED` moves a `SHIPPED` or `PACKED` order to `DELIVERED`.
+  Because of that, an event carrying a status outside `ShipmentStatus` is refused
+  rather than stored: it would be permanent, and it would stop the order
+  progressing.
+- Payment is **not** affected by delivery. A COD order's payment is captured when
+  the courier remits (§5.3), which is a separate act from marking it delivered.
+- Configuring zones, methods and couriers needs `settings.manage`. Recording a
+  shipment or a tracking update needs `orders.fulfil` — it is fulfilment work,
+  not configuration, so a manager can do it without being able to change rates.
+- `Courier.integration` selects the code that talks to a courier's API. There is
+  one implementation, `manual`, meaning tracking numbers are typed in. It is not
+  editable from the admin screen, because naming a provider that does not exist
+  would produce shipments nothing can dispatch.
 
 ---
 

@@ -90,16 +90,25 @@ class ShipmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def events(self, request: Request, pk: str | None = None) -> Response:
-        """Record a tracking update and keep the order status in step."""
+        """Record a tracking update and keep the order status in step.
+
+        The payload goes through `ShipmentEventSerializer` rather than being read
+        off `request.data`.  A `ShipmentEvent` is append-only and its status
+        drives `PACKED → SHIPPED → DELIVERED`, so an undefined status is not
+        cosmetic: it is permanent, and it stops the order progressing.
+        """
         shipment = self.get_object()
-        new_status = request.data.get("status", ShipmentStatus.IN_TRANSIT)
+
+        serializer = ShipmentEventSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_status = serializer.validated_data.get("status") or ShipmentStatus.IN_TRANSIT
 
         event = ShipmentEvent.objects.create(
             shipment=shipment,
             status=new_status,
-            message=request.data.get("message", ""),
-            location=request.data.get("location", ""),
-            occurred_at=request.data.get("occurred_at") or timezone.now(),
+            message=serializer.validated_data.get("message", ""),
+            location=serializer.validated_data.get("location", ""),
+            occurred_at=serializer.validated_data.get("occurred_at") or timezone.now(),
             created_by=request.user,
         )
         shipment.status = new_status

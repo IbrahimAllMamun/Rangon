@@ -26,16 +26,16 @@ and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
 | 08  | POS                                   | ✅      | ✅       | Barcode-first register, split payment, hold/resume, receipt, F2/F4/F8 shortcuts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 09  | Payments                              | ✅      | ✅       | Generic model + provider registry;`manual` provider (cash/card/MFS/COD) shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 10  | Returns                               | ✅      | ✅       | Full request→approve→receive→restock→refund + POS one-step return. **Admin screens shipped 2026-08-27** — `/admin/returns/[id]` drives approve / reject / receive / refund, with the per-line restock decision made at receipt and an account picker on the refund |
-| 11  | Customers                             | ✅      | 🟡       | Phone-first identity, addresses, notes, history. Admin customer list built; editing still API-only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 11  | Customers                             | ✅      | ✅       | Phone-first identity, addresses, notes, history. **Admin create/edit shipped 2026-08-28** — `/admin/customers/new` and `/admin/customers/[id]`: profile, addresses with a managed default, notes and order history. The endpoint audit that preceded it found four defects — see D24–D27 |
 | 12  | Online store                          | ✅      | ✅       | Home, shop, product, cart, checkout, order tracking, account, policies. Browser journey verified end to end                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 13  | Search + filters                      | ✅      | ✅       | Postgres trigram + indexed facets; facet UI with colour swatches; navbar type-ahead suggest (products / categories / popular searches) backed by a`SearchTerm` log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 14  | Cart                                  | ✅      | ✅       | Server-authoritative, re-priced on every read, drawer + full page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 15  | Checkout                              | ✅      | ✅       | Idempotency keys, reservation, COD, server-side totals, error summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 16  | Online payments                       | 🟡      | 🟡       | Abstraction + COD complete.**No live gateway** — the card option is disabled in the UI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 17  | Orders                                | ✅      | ✅       | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 18  | Shipping                              | ✅      | 🟡       | Zones, methods, shipments, courier-ready interface. Checkout picks a method; no admin screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 19  | Coupons                               | ✅      | 🟡       | Full engine + API; cart can apply/remove. No admin coupon screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 20  | Wishlist + reviews                    | ✅      | ✅       | **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. **Reviews fixed 2026-08-21** — the section always renders and carries a star-rating form (`ReviewForm`) posting to `POST /shop/products/{slug}/reviews/`. D1 and D2 struck through below                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 18  | Shipping                              | ✅      | ✅       | Zones, methods, shipments, courier-ready interface. Checkout picks a method. **Admin screens shipped 2026-08-28** — `/admin/shipping`: zones with nested methods, couriers, and a warning when no fallback zone exists. The endpoint audit found four defects — D32–D35 |
+| 19  | Coupons                               | ✅      | ✅       | Full engine + API; cart can apply/remove. **Admin screens shipped 2026-08-28** — `/admin/coupons`, with a type-aware form and a state column that separates live from scheduled, expired and used up. The endpoint audit found a money race and three validation gaps — D28–D31 |
+| 20  | Wishlist + reviews                    | ✅      | ✅       | **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. **Reviews fixed 2026-08-21** — the section always renders and carries a star-rating form (`ReviewForm`) posting to `POST /shop/products/{slug}/reviews/`. D1 and D2 struck through below **Moderation screen shipped 2026-08-28** — `/admin/reviews` with a status filter, approve/reject and a moderator note. The endpoint audit found three defects — D36–D38 |
 | 21  | Dashboard                             | ✅      | ✅       | Server-aggregated KPIs, sales chart with a table alternative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 22  | Reports                               | ✅      | ✅       | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 23  | Offline POS                           | ⬜      | ⬜       | Deliberately V2 (plan §29). Design recorded in`architecture/offline-pos.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -396,6 +396,135 @@ Also fixed: `seed_demo --reset` died with `ProtectedError` whenever a stock coun
 existed, which phase 39 made ordinary. Recorded as [D23](#known-defects), with a regression test that
 fails without the fix.
 
+### Customer screens verified, 2026-08-28
+
+Run on a Linux container without Docker — PostgreSQL 16 and the venv were built directly, so the
+`docker compose` commands in the README were **not** the ones executed. What ran:
+
+```text
+pytest ................................ 427 passed (405 before; +22)
+ruff check + ruff format .............. clean
+tsc --noEmit .......................... clean
+next lint ............................. clean
+vitest ................................ 79 passed, 6 files
+next build ............................ passes
+```
+
+**Four defects were found before a line of UI was written**, by checking the endpoints against the
+documented behaviour. All four are proven: reverting the source with the new tests in place fails
+**12 of the 22**, and each failure names its defect.
+
+- [D24](#known-defects) — `customers.view` could write an address or a note. An `ACCOUNTANT` holds
+  that code deliberately *without* update, and could still write. The action served GET and POST
+  under one permission list.
+- [D25](#known-defects) — addresses could be created but never edited or deleted. The storefront had
+  full CRUD; the admin surface did not, so the edit screen had no endpoints to call.
+- [D26](#known-defects) — nothing demoted the previous default address, on either surface. Checkout
+  pre-fills from `addresses.first()` under `("-is_default", "-created_at")`, so with two defaults the
+  pre-filled delivery address was arbitrary.
+- [D27](#known-defects) — an edit could clear both phone and email, producing the unfindable customer
+  phone-first identity exists to prevent.
+
+D26 is the one that reached a customer: it is the storefront's own account page, and the wrong
+address could have been pre-filled at checkout. Both surfaces now go through `customers.services`,
+which holds the invariant under `select_for_update`.
+
+**Not verified:** no signed-in browser click-through of these screens. Docker is unavailable in this
+environment, so the stack was never started. The screens are typechecked, linted and built, and the
+API beneath them is tested — but nobody has used them.
+
+### Coupon screens verified, 2026-08-28
+
+Same environment caveat as the customer pass: no Docker daemon, so PostgreSQL 16 and the venv were
+built directly and the README's `docker compose` commands were **not** what ran.
+
+```text
+pytest ................................ 445 passed (428 before; +17)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint / next build . clean
+vitest ................................ 79 passed, 6 files
+makemigrations --check ................ one new migration, promotions/0002
+```
+
+**The audit found a money bug this time**, not just validation gaps — [D28](#known-defects). A coupon
+limited to one use per customer could be redeemed twice by placing two orders concurrently:
+`redeem()` holds the coupon row lock and re-checks the *total* limit, but the *per-customer* limit was
+only ever checked in `validate_coupon`, which runs while the cart is priced — before the lock exists.
+Both checkouts passed validation, both redeemed, no refusal.
+
+It is proven rather than argued: `tests/test_concurrency.py` gained
+`test_one_customer_cannot_spend_a_one_per_customer_coupon_twice`, which against the old code reports
+*"a one-per-customer coupon was redeemed 2 times … refusals: []"*. The fix re-reads the per-customer
+count inside the lock `redeem()` already takes, so the existing serialisation does the work.
+
+`usage_limit_per_customer` defaults to **1**. The default configuration was the exposed one.
+
+Three smaller gaps came from the same instance-blind validation as [D27](#known-defects): an edit
+checked its payload rather than the resulting coupon ([D29](#known-defects), [D30](#known-defects)),
+and free shipping was forced to carry a meaningless amount ([D31](#known-defects)).
+
+**Not verified:** no signed-in browser click-through, for the same reason as the customer screens.
+
+### Shipping screens verified, 2026-08-28
+
+Same environment caveat: no Docker, so PostgreSQL 16 and the venv were built directly.
+
+```text
+pytest ................................ 464 passed (445 before; +19)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint / next build . clean
+vitest ................................ 79 passed, 6 files
+migration repair rehearsed ............ against a probe database holding the bad rows
+```
+
+**Shipping had no section in `business-rules.md` at all.** That is the finding behind the other four:
+an area nobody wrote down is an area nobody checks, and it was the only area of the system with
+neither documented rules nor a single API test. §8a now states the rules, reconstructed from the code
+and asserted in `tests/api/test_shipping_admin.py`.
+
+The money one is [D32](#known-defects): `free_over` accepted a negative number, and `price_for()`
+returns 0 whenever `subtotal >= free_over` — so one mistyped minus sign makes **every order ship
+free**, quietly, forever. [D33](#known-defects) is the durable one: `events` never used the serializer
+that already existed, so `status: "BANANA"` was stored with a 201 into an append-only log, and because
+that status drives `PACKED → SHIPPED → DELIVERED` the order also stopped progressing.
+
+Unlike the previous migrations, `shipping/0002` **tightens** two constraints, so a database written
+before today may hold rows that violate them and `AddConstraint` would fail outright. It repairs
+first — clearing a negative `free_over` to NULL, widening a backwards `max_days` — and prints what it
+changed rather than doing it silently. **Rehearsed rather than assumed:** a probe database was
+migrated to `0001`, seeded with exactly the two bad rows the old API allowed, and migrated forward.
+Both were repaired, both constraints then rejected fresh violations, and the probe was dropped.
+
+**Not verified:** no signed-in browser click-through, as with the customer and coupon screens.
+
+### Review moderation verified, 2026-08-28
+
+```text
+pytest ................................ 476 passed (464 before; +12)
+ruff check + ruff format .............. clean
+tsc --noEmit / next lint / next build . clean
+vitest ................................ 79 passed, 6 files
+```
+
+I was wrong in the shipping entry to say `content` had no documented rules: reviews are covered in
+detail by §6a. What the audit found instead is the opposite problem — **the documentation was right
+and the code did not match it.**
+
+§6a states that "a second, later order of the same product earns a second review". The code resolved
+the eligible order as simply the most recent one, so a repeat buyer's second attempt always landed on
+the order they had already reviewed and was refused ([D36](#known-defects)). They got one review
+however many times they bought. `business-rules.md` opens by saying that where code and this document
+disagree, "that is a bug in one of them — fix both in the same change"; here the document was the
+correct half.
+
+Also [D37](#known-defects) — `int()` on the raw rating, so `"excellent"` escaped as a 500 and `4.7`
+was silently stored as `4` — and [D38](#known-defects): moderation wrote no audit entry at all, while
+the neighbouring `content` app logs every navigation change. Since the review row holds only the
+*latest* moderator and note, reversing a decision erased the previous one, and re-approving a rejected
+review wiped the reason it was rejected.
+
+**Not verified:** no signed-in browser click-through, as with the other four screens.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -442,14 +571,33 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D12~~ | ~~**POS searched on every keystroke.**~~ **Fixed 2026-08-18** — the scan field fired `/pos/products/?q=` per character with no debounce. A keyboard-wedge scanner types a 13-character barcode in ~100 ms, so **one scan issued 13 parallel requests** at ~700 ms each; six saturated the browser's per-origin connection limit and the `lookup` that Enter fires queued behind them. Now debounced at 220 ms with request cancellation, so a scan issues **none**. Five Vitest cases cover it                                                                                                                                                                                                                              | `apps/web/src/components/pos/register.tsx`                                                          | The register appeared to freeze on every scan — the most severe user-facing defect found                                                       |
 | ~~D13~~ | ~~**Admin product list paginated without ordering.**~~ **Fixed 2026-08-18** — Django warned `UnorderedObjectListWarning`; PostgreSQL may return unordered rows in any order, so page 2 could repeat or skip products page 1 already showed. Now `-created_at, pk`                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `apps/api/catalog/api/views.py`                                                                     | Correctness, not just speed                                                                                                                     |
 | ~~D11~~ | ~~**Dev container ran a different Next than CI.**~~ **Fixed 2026-08-18** — `/app/node_modules` is an anonymous volume, so it kept a pre-upgrade install (15.1.4) while the lockfile, image and CI were all on 15.5.23; image rebuilds could not dislodge it. Recorded in [.claude/environment.md](../.claude/environment.md) §7                                                                                                                                                                                                                                                                                                                                                                                                           | `docker-compose.dev.yml`                                                                            | Local behaviour diverged from CI with no signal                                                                                                 |
+| ~~D24~~ | ~~**`customers.view` could write.**~~ **Fixed 2026-08-28** — the `addresses` and `notes` actions each served GET *and* POST but declared one permission list, `customers.view`, so the write inherited the read's requirement. `ACCOUNTANT` holds `customers.view` deliberately without update, and could add an address or a note to any customer. `RolePermission` now accepts a per-method mapping and fails closed on an undeclared method; both actions declare `{"GET": [view], "POST": [update]}` |
+| ~~D25~~ | ~~**A customer's addresses could be created but never edited or deleted.**~~ **Fixed 2026-08-28** — `CustomerViewSet` exposed `addresses` and `notes` as GET/POST only, and it is the only router registration, so no update or delete route existed on the admin surface. The *storefront* had full CRUD (`AccountAddressView`), making admin strictly weaker than the customer-facing page. Added `addresses/{id}/` (PATCH, DELETE) and `notes/{id}/` (DELETE) |
+| ~~D26~~ | ~~**A customer could hold several default addresses.**~~ **Fixed 2026-08-28** — nothing demoted the previous default on either surface. `CustomerAddress` is ordered `("-is_default", "-created_at")` and checkout pre-fills from the first row, so the pre-filled delivery address was whichever row PostgreSQL returned. `customers.services` now owns the invariant under `select_for_update`, and both surfaces go through it |
+| ~~D27~~ | ~~**An edit could leave a customer with no phone and no email.**~~ **Fixed 2026-08-28** — `CustomerSerializer.validate()` skipped its contact-detail check whenever `self.instance` was set, so a PATCH clearing both fields produced exactly the unfindable record phone-first identity exists to prevent. The check now runs against the resulting record, on create and update alike |
+
+| ~~D28~~ | ~~**A once-per-customer coupon could be spent twice.**~~ **Fixed 2026-08-28** — `redeem()` re-checked the *total* usage limit under the coupon row lock but never the *per-customer* one, which is checked only in `validate_coupon` — and that runs while the cart is priced, before the lock exists. Two concurrent checkouts both passed validation and both redeemed. `usage_limit_per_customer` defaults to **1**, so the default configuration was the vulnerable one. Proven by a new threaded test that redeemed twice with zero refusals; the per-customer count is now re-read inside the existing lock |
+| ~~D29~~ | ~~**An edit could invert a coupon's active window.**~~ **Fixed 2026-08-28** — `validate()` read `starts_at`/`ends_at` from the payload alone, so a PATCH sending only `ends_at` skipped the ordering check. No database constraint covered this, so the coupon was stored with a window `active_coupons` can never satisfy: it silently never applies. Rules are now checked against the resulting coupon |
+| ~~D30~~ | ~~**Invalid coupon edits returned 409 instead of a field error.**~~ **Fixed 2026-08-28** — a PATCH changing only `value` skipped the percentage check (which reads `discount_type` from the payload), and a value of 0 was never checked at all. Both reached the database `CheckConstraint` and came back as a generic `CONFLICT` — data was safe and nothing leaked, but the form had no field to attach the message to |
+| ~~D31~~ | ~~**A free-shipping coupon had to invent an amount.**~~ **Fixed 2026-08-28** — `value` is meaningless for `FREE_SHIPPING` (the discount is the shipping line being zeroed in `price_cart`), but the `value > 0` constraint applied to every row, so creating one meant submitting a number that would then mislead whoever read the coupon. Migration `0002` exempts the type; the serializer normalises the value to 0 and the form hides the field |
+
+| ~~D32~~ | ~~**A negative `free_over` made every order ship free.**~~ **Fixed 2026-08-28** — `ShippingMethod.price_for()` returns 0 whenever `subtotal >= free_over`, so a negative threshold is satisfied by every order. The API accepted `-100.00` with a 201. A mistyped minus sign would have given away the shipping revenue on every sale, silently. Refused by the serializer and by a new database constraint |
+| ~~D33~~ | ~~**A tracking update could write any status string.**~~ **Fixed 2026-08-28** — `ShipmentViewSet.events` read `request.data` directly and never used `ShipmentEventSerializer`, which existed and was only used to render the response. `status: "BANANA"` was stored with a 201. `ShipmentEvent` is append-only and its status drives `PACKED → SHIPPED → DELIVERED`, so the garbage was permanent *and* stopped the order progressing. Input now goes through the serializer |
+| ~~D34~~ | ~~**A zone's city list could be a bare string.**~~ **Fixed 2026-08-28** — `cities` is a `JSONField`, so `"Dhaka"` passed. `ShippingZone.matches()` iterates the value, and iterating a string yields characters: the zone matched the city `"d"` and never `"Dhaka"`. It looks correct in the database and silently routes every order to the wrong zone. The serializer now requires a list and stores names normalised |
+| ~~D35~~ | ~~**A delivery estimate could read backwards, and a malformed date 500'd.**~~ **Fixed 2026-08-28** — `min_days=5, max_days=2` was accepted and renders to a shopper as "5–2 days"; a non-date `occurred_at` reached the model and escaped as an unhandled `ValidationError` mid-transaction rather than a 400. Both refused now, the day order by a database constraint too |
+
+| ~~D36~~ | ~~**A repeat buyer got one review, ever.**~~ **Fixed 2026-08-28** — §6a says "a second, later order of the same product earns a second review", but the code resolved the eligible order as simply the most recent one. A customer's second attempt therefore always landed on the order they had already reviewed and was refused, however many times they had bought the product. The most recent **unreviewed** eligible order is now chosen. Code and documentation disagreed; both were wrong to leave |
+| ~~D37~~ | ~~**A non-numeric rating returned 500.**~~ **Fixed 2026-08-28** — `int(request.data.get("rating", 0))` raised `ValueError` on `"excellent"` and escaped unhandled; `4.7` was silently truncated to `4`, though §6a says ratings are whole numbers. Both are refused as validation errors now |
+| ~~D38~~ | ~~**Moderation left no audit trail, and erased its own notes.**~~ **Fixed 2026-08-28** — approving or rejecting decides what the public sees, yet wrote no `AuditLog` entry, while the neighbouring `content` app logs every navigation change. The review row holds only the *latest* moderator and note, so reversing a decision erased the previous one — and `request.data.get("note", "")` wiped a rejection reason on re-approval. Each decision now writes an entry, and an omitted note keeps the existing one |
+
 
 ## Still API-only (no UI)
 
-Every endpoint below exists and is tested. What is missing is the screen.
+What is missing is the screen. The endpoints exist — but **check each one against the documented
+behaviour before building over it.** Doing that has now paid for itself four times: a CSV export that
+had never worked, a stock count that could not be counted, a restock decision in the wrong place, and
+the four customer defects D24–D27. "Exists" is not "tested": the customers API had no tests at all.
 
-- customer create/edit, addresses, notes
-- coupon management, review moderation
-- shipping zones, methods, shipments
 - categories, brands, attributes
 - users and roles
 
@@ -514,12 +662,38 @@ consequence: it no longer only blocks the first real sale, it blocks the report 
 
 ## Suggested next task
 
-Phases 36, 39 (part) and the returns screens all shipped 2026-08-27.
+Phases 36, 39 (part) and the returns screens shipped 2026-08-27; the **customer screens** (D24–D27)
+and the **coupon screens** (D28–D31) both shipped 2026-08-28.
 
-**Customers, then coupons.** The last two "API-only" write screens a shop needs. Both look like
-ordinary form work — but check the endpoints against the documented behaviour first. That check has
-now paid for itself three times in a row: CSV export that had never worked, a stock count that could
-not be counted, and a restock decision that could not be made where the rules say it belongs.
+**Keep auditing the endpoints before building over them.** Five passes, five sets of defects — and
+the fifth was the first to touch money ([D28](#known-defects): a once-per-customer coupon redeemable
+twice under a race). The pattern is now specific enough to look for deliberately:
+
+- *Validation that reads the payload instead of the resulting record.* D27, D29 and D30 are the same
+  bug in three places. Any `validate()` using `attrs.get(...)` without falling back to
+  `self.instance` will let a PATCH through with a half-payload.
+- *A limit checked during pricing but not re-checked under the lock that protects it.* D28. Worth
+  grepping for wherever a service validates then mutates.
+- *A constraint that applies to a type it does not describe.* D31.
+
+**Remaining API-only screens:** categories/brands/attributes, and users and roles. Neither is
+load-bearing — categories and brands are seeded and rarely change, and users are created by an owner
+at setup. Both are worth doing, but neither blocks a shop from trading.
+
+**Two kinds of gap have now produced defects, and they need different checks:**
+
+- *No documented rules at all.* Shipping had no section in `business-rules.md`, and produced the worst
+  defect of the six passes (D32, all shipping free). **`accounts` (users, roles) still has none**, and
+  banners/navigation are only partly covered — check before building over either.
+- *Documented rules the code does not implement.* Reviews were the reverse case: §6a was detailed and
+  correct, and the code contradicted it (D36). Reading the doc is not enough; the rules have to be
+  executed against the endpoint.
+
+**Six passes, 15 defects, no exceptions so far.** Every area audited has had at least three.
+
+**Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
+typechecked and covered by API tests, but no browser has touched them — the environment they were
+written in had no Docker. That is the same "written but unproven" gap this file exists to name.
 
 **Phase 38 is one decision away.** The only blocker is **D-C, the VAT decision**.
 `finance.selectors.expense_totals()` is already the shape `business_summary()` subtracts, so once

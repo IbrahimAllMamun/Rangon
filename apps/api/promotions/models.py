@@ -26,7 +26,11 @@ class Coupon(BaseModel):
     value = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Percent (0–100) or a fixed amount, depending on discount_type.",
+        default=Decimal("0.00"),
+        help_text=(
+            "Percent (0–100) or a fixed amount, depending on discount_type. "
+            "Always 0 for FREE_SHIPPING, which carries no amount."
+        ),
     )
 
     minimum_order_value = money_field()
@@ -67,8 +71,14 @@ class Coupon(BaseModel):
         db_table = "promotions_coupon"
         ordering = ("-created_at",)
         constraints = [
+            # A free-shipping coupon carries no amount — the discount is the
+            # shipping line being zeroed, not a number on the coupon — so it is
+            # the one type allowed a value of 0. Every other type giving away
+            # nothing would be a coupon that silently does nothing.
             models.CheckConstraint(
-                condition=models.Q(value__gt=Decimal("0.00")), name="promotions_coupon_value_gt_0"
+                condition=models.Q(discount_type="FREE_SHIPPING")
+                | models.Q(value__gt=Decimal("0.00")),
+                name="promotions_coupon_value_gt_0",
             ),
             models.CheckConstraint(
                 condition=~models.Q(discount_type="PERCENTAGE")
