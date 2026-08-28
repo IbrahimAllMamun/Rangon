@@ -517,6 +517,67 @@ request id, timestamp. Passwords, tokens and full card data are never logged.
 
 ---
 
+## 8a. Shipping
+
+Shipping had no section here until 2026-08-28. That absence is why four rules
+below were enforceable nowhere: an area nobody wrote down is an area nobody
+checks. What follows was reconstructed from `shipping/` and is now asserted in
+`tests/api/test_shipping_admin.py`.
+
+### 8a.1 Zones
+
+- A delivery address is matched to a **zone** by city name, comparing lower-cased
+  on both sides. Zones are tried in `position` order and the first match wins.
+- A zone whose city list is empty matches nothing — **unless** it is the
+  `is_default` zone, which is the fallback for any city no other zone claims.
+- **With no default zone, a shopper in an unlisted city is offered no delivery
+  options and cannot check out.** This is a configuration hazard rather than a
+  bug, so the admin screen warns about it rather than the API refusing it: a shop
+  that genuinely only delivers to listed cities is entitled to that setup.
+- `cities` must be a **list of names**. It is a `JSONField`, so a bare string
+  passes type-checking and then breaks matching silently: `matches()` iterates
+  the value, and iterating `"Dhaka"` yields characters, making the zone match
+  the city `"d"` and never `"Dhaka"`. The serializer refuses anything but a list
+  and stores the names stripped and lower-cased.
+
+### 8a.2 Methods and rates
+
+- A **method** belongs to one zone; `code` is unique per zone. Checkout offers
+  the active methods of the matched zone in `position`, then `price` order.
+- `price` is what the shopper pays, **computed server-side** by
+  `ShippingMethod.price_for(subtotal)`. The browser never sends a shipping cost.
+- `free_over` is the subtotal at or above which shipping is free. **Blank means
+  shipping is never free** — not 0, which would make it always free. A negative
+  threshold is refused by both the serializer and a database constraint, because
+  `subtotal >= free_over` would then hold for every order and silently give the
+  shipping revenue away.
+- `min_days`/`max_days` are the delivery estimate and must read forwards;
+  `max_days < min_days` renders to a shopper as "5–2 days" and is refused.
+- A free-shipping **coupon** (§3.3) zeroes the shipping line independently of
+  `free_over`.
+
+### 8a.3 Shipments and tracking
+
+- A `Shipment` records what physically left: courier, tracking number, cost.
+  `ShipmentEvent` is **append-only** — a tracking update is never edited or
+  deleted, only followed by another.
+- An event's status drives the order: `DISPATCHED` moves a `PACKED` order to
+  `SHIPPED`, and `DELIVERED` moves a `SHIPPED` or `PACKED` order to `DELIVERED`.
+  Because of that, an event carrying a status outside `ShipmentStatus` is refused
+  rather than stored: it would be permanent, and it would stop the order
+  progressing.
+- Payment is **not** affected by delivery. A COD order's payment is captured when
+  the courier remits (§5.3), which is a separate act from marking it delivered.
+- Configuring zones, methods and couriers needs `settings.manage`. Recording a
+  shipment or a tracking update needs `orders.fulfil` — it is fulfilment work,
+  not configuration, so a manager can do it without being able to change rates.
+- `Courier.integration` selects the code that talks to a courier's API. There is
+  one implementation, `manual`, meaning tracking numbers are typed in. It is not
+  editable from the admin screen, because naming a provider that does not exist
+  would produce shipments nothing can dispatch.
+
+---
+
 ## 9. Currency and formatting
 
 Default currency **BDT**, symbol `৳`, 2 decimal places, `1,290.00` grouping, symbol before the amount.

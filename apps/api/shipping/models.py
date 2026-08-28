@@ -90,6 +90,18 @@ class ShippingMethod(BaseModel):
             models.CheckConstraint(
                 condition=models.Q(price__gte=Decimal("0.00")), name="shipping_method_price_gte_0"
             ),
+            # `price_for()` returns 0 whenever `subtotal >= free_over`, so a
+            # negative threshold is always satisfied and every order ships free.
+            models.CheckConstraint(
+                condition=models.Q(free_over__isnull=True)
+                | models.Q(free_over__gte=Decimal("0.00")),
+                name="shipping_method_free_over_gte_0",
+            ),
+            # A window that reads backwards renders as "5–2 days" to a shopper.
+            models.CheckConstraint(
+                condition=models.Q(max_days__gte=models.F("min_days")),
+                name="shipping_method_days_ordered",
+            ),
         ]
 
     def __str__(self) -> str:
