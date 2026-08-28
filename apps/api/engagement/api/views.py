@@ -8,6 +8,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
+from core import audit
+from core.models import AuditAction
 from engagement.models import Review, ReviewStatus
 
 
@@ -64,11 +66,26 @@ class ReviewModerationViewSet(
     ordering_fields = ["created_at", "rating"]
 
     def _moderate(self, request: Request, new_status: str) -> Response:
+        """Approve or reject, and record who decided.
+
+        The decision is audit-logged as well as stamped on the row. The row
+        carries only the *latest* moderator, note and time — a reversed decision
+        overwrites them — so without a log the sequence of a contested review is
+        lost. The neighbouring `content` app logs every navigation change;
+        deciding what customers see on a product page is at least as worth
+        recording (CLAUDE.md §3.5).
+        """
         review = self.get_object()
+        before = {"status": review.status, "moderation_note": review.moderation_note}
+
         review.status = new_status
         review.moderated_by = request.user
         review.moderated_at = timezone.now()
-        review.moderation_note = request.data.get("note", "")
+        # An omitted note means "no new note", not "erase the previous one":
+        # wiping a rejection reason on re-approval loses why it was rejected.
+        note = str(request.data.get("note", "")).strip()
+        if note:
+            review.moderation_note = note
         review.save(
             update_fields=[
                 "status",
@@ -77,6 +94,15 @@ class ReviewModerationViewSet(
                 "moderation_note",
                 "updated_at",
             ]
+        )
+
+        audit.record(
+            action=AuditAction.SETTINGS_CHANGED,
+            entity=review,
+            actor=request.user,
+            old_values=before,
+            new_values={"status": review.status, "moderation_note": review.moderation_note},
+            reason=note or f"Review {new_status.lower()}",
         )
         return Response(ReviewSerializer(review).data)
 

@@ -251,21 +251,32 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         if customer is None:
             raise ValidationError("A customer account is required to review.")
 
-        order = (
-            Order.objects.filter(
-                customer=customer,
-                items__variant__product=product,
-                status__in=["DELIVERED", "RETURNED", "REFUNDED"],
-            )
-            .order_by("-placed_at")
-            .first()
+        received = Order.objects.filter(
+            customer=customer,
+            items__variant__product=product,
+            status__in=["DELIVERED", "RETURNED", "REFUNDED"],
         )
-        if order is None:
+        if not received.exists():
             raise ValidationError("You can only review a product you have received.")
-        if Review.objects.filter(product=product, customer=customer, order=order).exists():
+
+        # One review per *purchase* (business-rules §6a): a second, later order
+        # of the same product earns a second review. Resolving simply to the
+        # most recent order would land on one already reviewed and refuse, so a
+        # repeat buyer got one review however many times they bought.
+        reviewed = Review.objects.filter(product=product, customer=customer).values_list(
+            "order_id", flat=True
+        )
+        order = received.exclude(pk__in=reviewed).order_by("-placed_at").first()
+        if order is None:
             raise ValidationError("You have already reviewed this purchase.")
 
-        rating = int(request.data.get("rating", 0))
+        # `int()` on the raw value let "excellent" escape as a 500 and silently
+        # truncated 4.7 to 4. Ratings are whole numbers, so anything that is not
+        # one is refused rather than coerced.
+        try:
+            rating = int(str(request.data.get("rating")).strip())
+        except (TypeError, ValueError):
+            raise ValidationError("Rating must be a whole number between 1 and 5.") from None
         if not 1 <= rating <= 5:
             raise ValidationError("Rating must be between 1 and 5.")
 

@@ -352,12 +352,22 @@ comment. `POST /shop/products/{slug}/reviews/` accepts a review only when all of
 - that customer has an order containing the product in status `DELIVERED`, `RETURNED` or `REFUNDED`
   — you may only review something you actually received;
 - they have not already reviewed **that purchase**. A second, later order of the same product earns a
-  second review.
+  second review — the API resolves the most recent eligible order the customer has **not** yet
+  reviewed, so a repeat buyer gets one review per purchase rather than one review ever.
+
+Ratings are whole numbers. A fractional or non-numeric rating is refused rather than coerced: `4.7`
+is not silently stored as `4`.
 
 Every accepted review is stored `verified_purchase = True` and `status = PENDING`. **Nothing appears
 on the storefront until a human approves it** through `POST /reviews/{id}/approve/`, which needs
 `content.review_moderate`. Rejection takes the same shape and both record the moderator, the time and
 an optional note.
+
+A decision is **reversible and audit-logged**. The review row carries only the latest moderator, note
+and time, so a reversal would otherwise erase the previous decision; each one writes an `AuditLog`
+entry instead, and the sequence of a contested review survives. Omitting a note on re-moderation
+means "no new note" and keeps the existing one — re-approving a rejected review must not erase why it
+was rejected.
 
 Ratings are whole numbers 1–5. The aggregate shown on a product page (and in its JSON-LD
 `AggregateRating`) counts approved reviews only, so a pending or rejected review can never move the
