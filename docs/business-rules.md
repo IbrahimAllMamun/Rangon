@@ -204,6 +204,19 @@ sums). Money is `Decimal`; `float` is forbidden.
   *`DECISION REQUIRED` — assumed.*
 - Coupon usage is counted when the order is **created**, and released if the order is cancelled before
   fulfilment.
+- **Both usage limits are re-checked inside `promotions.services.redeem()`**, under the coupon row's
+  `select_for_update` lock — not only in `validate_coupon`. Validation runs while the cart is priced,
+  which is before that lock exists, so two concurrent checkouts can both pass it. The lock serialises
+  them and the re-read is what actually enforces the limit. `usage_limit_per_customer` defaults to 1,
+  so the common configuration is the one a race would give away twice.
+- A **free-shipping** coupon carries **no amount**: its `value` is always `0.00`, and the discount is
+  the shipping line being zeroed in `checkout.price_cart`. Every other discount type must have a
+  `value` above 0 — a coupon giving away nothing is a coupon that silently does nothing. The database
+  constraint exempts `FREE_SHIPPING` from the "above zero" rule for exactly this reason.
+- A coupon's rules are validated against the **resulting** coupon on edit, not just the submitted
+  fields: a PATCH sending only `ends_at` is still checked against the stored `starts_at`, and one
+  sending only `value` against the stored `discount_type`. Editing a coupon never changes orders
+  already placed — they keep the discount they were given.
 
 ### 3.4 Tax
 

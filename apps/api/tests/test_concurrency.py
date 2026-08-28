@@ -24,6 +24,7 @@ from orders.services import payments as payment_services
 from orders.services import pos
 from orders.services import returns as return_services
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
+from promotions.models import Coupon, CouponRedemption, DiscountType
 from tests import factories
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.slow, pytest.mark.concurrency]
@@ -406,3 +407,61 @@ def test_a_replayed_capture_webhook_banks_the_money_once(last_unit):
     bank.refresh_from_db()
     assert bank.balance == Decimal("250.00")
     assert finance_services.verify_integrity() == []
+
+
+def test_one_customer_cannot_spend_a_one_per_customer_coupon_twice():
+    """`usage_limit_per_customer` must hold under a race, not just sequentially.
+
+    The limit defaults to 1, so this is the *default* configuration. Sequentially
+    it works: the second order's validation counts the first redemption and
+    refuses. Concurrently, both carts validate before either redeems, and the
+    customer spends a once-per-customer coupon twice — real money, given away.
+
+    `redeem()` already serialises on the coupon row to protect the total usage
+    limit. The per-customer limit has to be re-checked inside that same lock.
+    """
+    branch = factories.branch(factories.organization())
+    variant = factories.variant(price="1000.00")
+    factories.stock(variant, branch, 10, "400.00")
+    customer = factories.customer()
+    coupon = Coupon.objects.create(
+        code="ONCEPER",
+        discount_type=DiscountType.PERCENTAGE,
+        value=Decimal("50.00"),
+        usage_limit_per_customer=1,
+    )
+
+    # Two separate carts — two genuinely different orders, as two browser tabs
+    # or two rapid submissions would produce. Not a double-click on one cart:
+    # that is the idempotency key's job and is already covered.
+    carts = []
+    for index in range(2):
+        cart = checkout_services.get_or_create_cart(
+            token=f"coupon-race-{index}", customer=customer, branch=branch
+        )
+        checkout_services.add_item(cart=cart, variant_id=variant.pk, quantity=1)
+        checkout_services.apply_coupon(cart=cart, code="ONCEPER")
+        carts.append(cart)
+
+    def buy(index: int) -> str:
+        order = checkout_services.place_order(
+            cart=carts[index],
+            shipping_address=ADDRESS,
+            payment_method=PaymentMethod.COD,
+            customer=customer,
+            contact_phone=customer.phone,
+            idempotency_key=f"coupon-race-{index}",
+        )
+        return order.number
+
+    results, errors = run_together(buy, 2)
+
+    redeemed = CouponRedemption.objects.filter(
+        coupon=coupon, customer=customer, released_at__isnull=True
+    ).count()
+    assert redeemed == 1, (
+        f"a one-per-customer coupon was redeemed {redeemed} times "
+        f"(orders: {results}, refusals: {errors})"
+    )
+    coupon.refresh_from_db()
+    assert coupon.used_count == 1

@@ -124,10 +124,30 @@ def validate_coupon(
 def redeem(
     *, coupon: Coupon, order: Any, discount: Decimal, customer: Any = None
 ) -> CouponRedemption:
-    """Count the usage.  Called when the order is created, inside its transaction."""
+    """Count the usage.  Called when the order is created, inside its transaction.
+
+    Both limits are re-checked here, not only in `validate_coupon`.  Validation
+    runs while the cart is being priced, which is before this lock exists, so two
+    concurrent checkouts can both pass it and both arrive here.  The coupon row
+    lock serialises them; re-reading the counts under it is what actually
+    enforces the limits (docs/business-rules.md §3.3).
+    """
     locked = Coupon.objects.select_for_update().get(pk=coupon.pk)
     if locked.is_exhausted:
         raise CouponInvalid("This coupon has reached its usage limit.")
+
+    # The per-customer limit defaults to 1, so the common configuration is the
+    # one a race would give away twice.
+    if locked.usage_limit_per_customer and customer is not None:
+        used = (
+            CouponRedemption.objects.filter(
+                coupon=locked, customer=customer, released_at__isnull=True
+            )
+            .exclude(order=order)
+            .count()
+        )
+        if used >= locked.usage_limit_per_customer:
+            raise CouponInvalid("You have already used this coupon.")
 
     redemption, created = CouponRedemption.objects.get_or_create(
         coupon=locked,
