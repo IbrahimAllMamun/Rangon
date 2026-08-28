@@ -175,12 +175,12 @@ docker compose exec web npm run test:e2e              # Playwright — see the w
 is **many times slower than production, by design**. Measured on this project, same machine, same API,
 same seeded data:
 
-| Page | Production | Dev |
-|---|---|---|
-| `/` | **0.03 s** | 4.87 s |
-| `/shop` | **0.29 s** | 1.44 s |
-| `/checkout` | **0.012 s** | 0.93 s |
-| `/product/[slug]` | **0.11 s** | 1.36 s |
+| Page                | Production        | Dev    |
+| ------------------- | ----------------- | ------ |
+| `/`               | **0.03 s**  | 4.87 s |
+| `/shop`           | **0.29 s**  | 1.44 s |
+| `/checkout`       | **0.012 s** | 0.93 s |
+| `/product/[slug]` | **0.11 s**  | 1.36 s |
 
 Production boots in ~0.35 s and serves pages in 11–320 ms. If you want a real number, measure the real
 thing — see [Run the production build locally](#run-the-production-build-locally) below, then compare
@@ -257,11 +257,11 @@ prodlocal exec api python manage.py migrate
 prodlocal exec api python manage.py seed_demo --reset
 ```
 
-| | |
-|---|---|
-| Storefront / admin / POS | <http://localhost:4100> |
-| API (direct, bypassing Nginx) | <http://localhost:8100/api/v1/> |
-| Mailpit | <http://localhost:8125> |
+|                               |                                                               |
+| ----------------------------- | ------------------------------------------------------------- |
+| Storefront / admin / POS      | [http://localhost:4100](http://localhost:4100)                 |
+| API (direct, bypassing Nginx) | [http://localhost:8100/api/v1/](http://localhost:8100/api/v1/) |
+| Mailpit                       | [http://localhost:8125](http://localhost:8125)                 |
 
 Everything goes through Nginx on **4100** as a single origin, which is what the deployed topology
 looks like and what `smoke-test.sh` assumes:
@@ -282,6 +282,8 @@ Without the alias, spell the four flags out every time:
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local \
   -f docker-compose.yml -f docker-compose.prodlocal.yml <command>
+
+docker build -t rangon-web:prod -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=https://rangonfashion.com/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=https://rangonfashion.com apps/web
 ```
 
 What this deliberately is *not*: no TLS (so `DJANGO_SECURE_SSL_REDIRECT` is forced off per service —
@@ -313,6 +315,7 @@ Staging/production procedures, migration strategy, rollback and backups are docu
 - [docs/operations/deployment.md](docs/operations/deployment.md)
 - [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — single-server Webuzo VPS
 - [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md) — your own machine + your own domain
+- [docs/operations/cloudflare-local-setup.md](docs/operations/cloudflare-local-setup.md) — Cloudflare Tunnel runbook for the local stack
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)
 

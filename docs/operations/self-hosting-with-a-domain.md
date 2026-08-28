@@ -57,6 +57,9 @@ is documented in §7 only for completeness.
 
 ## 3. Route A — Cloudflare Tunnel with your domain
 
+> Command-by-command runbook, including the quick-tunnel variant and a troubleshooting table:
+> [cloudflare-local-setup.md](cloudflare-local-setup.md). This section is the summary.
+
 ### 3.1 Point the domain at Cloudflare
 
 1. Buy the domain wherever you like (Namecheap, GoDaddy, a local registrar).
