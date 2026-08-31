@@ -130,15 +130,11 @@ class TestAuditTrail:
         # Who may refund and discount just changed. That has to leave a trace.
         assert AuditLog.objects.count() > before
 
-    def test_resetting_a_password_is_audited_and_never_logs_the_password(
-        self, admin, shop
-    ):
+    def test_resetting_a_password_is_audited_and_never_logs_the_password(self, admin, shop):
         staff = factories.user(RoleCode.CASHIER, branch_obj=shop["branch"])
         secret = "another-long-password-2"
 
-        response = admin.patch(
-            f"/api/v1/users/{staff.pk}/", {"password": secret}, format="json"
-        )
+        response = admin.patch(f"/api/v1/users/{staff.pk}/", {"password": secret}, format="json")
 
         assert response.status_code == 200
         staff.refresh_from_db()

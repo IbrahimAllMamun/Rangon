@@ -173,9 +173,7 @@ class TestSlugsAreStable:
         assert category.slug == "children"
 
     def test_a_new_category_still_gets_a_slug(self, admin, shop):
-        response = admin.post(
-            "/api/v1/categories/", {"name": "Winter Coats"}, format="json"
-        )
+        response = admin.post("/api/v1/categories/", {"name": "Winter Coats"}, format="json")
 
         assert response.status_code == 201
         assert Category.objects.get(name="Winter Coats").slug
@@ -195,9 +193,7 @@ class TestPermissions:
         assert response.status_code == 403
 
     def test_a_cashier_cannot_create_a_brand(self, shop, cashier, auth_client):
-        response = auth_client(cashier).post(
-            "/api/v1/brands/", {"name": "Smuggled"}, format="json"
-        )
+        response = auth_client(cashier).post("/api/v1/brands/", {"name": "Smuggled"}, format="json")
 
         assert response.status_code == 403
 

@@ -100,9 +100,7 @@ class CategorySerializer(serializers.ModelSerializer):
         if value is None:
             return None
         if value < 0 or value > 1:
-            raise serializers.ValidationError(
-                "The VAT rate must be between 0 and 1 (0.15 is 15%)."
-            )
+            raise serializers.ValidationError("The VAT rate must be between 0 and 1 (0.15 is 15%).")
         return value
 
     def validate_parent(self, value: Category | None) -> Category | None:
