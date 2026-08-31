@@ -11,6 +11,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
@@ -27,6 +28,7 @@ from finance.api.serializers import (
     ExpenseCategorySerializer,
     ExpenseSerializer,
     ExpenseTotalsSerializer,
+    PartyLedgerSerializer,
     RecordMovementSerializer,
     VoidExpenseSerializer,
 )
@@ -413,3 +415,30 @@ class ExpenseViewSet(
         date_from, date_to = parse_window(request.query_params)
         totals = selectors.expense_totals(branch=branch, date_from=date_from, date_to=date_to)
         return Response(ExpenseTotalsSerializer(totals).data)
+
+
+class PartyLedgerView(APIView):
+    """Phase 37: who owes the business money, and who it owes.
+
+    Both sides are **derived** from orders and purchase orders every time they
+    are asked for.  Neither `Customer` nor `Supplier` carries a balance column,
+    on purpose: a stored balance is a second source of truth that drifts from
+    the documents it claims to summarise.
+    """
+
+    permission_classes = [IsAuthenticated, RolePermission]
+    # `reports.financial`, not `finance.view`. A cashier holds `finance.view` so
+    # they can pick which account a sale's money lands in -- a deliberately
+    # narrow grant. This screen is the shop's whole debtor and creditor
+    # position, which is a manager, accountant and owner concern.
+    required_permissions = ["reports.financial"]
+
+    def get(self, request: Request) -> Response:
+        branch = None
+        if branch_id := request.query_params.get("branch"):
+            branch = resolve_branch(request.user, branch_id)
+        elif not request.user.can_cross_branch and request.user.branch_id:
+            branch = request.user.branch
+
+        ledger = selectors.party_ledger(branch=branch)
+        return Response(PartyLedgerSerializer(ledger).data)

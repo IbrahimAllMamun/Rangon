@@ -62,6 +62,14 @@ export default async function FinancePage() {
       <PageHeader
         title="Finance"
         description="Every figure here comes from the cash book. A balance changes only when a movement is recorded against it — never by editing a number."
+        actions={
+          <Link
+            href="/admin/finance/parties"
+            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
+          >
+            Receivable &amp; payable
+          </Link>
+        }
       />
 
       {error ? (

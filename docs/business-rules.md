@@ -313,6 +313,34 @@ reduces August.
 inclusive pricing it sits inside the line total, so it is removed per line — the order's own frozen
 `tax_mode` decides, not today's setting.
 
+### 4.2 Receivable and payable (the party ledger)
+
+`finance.selectors.party_ledger(branch)` and `GET /api/v1/party-ledger/` (permission
+`reports.financial`). Both sides are **derived on read**:
+
+- **Receivable** — every order where `grand_total > paid_total`. The common case is COD: goods
+  delivered, cash not yet collected. `PENDING` baskets, `CANCELLED` and `REFUNDED` orders are not
+  debts. Aged from `placed_at`.
+- **Payable** — every purchase order where `grand_total > paid_total`, excluding `DRAFT` (nothing
+  committed to the supplier yet) and `CANCELLED`. Aged from the **due date**:
+  `completed_at or ordered_at` plus `Supplier.payment_terms_days`, so a supplier on 30-day terms is
+  not overdue on day one.
+
+Ageing buckets are current (0–30), 31–60, 61–90 and 90+ days.
+
+**There is deliberately no balance column on `Customer` or `Supplier`.** A stored balance is a second
+source of truth that drifts from the documents it claims to summarise — the same mistake
+`CLAUDE.md` §3.2 forbids for stock. Every figure is recomputed from the orders and purchase orders
+behind it, and the screen can expand any party to show exactly which documents make up the number.
+
+This answers **decision D-A** ("does the business sell on credit?") without needing the decision: a
+credit sale is already an order with a balance, so if the answer turns out to be yes, nothing here
+changes.
+
+Gated on `reports.financial` rather than `finance.view`. A cashier holds `finance.view` so they can
+pick which account a sale's money lands in — a deliberately narrow grant that must not also hand them
+every customer's debt and every supplier's balance.
+
 ---
 
 ## 5. Orders
