@@ -429,9 +429,8 @@ D26 is the one that reached a customer: it is the storefront's own account page,
 address could have been pre-filled at checkout. Both surfaces now go through `customers.services`,
 which holds the invariant under `select_for_update`.
 
-**Not verified:** no signed-in browser click-through of these screens. Docker is unavailable in this
-environment, so the stack was never started. The screens are typechecked, linted and built, and the
-API beneath them is tested — but nobody has used them.
+~~**Not verified:** no signed-in browser click-through.~~ **Verified 2026-08-28** — see
+[§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Coupon screens verified, 2026-08-28
 
@@ -463,7 +462,7 @@ Three smaller gaps came from the same instance-blind validation as [D27](#known-
 checked its payload rather than the resulting coupon ([D29](#known-defects), [D30](#known-defects)),
 and free shipping was forced to carry a meaningless amount ([D31](#known-defects)).
 
-**Not verified:** no signed-in browser click-through, for the same reason as the customer screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Shipping screens verified, 2026-08-28
 
@@ -495,7 +494,7 @@ changed rather than doing it silently. **Rehearsed rather than assumed:** a prob
 migrated to `0001`, seeded with exactly the two bad rows the old API allowed, and migrated forward.
 Both were repaired, both constraints then rejected fresh violations, and the probe was dropped.
 
-**Not verified:** no signed-in browser click-through, as with the customer and coupon screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
 
 ### Review moderation verified, 2026-08-28
 
@@ -523,7 +522,104 @@ the neighbouring `content` app logs every navigation change. Since the review ro
 *latest* moderator and note, reversing a decision erased the previous one, and re-approving a rejected
 review wiped the reason it was rejected.
 
-**Not verified:** no signed-in browser click-through, as with the other four screens.
+~~**Not verified.**~~ **Verified 2026-08-28** — see [§ The screens were finally used](#the-screens-were-finally-used-2026-08-28).
+
+### The screens were finally used, 2026-08-28
+
+Five verification entries above each ended "no signed-in browser click-through — Docker is
+unavailable". **That reasoning was wrong**, and it was repeated four times before anyone checked it.
+Docker is how this project *documents* running the stack; it is not what running it requires. The
+container has PostgreSQL 16, Python, Node and a pre-installed Chromium, which is enough.
+
+Run natively, the whole stack came up:
+
+```bash
+# postgres + redis (redis is not optional: the auth throttle is Redis-backed,
+# and without it POST /auth/login/ returns 500)
+pg_ctl -D <data> -o '-p 5432 -k /tmp' start
+redis-server --daemonize yes --port 6379 --save ''
+
+# api
+DATABASE_URL=postgresql://rangon:rangon@127.0.0.1:5432/rangon \
+DJANGO_SECRET_KEY=... DJANGO_DEBUG=1 python manage.py runserver 8000 --noreload
+
+# web — API_INTERNAL_URL is the one that matters; it defaults to the compose
+# hostname http://api:8000/api/v1, which does not resolve outside compose
+API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 npx next dev --port 4000
+```
+
+Then a real Chromium (`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`, the escape hatch
+`playwright.config.ts` already provides for via `PW_CHROMIUM_PATH`) signed in as `owner@rangon.test`
+and drove the screens:
+
+```text
+sign in as owner ....................... /admin
+all five screens render signed in ...... 200, correct <h1>, no console errors
+create a customer ...................... saved
+add an address ......................... saved, and became the default automatically (D26)
+add a note ............................. saved, attributed to owner@rangon.test
+create a coupon ........................ WALK415942, 15% off
+free shipping hides the amount field ... yes (D31), and saved with no value
+create a shipping zone ................. saved; cities stored "sylhet, rajshahi" (D34)
+a backwards estimate is refused ........ "The longest estimate cannot be shorter…" (D35)
+create a shipping method ............... saved, renders "5–7 days"
+reject a review with a note ............ note kept
+re-approve it .......................... earlier note survived (D38)
+the approved review reaches the shop ... count 1, average 4.0
+verify_inventory / verify_accounts ..... consistent; every money event names an account
+```
+
+13 writes, all landing. The only failing request in the whole run was `401 GET /shop/wishlist` on the
+anonymous login page, which is the correct answer for a signed-out wishlist check.
+
+Five of the fixes were confirmed through the UI rather than only in tests: D26, D31, D34, D35 and
+D38. **[D7](#known-defects) is also stale** — Playwright's Chromium runs here; the blocker was only
+ever the *dev container's* Alpine base.
+
+The lesson is the same one this file keeps recording, turned on itself: a constraint nobody has
+tested is not a constraint. "Docker is unavailable, so this cannot be verified" was carried through
+four passes and cost five screens their verification, and it took one `ls /opt/pw-browsers` to
+disprove.
+
+### E2E made repeatable, and a production-only defect found, 2026-08-28
+
+Ran with `scripts/dev-stack-native.sh` (new) — one command for postgres, redis, api and web.
+
+```text
+vitest wired into ci.yml ............... 79 tests now actually protect something
+playwright, 3 consecutive full runs .... 15/15, 15/15, 15/15 against next dev
+                                         (the 2nd run used to fail, every time)
+tsc --noEmit / next lint / vitest ...... clean
+```
+
+**[D18](#known-defects)'s diagnosis was wrong.** "The E2E suite is order-coupled" — it is not. Run in
+any order against a fresh database, every spec passes. The suite was *not repeatable*, which looks
+identical from the outside and is fixed differently: by restoring what the specs consume, not by
+reordering anything. Two distinct causes, and the second only became visible after fixing the first:
+
+1. The returns spec approves, receives and refunds the single seeded `REQUESTED` return. A second run
+   finds none and waits 60s for a table row that will never appear. `e2e/global-setup.ts` reseeds.
+2. Reseeding regenerates every id, but Next kept serving the cached product page, so "add to cart"
+   posted a variant that no longer existed — a 200 in the logs and a cart drawer that never opened.
+
+Cause 2 turned out to be a real defect in its own right, [D39](#known-defects): `/api/revalidate`
+allowed a `products` tag that **nothing emits**, while the product page tagged `product:<slug>`, which
+the endpoint **refused**. The one page the endpoint existed to keep fresh was the one page it could
+not touch. That matters beyond tests — restoring a backup behind a running storefront has exactly the
+same effect.
+
+**The E2E job is not in CI, deliberately.** Wiring it up meant running the suite against a production
+build for the first time, and `Admin › recording an expense…` fails there consistently while passing
+consistently in dev ([D40](#known-defects)). The money is fine — the void posts its compensating
+adjustment and `verify_accounts` is clean — but the screen is not, and it reproduces with the D39 fix
+reverted, so it is pre-existing rather than collateral. Adding a CI job that is knowingly red would
+turn every future build red for a defect unrelated to whatever the build is checking, and skipping the
+spec to get green is what CLAUDE.md §9 forbids. **Vitest is wired in now; the E2E job is written and
+waits on D40.**
+
+Worth stating plainly: five verification passes ran the suite against `next dev` and called it
+verified. One run against a production build found a defect none of them could. The gap between "it
+works" and "it works the way it ships" was a whole class of bug wide.
 
 ## Still unproven
 
@@ -533,7 +629,7 @@ Do not describe any of these as working.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Playwright (`npm run test:e2e`) | **Now proven to run** — 17 tests, all passing individually, 2026-08-27. A full sequential run is still flaky ([D18](#known-defects)). `apps/web/Dockerfile.dev` is still alpine, so [D7](#known-defects) stands *for the dev container* |
 | Vitest and Playwright in CI             | Neither is wired into`ci.yml`                                                                                                                   |
-| Admin**write** screens, signed in | The organization and branch editors exist in code and the routes correctly redirect anonymous users, but no signed-in click-through has been done |
+| ~~Admin**write** screens, signed in~~ | **Proven 2026-08-28.** A real Chromium signed in as the owner and drove all five new screens: a customer created, an address and a note added, two coupons created, a zone and a method created, a review rejected and re-approved. 13 writes, all landing. The organization and branch editors are still only read-anonymously-redirected |
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets documented in`docs/database/indexing.md` but **not asserted in tests**; no load test                                        |
@@ -554,13 +650,13 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | D4       | **The brand appears twice in product titles.** `seed_demo` writes `seo_title = "<name> \| Rangon Fashion"` while the root layout applies `template: "%s \| Rangon Fashion"`, producing `Classic Oxford Shirt \| Rangon Fashion \| Rangon Fashion`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `apps/api/core/management/commands/seed_demo.py:475` and `apps/web/src/app/layout.tsx:22`         | Any product with an`seo_title` gets a doubled suffix in the tab, the OG card and search results                                               |
 | ~~D5~~  | ~~**The cart drawer dialog has no description.**~~ **Fixed 2026-08-18** — `Dialog.Description` added; the drawer now renders `aria-describedby`, verified in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `apps/web/src/components/commerce/cart-drawer.tsx`                                                  | —                                                                                                                                              |
 | D6       | **mypy reports 98 errors in 29 files.** CI runs it with a trailing `                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                                                                                       | echo ":⚠️:"`, so it never blocks. 60 are `arg-type`, mostly DRF's `request.user`typed`User \| AnonymousUser`where services want`User` |
-| D7       | **Playwright cannot run in the dev container.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds, and none are installed (`~/.cache/ms-playwright` is absent)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `apps/web/Dockerfile.dev`                                                                           | Phase 29 is blocked until E2E runs on a glibc image (`mcr.microsoft.com/playwright`) or on the host                                           |
+| D7       | **Playwright cannot run in the *dev container*.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds. **Narrowed 2026-08-28** — this was being read as "Playwright cannot run here", which is false: a pre-installed Chromium drove the full signed-in walk-through (see the verification log). The defect is the Alpine dev image alone, and `playwright.config.ts` already carries the `PW_CHROMIUM_PATH` escape hatch |
 | ~~D21~~ | ~~**The image scan went red on a base-image CVE.**~~ **Fixed 2026-08-27** — `node:22-alpine` shipped openssl `3.5.7-r0` while Alpine 3.24 already carried the `3.5.8-r0` fix for CVE-2026-14456, so `Build & scan images` failed on every branch through no fault of any diff. The runtime stage now runs `apk upgrade --no-cache`, which is safe to do unconditionally because the gate sets `ignore-unfixed: true` — it only ever fails on a CVE whose fix is already published. Without this, the scan stays red until upstream rebuilds the base image |
 | ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
 | ~~D20~~ | ~~**Computed money left the API as JSON floats.**~~ **Fixed 2026-08-27** — `accounts/cash-position/` returned `661480.0` rather than `"661480.00"`, because it responds with plain selector dicts and DRF encodes `Decimal` as a number. CLAUDE.md §4 forbids float for money, and `CashPosition` in the web app's `types.ts` already declared these as strings. Now serialized through `DecimalField` |
 | ~~D22~~ | ~~**A stock count could never be counted.**~~ **Fixed 2026-08-27** — `counted_quantity` was write-protected by a `read_only=True` nested serializer and set by nothing, so `apply` adjusted nothing and silently marked the sheet APPLIED. No test covered stock counts at any level. Added `record/` and `cancel/`, made `apply/` refuse an empty or non-COUNTING sheet, and wrote the first 20 tests the feature has had |
 | ~~D23~~ | ~~**`seed_demo --reset` died once a stock count or transfer existed.**~~ **Fixed 2026-08-27** — `StockCountItem` and `StockTransferItem` hold PROTECT references to `ProductVariant`, and `_reset()` deleted the catalogue first. Harmless while those documents were unreachable from the UI; phase 39 made them ordinary. This is the second time the same omission has bitten (phase 36's `Expense` was the first), so it now has a regression test that creates one of each protecting document and resets |
-| D18      | **The E2E suite is order-coupled.** All 17 specs pass individually, but each full sequential run fails a *different* one — storefront checkout, a POS sale, an accessibility check. The config already says "these flows share one seeded database"; they also mutate it, and nothing resets between tests. Fixing it is phase 29 work: either reseed per describe-block or make each flow pick its own fixture. Found 2026-08-27, the first time the suite was ever executed |
+| ~~D18~~ | ~~**The E2E suite is order-coupled.**~~ **Diagnosis corrected and fixed 2026-08-28** — the specs are *not* order-coupled: run in any order against a fresh database they all pass. They were **not repeatable**, which looks identical from outside and is fixed differently. Two causes: (1) the returns spec *consumes* the single seeded `REQUESTED` return, so a second run finds none — `e2e/global-setup.ts` now restores the fixtures; (2) `seed_demo --reset` regenerates every id while Next keeps serving the cached product page, so "add to cart" posted a variant that no longer existed — see [D39](#known-defects). Three consecutive full runs now pass 15/15 against `next dev`, where the second used to fail |
 | D8       | **Dev and prod web images share one tag.** Neither compose file sets `image:`, so `docker compose build web` (production `Dockerfile`) and the dev overlay (`Dockerfile.dev`) both produce `rangon-web:latest`. The production runtime deliberately deletes npm, so a later `up -d` without `--build` would start it with `npm run dev` and fail                                                                                                                                                                                                                                                                                                                                                                              | `docker-compose.yml`, `docker-compose.dev.yml`                                                    | A confusing, self-inflicted breakage after any production build. Also recorded in`.claude/environment.md`                                     |
 | D9       | **Seed data has no product images.** Every storefront card and product page renders the "no image available" placeholder                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `seed_demo`                                                                                         | The photography-led storefront of`CLAUDE.md` §10 cannot actually be judged                                                                   |
 | ~~D16~~ | ~~**The production CSP renders a blank page.**~~ **Fixed 2026-08-21** — `apps/web/src/middleware.ts` mints a per-request nonce and sends the policy itself; Next stamps that nonce onto every script it emits (42 of 42 in the production build), so `script-src` is `'self' 'nonce-…' 'strict-dynamic'` with **no** `unsafe-inline` and **no** `unsafe-eval`. Both nginx configs had their `add_header Content-Security-Policy` **removed** — `add_header` appends, and a browser enforces the intersection of every policy it receives, so a second header would have re-broken hydration. Verified in Chromium against the production image: home page hydrates, 19 product cards, zero CSP violations | `apps/web/src/middleware.ts`, `infrastructure/docker/nginx/**`                                    | —                                                                                                                                              |
@@ -589,6 +685,9 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D36~~ | ~~**A repeat buyer got one review, ever.**~~ **Fixed 2026-08-28** — §6a says "a second, later order of the same product earns a second review", but the code resolved the eligible order as simply the most recent one. A customer's second attempt therefore always landed on the order they had already reviewed and was refused, however many times they had bought the product. The most recent **unreviewed** eligible order is now chosen. Code and documentation disagreed; both were wrong to leave |
 | ~~D37~~ | ~~**A non-numeric rating returned 500.**~~ **Fixed 2026-08-28** — `int(request.data.get("rating", 0))` raised `ValueError` on `"excellent"` and escaped unhandled; `4.7` was silently truncated to `4`, though §6a says ratings are whole numbers. Both are refused as validation errors now |
 | ~~D38~~ | ~~**Moderation left no audit trail, and erased its own notes.**~~ **Fixed 2026-08-28** — approving or rejecting decides what the public sees, yet wrote no `AuditLog` entry, while the neighbouring `content` app logs every navigation change. The review row holds only the *latest* moderator and note, so reversing a decision erased the previous one — and `request.data.get("note", "")` wiped a rejection reason on re-approval. Each decision now writes an entry, and an omitted note keeps the existing one |
+
+| ~~D39~~ | ~~**`/api/revalidate` could not bust the one page that needed it.**~~ **Fixed 2026-08-28** — the allow-list permitted `products`, which **nothing emitted**, while the product page tagged `product:<slug>`, which the endpoint **refused**. So the product page was the only page the endpoint could not invalidate: a merchandiser changing a price had no way to force it, and any operation that regenerates ids (a reseed, a restore from backup) left the storefront serving variant ids that no longer existed. The page now emits both tags and the endpoint admits the targeted form, bounded by a slug pattern so the allow-list stays an allow-list |
+| D40      | **The expenses screen fails against a production build.** Found 2026-08-28 by running the E2E suite against `npm run build && npm run start` — something no pass had done before; every previous run used `next dev`. `Admin › recording an expense…` fails consistently in production and passes consistently in dev. **The money is correct**: the expense and its void are written, the compensating adjustment posts, and `verify_accounts` is clean. What fails is the screen — after a reseed the recorded row does not appear, and in one sequence the account balance stayed down after a void while the database showed it restored. **Confirmed pre-existing**, not caused by the D39 fix: it reproduces with those changes reverted. Not root-caused; this is what blocks the E2E job from being added to CI |
 
 
 ## Still API-only (no UI)
@@ -689,7 +788,12 @@ at setup. Both are worth doing, but neither blocks a shop from trading.
   correct, and the code contradicted it (D36). Reading the doc is not enough; the rules have to be
   executed against the endpoint.
 
-**Six passes, 15 defects, no exceptions so far.** Every area audited has had at least three.
+**Seven passes, 17 defects, no exceptions so far.** Every area audited has had at least two.
+
+**The immediate next task is [D40](#known-defects)** — root-cause the expenses screen's
+production-only failure. It is the one thing standing between the E2E suite and CI, the job is already
+written, and until it lands the five admin screens shipped on this branch have no regression cover
+beyond their API tests.
 
 **Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
 typechecked and covered by API tests, but no browser has touched them — the environment they were

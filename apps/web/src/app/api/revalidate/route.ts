@@ -18,6 +18,25 @@ const SECRET = process.env.REVALIDATE_SECRET ?? "";
 /** Only tags the storefront actually uses; an arbitrary tag is a typo, not a request. */
 const ALLOWED_TAGS = new Set(["navigation", "categories", "home", "products"]);
 
+/**
+ * One product page, by slug.
+ *
+ * `products` was on the allow-list from the start but nothing emitted it, while
+ * the product page tagged `product:<slug>`, which the allow-list refused — so
+ * the product page was the one page this endpoint could not bust, and a
+ * merchandiser changing a price had no way to force it. The page now emits
+ * both, and this pattern admits the targeted form.
+ *
+ * The slug is bounded to the shape a slug can take: it reaches `revalidateTag`,
+ * so "any string starting with product:" would be an arbitrary-tag hole in an
+ * allow-list that exists to prevent exactly that.
+ */
+const PRODUCT_TAG = /^product:[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isAllowed(tag: string): boolean {
+  return ALLOWED_TAGS.has(tag) || PRODUCT_TAG.test(tag);
+}
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let mismatch = 0;
@@ -49,7 +68,7 @@ export async function POST(request: NextRequest) {
   }
 
   const revalidated = tags.filter(
-    (tag): tag is string => typeof tag === "string" && ALLOWED_TAGS.has(tag),
+    (tag): tag is string => typeof tag === "string" && isAllowed(tag),
   );
   for (const tag of revalidated) revalidateTag(tag);
 

@@ -16,7 +16,12 @@ async function getProduct(slug: string): Promise<ShopProduct | null> {
     return await apiServer<ShopProduct>(`/shop/products/${slug}/`, {
       auth: false,
       revalidate: 60,
-      tags: [`product:${slug}`],
+      // Two tags on purpose: `product:<slug>` busts this one page when its
+      // product is edited, and `products` busts every product page at once —
+      // which is what a reseed or a restore from backup needs, because those
+      // regenerate every id and leave the cached buy panel pointing at variants
+      // that no longer exist.
+      tags: ["products", `product:${slug}`],
     });
   } catch {
     return null;

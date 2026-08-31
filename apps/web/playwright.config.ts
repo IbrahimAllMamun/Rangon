@@ -4,6 +4,9 @@ const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Restores the fixtures the suite consumes, so a second run behaves like the
+  // first (D18). See e2e/global-setup.ts.
+  globalSetup: "./e2e/global-setup.ts",
   fullyParallel: false, // these flows share one seeded database
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
