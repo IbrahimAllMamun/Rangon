@@ -365,3 +365,78 @@ mark cannot be stretched.
 | Browser tab | `symbol` | `logo.svg` |
 
 Naming is *the colour of the wordmark*: `_dark` goes on white, `_light` on black.
+
+---
+
+## 2026-08-31 — VAT, phases 37 and 38, and the eighth audit pass
+
+**What shipped:** VAT became an editable, audited organisation setting; phase 38
+(net profit) and phase 37 (party ledger); the last two API-only areas got their
+screens; the E2E suite went into CI.
+
+### The bugs, and the lesson from each
+
+**`RANGON_PRICES_INCLUDE_TAX` was dead config.** Nothing read it, so the
+inclusive half of the VAT arithmetic did not exist — and inclusive is the
+treatment Bangladeshi retail most likely needs. A setting that nothing reads is
+worse than a missing one: it looks decided.
+
+**Revenue counted VAT as turnover.** `dashboard`, `profit_report` and
+`product_performance` all summed `line_total`, which under inclusive pricing
+contains the tax. Each would have overstated revenue, gross profit and margin by
+exactly the VAT — a defect that *could not exist* until the inclusive half was
+implemented, and would have shipped with it. When you make a previously
+impossible state reachable, go and look at everything that reads the field.
+
+**D20 was only ever fixed at one endpoint.** Money left every dict-shaped report
+as a JSON float, because those views answer with plain selector dicts and DRF's
+`COERCE_DECIMAL_TO_STRING` never applies to them. The frontend types already said
+`string`. A defect "fixed" at the place it was noticed is not fixed.
+
+**Eleven defects in the two areas this file called safe.** Categories/brands and
+users/roles were "seeded once, rarely changed" — which is exactly why nothing had
+ever exercised their edges. A category could be its own parent (infinite
+recursion in the navigation menu every storefront page renders), a category VAT
+rate of 500% was accepted (and a basket takes the *highest* rate present), a
+rename silently changed the slug and broke every link to it, a PATCH could
+deactivate your own account and walk around the guard on `deactivate`, the last
+owner could be demoted, and a role change — the write that decides who may
+refund — left **no audit entry at all**.
+
+**Two defects survived a clean typecheck and a clean lint.** A function passed
+from a server component into a client one (the page failed outright on first
+load), and a serializer field typed as an object that is really a string (a row
+of empty chips with duplicate React keys). `tsc` proves shapes agree with what
+you *wrote down*, not with what the API sends.
+
+**D40 was two bugs, and one of them was a clock.** The suite suddenly started
+failing on `next dev` too — which it never had — at 18:18 UTC, which is 00:18 in
+Dhaka. The expenses screen built its date window from the **UTC** calendar date;
+the API widens a bare date to the end of that day in the **shop's** timezone.
+Those agree for eighteen hours and disagree for six, so between midnight and
+06:00 local an expense vanished from the screen that recorded it — on any build.
+That had been masquerading as part of D40 in every late-evening run. Fixed by
+sending instants instead of dates. The lesson: "fails in production, passes in
+dev" is an environment-shaped explanation, and environment-shaped explanations
+are easy to reach for and hard to disprove. This one held for three days and was
+half wrong.
+
+**What is left of D40 is genuinely production-only.** "The expenses screen fails against a
+production build" described the symptom. The money is right, the server is right
+— a manual RSC fetch of the page contains the new row, so does the HTML, and a
+client-side navigation or a reload shows it. Only `router.refresh()` fails to
+apply what it fetched. Five hypotheses ruled out by experiment (the CSP
+middleware twice over, `next start` versus standalone, a stale API response, the
+query string), and it is not app-wide — other admin write screens pass against
+the same build. Still unfixed, but the shape of it is no longer money-coloured.
+
+**`next start` is not how this app is served.** `next.config` sets
+`output: "standalone"` and Next warns the two do not work together; the image
+runs `node server.js`. Every "production build" check before this one used the
+wrong server.
+
+### The two habits, restated
+
+1. Audit the endpoint before building the screen. Eight passes, eight sets of
+   defects, no exceptions.
+2. Run it. A green typecheck is not evidence the app works.

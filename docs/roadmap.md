@@ -9,9 +9,12 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last diagnosed: **2026-08-18**, against commit `423cdf4` on `main` (in sync with `origin/main`).
-Phases 07 and 35 shipped after that diagnosis — see the 2026-08-22 entries in the verification log —
-and phase 36 on 2026-08-27, whose verification is the 2026-08-27 entry.
+Last updated: **2026-08-31**. Phases 37 and 38 shipped that day, VAT became an editable setting,
+the last two API-only areas got their screens, and the E2E suite went into CI. The evidence for all
+of it is the 2026-08-31 entry in the verification log.
+
+**All 39 phases are now ✅ or deliberately V2.** What is left is not building: a payment gateway,
+two defects that keep E2E off a production build, one owner decision, and a deployment.
 
 | #   | Phase                                 | Backend | Frontend | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --- | ------------------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -668,9 +671,18 @@ on first load. And a cashier could read the whole party ledger, because the firs
 `finance.view` (which cashiers hold, deliberately, to pick an account for a sale) instead of
 `reports.financial`.
 
-**D40 is not what it looked like.** Five hypotheses ruled out by experiment; see the entry. The short
-version: the money is right, the server is right, and only `router.refresh()` fails to apply what it
-fetched — on this one screen, in a production build.
+**D40 is not what it looked like, and it was two bugs.** Five hypotheses ruled out by experiment, and
+then the suite started failing on `next dev` as well — which it had never done — at 18:18 UTC, which
+is 00:18 in Dhaka. That was [D42](#known-defects): the screen built its window from the **UTC**
+calendar date while the API widened it to the end of that day in the **shop's** timezone, so for the
+six hours a day those disagree, an expense vanished from the screen that recorded it. Fixed. What is
+left of D40 is the half that only appears in a production build: the money is right, the server is
+right, and only `router.refresh()` fails to apply what it fetched.
+
+Worth stating plainly, because it is the second time this pattern has shown up in this file: a defect
+that "fails in production and passes in dev" was, for one of its two causes, really "fails after
+18:00 UTC and passes before". Environment-shaped explanations are easy to reach for and hard to
+disprove; this one held for three days.
 
 
 ## Still unproven
@@ -739,20 +751,23 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 | ~~D38~~ | ~~**Moderation left no audit trail, and erased its own notes.**~~ **Fixed 2026-08-28** — approving or rejecting decides what the public sees, yet wrote no `AuditLog` entry, while the neighbouring `content` app logs every navigation change. The review row holds only the *latest* moderator and note, so reversing a decision erased the previous one — and `request.data.get("note", "")` wiped a rejection reason on re-approval. Each decision now writes an entry, and an omitted note keeps the existing one |
 
 | ~~D39~~ | ~~**`/api/revalidate` could not bust the one page that needed it.**~~ **Fixed 2026-08-28** — the allow-list permitted `products`, which **nothing emitted**, while the product page tagged `product:<slug>`, which the endpoint **refused**. So the product page was the only page the endpoint could not invalidate: a merchandiser changing a price had no way to force it, and any operation that regenerates ids (a reseed, a restore from backup) left the storefront serving variant ids that no longer existed. The page now emits both tags and the endpoint admits the targeted form, bounded by a slug pattern so the allow-list stays an allow-list |
-| D40      | **`router.refresh()` does not apply on the expenses screen in a production build.** Found 2026-08-28; **narrowed 2026-08-31**, and it is not what it looked like. It is not a money bug and not a server bug: the expense and its void are written, `verify_accounts` is clean, and the Next server renders the right thing — a manual RSC fetch of `/admin/expenses` contains the new row, the plain HTML contains it, a client-side navigation away and back shows it, and a full reload shows it. Only `router.refresh()` fails to apply the payload it fetched (Django logs the refetch and the response grows by exactly the new row). **Ruled out by experiment:** the CSP middleware (bypassed for RSC requests, then removed entirely — still fails), `next start` versus the standalone server the image actually runs, a stale API response, and the page's query string. **Not app-wide:** the inventory write-off and returns screens use `router.refresh()` the same way and pass against the same production build, so it is specific to this screen. Still not fixed |
+| D40      | **`router.refresh()` does not apply on the expenses screen in a production build.** Found 2026-08-28; **narrowed 2026-08-31**, and it is not what it looked like. It is not a money bug and not a server bug: the expense and its void are written, `verify_accounts` is clean, and the Next server renders the right thing — a manual RSC fetch of `/admin/expenses` contains the new row, the plain HTML contains it, a client-side navigation away and back shows it, and a full reload shows it. Only `router.refresh()` fails to apply the payload it fetched (Django logs the refetch and the response grows by exactly the new row). **Ruled out by experiment:** the CSP middleware (bypassed for RSC requests, then removed entirely — still fails), `next start` versus the standalone server the image actually runs, a stale API response, and the page's query string. **Not app-wide:** the inventory write-off and returns screens use `router.refresh()` the same way and pass against the same production build, so it is specific to this screen. Still not fixed. **A second, separate cause was found and fixed 2026-08-31** — see [D42](#known-defects) — which had been masquerading as part of this one in any run made after 18:00 UTC. With that fixed the spec passes against `next dev` and **still fails against a production build**, which is what isolates D40 to the `router.refresh()` behaviour alone |
 
 
 | D41      | **The storefront checkout specs are unstable against a production build.** Found 2026-08-31, running the whole suite against the standalone server (`node .next/standalone/server.js`, which is what the image runs) for the first time. One run failed only `[mobile] customer can complete a cash-on-delivery order`; a later reseeded run failed the desktop checkout **and** the incomplete-address spec. Both pass at both viewports against `next dev`, reseeded, every time. **Not diagnosed** — and the inconsistency between runs is itself the finding: whatever this is, it is not deterministic, so a production-build CI job would be flaky as well as red. This is the second reason the E2E job runs against dev |
+| ~~D42~~ | ~~**An expense recorded after midnight local time could not be seen.**~~ **Fixed 2026-08-31.** The expenses screen built its date window with `new Date().toISOString()` — the **UTC** date — and the API widens a bare `date_to` to the end of that day in the **shop's** timezone (`Asia/Dhaka`, UTC+6). The two agree for eighteen hours a day and disagree for the other six: at 00:18 in Dhaka the UTC date is still the previous day, so the window closed at 17:59 UTC — twenty minutes *before* the expense that had just been recorded. Between midnight and 06:00 local, an expense vanished from the screen that recorded it, on dev and production alike. Found by the E2E suite starting to fail on dev too, which it had never done, at 18:18 UTC. The window is now sent as exact instants, so there is no calendar day for the two ends to disagree about |
 
 ## Still API-only (no UI)
 
-What is missing is the screen. The endpoints exist — but **check each one against the documented
-behaviour before building over it.** Doing that has now paid for itself four times: a CSV export that
-had never worked, a stock count that could not be counted, a restock decision in the wrong place, and
-the four customer defects D24–D27. "Exists" is not "tested": the customers API had no tests at all.
+**Nothing.** The last two — categories/brands/attributes and users/roles — shipped 2026-08-31 as
+`/admin/taxonomy` and `/admin/staff`.
 
-- categories, brands, attributes
-- users and roles
+The rule that got us here is worth keeping for whatever is built next: **check each endpoint against
+the documented behaviour before building over it.** It has now paid for itself six times — a CSV
+export that had never worked, a stock count that could not be counted, a restock decision in the
+wrong place, the four customer defects D24–D27, a coupon redeemable twice under a race, and eleven
+more in the two "safe" areas above. "Exists" is not "tested", and "rarely touched" is a reason
+nothing has ever exercised the edges, not a reason they are sound.
 
 Recently built, so no longer on this list: **return approve / reject / receive / refund** —
 `/admin/returns/[id]`; **damage/write-off, stock counts and stock transfers** —
@@ -821,59 +836,38 @@ given, and no later setting change corrects it.
 
 ## Suggested next task
 
-Phases 36, 39 (part) and the returns screens shipped 2026-08-27; the **customer screens** (D24–D27)
-and the **coupon screens** (D28–D31) both shipped 2026-08-28.
+Phases 35–39 are complete. Every admin screen exists. The remaining work is no longer *building* —
+it is the things that need a decision, a provider, or an environment.
 
-**Keep auditing the endpoints before building over them.** Five passes, five sets of defects — and
-the fifth was the first to touch money ([D28](#known-defects): a once-per-customer coupon redeemable
-twice under a race). The pattern is now specific enough to look for deliberately:
+**1. The payment gateway.** Nothing prepaid can be sold until one exists, and a gateway's settled
+takings need a `BANK` account to land in. Implement against
+`orders.payments.providers.base.PaymentProvider`, with signature verification and webhook replay
+tests. This is the largest remaining gap between the software and a shop that can trade online.
 
-- *Validation that reads the payload instead of the resulting record.* D27, D29 and D30 are the same
-  bug in three places. Any `validate()` using `attrs.get(...)` without falling back to
-  `self.instance` will let a PATCH through with a half-payload.
-- *A limit checked during pricing but not re-checked under the lock that protects it.* D28. Worth
-  grepping for wherever a service validates then mutates.
-- *A constraint that applies to a type it does not describe.* D31.
+**2. [D40](#known-defects) and [D41](#known-defects)**, which together keep the E2E suite off a
+production build in CI. D40 is now narrowed to a single sentence — only `router.refresh()` fails to
+apply, on one screen, in a production build — with five hypotheses ruled out by experiment. D41 is
+not yet diagnosed at all, and is inconsistent between runs.
 
-**Remaining API-only screens:** categories/brands/attributes, and users and roles. Neither is
-load-bearing — categories and brands are seeded and rarely change, and users are created by an owner
-at setup. Both are worth doing, but neither blocks a shop from trading.
+**3. Settle VAT.** No code waits on it any more; the first real sale does. Both treatments are
+implemented and the setting is on `/admin/settings` with an audit trail and a confirmation guard —
+but the default is still exclusive at 0%, which is a placeholder rather than an answer.
 
-**Two kinds of gap have now produced defects, and they need different checks:**
+**4. Deployment.** Compose prod stack, green CI, images built and scanned — and nothing has ever
+been deployed. Everything after this point (a real backup schedule, a load test, an independent
+security review, `verify_accounts` against real data) needs an environment to be true of.
 
-- *No documented rules at all.* Shipping had no section in `business-rules.md`, and produced the worst
-  defect of the six passes (D32, all shipping free). **`accounts` (users, roles) still has none**, and
-  banners/navigation are only partly covered — check before building over either.
-- *Documented rules the code does not implement.* Reviews were the reverse case: §6a was detailed and
-  correct, and the code contradicted it (D36). Reading the doc is not enough; the rules have to be
-  executed against the endpoint.
+**Two habits to keep**, because both earned their place this pass:
 
-**Seven passes, 17 defects, no exceptions so far.** Every area audited has had at least two.
+- *Audit the endpoint before building the screen.* Eight passes, eight sets of defects, no
+  exceptions. The eighth was over the two areas this file called "not load-bearing" and found
+  eleven, five of them security-sensitive.
+- *Run it, do not typecheck it.* Two defects this pass survived a clean `tsc` and a clean lint and
+  died the moment a browser loaded the page: a function passed from a server component to a client
+  one, and a serializer field typed as an object that is really a string. A green typecheck is not
+  evidence the app works.
 
-**The immediate next task is [D40](#known-defects)** — root-cause the expenses screen's
-production-only failure. It is the one thing standing between the E2E suite and CI, the job is already
-written, and until it lands the five admin screens shipped on this branch have no regression cover
-beyond their API tests.
-
-**Worth doing while it is cheap: a signed-in click-through of the customer screens.** They are built,
-typechecked and covered by API tests, but no browser has touched them — the environment they were
-written in had no Docker. That is the same "written but unproven" gap this file exists to name.
-
-**Phase 38 is one decision away.** The only blocker is **D-C, the VAT decision**.
-`finance.selectors.expense_totals()` is already the shape `business_summary()` subtracts, so once
-VAT is settled 38 is mostly assembly. It remains the highest-value non-code action on this list, and
-it gets more expensive the longer it waits — settling it after the first real sale rewrites every
-historical total.
-
-**D18 — make the E2E suite survive a full run.** It executes and every spec passes alone; the flows
-share and mutate one seeded database. Reseed per describe-block or give each flow its own fixture,
-then wire Vitest and Playwright into `ci.yml`. That closes phase 29.
-
-**The rest of phase 39** — quotation, cheque register, barcode label sheets — is new building rather
-than screens over existing services.
-
-The heavier follow-up is still the **payment gateway**: nothing prepaid can be sold until one
-exists, and a gateway's settled takings need a `BANK` account to land in.
-
-**Worth doing once, soon:** run `manage.py verify_accounts` against real data on first deploy. Any
-payment taken before phase 35 carries no account, and that count is the size of the permanent gap.
+**The still-open backlog** from the Dostishop review — CSV import, a media library, four-state
+variant availability, Quick View, a Meta feed, merchandising endpoints, abandoned-checkout capture —
+is tracked in [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md) and is
+product work rather than gaps.

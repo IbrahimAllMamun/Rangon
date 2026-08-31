@@ -21,9 +21,10 @@ And in this folder:
 
 ---
 
-## State as of 2026-08-18 (diagnosis pass on `423cdf4`)
+## State as of 2026-08-31
 
-Working, running, and verified against the live stack:
+**All 39 phases are ✅ or deliberately V2.** The full picture, with evidence and dates, is in
+`../docs/roadmap.md`. What follows is only what you need before touching anything.
 
 ```text
 Storefront   http://localhost:4000          (NOT :3000 — see environment.md)
@@ -31,93 +32,53 @@ Admin        http://localhost:4000/admin
 POS          http://localhost:4000/pos
 API          http://localhost:8000/api/v1/
 API docs     http://localhost:8000/api/docs/
-Mailpit      http://localhost:8025
-MinIO        http://localhost:9001
 ```
 
 Logins (dev seed, all `rangon12345`): `owner@`, `manager@`, `cashier@`, `stock@`,
 `accounts@`, `customer@` — all `...@rangon.test`.
 
-### Verified by actually executing it
+`scripts/dev-stack-native.sh up` brings up postgres, redis, api and web without Docker. That is how
+everything below was verified.
+
+### Verified by actually executing it (2026-08-31)
 
 ```text
-migrations from an empty database ..... OK, all 12 Django apps
-seed_demo --reset ..................... 12 products, 72 variants, 2 POs, 40 orders
-inventory ledger integrity ............ 0 drift (re-checked after a live browser order)
-pytest ................................ 167 passed (160 + 7 threaded concurrency)
-ruff check + ruff format .............. clean
-tsc --noEmit .......................... clean
-vitest ................................ 17 passed, 2 files
-production Next build ................. passes in CI and via `docker compose build web`
-GitHub Actions CI ..................... green on all four jobs at HEAD (14 runs, latest #15)
-storefront / admin / POS .............. 11 storefront 200, 10 admin/POS 307 → /login
-a real POS sale through the web proxy . RGN-POS-000025 DELIVERED PAID 2450.00
-a real browser purchase ............... RGN-WEB-000018 CONFIRMED UNPAID 2520.00 (COD)
-all 10 admin routes ................... no dead sidebar links
+pytest ................................. 584 passed
+ruff check + ruff format ............... clean
+tsc --noEmit / next lint ............... clean
+vitest ................................. 79 passed, 6 files
+playwright, dev, reseeded .............. 20/20 — and now a CI job
+playwright, production standalone ...... NOT green — D40 and D41
+migrations from an empty database ...... OK
+inventory ledger integrity ............. 0 drift
 ```
 
 ### Never successfully run — do not claim these work
 
-- `npm run test:e2e` (Playwright). Specs for the four critical flows exist, but the
-  dev image is `node:22-alpine` and Playwright has no musl browsers. Needs a glibc
-  image or a host run.
-- A signed-in pass over the admin **write** screens (organization + branches). The
-  code is there and anonymous access correctly redirects; nobody has used them.
-- Anything deployed. There is no environment, and CI builds images without pushing.
+- **The E2E suite against a production build.** Two defects block it, D40 and D41. The CI job
+  deliberately runs against `next dev` and says so.
+- **A live payment gateway.** The card option is visibly disabled, not faked.
+- **Anything deployed.** There is no environment; CI builds and scans images without pushing.
+- **A load test**, and **an independent security review**.
 
-### Known defects found on 2026-08-18
+### The two habits that keep finding things
 
-Nine, none of them touching money or stock. Full table in `../docs/roadmap.md`.
-The three dead ends (wishlist, reviews, notifications) and the production CSP are
-now fixed. Still open: a doubled brand suffix in product titles (D4), 98
-non-blocking mypy errors (D6), Playwright blocked by Alpine (D7), both web images
-sharing one tag (D8), and a seed with no product images (D9).
+1. **Audit the endpoint before building the screen.** Eight passes, eight sets of defects, no
+   exceptions. The eighth was over categories/brands and users/roles — the two areas the roadmap
+   itself called "not load-bearing" — and found eleven, five of them security-sensitive.
+2. **Run it, do not typecheck it.** Two defects on 2026-08-31 survived a clean `tsc` *and* a clean
+   lint and died the moment a browser loaded the page: a function passed from a server component
+   into a client one, and a serializer field typed as an object that is really a string.
 
-## Commit history
+## What to do next
 
-```text
-423cdf4  subtle change                                  ← CI green from here
-d312a24  fixed ci.yml error
-c347068  requirements updated
-93772f0  feat(web): LogoLoader route transition, editable settings
-03c9a45  docs: add .claude/ with the working context for this repo
-18d1078  docs: correct verified test count, record live-stack checks
-5c77f39  fix(pos): unbreak sales and holds, build the five 404ing admin pages
-9fb2c1c  fix(docker): configurable storefront host port (Windows reserves 3000)
-ce9df26  fix(web): split API module so client code cannot pull in next/headers
-0d41804  feat(web): design system, storefront, admin and POS on brand assets
-36fe40c  feat(api): backend platform
-6a780e2  docs: constitution, architecture, operations
-```
+In order, and none of it is "build a screen":
 
-(23 commits total; the ones between `03c9a45` and `423cdf4` are small frontend
-fixes and CI-workflow repairs.)
+1. **A real payment gateway.** Nothing prepaid can be sold without one.
+2. **D40 and D41** — the two production-build defects keeping E2E off a production run in CI. D40 is
+   narrowed to one sentence; D41 is not diagnosed at all.
+3. **Settle VAT.** No code waits on it any more; the first real sale does.
+4. **Deploy something.** Every remaining item on the go-live list needs an environment to be true of.
 
-## Done since (2026-08-21)
-
-- **Admin product create/edit** with the variant matrix, opening stock through
-  the ledger, publish/unpublish, delete-or-archive and per-colour photography.
-- **The dead ends closed**: a review form (D2) and a notification bell + feed
-  (D3). The wishlist (D1) was closed earlier the same day.
-- **The CSP blank page (D16) fixed** with a per-request nonce from Next
-  middleware — and Nginx stopped sending its own header, which is the half that
-  would otherwise have re-broken it.
-- **Purchase orders and suppliers** (2026-08-22): raise → send → receive, with
-  partial deliveries, plus supplier create/edit. Receiving is the only step that
-  writes stock, and it goes through `inventory.services`.
-
-Details and the lessons are in `session-history.md`.
-
-## Next four tasks
-
-1. **Financial accounts + cash book** (roadmap phase 35) — the largest
-   structural gap, and it blocks phases 36–38. Payments name a *method* but
-   never an account, so there is no cash position and no net profit.
-2. **Return approve / reject / receive / refund** — four buttons on a list that
-   already renders.
-3. **Unblock Playwright** (glibc runner), then put both `npm run test` and
-   `npm run test:e2e` into CI. CI currently runs no frontend tests at all.
-   `apps/web/e2e/browser-walk.mjs` is the working pattern: `mcr.microsoft.com/playwright`
-   joined to the compose network.
-4. **One real payment gateway** end to end, with webhook signature verification
-   and replay tests.
+Details and the lesson from each session are in `session-history.md`; the decisions the owner still
+owes are in `open-questions.md`.
