@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 
 from django.http import HttpResponse
@@ -15,6 +16,29 @@ from accounts.models import Branch
 from accounts.permissions import RolePermission
 from reports import services as report_services
 from reports.services import DateRange
+
+
+def _json_safe(value: Any) -> Any:
+    """Decimals out as strings, never as JSON floats.
+
+    Every report here answers with a plain selector dict rather than a
+    serializer, so DRF's ``COERCE_DECIMAL_TO_STRING`` -- the setting that keeps
+    money out of floats everywhere else -- never applies to it.  The result was
+    ``"revenue": 236290.0`` on every dict-shaped report: a float carrying money
+    across the API boundary, which CLAUDE.md §4 forbids, and which silently
+    drops the two-decimal contract the frontend types already assume
+    (`revenue: string`).
+
+    This is [D20](../../../docs/roadmap.md) again.  Fixing it once here covers
+    every report rather than one endpoint at a time.
+    """
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _branch_for(request: Request) -> Branch | None:
@@ -66,6 +90,18 @@ class BaseReportView(APIView):
     filename = "report.csv"
     needs_range = True
 
+    @staticmethod
+    def csv_rows(data: Any) -> list[dict[str, Any]]:
+        """Which rows a CSV export writes.
+
+        A list report exports itself; a dict report has to say which part is
+        tabular.  Reports whose shape is neither override this -- returning
+        nothing here is how the export silently produced an empty file.
+        """
+        if isinstance(data, list):
+            return data
+        return data.get("daily", [])
+
     def get(self, request: Request) -> Response | HttpResponse:
         branch = _branch_for(request)
         kwargs: dict[str, Any] = {"branch": branch}
@@ -86,10 +122,10 @@ class BaseReportView(APIView):
                     },
                     status=403,
                 )
-            rows = data if isinstance(data, list) else data.get("daily", [])
-            return _csv_response(rows, self.filename)
+            return _csv_response(type(self).csv_rows(data), self.filename)
 
-        return Response(data if isinstance(data, dict) else {"results": data})
+        payload = data if isinstance(data, dict) else {"results": data}
+        return Response(_json_safe(payload))
 
 
 class DashboardView(BaseReportView):
@@ -152,3 +188,44 @@ class ExpenseReportView(BaseReportView):
     required_permissions = ["reports.financial"]
     report = staticmethod(report_services.expense_report)
     filename = "expenses.csv"
+
+
+class BusinessSummaryView(BaseReportView):
+    """Phase 38 -- revenue through to net profit."""
+
+    required_permissions = ["reports.financial"]
+    report = staticmethod(report_services.business_summary)
+    filename = "business-summary.csv"
+
+    @staticmethod
+    def csv_rows(data: Any) -> list[dict[str, Any]]:
+        """The statement itself, one row per line, in reading order.
+
+        The default hook would look for `daily` here, find nothing and write an
+        empty file -- which is how the CSV export shipped broken once already
+        (D19).  An owner pasting this into a spreadsheet wants the statement,
+        not the raw nesting.
+        """
+        revenue = data["revenue"]
+        cost = data["cost_of_goods"]
+        rows = [
+            {"line": "Revenue (goods, net of VAT)", "amount": revenue["goods"]},
+            {"line": "Less refunds", "amount": -revenue["refunds"]},
+            {"line": "Net revenue", "amount": revenue["net"]},
+            {"line": "Cost of goods sold", "amount": -cost["sold"]},
+            {
+                "line": "Cost recovered from restocked returns",
+                "amount": cost["recovered_from_returns"],
+            },
+            {"line": "Gross profit", "amount": data["gross_profit"]},
+        ]
+        rows += [
+            {"line": f"Expense — {row['category']}", "amount": -row["total"]}
+            for row in data["expenses"]["by_category"]
+        ]
+        rows += [
+            {"line": "Total expenses", "amount": -data["expenses"]["total"]},
+            {"line": "Net profit", "amount": data["net_profit"]},
+            {"line": "VAT collected (held, not income)", "amount": revenue["vat_collected"]},
+        ]
+        return rows

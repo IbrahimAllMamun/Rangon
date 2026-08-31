@@ -285,7 +285,33 @@ gross_profit = revenue − Σ line_cogs
 Profit is never computed as "selling price − current product cost". Reports read the frozen
 `unit_cost`, so historical profit does not move when prices or costs change later.
 
-Returned items credit COGS back at the same frozen `unit_cost`.
+Returned items credit COGS back at the same frozen `unit_cost` — but **only when the goods went back
+on the shelf**. `RESTOCK` recovers the cost; `DAMAGED` is a write-off and `QUARANTINE` is not sellable
+yet, so both keep the cost as a cost until that changes.
+
+### 4.1 Net profit (the business summary)
+
+`reports.services.business_summary(date_range, branch)` is the whole statement, and
+`GET /api/v1/reports/business-summary/` serves it (permission `reports.financial`):
+
+```text
+  revenue from goods            net of VAT, never the gross line total
+− refunds                       completed returns, by completed_at
+= net revenue
+− cost of goods sold            frozen unit_cost × quantity
++ cost recovered from returns   RESTOCK lines only
+= gross profit
+− operating expenses            finance.selectors.expense_totals, voids excluded
+= net profit
+```
+
+Three rules decide which period a figure lands in, and each matches what the money did: sales by
+`placed_at`, returns by `completed_at`, expenses by `spent_at`. A refund in August of a July sale
+reduces August.
+
+**VAT is reported but never counted as revenue or profit.** It is money held for the government. Under
+inclusive pricing it sits inside the line total, so it is removed per line — the order's own frozen
+`tax_mode` decides, not today's setting.
 
 ---
 
