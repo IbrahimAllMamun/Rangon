@@ -185,16 +185,19 @@ class UserWriteSerializer(serializers.ModelSerializer):
         )
 
     def update(self, instance: User, validated_data: dict[str, Any]) -> User:
-        password = validated_data.pop("password", None)
-        role_code = validated_data.pop("role_code", None)
-        if role_code:
-            instance.role = Role.objects.get(code=role_code)
-        for field, value in validated_data.items():
-            setattr(instance, field, value)
-        if password:
-            instance.set_password(password)
-        instance.save()
-        return instance
+        # Through the service, not onto the model: it carries the self-lockout
+        # and last-owner guards and writes the audit entry. Setting the fields
+        # here directly is how a role change and a password reset -- the two
+        # most security-sensitive writes in the system -- left no trace at all.
+        from accounts.services import update_staff_user
+
+        return update_staff_user(
+            user=instance,
+            actor=self.context["request"].user,
+            role_code=validated_data.pop("role_code", None),
+            password=validated_data.pop("password", None),
+            fields=validated_data,
+        )
 
 
 class MeSerializer(serializers.ModelSerializer):

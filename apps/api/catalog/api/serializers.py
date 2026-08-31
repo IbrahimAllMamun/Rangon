@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from decimal import Decimal
 from typing import Any
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -90,8 +91,51 @@ class CategorySerializer(serializers.ModelSerializer):
             context=self.context,
         ).data
 
+    def validate_tax_rate(self, value: Decimal | None) -> Decimal | None:
+        """A category override replaces the organisation's VAT rate, and a
+        mixed basket takes the **highest** rate present -- so one impossible
+        rate here silently overcharges every order containing the category.
+        The column is `DecimalField(6, 4)`, which happily stores 99.9999.
+        """
+        if value is None:
+            return None
+        if value < 0 or value > 1:
+            raise serializers.ValidationError(
+                "The VAT rate must be between 0 and 1 (0.15 is 15%)."
+            )
+        return value
+
+    def validate_parent(self, value: Category | None) -> Category | None:
+        """No category may be its own ancestor.
+
+        Not a tidiness rule: `Category.path`, `ancestors()` and this
+        serializer's own `get_children` all walk the tree without a depth
+        guard, so a cycle recurses until the stack gives out -- and the
+        navigation menu that renders on every storefront page is built from
+        exactly that walk.
+        """
+        if value is None or self.instance is None:
+            return value
+        if value.pk == self.instance.pk:
+            raise serializers.ValidationError("A category cannot be its own parent.")
+
+        seen = {self.instance.pk}
+        ancestor = value
+        while ancestor is not None:
+            if ancestor.pk in seen:
+                raise serializers.ValidationError(
+                    f"That would put “{self.instance.name}” underneath itself."
+                )
+            seen.add(ancestor.pk)
+            ancestor = ancestor.parent
+        return value
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        if not attrs.get("slug") and attrs.get("name"):
+        # Only on create. A slug is a URL: regenerating it whenever the name
+        # changes silently breaks every link and every indexed page pointing at
+        # the old one. Renaming and re-slugging are separate decisions, so a
+        # rename keeps the slug and a caller who wants a new one sends it.
+        if self.instance is None and not attrs.get("slug") and attrs.get("name"):
             attrs["slug"] = unique_slug(Category, attrs["name"])
         return attrs
 
@@ -104,7 +148,8 @@ class BrandSerializer(serializers.ModelSerializer):
         extra_kwargs = {"slug": {"required": False}}
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        if not attrs.get("slug") and attrs.get("name"):
+        # Create only -- see the note on CategorySerializer.validate.
+        if self.instance is None and not attrs.get("slug") and attrs.get("name"):
             attrs["slug"] = unique_slug(Brand, attrs["name"])
         return attrs
 

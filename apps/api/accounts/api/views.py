@@ -325,20 +325,12 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def deactivate(self, request: Request, pk: str | None = None) -> Response:
-        from accounts.services import set_user_status
+        from accounts.services import check_can_lose_access, set_user_status
 
         user = self.get_object()
-        if user == request.user:
-            return Response(
-                {
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "message": "You cannot deactivate your own account.",
-                        "details": {},
-                    }
-                },
-                status=400,
-            )
+        # Same guards as the PATCH path, in the service, so neither route can
+        # lock the caller -- or the whole organisation -- out.
+        check_can_lose_access(user=user, actor=request.user, what="deactivate")
         set_user_status(
             user=user,
             status="INACTIVE",

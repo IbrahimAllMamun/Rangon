@@ -50,6 +50,17 @@ class Category(BaseModel):
         ordering = ("position", "name")
         verbose_name_plural = "categories"
         indexes = [models.Index(fields=["parent", "position"])]
+        constraints = [
+            # The column is Decimal(6, 4), which would otherwise store 99.9999
+            # as a VAT rate. A category override replaces the organisation
+            # default and a mixed basket takes the highest rate present, so one
+            # impossible value here overcharges every order containing it.
+            models.CheckConstraint(
+                condition=models.Q(tax_rate__isnull=True)
+                | (models.Q(tax_rate__gte=0) & models.Q(tax_rate__lte=1)),
+                name="catalog_category_tax_rate_range",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name

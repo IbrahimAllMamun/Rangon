@@ -601,6 +601,40 @@ Rules:
   the cashier lacks it (elevation is audit-logged).
 - `CUSTOMER` accounts can only ever reach `/api/v1/shop/*` and their own resources.
 
+### 7.1 Staff accounts
+
+Only `OWNER` holds `users.manage`; `MANAGER` holds `users.view` and can see the list without changing
+it. Every edit goes through `accounts.services.update_staff_user()`, never onto the model from a
+serializer, because two guards and one audit entry hang off it:
+
+- **Nobody may lock themselves out.** Deactivating or demoting *your own* account is refused, on the
+  `deactivate` action and on a plain `PATCH` alike. Guarding only the action left the PATCH as a way
+  around it.
+- **The last active owner may not be deactivated or demoted.** Nothing but `OWNER` holds
+  `users.manage` or `settings.manage`, so an organisation with no active owner cannot grant them to
+  anybody again — there is no recovery path short of a shell on the server. Promote a second owner
+  first.
+- **Every change is audited.** A role change decides who may refund, discount and adjust stock; a
+  password reset hands somebody an account. Both write an `AuditLog` entry with before and after.
+  The password itself is never written to it — only `password_reset: true`.
+
+Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
+has to keep pointing at a real row. Customers never appear in the staff list.
+
+### 7.2 Categories, brands and attributes
+
+- A category may not be its own parent, or be moved underneath its own descendant. `Category.path`,
+  `ancestors()` and the serializer's `children` all walk `parent` without a depth guard, so a cycle
+  recurses until the stack gives out — on the navigation menu that renders on every storefront page.
+- `Category.tax_rate` must be between 0 and 1, enforced in the serializer *and* by a database
+  constraint. It overrides the organisation default and a mixed basket takes the **highest** rate
+  present, so one impossible value silently overcharges every order containing that category.
+- **A slug is generated on create only.** Renaming a category or brand keeps its slug: the slug is a
+  URL, and regenerating it on every rename breaks every link and every indexed page pointing at the
+  old one. Changing a slug is a separate, deliberate edit.
+- A category or brand that still holds products cannot be deleted (`PROTECT`); retire it with
+  `is_active` instead.
+
 ---
 
 ## 8. Audit
