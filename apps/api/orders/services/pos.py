@@ -176,6 +176,7 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
             manual_discount=priced.manual_discount,
             discount_total=priced.discount_total,
             tax_rate=priced.tax_rate,
+            tax_mode=priced.tax_mode,
             tax_total=priced.tax_total,
             shipping_total=ZERO,
             grand_total=priced.grand_total,

@@ -13,6 +13,7 @@ from rest_framework.routers import DefaultRouter
 from accounts.api.views import (
     AuditLogViewSet,
     BranchViewSet,
+    OrganizationTaxView,
     OrganizationView,
     PermissionViewSet,
     RoleViewSet,
@@ -115,6 +116,7 @@ router.register("storefront-banners", StorefrontBannerViewSet, basename="storefr
 urlpatterns = [
     path("auth/", include("accounts.api.urls")),
     path("organization/", OrganizationView.as_view(), name="organization"),
+    path("organization/tax/", OrganizationTaxView.as_view(), name="organization-tax"),
     path("shop/", include("orders.api.shop_urls")),
     path("pos/", include("orders.api.pos_urls")),
     path("reports/", include("reports.api.urls")),

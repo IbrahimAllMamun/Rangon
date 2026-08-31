@@ -220,12 +220,45 @@ sums). Money is `Decimal`; `float` is forbidden.
 
 ### 3.4 Tax
 
-VAT is configurable per organisation (`RANGON_DEFAULT_TAX_RATE`, default `0.00`) and can be overridden
-per category. Prices are stored and displayed **tax-exclusive**, with tax shown as a separate order
-line.
-*`DECISION REQUIRED` — Bangladesh retail commonly quotes VAT-inclusive prices. Confirm with the
-owner/accountant before go-live; switching to inclusive pricing changes `taxable_base` and every
-historical report, so it must be decided before real sales are recorded.*
+VAT is **set in the admin** at `/admin/settings`, not in an environment variable, because it is a
+decision the owner makes and has to be able to see. Two settings, both on `Organization`:
+
+- **`tax_mode`** — `EXCLUSIVE` (tax added on top of the shown price) or `INCLUSIVE` (the shown price
+  already contains it). Default `EXCLUSIVE`.
+- **`default_tax_rate`** — a fraction, `0.1500` for 15%. Default `0.0000`. A category may override it
+  (`Category.tax_rate`); a mixed-rate basket takes the **highest** rate present.
+
+```text
+taxable_base = subtotal - discount_total
+
+EXCLUSIVE   tax   = round(taxable_base * rate, 2)
+            total = taxable_base + tax + shipping
+
+INCLUSIVE   tax   = round(taxable_base * rate / (1 + rate), 2)
+            total = taxable_base + shipping
+```
+
+**Shipping is never taxed** under either treatment — the carriage line is quoted as it is charged.
+
+**Margin under inclusive pricing.** When the tax sits inside `subtotal`, every profit figure has to
+take it back out again, or margin is overstated by exactly the VAT. That is what `Order.net_revenue`
+is for, and `gross_profit` is built on it rather than on `subtotal` directly.
+
+**History never moves.** Every order freezes the `tax_mode`, `tax_rate` and `tax_total` it was priced
+under, so changing the setting cannot rewrite a total that has already been charged. What it *does*
+change is that a report spanning the change mixes two treatments — so once orders exist the API
+refuses an unconfirmed change (`409 TAX_CHANGE_NEEDS_CONFIRMATION`, carrying the order count) and the
+screen asks before proceeding. Every change is written to the audit log with before and after, and
+stamped with who settled it and when.
+
+Writes go through `PATCH /organization/tax/` (permission `settings.manage`) and
+`accounts.services.update_tax_settings()`. The VAT fields are deliberately **read-only** on the
+generic `PATCH /organization/`, so a change cannot slip through without the guard or the audit entry.
+
+*`DECISION REQUIRED` — the default is still exclusive at 0%, which is a placeholder, not an answer.
+Bangladeshi retail commonly quotes VAT-inclusive prices. Settle it before the first real sale: the
+arithmetic is now implemented for both treatments, but orders taken under the wrong one keep the
+totals they were given.*
 
 ---
 

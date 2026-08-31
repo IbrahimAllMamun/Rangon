@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from django.contrib.auth import authenticate
@@ -7,7 +8,16 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import Branch, Organization, Permission, Role, RoleCode, Status, User
+from accounts.models import (
+    Branch,
+    Organization,
+    Permission,
+    Role,
+    RoleCode,
+    Status,
+    TaxMode,
+    User,
+)
 from core.models import AuditLog
 
 
@@ -32,6 +42,9 @@ class BranchSerializer(serializers.ModelSerializer):
 
 class OrganizationSerializer(serializers.ModelSerializer):
     branches = BranchSerializer(many=True, read_only=True)
+    tax_settled_by_name = serializers.CharField(
+        source="tax_settled_by.full_name", read_only=True, default=""
+    )
 
     class Meta:
         model = Organization
@@ -47,9 +60,44 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "vat_registration",
             "currency",
             "receipt_footer",
+            "tax_mode",
+            "default_tax_rate",
+            "tax_settled_at",
+            "tax_settled_by_name",
             "branches",
         ]
-        read_only_fields = ["id", "slug"]
+        # The VAT fields are readable here but only writable through
+        # PATCH /organization/tax/, which is the path that carries the
+        # confirmation guard and the audit entry.  Leaving them writable on the
+        # generic PATCH would let a change slip through with neither.
+        read_only_fields = [
+            "id",
+            "slug",
+            "tax_mode",
+            "default_tax_rate",
+            "tax_settled_at",
+            "tax_settled_by_name",
+        ]
+
+
+class TaxSettingsSerializer(serializers.Serializer):
+    """Input for settling the VAT decision (docs/business-rules.md §3.4)."""
+
+    tax_mode = serializers.ChoiceField(choices=TaxMode.choices)
+    default_tax_rate = serializers.DecimalField(
+        max_digits=6,
+        decimal_places=4,
+        min_value=Decimal("0"),
+        max_value=Decimal("1"),
+        help_text="A fraction, not a percentage: 0.0750 is 7.5%.",
+    )
+    confirm = serializers.BooleanField(
+        default=False,
+        help_text=(
+            "Required once orders exist, to acknowledge that reports " "will span two treatments."
+        ),
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
 
 
 class PermissionSerializer(serializers.ModelSerializer):

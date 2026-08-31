@@ -7,8 +7,19 @@ disagree about how a total was reached (docs/business-rules.md §3.2).
     subtotal       = sum(line_subtotal)
     discount_total = coupon_discount + manual_discount
     taxable_base   = subtotal - discount_total
+
+EXCLUSIVE (tax is added to the shown price):
+
     tax            = round(taxable_base * tax_rate, 2)
     grand_total    = taxable_base + tax + shipping
+
+INCLUSIVE (the shown price already contains the tax):
+
+    tax            = round(taxable_base * rate / (1 + rate), 2)
+    grand_total    = taxable_base + shipping
+
+Shipping is never taxed under either mode — the carriage line is quoted as it
+is charged (docs/business-rules.md §3.4).
 """
 
 from __future__ import annotations
@@ -17,13 +28,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
-from django.conf import settings
-
+from accounts.models import TaxMode
+from accounts.services import tax_settings
 from catalog.models import ProductVariant
 from core.exceptions import ValidationError
 from core.money import ZERO, quantize
 
 ZERO_RATE = Decimal("0.0000")
+ONE = Decimal("1")
 
 
 @dataclass
@@ -65,6 +77,7 @@ class PricedOrder:
     discount_total: Decimal = ZERO
     tax_rate: Decimal = ZERO_RATE
     tax_total: Decimal = ZERO
+    tax_mode: str = TaxMode.EXCLUSIVE
     shipping_total: Decimal = ZERO
     grand_total: Decimal = ZERO
     coupon: Any = None
@@ -78,15 +91,28 @@ class PricedOrder:
     def cogs_total(self) -> Decimal:
         return quantize(sum((line.unit_cost * line.quantity for line in self.lines), ZERO))
 
+    @property
+    def net_revenue(self) -> Decimal:
+        """What the business keeps from the goods, before cost of goods.
 
-def resolve_tax_rate(lines: list[PricedLine]) -> Decimal:
+        Under INCLUSIVE pricing the tax is sitting *inside* `subtotal`, so it
+        has to come out again or every margin figure is overstated by the VAT.
+        """
+        base = quantize(self.subtotal - self.discount_total)
+        if self.tax_mode == TaxMode.INCLUSIVE:
+            return quantize(base - self.tax_total)
+        return base
+
+
+def resolve_tax_rate(lines: list[PricedLine], default: Decimal | None = None) -> Decimal:
     """Category override wins over the organisation default.
 
     A single order-level rate is used; mixed-rate baskets take the highest rate
     present, which is the conservative choice. Revisit if the shop ever sells
     goods at genuinely different VAT rates (docs/requirements.md ❓1).
     """
-    default = Decimal(settings.RANGON["DEFAULT_TAX_RATE"])
+    if default is None:
+        _, default = tax_settings()
     rates = [
         line.variant.product.category.tax_rate
         for line in lines
@@ -135,6 +161,7 @@ def calculate(
     manual_discount: Decimal = ZERO,
     shipping_total: Decimal = ZERO,
     tax_rate: Decimal | None = None,
+    tax_mode: str | None = None,
     coupon: Any = None,
 ) -> PricedOrder:
     """Compute every order-level figure once, in a fixed order."""
@@ -150,8 +177,17 @@ def calculate(
         )
 
     taxable_base = quantize(subtotal - discount_total)
-    rate = tax_rate if tax_rate is not None else resolve_tax_rate(lines)
-    tax_total = quantize(taxable_base * rate)
+
+    organisation_mode, organisation_rate = tax_settings()
+    mode = tax_mode if tax_mode is not None else organisation_mode
+    rate = tax_rate if tax_rate is not None else resolve_tax_rate(lines, organisation_rate)
+
+    if mode == TaxMode.INCLUSIVE:
+        # The base already contains the tax, so extract it rather than adding:
+        # base = net * (1 + rate), therefore tax = base * rate / (1 + rate).
+        tax_total = quantize(taxable_base * rate / (ONE + rate))
+    else:
+        tax_total = quantize(taxable_base * rate)
 
     # Distribute tax across lines for the receipt; the order total stays the
     # authoritative figure, so rounding drift lands on the last line only.
@@ -169,7 +205,11 @@ def calculate(
             line.tax_amount = ZERO
 
     shipping_total = quantize(shipping_total)
-    grand_total = quantize(taxable_base + tax_total + shipping_total)
+    if mode == TaxMode.INCLUSIVE:
+        # Adding it again would charge the customer the VAT twice.
+        grand_total = quantize(taxable_base + shipping_total)
+    else:
+        grand_total = quantize(taxable_base + tax_total + shipping_total)
 
     return PricedOrder(
         lines=lines,
@@ -179,6 +219,7 @@ def calculate(
         discount_total=discount_total,
         tax_rate=rate,
         tax_total=tax_total,
+        tax_mode=mode,
         shipping_total=shipping_total,
         grand_total=grand_total,
         coupon=coupon,

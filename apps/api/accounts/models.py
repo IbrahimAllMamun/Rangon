@@ -12,13 +12,27 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.utils import timezone
 
-from core.models import BaseModel
+from core.models import BaseModel, rate_field
 
 
 class Status(models.TextChoices):
     ACTIVE = "ACTIVE", "Active"
     INACTIVE = "INACTIVE", "Inactive"
     SUSPENDED = "SUSPENDED", "Suspended"
+
+
+class TaxMode(models.TextChoices):
+    """Whether a shown price already contains VAT (docs/business-rules.md §3.4).
+
+    This is the decision the build plan recorded as owed, and it changes the
+    arithmetic rather than a label: under EXCLUSIVE the tax is added to the
+    taxable base, under INCLUSIVE it is extracted from it.  Orders freeze the
+    mode and rate they were priced under, so changing this never rewrites a
+    total that has already been taken.
+    """
+
+    EXCLUSIVE = "EXCLUSIVE", "Added on top of the shown price"
+    INCLUSIVE = "INCLUSIVE", "Already included in the shown price"
 
 
 class Organization(BaseModel):
@@ -34,9 +48,47 @@ class Organization(BaseModel):
     logo = models.ImageField(upload_to="organization/", blank=True, null=True)
     receipt_footer = models.TextField(blank=True)
 
+    # --- VAT.  Editable in the admin, not an environment variable, because it
+    # is a business decision the owner makes once and must be able to see.
+    tax_mode = models.CharField(
+        max_length=16,
+        choices=TaxMode.choices,
+        default=TaxMode.EXCLUSIVE,
+        help_text="Whether catalogue prices already contain VAT.",
+    )
+    default_tax_rate = rate_field(
+        help_text="Fraction, not a percentage: 0.0750 is 7.5%. Categories may override it.",
+    )
+    tax_settled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the owner last confirmed the VAT treatment. Null means never decided.",
+    )
+    tax_settled_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tax_settlements",
+    )
+
     class Meta:
         db_table = "accounts_organization"
         ordering = ("name",)
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(default_tax_rate__gte=0) & models.Q(default_tax_rate__lte=1),
+                name="accounts_organization_default_tax_rate_range",
+            ),
+        ]
+
+    @property
+    def prices_include_tax(self) -> bool:
+        return self.tax_mode == TaxMode.INCLUSIVE
+
+    @property
+    def tax_is_settled(self) -> bool:
+        return self.tax_settled_at is not None
 
     def __str__(self) -> str:
         return self.name

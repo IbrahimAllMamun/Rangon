@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.db import models
 from django.utils import timezone
 
+from accounts.models import TaxMode
 from core.models import AppendOnlyModel, BaseModel, money_field, rate_field
 
 
@@ -151,6 +152,14 @@ class Order(BaseModel):
     discount_total = money_field()
     tax_total = money_field()
     tax_rate = rate_field()
+    # Frozen with the order: a later change to the organisation's VAT treatment
+    # must never re-interpret a total that has already been charged.
+    tax_mode = models.CharField(
+        max_length=16,
+        choices=TaxMode.choices,
+        default=TaxMode.EXCLUSIVE,
+        help_text="Whether tax_total sits inside subtotal or was added on top.",
+    )
     shipping_total = money_field()
     grand_total = money_field()
     paid_total = money_field()
@@ -238,8 +247,21 @@ class Order(BaseModel):
         return sum((item.unit_cost * item.quantity for item in self.items.all()), Decimal("0.00"))
 
     @property
+    def net_revenue(self) -> Decimal:
+        """Goods revenue the business keeps, excluding VAT and shipping.
+
+        Under inclusive pricing the VAT is part of `subtotal`, so it has to be
+        taken out again — otherwise every margin and profit figure built on this
+        is overstated by exactly the tax.
+        """
+        base = self.subtotal - self.discount_total
+        if self.tax_mode == TaxMode.INCLUSIVE:
+            return base - self.tax_total
+        return base
+
+    @property
     def gross_profit(self) -> Decimal:
-        return self.subtotal - self.discount_total - self.cogs_total
+        return self.net_revenue - self.cogs_total
 
 
 class OrderItem(BaseModel):

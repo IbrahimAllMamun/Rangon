@@ -2,15 +2,27 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import QuerySet
+from django.utils import timezone
 
-from accounts.models import Branch, Organization, Permission, Role, RoleCode, Status, User
+from accounts.models import (
+    Branch,
+    Organization,
+    Permission,
+    Role,
+    RoleCode,
+    Status,
+    TaxMode,
+    User,
+)
 from accounts.permissions import PERMISSIONS, ROLE_PERMISSIONS
 from core import audit
-from core.exceptions import PermissionDenied
+from core.exceptions import Conflict, NotFound, PermissionDenied, ValidationError
 
 
 @transaction.atomic
@@ -136,3 +148,114 @@ def set_user_status(
         reason=reason or f"Status changed to {status}",
     )
     return user
+
+
+# --------------------------------------------------------------------------- VAT
+
+
+def tax_settings() -> tuple[str, Decimal]:
+    """The organisation's VAT treatment: (mode, default rate).
+
+    Falls back to the deployment default when no organisation row exists yet,
+    so pricing never depends on the seed having run.
+    """
+    organization = get_organization()
+    if organization is None:
+        return TaxMode.EXCLUSIVE, Decimal(settings.RANGON["DEFAULT_TAX_RATE"])
+    return organization.tax_mode, organization.default_tax_rate
+
+
+def priced_order_count() -> int:
+    """How many orders already carry a total computed under the current rules.
+
+    Changing VAT never rewrites these — every order freezes its own `tax_mode`,
+    `tax_rate` and `tax_total` — but it does mean a report spanning the change
+    mixes two treatments, which the owner has to be told before they confirm.
+    """
+    from orders.models import Order
+
+    return Order.objects.count()
+
+
+@transaction.atomic
+def update_tax_settings(
+    *,
+    tax_mode: str,
+    default_tax_rate: Decimal,
+    actor: User | None = None,
+    confirm_historical: bool = False,
+    reason: str = "",
+) -> Organization:
+    """Settle the VAT decision (docs/business-rules.md §3.4, decision D-C).
+
+    Guarded rather than free-form: once orders exist, an accidental click here
+    would silently change what every future total means, so the caller has to
+    say it meant it.  The change is always audited with before and after.
+    """
+    organization = get_organization()
+    if organization is None:
+        raise NotFound("No organisation is configured.")
+
+    if tax_mode not in TaxMode.values:
+        raise ValidationError(
+            f"Unknown VAT mode {tax_mode!r}.",
+            details={"tax_mode": f"Choose one of {', '.join(TaxMode.values)}."},
+        )
+
+    rate = Decimal(default_tax_rate)
+    if rate < 0 or rate > 1:
+        raise ValidationError(
+            "The VAT rate must be between 0 and 1 (0.15 is 15%).",
+            details={"default_tax_rate": "Enter a fraction between 0 and 1."},
+        )
+
+    changing = tax_mode != organization.tax_mode or rate != organization.default_tax_rate
+    if changing and not confirm_historical:
+        existing = priced_order_count()
+        if existing:
+            raise Conflict(
+                "Changing VAT after orders exist needs confirmation.",
+                code="TAX_CHANGE_NEEDS_CONFIRMATION",
+                details={
+                    "order_count": existing,
+                    "message": (
+                        f"{existing} order(s) were priced under the current VAT treatment. "
+                        "They keep the totals they were given; reports spanning the change "
+                        "will mix both. Re-submit with confirm=true to proceed."
+                    ),
+                },
+            )
+
+    before = {
+        "tax_mode": organization.tax_mode,
+        "default_tax_rate": str(organization.default_tax_rate),
+        "tax_settled_at": organization.tax_settled_at,
+    }
+
+    organization.tax_mode = tax_mode
+    organization.default_tax_rate = rate
+    organization.tax_settled_at = timezone.now()
+    organization.tax_settled_by = actor if actor is not None and actor.is_authenticated else None
+    organization.save(
+        update_fields=[
+            "tax_mode",
+            "default_tax_rate",
+            "tax_settled_at",
+            "tax_settled_by",
+            "updated_at",
+        ]
+    )
+
+    audit.record(
+        action=audit.AuditAction.SETTINGS_CHANGED,
+        entity=organization,
+        actor=actor,
+        old_values=before,
+        new_values={
+            "tax_mode": organization.tax_mode,
+            "default_tax_rate": str(organization.default_tax_rate),
+            "tax_settled_at": organization.tax_settled_at,
+        },
+        reason=reason or "VAT treatment settled",
+    )
+    return organization
