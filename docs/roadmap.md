@@ -757,6 +757,62 @@ endpoint looks like an empty page. Restarting via the script reseeds and would h
 test data; the API has to be restarted on its own.
 
 
+### V2, second item: transfers grew their middle step, 2026-09-01
+
+The V2 list names "Multi-branch transfers", and a transfer service already existed — which is what
+made this worth looking at rather than skipping. It turned out the gap was not a missing feature but
+[D43](#known-defects): `business-rules.md` §1.6 has described a **two-step** transfer since it was
+written, and the code did one step.
+
+> "it leaves the source immediately and arrives when the transfer is marked received. A pending
+> transfer therefore shows as reduced at the source and not yet present at the destination."
+
+`transfer()` wrote `TRANSFER_OUT` and `TRANSFER_IN` in the same transaction and stamped `RECEIVED`.
+`TransferStatus.IN_TRANSIT`, `received_at` and `received_by` were all on the model and written to by
+nothing. So the destination could sell goods that were physically in a van — and the ledger could
+not see it, because as far as it knew the stock was on the shelf.
+
+**A documented behaviour that does not exist is worse than a missing one.** Anyone reading the doc —
+including the next person to build against it — would believe the protection was there. That is the
+same shape as D20 ("the frontend types already said `string`"): the two halves of the system
+disagreed, and the written half was the one that was right.
+
+```text
+dispatch / receive / cancel ............ inventory.services, migration 0004
+in-transit selectors ................... in_transit, in_transit_units
+/stock-transfers/{id}/receive|cancel/ .. plus /in-transit/
+/admin/inventory/transfers ............. "In transit" section with receipt
+pytest ................................. 646 passed (up from 617)
+ruff, tsc --noEmit, next lint .......... clean
+vitest ................................. 79 passed
+playwright, dev, reseeded .............. 20/20
+```
+
+**Two existing tests were pinning the defect** — one service, one API, both asserting that stock
+arrives at the destination in the same call that dispatches it. They were rewritten to assert the
+document rather than deleted, and the service test now also asserts what the change buys: after a
+dispatch, a sale at the destination raises `INSUFFICIENT_STOCK`.
+
+**A shortfall is booked at the destination, atomically.** Receiving takes what actually arrived per
+line and writes `TRANSFER_IN` for what was sent then `LOSS` for what did not, in one transaction,
+with a mandatory reason. The alternative — receive everything, then remember to write off — is one
+step longer and the second step is the one people forget, which leaves a branch holding stock that
+does not exist. Booking it at the destination rather than the source is a `DECISION REQUIRED`
+recorded in business-rules §1.6: the source's count is already right, because the goods did leave.
+
+**The migration backfills rather than leaving the history lying.** Historical transfers are
+`RECEIVED` with no `received_quantity`, which the new `units_lost` property would read as "nothing
+arrived, everything was lost". They did arrive — the old code wrote both movements — so the
+migration says so, and sets `dispatched_at = received_at = created_at`, which is the truth about
+those rows: there was no gap.
+
+**Verified in a browser as the owner:** a dispatch of 4 dropped DHK1 to 21 and created no row at all
+at DHK2 (not a zero row — nothing has ever arrived, so there is nothing to have a balance); the
+receipt form defaulted to 4; recording 3 without a reason was refused; with a reason it wrote
+`TRANSFER_IN 4` then `LOSS -1`, left DHK2 holding 3, and the history row read "1 lost in transit ·
+Received · Rafiq Ahmed".
+
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -828,6 +884,7 @@ process gaps. D1, D2, D3, D5, D10, D11, D12, D13, D16 and D17 have since been fi
 
 | D41      | **The storefront checkout specs are unstable against a production build.** Found 2026-08-31, running the whole suite against the standalone server (`node .next/standalone/server.js`, which is what the image runs) for the first time. One run failed only `[mobile] customer can complete a cash-on-delivery order`; a later reseeded run failed the desktop checkout **and** the incomplete-address spec. Both pass at both viewports against `next dev`, reseeded, every time. **Not diagnosed** — and the inconsistency between runs is itself the finding: whatever this is, it is not deterministic, so a production-build CI job would be flaky as well as red. This is the second reason the E2E job runs against dev |
 | ~~D42~~ | ~~**An expense recorded after midnight local time could not be seen.**~~ **Fixed 2026-08-31.** The expenses screen built its date window with `new Date().toISOString()` — the **UTC** date — and the API widens a bare `date_to` to the end of that day in the **shop's** timezone (`Asia/Dhaka`, UTC+6). The two agree for eighteen hours a day and disagree for the other six: at 00:18 in Dhaka the UTC date is still the previous day, so the window closed at 17:59 UTC — twenty minutes *before* the expense that had just been recorded. Between midnight and 06:00 local, an expense vanished from the screen that recorded it, on dev and production alike. Found by the E2E suite starting to fail on dev too, which it had never done, at 18:18 UTC. The window is now sent as exact instants, so there is no calendar day for the two ends to disagree about |
+| ~~D43~~ | ~~**A branch could sell stock that was still in a van.**~~ **Fixed 2026-09-01.** `business-rules.md` §1.6 has always described a two-step transfer — out of the source now, into the destination when somebody says it arrived — and `TransferStatus.IN_TRANSIT`, `received_at` and `received_by` were all on the model. Nothing ever wrote them: `inventory.services.transfer()` wrote `TRANSFER_OUT` and `TRANSFER_IN` in one transaction and stamped `RECEIVED`. So the moment a transfer was created, the destination's `on_hand` included goods that were physically in transit, and it could sell them — an oversell the ledger could not detect, because by its own account the stock was on the shelf. Worse than a missing feature: the documentation asserted a protection that did not exist, so anyone building against it would have assumed the gap was covered. Now dispatch, receive and cancel are three separate services; a short receipt writes the difference off at the destination atomically with a mandatory reason; and the stock in between is visible through `/stock-transfers/in-transit/` rather than through anybody's `on_hand`. Two existing tests were pinning the old behaviour and were rewritten to assert the document | `apps/api/inventory/services.py`, `inventory/migrations/0004` | The only multi-branch invariant in the system, and it was inverted |
 
 ## Still API-only (no UI)
 

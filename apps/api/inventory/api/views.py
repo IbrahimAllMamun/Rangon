@@ -229,13 +229,21 @@ class StockTransferViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = StockTransfer.objects.select_related("source_branch", "target_branch")
+    queryset = StockTransfer.objects.select_related(
+        "source_branch", "target_branch", "received_by"
+    ).prefetch_related("items__variant__product")
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = {
         "list": ["inventory.view"],
         "retrieve": ["inventory.view"],
         "create": ["inventory.transfer"],
+        # Receiving and turning back both move stock, so both take the same
+        # permission as dispatching it.
+        "receive": ["inventory.transfer"],
+        "cancel": ["inventory.transfer"],
+        "in_transit": ["inventory.view"],
     }
+    filterset_fields = ["status", "source_branch", "target_branch"]
 
     def get_serializer_class(self) -> Any:
         from inventory.api.serializers import StockTransferSerializer
@@ -257,6 +265,55 @@ class StockTransferViewSet(
             notes=data.get("notes", ""),
         )
         return Response(StockTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def receive(self, request: Request, pk: str | None = None) -> Response:
+        from inventory.api.serializers import ReceiveTransferSerializer, StockTransferSerializer
+
+        serializer = ReceiveTransferSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        received = inventory_services.receive_transfer(
+            transfer_row=self.get_object(),
+            received={line["variant"]: line["received_quantity"] for line in data.get("lines", [])}
+            or None,
+            actor=request.user,
+            reason=data.get("reason", ""),
+            notes=data.get("notes", ""),
+        )
+        return Response(StockTransferSerializer(received).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request: Request, pk: str | None = None) -> Response:
+        from inventory.api.serializers import CancelTransferSerializer, StockTransferSerializer
+
+        serializer = CancelTransferSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cancelled = inventory_services.cancel_transfer(
+            transfer_row=self.get_object(),
+            reason=serializer.validated_data["reason"],
+            actor=request.user,
+        )
+        return Response(StockTransferSerializer(cancelled).data)
+
+    @action(detail=False, methods=["get"], url_path="in-transit")
+    def in_transit(self, request: Request) -> Response:
+        """What has left one shelf and not reached another.
+
+        Stock in a van is in nobody's `on_hand` -- correctly, it is not on any
+        shelf -- so without this it is simply missing from the system's view of
+        itself.
+        """
+        from inventory.api.serializers import StockTransferSerializer
+
+        branch = request.query_params.get("branch")
+        direction = request.query_params.get("direction", "in")
+        rows = inventory_selectors.in_transit(
+            branch=branch or None, direction="out" if direction == "out" else "in"
+        )
+        return Response(StockTransferSerializer(rows, many=True).data)
 
 
 class StockCountViewSet(viewsets.ModelViewSet):

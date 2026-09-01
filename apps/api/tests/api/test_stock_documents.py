@@ -342,9 +342,163 @@ class TestStockTransferEndpoint:
 
         assert response.status_code == 201, response.data
         assert response.data["number"].startswith("TRF-")
+        assert response.data["status"] == "IN_TRANSIT"
+        # Dispatched, not delivered: the stock has left the source and reached
+        # nobody. Until 2026-09-01 this endpoint landed it at the destination in
+        # the same request, so Gulshan could sell goods still in the van.
         assert _stock(variant, source).on_hand == 14
+        assert not Inventory.objects.filter(branch=target, variant=variant).exists()
+
+        received = auth_client(shop["owner"]).post(
+            f"/api/v1/stock-transfers/{response.data['id']}/receive/", {}, format="json"
+        )
+
+        assert received.status_code == 200, received.data
+        assert received.data["status"] == "RECEIVED"
         assert _stock(variant, target).on_hand == 6
         assert _stock(variant, target).average_cost == cost_at_source
+
+    def test_a_short_receipt_writes_the_difference_off_and_needs_a_reason(self, shop, auth_client):
+        source = shop["branch"]
+        target = factories.branch(shop["organization"])
+        variant = shop["variants"][0]
+        client = auth_client(shop["owner"])
+        moving = client.post(
+            "/api/v1/stock-transfers/",
+            {
+                "source_branch": str(source.pk),
+                "target_branch": str(target.pk),
+                "lines": [{"variant": str(variant.pk), "quantity": 6}],
+            },
+            format="json",
+        ).data
+
+        short = {"lines": [{"variant": str(variant.pk), "received_quantity": 4}]}
+        refused = client.post(
+            f"/api/v1/stock-transfers/{moving['id']}/receive/", short, format="json"
+        )
+        assert refused.status_code == 400
+
+        accepted = client.post(
+            f"/api/v1/stock-transfers/{moving['id']}/receive/",
+            {**short, "reason": "Two missing from the carton."},
+            format="json",
+        )
+
+        assert accepted.status_code == 200, accepted.data
+        assert accepted.data["units_lost"] == 2
+        assert _stock(variant, target).on_hand == 4
+
+    def test_a_transfer_can_be_turned_back(self, shop, auth_client):
+        source = shop["branch"]
+        target = factories.branch(shop["organization"])
+        variant = shop["variants"][0]
+        client = auth_client(shop["owner"])
+        before = _stock(variant, source).on_hand
+        moving = client.post(
+            "/api/v1/stock-transfers/",
+            {
+                "source_branch": str(source.pk),
+                "target_branch": str(target.pk),
+                "lines": [{"variant": str(variant.pk), "quantity": 3}],
+            },
+            format="json",
+        ).data
+
+        assert (
+            client.post(
+                f"/api/v1/stock-transfers/{moving['id']}/cancel/", {}, format="json"
+            ).status_code
+            == 400
+        )
+
+        cancelled = client.post(
+            f"/api/v1/stock-transfers/{moving['id']}/cancel/",
+            {"reason": "Van turned back."},
+            format="json",
+        )
+
+        assert cancelled.status_code == 200, cancelled.data
+        assert cancelled.data["status"] == "CANCELLED"
+        assert _stock(variant, source).on_hand == before
+
+    def test_receiving_twice_is_a_conflict(self, shop, auth_client):
+        target = factories.branch(shop["organization"])
+        variant = shop["variants"][0]
+        client = auth_client(shop["owner"])
+        moving = client.post(
+            "/api/v1/stock-transfers/",
+            {
+                "source_branch": str(shop["branch"].pk),
+                "target_branch": str(target.pk),
+                "lines": [{"variant": str(variant.pk), "quantity": 2}],
+            },
+            format="json",
+        ).data
+        assert (
+            client.post(
+                f"/api/v1/stock-transfers/{moving['id']}/receive/", {}, format="json"
+            ).status_code
+            == 200
+        )
+
+        second = client.post(f"/api/v1/stock-transfers/{moving['id']}/receive/", {}, format="json")
+
+        assert second.status_code == 409
+        assert _stock(variant, target).on_hand == 2
+
+    def test_in_transit_lists_what_has_not_landed(self, shop, auth_client):
+        target = factories.branch(shop["organization"])
+        variant = shop["variants"][0]
+        client = auth_client(shop["owner"])
+        client.post(
+            "/api/v1/stock-transfers/",
+            {
+                "source_branch": str(shop["branch"].pk),
+                "target_branch": str(target.pk),
+                "lines": [{"variant": str(variant.pk), "quantity": 2}],
+            },
+            format="json",
+        )
+
+        response = client.get(f"/api/v1/stock-transfers/in-transit/?branch={target.pk}")
+
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]["status"] == "IN_TRANSIT"
+
+    def test_a_cashier_cannot_receive_or_turn_back_a_transfer(self, shop, auth_client):
+        target = factories.branch(shop["organization"])
+        variant = shop["variants"][0]
+        moving = (
+            auth_client(shop["owner"])
+            .post(
+                "/api/v1/stock-transfers/",
+                {
+                    "source_branch": str(shop["branch"].pk),
+                    "target_branch": str(target.pk),
+                    "lines": [{"variant": str(variant.pk), "quantity": 2}],
+                },
+                format="json",
+            )
+            .data
+        )
+        cashier = auth_client(shop["cashier"])
+
+        assert (
+            cashier.post(
+                f"/api/v1/stock-transfers/{moving['id']}/receive/", {}, format="json"
+            ).status_code
+            == 403
+        )
+        assert (
+            cashier.post(
+                f"/api/v1/stock-transfers/{moving['id']}/cancel/",
+                {"reason": "No."},
+                format="json",
+            ).status_code
+            == 403
+        )
 
     def test_transferring_more_than_the_source_holds_is_refused(self, shop, auth_client):
         target = factories.branch(shop["organization"])

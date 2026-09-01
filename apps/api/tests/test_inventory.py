@@ -10,7 +10,12 @@ from django.test import override_settings
 from core.exceptions import InsufficientStock, ValidationError
 from core.models import AppendOnlyError
 from inventory import services
-from inventory.models import Inventory, InventoryTransaction, TransactionType
+from inventory.models import (
+    Inventory,
+    InventoryTransaction,
+    TransactionType,
+    TransferStatus,
+)
 from tests import factories
 
 pytestmark = pytest.mark.django_db
@@ -185,7 +190,12 @@ class TestCosting:
 
 
 class TestTransfers:
-    def test_transfer_moves_stock_and_cost_between_branches(self, shop):
+    def test_dispatch_removes_stock_from_the_source_and_gives_it_to_nobody(self, shop):
+        """The gap is the feature. Until 2026-09-01 both movements were written
+        at once, so the destination could sell goods that were in a van --
+        an oversell the ledger could not see, because as far as it knew the
+        stock was on the shelf.
+        """
         source = shop["branch"]
         target = factories.branch(shop["organization"])
         variant = factories.variant()
@@ -193,17 +203,41 @@ class TestTransfers:
             branch=source, variant=variant, quantity=20, unit_cost=Decimal("250.00")
         )
 
-        services.transfer(
+        moving = services.transfer(
             source_branch=source, target_branch=target, lines=[(variant.pk, 8)], notes="Restock"
         )
 
+        assert moving.status == TransferStatus.IN_TRANSIT
+        assert moving.dispatched_at is not None
         assert _inventory(variant, source).on_hand == 12
-        target_inventory = _inventory(variant, target)
-        assert target_inventory.on_hand == 8
-        assert target_inventory.average_cost == Decimal("250.00")
+        # Not "zero at the destination" -- the destination has no row for it at
+        # all. Nothing has ever arrived, so there is nothing to have a balance.
+        assert not Inventory.objects.filter(branch=target, variant=variant).exists()
         assert InventoryTransaction.objects.filter(
             transaction_type=TransactionType.TRANSFER_OUT
         ).exists()
+        assert not InventoryTransaction.objects.filter(
+            transaction_type=TransactionType.TRANSFER_IN
+        ).exists()
+
+    def test_receiving_lands_the_stock_and_the_cost_it_travelled_at(self, shop):
+        source = shop["branch"]
+        target = factories.branch(shop["organization"])
+        variant = factories.variant()
+        services.receive_stock(
+            branch=source, variant=variant, quantity=20, unit_cost=Decimal("250.00")
+        )
+        moving = services.transfer(
+            source_branch=source, target_branch=target, lines=[(variant.pk, 8)]
+        )
+
+        received = services.receive_transfer(transfer_row=moving)
+
+        assert received.status == TransferStatus.RECEIVED
+        assert received.received_at is not None
+        target_inventory = _inventory(variant, target)
+        assert target_inventory.on_hand == 8
+        assert target_inventory.average_cost == Decimal("250.00")
         assert InventoryTransaction.objects.filter(
             transaction_type=TransactionType.TRANSFER_IN
         ).exists()

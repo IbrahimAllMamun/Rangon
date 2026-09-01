@@ -100,17 +100,40 @@ immediately and are not time-limited.
 
 ### 1.6 Stock transfers
 
-A transfer writes `TRANSFER_OUT` at the source and `TRANSFER_IN` at the destination in one atomic
-transaction. In-transit stock is modelled as: it leaves the source immediately and arrives when the
-transfer is marked received. A pending transfer therefore shows as reduced at the source and not yet
-present at the destination.
-*`DECISION REQUIRED` — a formal in-transit holding location was not requested; with one branch in V1
-this is adequate.*
+A transfer is **two steps**, because the goods spend real time in a van.
+
+| Step | What happens |
+|---|---|
+| **Dispatch** (`inventory.services.transfer`) | `TRANSFER_OUT` at the source, status `IN_TRANSIT`, `dispatched_at` stamped. The source's stock drops now. The destination gets nothing — not even a zero row. |
+| **Receive** (`receive_transfer`) | `TRANSFER_IN` at the destination for the quantity **dispatched**, status `RECEIVED`, `received_at` / `received_by` stamped. |
+| **Turn back** (`cancel_transfer`) | `TRANSFER_IN` back at the *source*, status `CANCELLED`. Reason mandatory. Not a delete: the stock left and came back, and both movements stay on the ledger. |
+
+Between dispatch and receipt the stock is on **nobody's** shelf, and that is the point: writing both
+movements at once lets the destination sell goods that are physically in a van — an oversell the
+ledger cannot even see, because as far as it knows the stock is there. It is findable through
+`/stock-transfers/in-transit/` and the *In transit* section of the transfers screen, never through
+`on_hand`.
+
+**Short receipts.** `receive_transfer` takes what actually arrived per line, defaulting to the
+dispatched quantity. Anything missing is written off **at the destination** in the same transaction:
+`TRANSFER_IN` for what was sent, then `LOSS` for what did not turn up, with a **mandatory reason**.
+Doing it atomically rather than as "receive, then remember to write off" is deliberate — the second
+half is the half people forget, and forgetting it leaves the destination holding stock that does not
+exist. Receiving *more* than was sent is refused: those units have no cost and no provenance.
+
+*`DECISION REQUIRED` — the shortfall is booked at the **destination**, not the source. The source's
+count is already correct (the goods did leave), and the destination is the branch that has to
+reconcile the shelf. The alternative, a formal in-transit holding location with its own balance,
+was not requested and would need a fourth kind of ledger owner.*
 
 Cost travels with the goods: each line carries the source's weighted average cost at the moment of
-the move (ADR-0006), so neither branch's margin is distorted by relocating stock. Cost is therefore
-never an input to a transfer — a box for it would let someone change what stock is worth by moving
-it between shelves.
+the move (ADR-0006), so neither branch's margin is distorted by relocating stock. It is frozen at
+**dispatch**, not receipt — what the stock was worth is a fact about the source at the moment it
+left, and a receipt weeks later must not revalue it. Cost is therefore never an input to a transfer
+— a box for it would let someone change what stock is worth by moving it between shelves.
+
+Both `receive` and `cancel` take `inventory.transfer`, the same permission as dispatching: all three
+move stock.
 
 ### 1.7 Write-offs
 

@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { PageHeader } from "@/components/admin/shell";
 import { StockTransferForm } from "@/components/admin/stock-transfer-form";
-import { Card, ErrorState } from "@/components/ui/primitives";
+import { TransferReceipt } from "@/components/admin/transfer-receipt";
+import { Badge, Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { BranchSummary, SessionUser, StockTransfer } from "@/lib/api/types";
@@ -32,6 +33,8 @@ export default async function StockTransfersPage() {
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load transfers.";
   }
+
+  const inTransit = transfers.filter((row) => row.status === "IN_TRANSIT");
 
   const columns: Column<StockTransfer>[] = [
     { header: "Transfer", cell: (row) => <span className="font-mono">{row.number}</span> },
@@ -63,7 +66,18 @@ export default async function StockTransfersPage() {
     {
       header: "Units",
       numeric: true,
-      cell: (row) => row.items.reduce((sum, item) => sum + item.quantity, 0),
+      cell: (row) => (
+        <>
+          {row.units_dispatched}
+          {/* A short receipt is the interesting case, so say it here rather
+              than making somebody open the row to find out. */}
+          {row.units_lost > 0 && (
+            <span className="block text-caption text-[var(--error)]">
+              {row.units_lost} lost in transit
+            </span>
+          )}
+        </>
+      ),
     },
     {
       header: "Value moved",
@@ -73,14 +87,18 @@ export default async function StockTransfersPage() {
           row.items.reduce((sum, item) => sum + Number(item.unit_cost) * item.quantity, 0),
         ),
     },
-    { header: "When", cell: (row) => dateTime(row.created_at) },
+    {
+      header: "Status",
+      cell: (row) => <TransferBadge row={row} />,
+    },
+    { header: "Dispatched", cell: (row) => dateTime(row.dispatched_at ?? row.created_at) },
   ];
 
   return (
     <>
       <PageHeader
         title="Stock transfers"
-        description="Moving stock between branches writes both sides in one transaction, and the weighted average cost travels with the goods — so neither branch's margin is distorted by the move."
+        description="Stock leaves the source when it is dispatched and arrives when somebody at the destination says it did. In between it is on nobody's shelf — which is what stops a branch selling goods that are still in the van. Weighted average cost travels with the goods, frozen at dispatch."
         actions={
           <Link href="/admin/inventory" className="text-body-sm text-brand-600 hover:underline">
             ← Inventory
@@ -98,9 +116,21 @@ export default async function StockTransfersPage() {
             <StockTransferForm branches={branches} defaultSourceId={user.branch?.id ?? ""} />
           )}
 
+          <section aria-labelledby="in-transit">
+            <h2 id="in-transit" className="mb-3 text-h4 font-semibold">
+              In transit
+              {inTransit.length > 0 && (
+                <span className="ml-2 align-middle text-body-sm font-normal text-muted">
+                  {inTransit.length} awaiting receipt
+                </span>
+              )}
+            </h2>
+            <TransferReceipt transfers={inTransit} canReceive={canTransfer} />
+          </section>
+
           <section aria-labelledby="history">
             <h2 id="history" className="mb-3 text-h4 font-semibold">
-              Recent transfers
+              All transfers
             </h2>
             <ResourceTable
               rows={transfers}
@@ -115,4 +145,31 @@ export default async function StockTransfersPage() {
       )}
     </>
   );
+}
+
+/** Status, with the fact that makes it worth reading attached. */
+function TransferBadge({ row }: { row: StockTransfer }) {
+  if (row.status === "IN_TRANSIT") return <Badge tone="warning">In transit</Badge>;
+  if (row.status === "CANCELLED") {
+    return (
+      <>
+        <Badge tone="neutral">Turned back</Badge>
+        {row.cancellation_reason && (
+          <span className="mt-1 block text-caption text-muted">{row.cancellation_reason}</span>
+        )}
+      </>
+    );
+  }
+  if (row.status === "RECEIVED") {
+    return (
+      <>
+        <Badge tone={row.units_lost > 0 ? "warning" : "success"}>Received</Badge>
+        <span className="mt-1 block text-caption text-muted">
+          {row.received_by_name ? `${row.received_by_name} · ` : ""}
+          {dateTime(row.received_at)}
+        </span>
+      </>
+    );
+  }
+  return <Badge tone="neutral">Draft</Badge>;
 }

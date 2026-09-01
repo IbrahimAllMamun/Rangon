@@ -116,7 +116,18 @@ class StockTransferItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockTransferItem
-        fields = ["id", "variant", "sku", "product_name", "quantity", "unit_cost"]
+        fields = [
+            "id",
+            "variant",
+            "sku",
+            "product_name",
+            "quantity",
+            "received_quantity",
+            "shortfall",
+            "unit_cost",
+        ]
+
+    shortfall = serializers.IntegerField(read_only=True)
 
 
 class StockTransferSerializer(serializers.ModelSerializer):
@@ -137,8 +148,22 @@ class StockTransferSerializer(serializers.ModelSerializer):
             "notes",
             "items",
             "created_at",
+            "dispatched_at",
             "received_at",
+            "received_by_name",
+            "cancelled_at",
+            "cancellation_reason",
+            "units_dispatched",
+            "units_received",
+            "units_lost",
         ]
+
+    received_by_name = serializers.CharField(
+        source="received_by.get_full_name", read_only=True, default=""
+    )
+    units_dispatched = serializers.IntegerField(read_only=True)
+    units_received = serializers.IntegerField(read_only=True)
+    units_lost = serializers.IntegerField(read_only=True)
 
 
 class CreateTransferSerializer(serializers.Serializer):
@@ -259,3 +284,31 @@ class StockExceptionSerializer(serializers.ModelSerializer):
 class ResolveStockExceptionSerializer(serializers.Serializer):
     resolution = serializers.ChoiceField(choices=StockExceptionResolution.choices)
     note = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=2000)
+
+
+class ReceiveTransferLineSerializer(serializers.Serializer):
+    variant = serializers.UUIDField()
+    received_quantity = serializers.IntegerField(min_value=0)
+
+
+class ReceiveTransferSerializer(serializers.Serializer):
+    """What arrived.
+
+    `lines` is optional: omitting it means everything that was sent turned up,
+    which is the ordinary case and should not need typing out. The service
+    still demands a reason for anything that did not.
+    """
+
+    lines = ReceiveTransferLineSerializer(many=True, required=False)
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    notes = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+
+    def validate_lines(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen = {str(line["variant"]) for line in value}
+        if len(seen) != len(value):
+            raise serializers.ValidationError("The same product appears twice.")
+        return value
+
+
+class CancelTransferSerializer(serializers.Serializer):
+    reason = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=2000)

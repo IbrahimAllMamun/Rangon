@@ -68,7 +68,10 @@ Stock transfers and counts are **top-level** resources, not nested under
 
 | Method | Path | Perm |
 |---|---|---|
-| GET/POST | `/stock-transfers/` | `inventory.view` / `inventory.transfer` — writes `TRANSFER_OUT` + `TRANSFER_IN` in one transaction; cost travels with the goods (ADR-0006) |
+| GET/POST | `/stock-transfers/` | `inventory.view` / `inventory.transfer` — POST **dispatches**: `TRANSFER_OUT` at the source, status `IN_TRANSIT`. It does not deliver. Cost travels with the goods, frozen at dispatch (ADR-0006) |
+| POST | `/stock-transfers/{id}/receive/` | `inventory.transfer` — `{lines?: [{variant, received_quantity}], reason?}`. Omitting `lines` means everything arrived. A shortfall is written off at the destination in the same transaction and needs a `reason`; receiving more than was sent is refused. `409` if not in transit |
+| POST | `/stock-transfers/{id}/cancel/` | `inventory.transfer` — `{reason}` (mandatory); the stock goes back to the source and both movements stay on the ledger. `409` if not in transit |
+| GET | `/stock-transfers/in-transit/` | `inventory.view` — `?branch=&direction=in\|out`; stock that has left one shelf and not reached another, which is in nobody's `on_hand` |
 | GET/POST | `/stock-counts/` | `inventory.view` / `inventory.count` — creating one snapshots the branch's current on-hand as `expected_quantity` |
 | POST | `/stock-counts/{id}/record/` | `inventory.count` — `{lines: [{variant, counted_quantity, notes}]}` |
 | POST | `/stock-counts/{id}/apply/` | `inventory.count` — counted figures → `ADJUSTMENT` ledger rows |

@@ -188,10 +188,21 @@ class StockTransfer(BaseModel):
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    #: When the goods left the source. Set by `inventory.services.transfer`,
+    #: which is also when the source's stock is reduced.
+    dispatched_at = models.DateTimeField(null=True, blank=True)
     received_at = models.DateTimeField(null=True, blank=True)
     received_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    #: Why a dispatched transfer came back instead of arriving. Mandatory on
+    #: cancellation -- stock returning to the shelf without a reason is
+    #: indistinguishable from stock being invented.
+    cancellation_reason = models.TextField(blank=True)
 
     class Meta:
         db_table = "inventory_stocktransfer"
@@ -200,11 +211,34 @@ class StockTransfer(BaseModel):
             models.CheckConstraint(
                 condition=~models.Q(source_branch=models.F("target_branch")),
                 name="inventory_transfer_distinct_branches",
-            )
+            ),
+            models.CheckConstraint(
+                condition=(~models.Q(status="CANCELLED") | ~models.Q(cancellation_reason="")),
+                name="inventory_transfer_cancellation_reason",
+            ),
         ]
 
     def __str__(self) -> str:
         return f"{self.number}: {self.source_branch_id} -> {self.target_branch_id}"
+
+    @property
+    def is_in_transit(self) -> bool:
+        return self.status == TransferStatus.IN_TRANSIT
+
+    @property
+    def units_dispatched(self) -> int:
+        return sum(item.quantity for item in self.items.all())
+
+    @property
+    def units_received(self) -> int:
+        return sum(item.received_quantity or 0 for item in self.items.all())
+
+    @property
+    def units_lost(self) -> int:
+        """Dispatched but never arrived. Zero until the transfer is received."""
+        if self.status != TransferStatus.RECEIVED:
+            return 0
+        return self.units_dispatched - self.units_received
 
 
 class StockTransferItem(BaseModel):
@@ -212,7 +246,11 @@ class StockTransferItem(BaseModel):
     variant = models.ForeignKey(
         "catalog.ProductVariant", on_delete=models.PROTECT, related_name="+"
     )
+    #: What left the source. Frozen at dispatch.
     quantity = models.PositiveIntegerField()
+    #: What actually turned up. `None` until the transfer is received; equal to
+    #: `quantity` unless something went missing on the way.
+    received_quantity = models.PositiveIntegerField(null=True, blank=True)
     unit_cost = money_field(null=True, blank=True, default=None)
 
     class Meta:
@@ -220,8 +258,21 @@ class StockTransferItem(BaseModel):
         constraints = [
             models.UniqueConstraint(
                 fields=["transfer", "variant"], name="inventory_transferitem_uniq"
-            )
+            ),
+            # More cannot arrive than was sent. That is a data error, not an
+            # event -- the extra units have no cost and no provenance.
+            models.CheckConstraint(
+                condition=models.Q(received_quantity__isnull=True)
+                | models.Q(received_quantity__lte=models.F("quantity")),
+                name="inventory_transferitem_received_lte_sent",
+            ),
         ]
+
+    @property
+    def shortfall(self) -> int:
+        if self.received_quantity is None:
+            return 0
+        return self.quantity - self.received_quantity
 
 
 class StockCountStatus(models.TextChoices):

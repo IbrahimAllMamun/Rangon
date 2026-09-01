@@ -543,9 +543,15 @@ export interface StockTransferItem {
   variant: string;
   sku: string;
   product_name: string;
+  /** What left the source. Frozen at dispatch. */
   quantity: number;
+  /** What turned up. `null` until the transfer is received. */
+  received_quantity: number | null;
+  shortfall: number;
   unit_cost: string;
 }
+
+export type TransferStatus = "DRAFT" | "IN_TRANSIT" | "RECEIVED" | "CANCELLED";
 
 export interface StockTransfer {
   id: string;
@@ -554,11 +560,18 @@ export interface StockTransfer {
   source_code: string;
   target_branch: string;
   target_code: string;
-  status: string;
+  status: TransferStatus;
   notes: string;
   items: StockTransferItem[];
   created_at: string;
+  dispatched_at: string | null;
   received_at: string | null;
+  received_by_name: string;
+  cancelled_at: string | null;
+  cancellation_reason: string;
+  units_dispatched: number;
+  units_received: number;
+  units_lost: number;
 }
 
 export interface BranchSummary {

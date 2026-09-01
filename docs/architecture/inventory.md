@@ -108,7 +108,8 @@ happens in `on_commit`, so a rolled-back sale never notifies.
 - **Lot/serial tracking.** Cosmetics carry batch/expiry on the variant, which covers expiry reporting
   but not multi-lot cost layers. FIFO/lot costing would replace WAC — a schema change, so it is an
   explicit V2 decision, not an accident.
-- **In-transit branch stock.** See business-rules §1.6.
+- **A formal in-transit holding location.** Stock between two branches is tracked on the transfer
+  document, not as a balance belonging to a third pseudo-branch. See business-rules §1.6.
 - **Back-orders.** Negative stock is *reported* (below), never promised to a customer as a future
   fulfilment. Selling something the shop does not have, on purpose, is a different feature.
 

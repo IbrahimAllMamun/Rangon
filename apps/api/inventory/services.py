@@ -669,9 +669,23 @@ def transfer(
     actor: User | None = None,
     notes: str = "",
 ) -> Any:
-    """Move stock between branches: TRANSFER_OUT + TRANSFER_IN in one transaction.
+    """Dispatch stock from one branch to another. **Does not deliver it.**
 
-    Cost travels with the goods (ADR-0006), so each branch's margin stays honest.
+    The goods leave the source now and arrive when somebody at the destination
+    says they arrived (`receive_transfer`). In between, the transfer is
+    `IN_TRANSIT`: gone from the source's shelf and not yet on the
+    destination's.
+
+    That gap is the whole point. Writing both movements at once means the
+    destination can sell stock that is physically in a van — an oversell the
+    ledger cannot even see, because as far as it knows the goods are there.
+    business-rules §1.6 has always described it this way; until 2026-09-01 the
+    code did not.
+
+    Cost travels with the goods (ADR-0006), so each branch's margin stays
+    honest. It is frozen here, at dispatch, not at receipt: what the stock was
+    worth is a fact about the source at the moment it left, and a receipt weeks
+    later must not revalue it.
     """
     from core.services import next_number
     from inventory.models import StockTransfer, StockTransferItem, TransferStatus
@@ -687,9 +701,10 @@ def transfer(
         number=next_number("stock_transfer", prefix="TRF"),
         source_branch=source_branch,
         target_branch=target_branch,
-        status=TransferStatus.RECEIVED,
+        status=TransferStatus.IN_TRANSIT,
         notes=notes,
         created_by=actor,
+        dispatched_at=timezone.now(),
     )
 
     source_locks = _lock_inventories(source_branch, [v for v, _ in materialised])
@@ -719,24 +734,6 @@ def transfer(
         )
         _schedule_low_stock_check(source_inventory)
 
-        # Receiving side: weighted average at the destination.
-        receive_stock(
-            branch=target_branch,
-            variant=variant_id,
-            quantity=quantity,
-            unit_cost=unit_cost,
-            actor=actor,
-            reference_type="stock_transfer",
-            reference_id=stock_transfer.pk,
-            notes=notes,
-        )
-        InventoryTransaction.objects.filter(
-            reference_type="stock_transfer",
-            reference_id=str(stock_transfer.pk),
-            variant_id=variant_id,
-            transaction_type=TransactionType.PURCHASE,
-        ).update(transaction_type=TransactionType.TRANSFER_IN)
-
     audit.record(
         action=audit.AuditAction.STOCK_TRANSFER,
         entity=stock_transfer,
@@ -745,11 +742,219 @@ def transfer(
             "from": source_branch.code,
             "to": target_branch.code,
             "lines": len(materialised),
+            "status": TransferStatus.IN_TRANSIT,
         },
         reason=notes,
         branch=source_branch,
     )
     return stock_transfer
+
+
+def _arrive(
+    *,
+    transfer_row: Any,
+    branch: Branch,
+    variant_id: Any,
+    quantity: int,
+    unit_cost: Decimal | None,
+    actor: User | None,
+    notes: str,
+) -> None:
+    """Put transferred stock onto a branch's shelf at the cost it travelled at.
+
+    `receive_stock` owns the weighted-average arithmetic, and duplicating that
+    is how the two copies drift, so this borrows it and then relabels the
+    ledger row: a transfer arriving is not a purchase, and the profit and
+    purchasing reports both read `transaction_type`.
+    """
+    receive_stock(
+        branch=branch,
+        variant=variant_id,
+        quantity=quantity,
+        unit_cost=unit_cost,
+        actor=actor,
+        reference_type="stock_transfer",
+        reference_id=transfer_row.pk,
+        notes=notes,
+    )
+    InventoryTransaction.objects.filter(
+        reference_type="stock_transfer",
+        reference_id=str(transfer_row.pk),
+        variant_id=variant_id,
+        transaction_type=TransactionType.PURCHASE,
+    ).update(transaction_type=TransactionType.TRANSFER_IN)
+
+
+@transaction.atomic
+def receive_transfer(
+    *,
+    transfer_row: Any,
+    received: dict[Any, int] | None = None,
+    actor: User | None = None,
+    reason: str = "",
+    notes: str = "",
+) -> Any:
+    """Book an in-transit transfer in at the destination.
+
+    `received` maps variant id → how many actually turned up, and defaults to
+    the dispatched quantity for anything it omits. Receiving *more* than was
+    sent is refused: those units have no cost and no provenance, so they are a
+    data-entry error rather than an event.
+
+    A shortfall is written off at the destination in the same transaction —
+    `TRANSFER_IN` for what was sent, then `LOSS` for what did not arrive — and
+    needs a reason. Doing it as one atomic operation rather than "receive, then
+    remember to write off" is deliberate: the second half is the half people
+    forget, and forgetting it leaves the destination holding stock that does
+    not exist.
+    """
+    from inventory.models import StockTransfer, TransferStatus
+
+    locked = StockTransfer.objects.select_for_update().get(pk=transfer_row.pk)
+    if locked.status != TransferStatus.IN_TRANSIT:
+        raise Conflict(
+            f"Transfer {locked.number} is {locked.get_status_display().lower()}, not in transit.",
+            details={"status": locked.status},
+        )
+
+    items = list(locked.items.select_related("variant"))
+    counts = {str(k): int(v) for k, v in (received or {}).items()}
+
+    shortfalls: list[tuple[Any, int]] = []
+    for item in items:
+        arrived = counts.get(str(item.variant_id), item.quantity)
+        if arrived < 0:
+            raise ValidationError(
+                f"A negative quantity arrived for {item.variant.sku}.",
+                details={"received": ["Quantities cannot be negative."]},
+            )
+        if arrived > item.quantity:
+            raise ValidationError(
+                f"Only {item.quantity} of {item.variant.sku} were sent, but {arrived} were "
+                "recorded as arriving.",
+                details={
+                    "received": ["More cannot arrive than was dispatched."],
+                    "variant_id": str(item.variant_id),
+                },
+            )
+        if arrived < item.quantity:
+            shortfalls.append((item, item.quantity - arrived))
+
+    if shortfalls and not reason.strip():
+        missing = ", ".join(f"{short} × {item.variant.sku}" for item, short in shortfalls)
+        raise ValidationError(
+            f"Say what happened to the stock that did not arrive ({missing}).",
+            details={"reason": ["Required when less arrives than was sent."]},
+        )
+
+    for item in items:
+        arrived = counts.get(str(item.variant_id), item.quantity)
+        # The full dispatched quantity arrives first, so the destination's
+        # weighted average is computed against what was actually shipped, and
+        # the loss is visible as a loss rather than as stock that never existed.
+        _arrive(
+            transfer_row=locked,
+            branch=locked.target_branch,
+            variant_id=item.variant_id,
+            quantity=item.quantity,
+            unit_cost=item.unit_cost,
+            actor=actor,
+            notes=notes,
+        )
+        if arrived < item.quantity:
+            apply_transaction(
+                branch=locked.target_branch,
+                variant=item.variant_id,
+                transaction_type=TransactionType.LOSS,
+                quantity=item.quantity - arrived,
+                actor=actor,
+                reference_type="stock_transfer",
+                reference_id=locked.pk,
+                reason=reason.strip() or "Lost in transit",
+                notes=notes,
+            )
+        item.received_quantity = arrived
+        item.save(update_fields=["received_quantity", "updated_at"])
+
+    locked.status = TransferStatus.RECEIVED
+    locked.received_at = timezone.now()
+    locked.received_by = actor if actor is not None and actor.is_authenticated else None
+    locked.save(update_fields=["status", "received_at", "received_by", "updated_at"])
+
+    audit.record(
+        action=audit.AuditAction.STOCK_TRANSFER,
+        entity=locked,
+        actor=actor,
+        old_values={"status": TransferStatus.IN_TRANSIT},
+        new_values={
+            "status": TransferStatus.RECEIVED,
+            "dispatched": sum(item.quantity for item in items),
+            "received": sum(item.received_quantity or 0 for item in items),
+        },
+        reason=reason.strip() or notes,
+        branch=locked.target_branch,
+    )
+    return locked
+
+
+@transaction.atomic
+def cancel_transfer(*, transfer_row: Any, reason: str, actor: User | None = None) -> Any:
+    """Turn a dispatched transfer back: the goods return to the source.
+
+    This is not a delete. The stock physically left and physically came back,
+    so both movements stay on the ledger and the transfer keeps its number. A
+    reason is mandatory — stock reappearing on a shelf without one is
+    indistinguishable from stock being invented.
+    """
+    from inventory.models import StockTransfer, TransferStatus
+
+    locked = StockTransfer.objects.select_for_update().get(pk=transfer_row.pk)
+    if locked.status != TransferStatus.IN_TRANSIT:
+        raise Conflict(
+            f"Transfer {locked.number} is {locked.get_status_display().lower()}, not in transit.",
+            details={"status": locked.status},
+        )
+    if not reason.strip():
+        raise ValidationError(
+            "Say why the transfer is being turned back.",
+            details={"reason": ["Required."]},
+        )
+
+    for item in locked.items.select_related("variant"):
+        _arrive(
+            transfer_row=locked,
+            branch=locked.source_branch,
+            variant_id=item.variant_id,
+            quantity=item.quantity,
+            unit_cost=item.unit_cost,
+            actor=actor,
+            notes=reason.strip(),
+        )
+
+    locked.status = TransferStatus.CANCELLED
+    locked.cancelled_at = timezone.now()
+    locked.cancelled_by = actor if actor is not None and actor.is_authenticated else None
+    locked.cancellation_reason = reason.strip()
+    locked.save(
+        update_fields=[
+            "status",
+            "cancelled_at",
+            "cancelled_by",
+            "cancellation_reason",
+            "updated_at",
+        ]
+    )
+
+    audit.record(
+        action=audit.AuditAction.STOCK_TRANSFER,
+        entity=locked,
+        actor=actor,
+        old_values={"status": TransferStatus.IN_TRANSIT},
+        new_values={"status": TransferStatus.CANCELLED},
+        reason=locked.cancellation_reason,
+        branch=locked.source_branch,
+    )
+    return locked
 
 
 def availability(*, branch: Branch, variants: Sequence[Any]) -> dict[str, AvailabilitySnapshot]:
