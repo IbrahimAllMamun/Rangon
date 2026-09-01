@@ -199,6 +199,26 @@ class TestReceivableAgeing:
 
         assert sum(result["ageing"].values()) == result["total"] == Decimal("1000.00")
 
+    def test_a_clock_that_steps_backwards_does_not_lose_a_day(self, shop):
+        """Ageing counts calendar days, so sub-second skew cannot cost a day.
+
+        `(now - placed).days` floors towards negative infinity, so reading the
+        clock a microsecond *behind* the instant the order was written used to
+        report 44 days instead of 45.  That is not hypothetical here: the
+        container clock steps backwards by 0.1-80 ms several times a minute
+        (roadmap D46).  `as_of` pins the skew so the invariant is asserted
+        rather than waited for.
+        """
+        noon = timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0)
+        _unpaid_order(shop, total="1000.00", placed_at=noon - timedelta(days=45))
+
+        result = selectors.receivables(
+            branch=shop["branch"], as_of=noon - timedelta(microseconds=1)
+        )
+
+        assert result["parties"][0]["oldest_days"] == 45
+        assert result["ageing"]["d31_60"] == Decimal("1000.00")
+
 
 class TestPayables:
     def test_an_unpaid_received_purchase_is_money_owed(self, shop):
@@ -270,6 +290,29 @@ class TestPayableAgeingUsesTerms:
 
         assert result["parties"][0]["oldest_days"] == 45
         assert result["ageing"]["d31_60"] == Decimal("5000.00")
+
+    def test_a_clock_that_steps_backwards_does_not_lose_a_day(self, shop):
+        """The same invariant on the payable side, where it actually bit.
+
+        `test_ageing_runs_from_the_due_date_not_the_order_date` above failed
+        intermittently in a full-suite run -- `assert 9 == 10` -- because the
+        wall clock stepped back between writing the purchase and reading the
+        report, and a floored `timedelta.days` turns any backward step into a
+        whole missing day.  Roadmap D46.
+        """
+        noon = timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0)
+        supplier = factories.supplier(payment_terms_days=30)
+        _purchase(
+            shop,
+            total="5000.00",
+            supplier=supplier,
+            ordered_at=noon - timedelta(days=40),
+        )
+
+        # A microsecond *behind* the instant the purchase was written.
+        result = selectors.payables(branch=shop["branch"], as_of=noon - timedelta(microseconds=1))
+
+        assert result["parties"][0]["oldest_days"] == 10
 
 
 class TestNetPosition:
