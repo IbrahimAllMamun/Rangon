@@ -39,6 +39,16 @@ List (always paginated):
 Defaults: `page_size=25`, max `100`. Money is a **string** (`"1290.00"`) so no client can lose precision
 in a float. Timestamps are ISO-8601 UTC with `Z`.
 
+**Media URLs are origin-relative** — `"/media/products/2026/08/shirt.jpg"`, never
+`"http://host/media/..."`. The API is always behind a proxy (Nginx, and the storefront's own
+`/api/proxy/*` route), so the `Host` it sees is an internal one and any URL built from it is
+unreachable by the browser. Storefront, admin, POS, `/api/` and `/media/` are one origin, so a
+relative path is correct under every hostname, port and scheme. Object storage is the exception:
+with `USE_S3=1` the backend returns its own absolute URL and the API passes it through unchanged.
+Anything that needs an absolute URL — JSON-LD, for one — resolves it client-side against the site
+URL. See `apps/api/core/media.py` and
+[product-media.md §8](../architecture/product-media.md#8-serving-the-bytes).
+
 ## Errors
 
 Always the same envelope:

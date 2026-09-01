@@ -24,6 +24,7 @@ from content.api.serializers import serialise_banner
 from content.models import BannerPlacement, StorefrontBanner
 from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
+from core.media import media_url
 from core.pagination import StandardPagination
 from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
@@ -90,10 +91,10 @@ def _payload_queryset(queryset: Any) -> Any:
     )
 
 
-def _product_payload(product: Product, *, request: Request, snapshots: dict) -> dict[str, Any]:
+def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
     images = [
         {
-            "url": request.build_absolute_uri(image.image.url) if image.image else "",
+            "url": media_url(image.image),
             "alt": image.effective_alt,
             # `null` marks a shared image — a flat-lay or a size chart — which
             # shows for every colour and never changes the selection.
@@ -187,9 +188,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         variants = ProductVariant.objects.filter(product__in=products)
         snapshots = inventory_services.availability(branch=branch, variants=list(variants))
 
-        payload = [
-            _product_payload(product, request=request, snapshots=snapshots) for product in products
-        ]
+        payload = [_product_payload(product, snapshots=snapshots) for product in products]
 
         # Merchandising signal, logged once per search rather than per page.
         query = request.query_params.get("q", "")
@@ -212,7 +211,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         snapshots = inventory_services.availability(
             branch=branch, variants=list(product.variants.all())
         )
-        payload = _product_payload(product, request=request, snapshots=snapshots)
+        payload = _product_payload(product, snapshots=snapshots)
 
         reviews = product.reviews.filter(status=ReviewStatus.APPROVED).select_related("customer")
         payload["reviews"] = {
@@ -239,7 +238,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
             variants=list(ProductVariant.objects.filter(product__in=related)),
         )
         payload["related"] = [
-            _product_payload(item, request=request, snapshots=related_snapshots) for item in related
+            _product_payload(item, snapshots=related_snapshots) for item in related
         ]
         return Response(payload)
 
@@ -323,9 +322,7 @@ class ShopCategoryView(APIView):
                     "slug": category.slug,
                     "path": path,
                     "description": category.description,
-                    "image": request.build_absolute_uri(category.image.url)
-                    if category.image
-                    else "",
+                    "image": media_url(category.image),
                     "breadcrumbs": [
                         {"name": ancestor.name, "slug": ancestor.slug, "path": crumb_path}
                         for ancestor, crumb_path in zip(ancestors, crumb_paths, strict=True)
@@ -352,7 +349,7 @@ class ShopCategoryView(APIView):
                     "name": root.name,
                     "slug": root.slug,
                     "path": root.slug,
-                    "image": request.build_absolute_uri(root.image.url) if root.image else "",
+                    "image": media_url(root.image),
                     "children": [
                         {
                             "name": child.name,
@@ -393,7 +390,7 @@ class ShopSearchSuggestView(APIView):
                         "price": str(product.price_from or Decimal("0.00")),
                         "image": next(
                             (
-                                request.build_absolute_uri(image.image.url)
+                                media_url(image.image)
                                 for image in product.images.all()
                                 if image.image
                             ),
@@ -439,10 +436,7 @@ class ShopHomeView(APIView):
                 branch=branch,
                 variants=list(ProductVariant.objects.filter(product__in=products)),
             )
-            return [
-                _product_payload(product, request=request, snapshots=snapshots)
-                for product in products
-            ]
+            return [_product_payload(product, snapshots=snapshots) for product in products]
 
         base = _payload_queryset(visible_products())
 
@@ -463,15 +457,13 @@ class ShopHomeView(APIView):
             {
                 # Merchandised hero, or None — the page keeps its previous
                 # behaviour of falling back to a new arrival's photograph.
-                "hero": serialise_banner(hero, request=request),
+                "hero": serialise_banner(hero),
                 "featured_categories": [
                     {
                         "name": category.name,
                         "slug": category.slug,
                         "path": category.slug,
-                        "image": request.build_absolute_uri(category.image.url)
-                        if category.image
-                        else "",
+                        "image": media_url(category.image),
                     }
                     for category in Category.objects.filter(
                         is_active=True, show_in_navigation=True, parent__isnull=True
@@ -484,7 +476,7 @@ class ShopHomeView(APIView):
                     {
                         "name": brand.name,
                         "slug": brand.slug,
-                        "logo": request.build_absolute_uri(brand.logo.url) if brand.logo else "",
+                        "logo": media_url(brand.logo),
                     }
                     for brand in Brand.objects.filter(is_active=True, is_featured=True)[:8]
                 ],
@@ -709,7 +701,7 @@ class WishlistView(APIView):
             [
                 {
                     "id": str(item.pk),
-                    "product": _product_payload(item.product, request=request, snapshots=snapshots),
+                    "product": _product_payload(item.product, snapshots=snapshots),
                 }
                 for item in items
             ]

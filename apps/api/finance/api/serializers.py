@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import Branch
+from core.media import RelativeFileField, media_url
 from finance.models import (
     Account,
     AccountKind,
@@ -219,6 +220,9 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
+    # Alongside `attachment_url`, and origin-relative like it: DRF would
+    # otherwise absolutise this one against the request (`core.media`).
+    attachment = RelativeFileField(read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
     category_code = serializers.CharField(source="category.code", read_only=True)
     account_name = serializers.CharField(source="account.name", read_only=True)
@@ -258,11 +262,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_attachment_url(self, expense: Expense) -> str:
-        if not expense.attachment:
-            return ""
-        request = self.context.get("request")
-        url = expense.attachment.url
-        return request.build_absolute_uri(url) if request else url
+        return media_url(expense.attachment)
 
 
 #: A receipt is a photo or a scanned bill. Anything executable is refused

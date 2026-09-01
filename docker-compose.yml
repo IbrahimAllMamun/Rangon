@@ -76,6 +76,10 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     environment: *api-env
+    # Uploaded product photography with USE_S3=0. Without this the files live in
+    # the container's writable layer and every rebuild silently destroys them.
+    volumes:
+      - api_media:/app/media
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -88,6 +92,10 @@ services:
       dockerfile: Dockerfile
     command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
     environment: *api-env
+    # Same volume as the API: a task that generates a thumbnail must write it
+    # where the API will serve it from.
+    volumes:
+      - api_media:/app/media
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -131,6 +139,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  api_media:
 
 networks:
   # db and redis live only on `backend`, which is never published.

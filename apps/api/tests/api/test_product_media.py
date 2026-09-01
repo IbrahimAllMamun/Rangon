@@ -219,3 +219,178 @@ class TestAdminApi:
         assert response.data["color"]["label"] == "Black"
         # The first image of a product becomes its primary one.
         assert response.data["is_primary"] is True
+
+
+class TestImageUrlsAreOriginRelative:
+    """The API cannot know the public origin, so it must not guess one.
+
+    Every media URL used to be `request.build_absolute_uri(...)`. The browser
+    never talks to Django directly: through the storefront proxy the request
+    carries `Host: api:8000`, and through Nginx it carries `Host: localhost`
+    with the port stripped. Both produced URLs no browser could load, which is
+    how uploaded photography reached the admin as a broken image
+    (docs/architecture/product-media.md section 8).
+    """
+
+    def test_admin_upload_returns_a_relative_url(self, auth_client, owner, branch):
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+
+        response = auth_client(owner).post(
+            "/api/v1/product-images/",
+            {"product": str(product.pk), "image": _png()},
+            format="multipart",
+            # The Host the Next.js proxy forwards under: an internal Docker name.
+            HTTP_HOST="api:8000",
+        )
+
+        assert response.status_code == 201, response.data
+        assert response.data["url"].startswith("/media/"), response.data["url"]
+        # No field may leak the host, `url` or otherwise.
+        assert "api:8000" not in str(response.data)
+
+    def test_storefront_payload_returns_a_relative_url(self, api, branch):
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+        _image(product, colours[0]).save()
+
+        response = api.get(f"/api/v1/shop/products/{product.slug}/", HTTP_HOST="localhost")
+
+        assert response.status_code == 200, response.data
+        assert response.data["images"][0]["url"].startswith("/media/")
+
+    def test_the_url_does_not_depend_on_the_host_header(self, api, branch):
+        """The same row must serialise identically behind any proxy."""
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+        _image(product, colours[0]).save()
+
+        path = f"/api/v1/shop/products/{product.slug}/"
+        through_nginx = api.get(path, HTTP_HOST="localhost").data["images"][0]["url"]
+        through_proxy = api.get(path, HTTP_HOST="api:8000").data["images"][0]["url"]
+
+        assert through_nginx == through_proxy
+
+
+class TestMediaIsServed:
+    """Uploading a photograph is only half the job; it has to come back.
+
+    `django.conf.urls.static.static()` returns nothing unless DEBUG, so with
+    DEBUG=0 the upload succeeded and every image 404ed.
+    """
+
+    def test_an_uploaded_image_is_downloadable_with_debug_off(
+        self, auth_client, owner, branch, settings, tmp_path
+    ):
+        # The suite stores uploads in memory for speed; serving them is a
+        # question about the *disk* backend, which is what every non-S3
+        # deployment runs.
+        settings.DEBUG = False
+        settings.MEDIA_ROOT = tmp_path
+        settings.STORAGES = {
+            **settings.STORAGES,
+            "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        }
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+
+        created = auth_client(owner).post(
+            "/api/v1/product-images/",
+            {"product": str(product.pk), "image": _png()},
+            format="multipart",
+        )
+        assert created.status_code == 201, created.data
+
+        response = auth_client(owner).get(created.data["url"])
+
+        assert response.status_code == 200, f"{created.data['url']} is not served"
+        assert response["Content-Type"] == "image/png"
+
+
+class TestUploadValidation:
+    """The admin form's limits are a courtesy; the API has to enforce them.
+
+    `ImageField` proves only that Pillow can decode the bytes, and
+    `FILE_UPLOAD_MAX_MEMORY_SIZE` is a buffering threshold rather than a cap -
+    a bigger upload spills to a temp file and is accepted (CLAUDE.md section 4).
+    """
+
+    URL = "/api/v1/product-images/"
+
+    def test_an_oversized_image_is_refused(self, auth_client, owner, branch, settings):
+        # A *decodable* image over the cap: the point is the size check, not
+        # Pillow rejecting corrupt bytes before it is ever reached.
+        settings.RANGON_MAX_IMAGE_BYTES = 32
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+
+        oversized = _png()
+        assert oversized.size > 32
+
+        response = auth_client(owner).post(
+            self.URL,
+            {"product": str(product.pk), "image": oversized},
+            format="multipart",
+        )
+
+        assert response.status_code == 400
+        assert "image" in response.data["error"]["details"]
+        assert ProductImage.objects.filter(product=product).count() == 0
+
+    def test_an_image_declaring_a_disallowed_type_is_refused(self, auth_client, owner, branch):
+        """Real PNG bytes, renamed and declared as SVG.
+
+        SVG carries script, so it is not in `RANGON_ALLOWED_IMAGE_TYPES`. Pillow
+        decodes the payload happily, which is exactly why the decode is not the
+        check that matters.
+        """
+        _, colours = _colour_attribute(["black"])
+        product = _product_in_colours(branch, colours)
+
+        disguised = SimpleUploadedFile("payload.svg", _png().read(), content_type="image/svg+xml")
+        response = auth_client(owner).post(
+            self.URL,
+            {"product": str(product.pk), "image": disguised},
+            format="multipart",
+        )
+
+        assert response.status_code == 400
+        assert "image" in response.data["error"]["details"]
+        assert ProductImage.objects.filter(product=product).count() == 0
+
+
+class TestEveryUploadFieldIsRelative:
+    """Product photography was not the only thing carrying a broken host.
+
+    DRF renders a `FileField`/`ImageField` by absolutising it against the
+    incoming request, so *every* serializer naming one in `Meta.fields` had the
+    same defect - category images, brand logos, navigation and banner artwork,
+    expense receipts. `core.media.RelativeImageField` is what keeps them
+    origin-relative (product-media.md section 8).
+    """
+
+    # The Host the Next.js proxy forwards under: an internal Docker name that
+    # no browser can resolve.
+    PROXY_HOST = "api:8000"
+
+    def test_a_category_image_is_relative(self, auth_client, owner):
+        from catalog.models import Category
+
+        category = Category.objects.create(name="Serums", slug="serums", image=_png())
+        response = auth_client(owner).get(
+            f"/api/v1/categories/{category.pk}/", HTTP_HOST=self.PROXY_HOST
+        )
+
+        assert response.status_code == 200, response.data
+        assert response.data["image"].startswith("/media/"), response.data["image"]
+        assert self.PROXY_HOST not in str(response.data)
+
+    def test_a_brand_logo_is_relative(self, auth_client, owner):
+        from catalog.models import Brand
+
+        brand = Brand.objects.create(name="Lumen", slug="lumen", logo=_png())
+        response = auth_client(owner).get(f"/api/v1/brands/{brand.pk}/", HTTP_HOST=self.PROXY_HOST)
+
+        assert response.status_code == 200, response.data
+        assert response.data["logo"].startswith("/media/"), response.data["logo"]
+        assert self.PROXY_HOST not in str(response.data)

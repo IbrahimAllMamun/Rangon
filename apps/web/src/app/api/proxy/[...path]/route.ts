@@ -78,7 +78,13 @@ async function forward(request: NextRequest, path: string[]) {
   }
 
   const text = await upstream.text();
-  const response = new NextResponse(text, {
+
+  // A 204/205/304 must be constructed with a null body: the Response
+  // constructor throws `Invalid response status code` on anything else, even
+  // the empty string, which turned every successful DELETE - deleting a product
+  // image, for one - into a 500 *after* the API had already done the work.
+  const empty = upstream.status === 204 || upstream.status === 205 || upstream.status === 304;
+  const response = new NextResponse(empty ? null : text, {
     status: upstream.status,
     headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json" },
   });
