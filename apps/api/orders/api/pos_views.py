@@ -16,6 +16,7 @@ from accounts.permissions import RolePermission
 from accounts.services import resolve_branch
 from catalog.api.serializers import ProductVariantSerializer
 from catalog.models import ProductVariant, PublishStatus
+from core.media import media_url
 from core.money import quantize
 from inventory import services as inventory_services
 from orders.api.serializers import (
@@ -155,7 +156,7 @@ class PosProductSearchView(APIView):
                     "label": variant.label,
                     "price": str(variant.price),
                     "available": snapshot.available,
-                    "image": image.image.url if image and image.image else "",
+                    "image": media_url(image.image) if image else "",
                     "category": variant.product.category.name,
                 }
             )

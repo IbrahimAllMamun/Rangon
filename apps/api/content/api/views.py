@@ -58,15 +58,9 @@ class ShopNavigationView(APIView):
         )
         return Response(
             {
-                "announcement": serialise_banner(announcement, request=request),
-                "items": [
-                    serialise_node(node, request=request)
-                    for node in navigation(placement=Placement.HEADER)
-                ],
-                "footer": [
-                    serialise_node(node, request=request)
-                    for node in navigation(placement=Placement.FOOTER)
-                ],
+                "announcement": serialise_banner(announcement),
+                "items": [serialise_node(node) for node in navigation(placement=Placement.HEADER)],
+                "footer": [serialise_node(node) for node in navigation(placement=Placement.FOOTER)],
             }
         )
 

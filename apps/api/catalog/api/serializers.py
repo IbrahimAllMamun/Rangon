@@ -4,6 +4,7 @@ import copy
 from decimal import Decimal
 from typing import Any
 
+from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -18,6 +19,7 @@ from catalog.models import (
     VariantAttributeValue,
 )
 from catalog.services import unique_slug
+from core.media import RelativeImageField, media_url
 
 
 class AttributeValueSerializer(serializers.ModelSerializer):
@@ -56,6 +58,8 @@ class AttributeSerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    # Origin-relative, like every other media URL (`core.media`).
+    image = RelativeImageField(required=False, allow_null=True)
     product_count = serializers.IntegerField(read_only=True, required=False)
     children = serializers.SerializerMethodField()
     parent_name = serializers.CharField(source="parent.name", read_only=True, default="")
@@ -139,6 +143,8 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class BrandSerializer(serializers.ModelSerializer):
+    logo = RelativeImageField(required=False, allow_null=True)
+
     class Meta:
         model = Brand
         fields = ["id", "name", "slug", "description", "logo", "is_active", "is_featured"]
@@ -152,10 +158,21 @@ class BrandSerializer(serializers.ModelSerializer):
         return attrs
 
 
+#: Product photography, and nothing that merely looks like it. The admin form
+#: applies the same rules, but the API is what has to refuse (CLAUDE.md section 4).
+ALLOWED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
+
+
 class ProductImageSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
     alt = serializers.CharField(source="effective_alt", read_only=True)
     color = serializers.SerializerMethodField()
+    # Upload-only. DRF's `FileField` renders a file by absolutising it against
+    # the incoming request, which is exactly the mistake `core.media` exists to
+    # avoid — it emitted `http://api:8000/media/...` when the admin uploaded
+    # through the storefront's proxy. `url` is the one public URL; nothing reads
+    # this field back.
+    image = serializers.ImageField(write_only=True)
 
     class Meta:
         model = ProductImage
@@ -174,14 +191,30 @@ class ProductImageSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
     def get_url(self, image: ProductImage) -> str:
-        if not image.image:
-            return ""
-        request = self.context.get("request")
-        url = image.image.url
-        return request.build_absolute_uri(url) if request else url
+        return media_url(image.image)
 
     def get_color(self, image: ProductImage) -> dict[str, str] | None:
         return colour_payload(image.attribute_value if image.attribute_value_id else None)
+
+    def validate_image(self, value: Any) -> Any:
+        """Size and type, server-side.
+
+        `ImageField` only proves Pillow can decode the file; it caps nothing.
+        Django's `FILE_UPLOAD_MAX_MEMORY_SIZE` is not a limit either — a larger
+        upload simply spills to a temporary file — so without this a 200 MB
+        "photograph" would be accepted and then served back forever.
+        """
+        if not value:
+            return value
+        if value.size > settings.RANGON_MAX_IMAGE_BYTES:
+            limit = settings.RANGON_MAX_IMAGE_BYTES // (1024 * 1024)
+            raise serializers.ValidationError(f"The image must be smaller than {limit} MB.")
+        content_type = (getattr(value, "content_type", "") or "").lower()
+        if content_type and content_type not in settings.RANGON_ALLOWED_IMAGE_TYPES:
+            raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
+        if not str(value.name).lower().endswith(ALLOWED_IMAGE_EXTENSIONS):
+            raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
+        return value
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         # The colour rules live on the model so the Django admin obeys them too.
@@ -302,10 +335,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         image = product.primary_image
         if image is None or not image.image:
             return None
-        request = self.context.get("request")
-        url = image.image.url
         return {
-            "url": request.build_absolute_uri(url) if request else url,
+            "url": media_url(image.image),
             "alt": image.effective_alt,
         }
 

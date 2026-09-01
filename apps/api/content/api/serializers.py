@@ -15,16 +15,10 @@ from rest_framework import serializers
 
 from content.models import NavigationItem, StorefrontBanner
 from content.selectors import NavNode
+from core.media import RelativeImageField, media_url
 
 
-def absolute(request: Any, image: Any) -> str:
-    if not image:
-        return ""
-    url = image.url
-    return request.build_absolute_uri(url) if request else url
-
-
-def serialise_node(node: NavNode, *, request: Any) -> dict[str, Any]:
+def serialise_node(node: NavNode) -> dict[str, Any]:
     return {
         "id": node.id,
         "label": node.label,
@@ -33,12 +27,12 @@ def serialise_node(node: NavNode, *, request: Any) -> dict[str, Any]:
         "badge": node.badge or None,
         "layout": node.layout,
         "description": node.description,
-        "image": absolute(request, node.image) or None,
-        "children": [serialise_node(child, request=request) for child in node.children],
+        "image": media_url(node.image) or None,
+        "children": [serialise_node(child) for child in node.children],
     }
 
 
-def serialise_banner(banner: StorefrontBanner | None, *, request: Any) -> dict[str, Any] | None:
+def serialise_banner(banner: StorefrontBanner | None) -> dict[str, Any] | None:
     if banner is None:
         return None
     return {
@@ -49,7 +43,7 @@ def serialise_banner(banner: StorefrontBanner | None, *, request: Any) -> dict[s
         "subtitle": banner.subtitle,
         "cta_label": banner.cta_label,
         "url": banner.url,
-        "image": absolute(request, banner.image) or None,
+        "image": media_url(banner.image) or None,
         "dismissible": banner.dismissible,
     }
 
@@ -80,6 +74,7 @@ class ScheduledContentSerializer(serializers.ModelSerializer):
 
 
 class NavigationItemSerializer(ScheduledContentSerializer):
+    image = RelativeImageField(required=False, allow_null=True)
     display_label = serializers.CharField(read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True, default="")
 
@@ -121,6 +116,8 @@ class NavigationItemSerializer(ScheduledContentSerializer):
 
 
 class StorefrontBannerSerializer(ScheduledContentSerializer):
+    image = RelativeImageField(required=False, allow_null=True)
+
     class Meta:
         model = StorefrontBanner
         fields = [

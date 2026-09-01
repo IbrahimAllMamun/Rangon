@@ -22,26 +22,40 @@ downloads, credentials. `Desktop/Rangon` has its own `.git`, so you are safe
 
 ---
 
-## 2. Port 3000 cannot be bound — the storefront is on 4000
+## 2. Windows reserves whole TCP ranges, and **they move between reboots**
 
-Windows reserves wide TCP ranges for Hyper-V/WinNAT. On this machine:
-
-```text
-2906-3005   3006-3105   3106-3205   3206-3305   3306-3405   3406-3505
-50000-50059
-```
-
-So 3000, 3001 and 3100 all fail with:
+Windows hands wide TCP ranges to Hyper-V/WinNAT. A port inside one cannot be
+bound at all:
 
 ```text
 bind: An attempt was made to access a socket in a way forbidden by its access permissions
 ```
 
-Nothing is listening; the OS simply refuses. Check the current ranges with:
+Nothing is listening; the OS simply refuses. **The ranges are not stable** — they
+are reassigned on reboot, so never trust a list written in a previous session.
+Read them fresh every time:
 
 ```bash
 netsh.exe interface ipv4 show excludedportrange protocol=tcp
 ```
+
+Or just try the bind, which is the only answer that counts:
+
+```bash
+docker run --rm -d -p 8125:8025 --name porttest alpine sleep 5 >/dev/null && echo OK || echo RESERVED
+docker rm -f porttest >/dev/null 2>&1
+```
+
+Observed so far, to show how much they move:
+
+| Date       | Reserved ranges                                                   |
+| ---------- | ----------------------------------------------------------------- |
+| 2026-08-18 | 2906-3505 (six blocks), 50000-50059                                |
+| 2026-08-30 | 2333-2432, 7804-8003, 8104-8203, 14567-14666, 50000-50059          |
+
+On 2026-08-18 that cost port **3000** (the storefront default). On 2026-08-30
+3000 was free again but **8125** was not, which is Mailpit's published port in
+`docker-compose.prodlocal.yml` — hence `MAILPIT_PORT` (see §11).
 
 `.env` therefore sets `WEB_PORT=4000`, with `NEXT_PUBLIC_SITE_URL`,
 `DJANGO_CORS_ALLOWED_ORIGINS` and `DJANGO_CSRF_TRUSTED_ORIGINS` moved to the
@@ -192,18 +206,119 @@ the config default of 3000).
 
 ---
 
-## 10. There is no `gh` CLI on this machine
+## 10. `gh` IS installed now — and a conflicting PR gets no CI at all
 
-`gh` is not installed, but `origin` is a **public** GitHub repo, so the REST API
-answers unauthenticated:
+This section used to say `gh` was missing. As of 2026-09-01 it is at
+`/c/Program Files/GitHub CLI/gh`, authenticated as `IbrahimAllMamun` with
+`repo` and `workflow` scopes, so `gh pr`, `gh run` and `gh api` all work.
+
+`origin` is also a **public** repo, so the REST API still answers
+unauthenticated if `gh` ever disappears again:
 
 ```bash
 curl.exe -s "https://api.github.com/repos/IbrahimAllMamun/Rangon/actions/runs?per_page=10"
-curl.exe -s "https://api.github.com/repos/IbrahimAllMamun/Rangon/actions/runs/<id>/jobs"
 ```
 
-That is how the CI status in `../docs/roadmap.md` was checked. Downloading run
-**logs** does need a token; job and step conclusions do not.
+**A PR with merge conflicts runs no workflows.** `ci.yml` is `on: pull_request`,
+and those workflows build against the *computed merge commit* — which GitHub
+cannot produce while the PR is `CONFLICTING`. The symptom is a PR sitting with
+**zero** check runs and no explanation, while Actions is plainly enabled:
+
+```bash
+gh pr view <n> --json mergeable,mergeStateStatus   # CONFLICTING / DIRTY
+gh api repos/IbrahimAllMamun/Rangon/commits/<sha>/check-runs --jq .total_count   # 0
+gh api repos/IbrahimAllMamun/Rangon/actions/permissions                          # enabled: true
+```
+
+Rebase or merge `main` in first; CI only then has anything to say.
+
+---
+
+## 11. The local production stack does not build its own images
+
+`docker-compose.prodlocal.yml` sets `build: !reset null` on `api`, `worker`,
+`beat` and `web`, so **`prodlocal up -d --build` builds nothing** — it looks for
+`rangon-api:prod` and `rangon-web:prod` and fails if they are missing. Build them
+by hand first (unlike §8's shared `:latest`, these tags collide with nothing):
+
+```bash
+docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api           # ~4 min cold
+docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web \
+  --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 \
+  --build-arg NEXT_PUBLIC_SITE_URL=http://localhost:4100
+```
+
+Then:
+
+```bash
+alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
+prodlocal up -d
+prodlocal exec api python manage.py migrate
+prodlocal exec api python manage.py seed_demo --reset
+./scripts/smoke-test.sh http://localhost:4100
+```
+
+Its database is a **separate volume** (`rangon-prod_postgres_data`) from the dev
+stack's, so it always starts empty and always needs migrate + seed.
+
+### Recreating `api` or `web` means restarting `nginx`
+
+`local-prod/default.conf` declares its upstreams as `server api:8000` /
+`server web:3000`. Nginx resolves those names **once, at startup**, and caches
+the IP for the life of the process. A recreated container gets a new address, so
+every `/api/` request answers **502** while `docker exec … getent hosts api`
+inside the very same nginx container prints the correct new IP:
+
+```bash
+docker compose -p rangon-prod … up -d --force-recreate api
+docker compose -p rangon-prod … restart nginx     # or /api/ stays 502
+```
+
+The storefront keeps working throughout, because `web` was not replaced — which
+makes it look like an API fault rather than a proxy one.
+
+### Docker Desktop has ~4 GB here, and the OOM killer is silent
+
+`docker info` reports `3993014272` bytes. The local production stack is eight
+containers; add the test stack and an image build on top and something is
+killed with **exit 137** and no message anywhere obvious:
+
+- `db-test` died mid-run and `pytest` produced **no output at all** while still
+  exiting `0` — a green-looking run that never executed a test;
+- `docker compose up -d --force-recreate api worker beat` was killed after
+  removing the old `api` and before starting the new one, leaving the stack
+  running with no API.
+
+Do not run a build and the test suite at the same time as the prod stack. If a
+command dies with 137, or a suite finishes suspiciously fast and silent, check
+`docker ps` for what is missing before believing the result.
+
+### Three containers report `unhealthy` and two of them are lying
+
+```text
+rangon-prod-worker-1   unhealthy   # false — inherited healthcheck
+rangon-prod-beat-1     unhealthy   # false — inherited healthcheck
+rangon-prod-web-1      unhealthy   # REAL — see below
+```
+
+`worker` and `beat` run Celery from the **api** image, so they inherit its
+`HEALTHCHECK` curling `localhost:8000`. Nothing listens on 8000 in a Celery
+container and nothing ever will. Ignore them; do not "fix" it by weakening the
+api healthcheck.
+
+`web` is a genuine bug. Next.js standalone `server.js` binds
+`process.env.HOSTNAME`, and Docker sets `HOSTNAME` to the container ID, so the
+server binds **only the container IP**:
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec rangon-prod-web-1 netstat -ltn | grep 3000
+# tcp  0  0  172.20.0.3:3000  0.0.0.0:*  LISTEN     <- not 0.0.0.0:3000
+```
+
+The app still works, because nginx reaches it as `web:3000` over the bridge — but
+`curl localhost:3000` inside the container is refused, so the image's own
+healthcheck can never pass and `depends_on: service_healthy` on `web` would hang
+forever. The fix is one line in `apps/web/Dockerfile`: `ENV HOSTNAME=0.0.0.0`.
 
 ---
 
@@ -230,7 +345,8 @@ docker compose build web                                          # prod build (
 docker compose -f docker-compose.yml -f docker-compose.dev.yml build web
 
 # Verify from Windows, not from a container
-curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4000/
+curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4000/    # dev
+curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4100/    # local production (§11)
 
 # Hit the API through the same proxy the browser uses (put the script in
 # apps/web/, which is bind-mounted to /app)
@@ -283,3 +399,44 @@ For a browser pass, this environment ships Chromium at
 already honours `PW_CHROMIUM_PATH` for exactly this. **D7 does not mean
 "Playwright cannot run here"** — it means the *dev container's* Alpine base
 ships no musl browser.
+
+---
+
+## 12. Two pytest runs on this machine will corrupt each other
+
+`docker-compose.test.yml` pins `name: rangon-test`, and `config/settings/test.py` pins
+`TEST["NAME"] = "rangon_test_db"`. So every run of
+
+```bash
+docker compose -f docker-compose.test.yml run --rm -T api-test pytest -q
+```
+
+shares one PostgreSQL **and** one test database, whichever worktree it is
+started from. pytest-django drops and recreates that database at session start,
+so a second run pulls the database out from under a first one.
+
+Observed 2026-09-01, with a second Claude session running in another worktree.
+It does not fail cleanly — it manufactures believable failures somewhere else:
+
+```text
+django.db.utils.OperationalError: database "rangon_test_db" does not exist
+assert '2000.00' == '1000.00'   # the other session's committed rows, read straight through
+```
+
+Both were first read as regressions from the change under test. Check for a
+stray runner before believing any test result:
+
+```bash
+docker ps --format '{{.Names}}	{{.Command}}' | grep api-test
+```
+
+Give each session its own compose project. The image build is cache-warm (~30 s)
+and everything else follows:
+
+```bash
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml build api-test
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml run --rm -T api-test pytest -q
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml down
+```
+
+Recorded as D46's sibling defect, D47, in `../docs/roadmap.md`.

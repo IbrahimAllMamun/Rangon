@@ -16,7 +16,8 @@
 #
 # Nginx fronts the whole thing on 4100 as a single origin, exactly as the
 # deployed topology does; the API is *also* published on 8100 so it can be
-# poked directly. Mailpit is on 8125.
+# poked directly. Mailpit is on ${MAILPIT_PORT:-8125} — override it in the env
+# file when Windows has reserved 8125 (see .claude/environment.md).
 # For the real thing see docker-compose.prod.yml and docs/operations/.
 
 # docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml down
@@ -81,6 +82,6 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "8125:8025"
+      - "${MAILPIT_PORT:-8125}:8025"
     networks: [backend]
     restart: unless-stopped
