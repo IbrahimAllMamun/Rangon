@@ -22,11 +22,12 @@ from typing import Any
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q, Sum
+from django.utils import timezone
 
 from accounts.models import Branch, User
 from catalog.models import ProductVariant
 from core import audit
-from core.exceptions import InsufficientStock, ValidationError
+from core.exceptions import Conflict, InsufficientStock, ValidationError
 from core.money import quantize
 from inventory.models import (
     REASON_REQUIRED,
@@ -35,6 +36,9 @@ from inventory.models import (
     TRANSACTION_SIGN,
     Inventory,
     InventoryTransaction,
+    StockException,
+    StockExceptionResolution,
+    StockExceptionStatus,
     TransactionType,
 )
 
@@ -131,7 +135,7 @@ def _write_ledger(
 
     inventory.save(update_fields=["on_hand", "reserved", "average_cost", "updated_at"])
 
-    return InventoryTransaction.objects.create(
+    entry = InventoryTransaction.objects.create(
         branch=inventory.branch,
         variant_id=inventory.variant_id,
         transaction_type=transaction_type,
@@ -144,6 +148,38 @@ def _write_ledger(
         reason=reason,
         notes=notes,
         created_by=actor,
+    )
+    _raise_stock_exception(inventory=inventory, entry=entry, delta=delta)
+    return entry
+
+
+def _raise_stock_exception(
+    *, inventory: Inventory, entry: InventoryTransaction, delta: int
+) -> None:
+    """Record a movement that left `on_hand` below zero.
+
+    Every stock movement in the system funnels through `_write_ledger`, so this
+    is the one place that can promise the guarantee offline POS depends on:
+    stock cannot go negative without somebody being told
+    (docs/architecture/offline-pos.md).
+
+    Only *reductions* raise one. A receipt landing on an already-negative
+    balance is the stock arriving to cover the hole, not a second hole, and
+    flagging it would bury the original under noise.
+    """
+    if delta >= 0 or entry.transaction_type not in STOCK_AFFECTING:
+        return
+    if inventory.on_hand >= 0:
+        return
+
+    StockException.objects.create(
+        branch=inventory.branch,
+        variant_id=inventory.variant_id,
+        transaction=entry,
+        shortfall=abs(inventory.on_hand),
+        on_hand_after=inventory.on_hand,
+        reference_type=entry.reference_type,
+        reference_id=entry.reference_id,
     )
 
 
@@ -864,3 +900,67 @@ def repair_drift(*, issue: IntegrityIssue, actor: User | None = None, reason: st
         reason=reason,
         branch=inventory.branch,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stock exceptions
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def resolve_stock_exception(
+    *,
+    exception: StockException,
+    resolution: str,
+    note: str,
+    actor: User | None = None,
+) -> StockException:
+    """Close an oversell exception, with a reason that is not optional.
+
+    Resolving does not touch stock. If the shortfall needs correcting, that is
+    a receipt, a write-off or a stock count -- each of which writes its own
+    ledger row. This only records that a human looked at the hole and said what
+    it was, which is the whole guarantee offline POS is allowed to rely on.
+    """
+    locked = StockException.objects.select_for_update().get(pk=exception.pk)
+    if locked.status == StockExceptionStatus.RESOLVED:
+        raise Conflict("That exception has already been resolved.")
+    if resolution not in StockExceptionResolution.values:
+        raise ValidationError(
+            f"Unknown resolution {resolution!r}.",
+            details={
+                "resolution": [f"Choose one of {', '.join(StockExceptionResolution.values)}."]
+            },
+        )
+    if not note.strip():
+        raise ValidationError(
+            "Say what was done about it.",
+            details={"note": ["Required — an unexplained resolution explains nothing."]},
+        )
+
+    locked.status = StockExceptionStatus.RESOLVED
+    locked.resolution = resolution
+    locked.resolution_note = note.strip()
+    locked.resolved_at = timezone.now()
+    locked.resolved_by = actor if actor is not None and actor.is_authenticated else None
+    locked.save(
+        update_fields=[
+            "status",
+            "resolution",
+            "resolution_note",
+            "resolved_at",
+            "resolved_by",
+            "updated_at",
+        ]
+    )
+
+    audit.record(
+        action=audit.AuditAction.STOCK_ADJUSTMENT,
+        entity=locked,
+        actor=actor,
+        old_values={"status": StockExceptionStatus.OPEN},
+        new_values={"status": locked.status, "resolution": resolution},
+        reason=locked.resolution_note,
+        branch=locked.branch,
+    )
+    return locked

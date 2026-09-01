@@ -298,7 +298,12 @@ class Command(BaseCommand):
             AccountTransfer,
             Expense,
         )
-        from inventory.models import InventoryTransaction, StockCount, StockTransfer
+        from inventory.models import (
+            InventoryTransaction,
+            StockCount,
+            StockException,
+            StockTransfer,
+        )
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
         from purchasing.models import PurchaseOrder, PurchaseReceipt, SupplierPayment
@@ -332,6 +337,11 @@ class Command(BaseCommand):
             # cascade from the parent document.
             StockCount,
             StockTransfer,
+            # StockException PROTECTs the ledger row that caused it -- the
+            # evidence has to outlive any tidying up of the exception. That is
+            # right in production and means the reset must clear exceptions
+            # before the transactions they point at.
+            StockException,
             InventoryTransaction,
             Inventory,
             AuditLog,

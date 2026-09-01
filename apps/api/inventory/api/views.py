@@ -15,6 +15,7 @@ from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.exceptions import Conflict, ValidationError
 from core.services import next_number
+from inventory import selectors as inventory_selectors
 from inventory import services as inventory_services
 from inventory.api.serializers import (
     AdjustStockSerializer,
@@ -22,7 +23,9 @@ from inventory.api.serializers import (
     InventorySerializer,
     InventoryTransactionSerializer,
     RecordCountSerializer,
+    ResolveStockExceptionSerializer,
     StockCountSerializer,
+    StockExceptionSerializer,
     WriteOffSerializer,
 )
 from inventory.models import (
@@ -31,6 +34,7 @@ from inventory.models import (
     StockCount,
     StockCountItem,
     StockCountStatus,
+    StockExceptionStatus,
     StockTransfer,
 )
 
@@ -387,3 +391,57 @@ class StockCountViewSet(viewsets.ModelViewSet):
         count.applied_by = request.user
         count.save(update_fields=["status", "applied_at", "applied_by", "updated_at"])
         return Response({"adjusted_lines": applied, "status": count.status})
+
+
+class StockExceptionViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """The oversell report.
+
+    Read-only apart from `resolve`: nothing outside `inventory.services` may
+    create one, and none may be deleted — an exception queue that can be
+    emptied by deleting rows is not a control.
+    """
+
+    serializer_class = StockExceptionSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["inventory.view"],
+        "retrieve": ["inventory.view"],
+        # Deciding a hole was acceptable is the same weight of call as
+        # adjusting stock, so it takes the same permission.
+        "resolve": ["inventory.adjust"],
+    }
+    filterset_fields = ["branch", "variant", "status", "reference_type"]
+
+    def get_queryset(self) -> Any:
+        queryset = inventory_selectors.stock_exceptions(
+            status=self.request.query_params.get("status") or None
+        )
+        return branch_queryset(self.request.user, queryset)
+
+    @action(detail=True, methods=["post"])
+    def resolve(self, request: Request, pk: str | None = None) -> Response:
+        serializer = ResolveStockExceptionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        inventory_services.resolve_stock_exception(
+            exception=self.get_object(),
+            resolution=serializer.validated_data["resolution"],
+            note=serializer.validated_data["note"],
+            actor=request.user,
+        )
+        # Re-read through the selector so the response carries `on_hand_now`.
+        refreshed = self.get_queryset().get(pk=pk)
+        return Response(self.get_serializer(refreshed).data)
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request: Request) -> Response:
+        """What the dashboard badge needs, without pulling the whole list."""
+        queryset = self.get_queryset()
+        return Response(
+            {
+                "open": queryset.filter(status=StockExceptionStatus.OPEN).count(),
+                "resolved": queryset.filter(status=StockExceptionStatus.RESOLVED).count(),
+            }
+        )

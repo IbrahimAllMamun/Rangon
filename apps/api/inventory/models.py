@@ -278,3 +278,100 @@ class StockCountItem(BaseModel):
         if self.counted_quantity is None:
             return None
         return self.counted_quantity - self.expected_quantity
+
+
+class StockExceptionStatus(models.TextChoices):
+    OPEN = "OPEN", "Open"
+    RESOLVED = "RESOLVED", "Resolved"
+
+
+class StockExceptionResolution(models.TextChoices):
+    RESTOCKED = "RESTOCKED", "Stock arrived and covers it"
+    WRITTEN_OFF = "WRITTEN_OFF", "Written off as lost"
+    COUNTED = "COUNTED", "Corrected by a stock count"
+    NOT_AN_ERROR = "NOT_AN_ERROR", "Expected — no action needed"
+
+
+class StockException(BaseModel):
+    """A movement that left `on_hand` below zero.
+
+    "Never oversell" is the rule the inventory engine exists to enforce
+    (CLAUDE.md §3.2), and it holds for every online path. There is exactly one
+    case where it is deliberately relaxed: a sale that already happened at the
+    counter while the register could not reach the server. The customer has
+    walked out with the goods, so refusing the sale afterwards would make the
+    ledger describe a world that does not exist —
+    [offline-pos.md](../../docs/architecture/offline-pos.md) settles that in
+    advance: accept it, go negative, and raise this for a manager.
+
+    That doc also names this table as the **precondition** for offline POS:
+    negative stock may only be permitted once somebody is guaranteed to see it.
+    So this exists first, and it is written by `inventory.services` at the one
+    choke point every movement passes through — nothing else may create one.
+
+    Detection could have been derived (any `InventoryTransaction` with
+    `on_hand_after < 0`), but the *resolution* cannot: who looked at it, what
+    they concluded and when is state, not a query.
+    """
+
+    branch = models.ForeignKey(
+        "accounts.Branch", on_delete=models.PROTECT, related_name="stock_exceptions"
+    )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant", on_delete=models.PROTECT, related_name="stock_exceptions"
+    )
+    #: The ledger row that took it negative. PROTECT: the evidence must outlive
+    #: any tidying up of the exception itself.
+    transaction = models.OneToOneField(
+        InventoryTransaction, on_delete=models.PROTECT, related_name="stock_exception"
+    )
+
+    #: How far below zero this movement left the stock, as a positive number.
+    shortfall = models.PositiveIntegerField()
+    on_hand_after = models.IntegerField(
+        help_text="Balance immediately after the movement. Negative, by definition."
+    )
+    #: Copied from the transaction so the sale is findable without a join, and
+    #: still findable if the reference is later archived.
+    reference_type = models.CharField(max_length=32, blank=True, db_index=True)
+    reference_id = models.CharField(max_length=64, blank=True, db_index=True)
+
+    status = models.CharField(
+        max_length=16, choices=StockExceptionStatus.choices, default=StockExceptionStatus.OPEN
+    )
+    resolution = models.CharField(
+        max_length=16, choices=StockExceptionResolution.choices, blank=True
+    )
+    resolution_note = models.TextField(blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "inventory_stockexception"
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=["status", "-created_at"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(shortfall__gt=0),
+                name="inventory_stockexception_shortfall_positive",
+            ),
+            # A resolved exception must say how, and an open one must not
+            # pretend to have been resolved.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status="OPEN", resolution="", resolved_at__isnull=True)
+                    | models.Q(status="RESOLVED", resolved_at__isnull=False)
+                    & ~models.Q(resolution="")
+                ),
+                name="inventory_stockexception_resolution_consistent",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.variant.sku} short {self.shortfall} at {self.branch.code}"
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == StockExceptionStatus.OPEN

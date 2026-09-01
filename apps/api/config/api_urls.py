@@ -43,6 +43,7 @@ from inventory.api.views import (
     InventoryTransactionViewSet,
     InventoryViewSet,
     StockCountViewSet,
+    StockExceptionViewSet,
     StockTransferViewSet,
 )
 from orders.api.views import OrderViewSet, ReturnRequestViewSet
@@ -84,6 +85,7 @@ router.register(
 )
 router.register("stock-transfers", StockTransferViewSet, basename="stocktransfer")
 router.register("stock-counts", StockCountViewSet, basename="stockcount")
+router.register("stock-exceptions", StockExceptionViewSet, basename="stockexception")
 
 # --- purchasing ------------------------------------------------------------
 router.register("suppliers", SupplierViewSet, basename="supplier")

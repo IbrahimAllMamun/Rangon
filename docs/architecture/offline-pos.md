@@ -3,7 +3,8 @@
 Per plan §29, offline POS is only built **after** the online POS has proven itself in production. This
 document records the intended design so the online POS is not built in a way that blocks it.
 
-Status: **not implemented.** The POS today requires connectivity.
+Status: **not implemented.** The POS today requires connectivity. The first of its preconditions —
+the oversell exception report — is built; see *Gate 1* below.
 
 ## What the online POS already does to keep this possible
 
@@ -48,3 +49,33 @@ local queue → POST /pos/sales (Idempotency-Key: client_sale_id)
 This is the one place where the "never oversell" rule is deliberately relaxed, because the physical
 transaction has already happened. It requires an explicit oversell exception report before the feature
 can be enabled — which is why it is V2, not V1.
+
+## Gate 1 — oversell exception report: **built**
+
+The report exists (`StockException`, `/api/v1/stock-exceptions/`,
+`/admin/inventory/exceptions`). Rules in
+[business-rules.md §1.4a](../business-rules.md); mechanism in
+[inventory.md](inventory.md).
+
+What it guarantees, and therefore what the sync engine may now rely on:
+
+- Any reduction leaving `on_hand < 0` raises a row, from **every** path — the hook sits in
+  `inventory.services._write_ledger`, not at the call sites, so the sync engine gets one for free
+  without asking.
+- The row is written in the same transaction as the ledger entry, so an accepted-then-rolled-back
+  sale leaves nothing behind and an accepted one is never silent.
+- It cannot be created, deleted or re-resolved through the API, and closing one needs
+  `inventory.adjust` plus a written reason.
+
+So the sync engine's job for the oversell row of the table above is now simply: pass
+`allow_negative=True`. It does not detect, report or flag anything itself — that is already done, and
+doing it twice is how the two copies drift.
+
+## Remaining gates before offline POS can be enabled
+
+1. **Price-drift and unpublished-product reporting.** Rows 2 and 3 of the conflict table promise
+   "the difference is reported" and "accept; report". Nothing reports either yet. The oversell row
+   above is the pattern to copy.
+2. **A manager review list for rejected sales.** Row 5 sends a revoked-permission sale to "a manager
+   review list" that does not exist. A `409` today is a dead end for a sale that physically happened.
+3. **The queue itself** — service worker, `pos-cache`, `pos-queue`, drain engine.

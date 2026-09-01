@@ -1,4 +1,4 @@
-import { ArrowRightLeft, ClipboardList } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
@@ -39,6 +39,14 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
     error = caught instanceof Error ? caught.message : "Could not load inventory.";
   }
 
+  // Oversell exceptions are the price of admission for offline selling
+  // (docs/architecture/offline-pos.md): stock is allowed below zero only
+  // because somebody is guaranteed to be shown it. That guarantee is this
+  // badge, so a failure to load it must not take the inventory page with it.
+  const oversells = await apiServer<{ open: number }>("/stock-exceptions/summary/").catch(
+    () => null,
+  );
+
   const totalValue = (rows?.results ?? []).reduce(
     (sum, row) => sum + Number(row.stock_value ?? 0),
     0,
@@ -57,6 +65,20 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         description="Every figure here comes from the ledger. Stock changes only through an adjustment, a sale, a return, a receipt, a count or a write-off."
         actions={
           <div className="flex flex-wrap gap-2">
+            {/* Always linked, loud only when there is something to answer for.
+                Hiding it at zero would make the queue undiscoverable exactly
+                when somebody wants to check that it is empty. */}
+            <Link
+              href="/admin/inventory/exceptions"
+              className={
+                (oversells?.open ?? 0) > 0
+                  ? "inline-flex items-center gap-1.5 rounded-md border border-[var(--warning)] bg-[var(--warning-bg)] px-3 py-1.5 text-body-sm font-medium text-[var(--warning)] hover:brightness-95"
+                  : "inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
+              }
+            >
+              <AlertTriangle className="size-4" aria-hidden />
+              {(oversells?.open ?? 0) > 0 ? `${oversells!.open} oversold` : "Oversells"}
+            </Link>
             <Link
               href="/admin/inventory/counts"
               className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"

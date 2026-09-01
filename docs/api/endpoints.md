@@ -73,6 +73,9 @@ Stock transfers and counts are **top-level** resources, not nested under
 | POST | `/stock-counts/{id}/record/` | `inventory.count` — `{lines: [{variant, counted_quantity, notes}]}` |
 | POST | `/stock-counts/{id}/apply/` | `inventory.count` — counted figures → `ADJUSTMENT` ledger rows |
 | POST | `/stock-counts/{id}/cancel/` | `inventory.count` — abandon without touching stock |
+| GET | `/stock-exceptions/` | `inventory.view` — oversell report: movements that left `on_hand < 0`. Filter `?status=OPEN\|RESOLVED`. Read-only; rows are written only by `inventory.services` and can never be created or deleted through the API |
+| GET | `/stock-exceptions/summary/` | `inventory.view` — `{open, resolved}` counts for the badge, without pulling the list |
+| POST | `/stock-exceptions/{id}/resolve/` | `inventory.adjust` — `{resolution, note}`; the note is mandatory and a resolved row returns `409` rather than being overwritten. Moves no stock (see business-rules §1.4a) |
 
 `record/` is the only way `counted_quantity` can be written: `items` on the count serializer is
 read-only, because `expected_quantity` is the ledger's snapshot and editing it would make the

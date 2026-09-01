@@ -266,7 +266,7 @@ cd apps/web
 API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 npx next dev --port 4000
 ```
 
-Two traps, both of which cost time:
+Three traps, all of which cost time:
 
 1. **Redis is not optional.** The auth throttle is Redis-backed, so with no
    Redis `POST /api/v1/auth/login/` returns **500**, not a throttling error —
@@ -277,6 +277,25 @@ Two traps, both of which cost time:
    `NEXT_PUBLIC_API_URL`. It defaults to `http://api:8000/api/v1` — the compose
    service hostname — which does not resolve outside compose, so every
    server-side fetch fails while the pages still render.
+
+3. **`--noreload` means new URLs do not appear.** The API is started with
+   `--noreload` (deliberately — the autoreloader is flaky under this sandbox).
+   Adding a route to `config/api_urls.py` therefore changes nothing until the
+   server is restarted, and the symptom is not a visible 404: the admin page
+   catches the failed fetch and renders its error state, so a brand-new
+   endpoint looks like a screen that loads with no data. Check
+   `/tmp/rangon-native/api.log` for `Not Found:` before suspecting the UI.
+   Restart the API **on its own** — `dev-stack-native.sh up` reseeds with
+   `--reset` and will destroy whatever you were testing against:
+
+   ```bash
+   pkill -f "manage.py runserver 8000"
+   cd apps/api && DATABASE_URL=... DJANGO_SECRET_KEY=... DJANGO_DEBUG=1 \
+     DJANGO_ALLOWED_HOSTS='*' python manage.py runserver 8000 --noreload
+   ```
+
+   Backgrounding it with `nohup ... &` from a tool call does **not** survive;
+   the process needs to be started as a genuinely detached background command.
 
 For a browser pass, this environment ships Chromium at
 `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`. `playwright.config.ts`

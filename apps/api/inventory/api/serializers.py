@@ -9,6 +9,8 @@ from inventory.models import (
     InventoryTransaction,
     StockCount,
     StockCountItem,
+    StockException,
+    StockExceptionResolution,
     StockTransfer,
     StockTransferItem,
     TransactionType,
@@ -212,3 +214,48 @@ class StockCountSerializer(serializers.ModelSerializer):
             "applied_at",
         ]
         read_only_fields = ["id", "number", "status", "applied_at"]
+
+
+class StockExceptionSerializer(serializers.ModelSerializer):
+    sku = serializers.CharField(source="variant.sku", read_only=True)
+    product_name = serializers.CharField(source="variant.product.name", read_only=True)
+    variant_label = serializers.CharField(source="variant.label", read_only=True)
+    branch_code = serializers.CharField(source="branch.code", read_only=True)
+    resolved_by_name = serializers.CharField(
+        source="resolved_by.get_full_name", read_only=True, default=""
+    )
+    #: The balance *now*, not at the time of the oversell. A manager triaging
+    #: the queue needs to know whether the hole is still open, and the frozen
+    #: `on_hand_after` cannot tell them. Annotated by `selectors.stock_exceptions`.
+    on_hand_now = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = StockException
+        fields = [
+            "id",
+            "branch",
+            "branch_code",
+            "variant",
+            "sku",
+            "product_name",
+            "variant_label",
+            "transaction",
+            "shortfall",
+            "on_hand_after",
+            "on_hand_now",
+            "reference_type",
+            "reference_id",
+            "status",
+            "resolution",
+            "resolution_note",
+            "resolved_at",
+            "resolved_by",
+            "resolved_by_name",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ResolveStockExceptionSerializer(serializers.Serializer):
+    resolution = serializers.ChoiceField(choices=StockExceptionResolution.choices)
+    note = serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=2000)

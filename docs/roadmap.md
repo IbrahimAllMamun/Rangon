@@ -685,6 +685,78 @@ that "fails in production and passes in dev" was, for one of its two causes, rea
 disprove; this one held for three days.
 
 
+### V2 begins — the oversell report, 2026-09-01
+
+V1 is feature-complete, so this is the first V2 item. It was chosen because
+[offline-pos.md](architecture/offline-pos.md) does not present it as one V2 feature among seven — it
+names it as the **precondition** for another:
+
+> It requires an explicit oversell exception report before the feature can be enabled — which is why
+> it is V2, not V1.
+
+Offline POS is the only place the platform ever relaxes "never oversell", and it is allowed to
+because a customer has already walked out with the goods. What it pays for that relaxation is this:
+stock may go below zero only where somebody is guaranteed to be shown it. Building the queue first
+and the report afterwards would have meant shipping the relaxation without the price.
+
+```text
+StockException model + migration ....... inventory/migrations/0003
+_write_ledger hook ..................... one place, not per call site
+resolve_stock_exception service ........ locked, audited, reason mandatory
+/api/v1/stock-exceptions/ .............. list, retrieve, summary, resolve
+/admin/inventory/exceptions ............ open / resolved / all, badged on inventory
+pytest ................................. 617 passed (up from 584)
+ruff, tsc --noEmit, next lint .......... clean
+vitest ................................. 79 passed
+playwright, dev, reseeded .............. 20/20
+```
+
+**The hook is at the choke point, not the call sites.** `_write_ledger` is the single function every
+stock movement in the system passes through, so putting the detection there is what turns "offline
+sales are reported" into "*nothing* can go negative without a row" — including paths that do not
+exist yet. The sync engine, when it is written, does not have to remember to report anything: it
+passes `allow_negative=True` and the report happens. Two copies of that logic is how they drift.
+
+**Three things deliberately do not raise one**, because a report full of noise is a report nobody
+reads: a receipt landing on an already-negative balance (that is the stock arriving to cover the
+hole, not a second hole), a reservation (it moves `reserved`, not `on_hand`), and a movement landing
+exactly on zero (a legal balance).
+
+**Resolving needs a written reason and cannot be undone.** A resolution that can be clicked away is
+a queue that empties itself, which is indistinguishable from having no queue. Closing a row takes
+`inventory.adjust` — cashiers can see the report, because the register they work on is where the
+hole came from, but deciding a hole was *acceptable* is the same weight of call as adjusting stock.
+A resolved row returns `409` rather than being overwritten: the first answer is the only record of
+what was concluded.
+
+**Verified by mutation, not just by a green suite.** The 18 service tests all passed first run,
+which is not evidence of much on code written in the same sitting — so the hook was removed and the
+suite re-run: 8 failed, 6 errored. Then in a browser, signed in as the owner: an offline sale of 12
+against 9 on hand raised one row reading "short 3", the inventory page badged "1 oversold", an empty
+note was refused, and a resolution with a note moved it to Resolved carrying the manager's name.
+
+**One defect, found the same way the last eight were.** The suite was green, the screens worked, and
+then the E2E run died in `global-setup` before a single test: `seed_demo --reset` could no longer
+clear the database, because `StockException.transaction` is `PROTECT` and `_reset()` had never been
+told about it. The `PROTECT` is right — the evidence has to outlive any tidying up of the exception
+— so the fix is in the reset order, and `tests/test_seed_reset.py` now covers it. That file's
+docstring already said this had happened twice; it is three. Worth noting what was new about it:
+the first two protected the **catalogue**, this one protects a **ledger row**, so "does it point at
+a product?" was never going to have caught it.
+
+**No E2E spec covers this screen, deliberately.** Setting one up needs an oversold row, and the only
+way to create one is `allow_negative=True` from inside `inventory.services` — not reachable through
+any API, which is the point. Adding a seeded oversell would put a permanently-open exception in
+every demo database. So this screen is covered by 33 backend tests and a recorded browser pass
+rather than by Playwright, until the offline queue exists to create one honestly.
+
+**One environment trap worth recording**, because it cost a probe run and looked like a UI defect:
+`scripts/dev-stack-native.sh` starts the API with `--noreload`. New URLs do not appear until it is
+restarted, and the screen renders its error state rather than anything that says "404" — so a new
+endpoint looks like an empty page. Restarting via the script reseeds and would have destroyed the
+test data; the API has to be restarted on its own.
+
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -836,8 +908,17 @@ given, and no later setting change corrects it.
 
 ## Suggested next task
 
-Phases 35–39 are complete. Every admin screen exists. The remaining work is no longer *building* —
-it is the things that need a decision, a provider, or an environment.
+V1 is complete and V2 has started. The first V2 item — the oversell exception report — is done,
+which unblocks nothing on its own but removes the stated blocker from offline POS.
+
+**0. The rest of V2.** Per the build plan §29: offline POS, multi-branch transfers (the *service*
+exists; the reconciliation and in-transit half does not), loyalty, advanced promotions, courier API,
+customer segmentation, advanced analytics. Offline POS is the largest and now has three gates left
+rather than four — they are listed at the foot of
+[offline-pos.md](architecture/offline-pos.md). Two of them (price-drift reporting, a manager review
+list for rejected sales) are the same shape as the report just built and can copy it.
+
+The V1 items below are still open and still outrank most of V2 for a shop that wants to trade.
 
 **1. The payment gateway.** Nothing prepaid can be sold until one exists, and a gateway's settled
 takings need a `BANK` account to land in. Implement against

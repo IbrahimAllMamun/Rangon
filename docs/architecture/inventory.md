@@ -109,5 +109,21 @@ happens in `on_commit`, so a rolled-back sale never notifies.
   but not multi-lot cost layers. FIFO/lot costing would replace WAC — a schema change, so it is an
   explicit V2 decision, not an accident.
 - **In-transit branch stock.** See business-rules §1.6.
-- **Negative-stock reconciliation workflows.** Overselling is off by default; if it is turned on, a
-  back-order/oversell report must be built before use.
+- **Back-orders.** Negative stock is *reported* (below), never promised to a customer as a future
+  fulfilment. Selling something the shop does not have, on purpose, is a different feature.
+
+## Oversell exceptions
+
+`_write_ledger` is the single point every stock movement passes through, so it is the one place that
+can promise: **stock cannot go below zero without somebody being told.** Any reduction that leaves
+`on_hand < 0` writes a `StockException` alongside the ledger row, in the same transaction — so a
+rolled-back sale leaves no phantom exception behind, and an accepted one can never be silent.
+
+That guarantee is the precondition
+[offline-pos.md](offline-pos.md) names for offline selling, which is why the report exists before the
+feature does. The hook is deliberately placed at the choke point rather than at each call site: a
+future path that forgets about exceptions still gets one.
+
+Detection could have been derived (`InventoryTransaction.on_hand_after < 0` is a query). The
+*resolution* cannot — who looked at it, what they concluded and when is state. Rules in
+[business-rules.md §1.4a](../business-rules.md).

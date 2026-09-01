@@ -61,7 +61,34 @@ Signed ledger effects:
 
 Overselling is refused (`INSUFFICIENT_STOCK`) unless `RANGON_ALLOW_OVERSELL=1`, which is a deliberate
 organisation-level configuration. `available` may never go negative while that flag is off. Enforced by
-a database `CheckConstraint` plus a service-level guard under `SELECT … FOR UPDATE`.
+a service-level guard under `SELECT … FOR UPDATE`.
+
+There is a second, narrower door: a caller inside `inventory.services` may pass `allow_negative=True`
+for a movement that records something which has *already physically happened* — today only an offline
+POS sale being drained from the queue (see
+[offline-pos.md](architecture/offline-pos.md)). Refusing it would make the ledger describe a world
+that does not exist: the customer has walked out with the goods.
+
+### 1.4a Oversell exceptions
+
+Whenever a stock **reduction** leaves `on_hand` below zero — by either door above — the inventory
+engine writes a `StockException` row. This is what pays for the relaxed rule: stock may go negative
+only where somebody is guaranteed to be shown it.
+
+| Rule | Detail |
+|---|---|
+| Where it is raised | `inventory.services._write_ledger`, the single point every stock movement passes through. Nothing else may create one. |
+| What raises one | A reduction (`SALE`, `DAMAGE`, `LOSS`, `TRANSFER_OUT`, negative `ADJUSTMENT`, …) that leaves `on_hand < 0`. |
+| What does not | A **receipt** landing on an already-negative balance — that is the stock arriving to cover the hole, not a second hole. Reservations never raise one: they move `reserved`, not `on_hand`. Landing exactly on zero is a legal balance. |
+| Granularity | One row per movement, not per variant. Two registers each selling the last unit are two events for a manager to look at. |
+| Evidence | The row points at the `InventoryTransaction` that caused it (`PROTECT`), and copies the reference (`pos_sale` / `OFFLINE-1`) so the sale is findable without a join. |
+| Resolving | `inventory.adjust`. Deciding a hole was acceptable is the same weight of call as adjusting stock, so it takes the same permission — cashiers can see the report but cannot close a row. |
+| Resolutions | `RESTOCKED` (stock arrived and covers it) · `WRITTEN_OFF` (lost) · `COUNTED` (a stock count re-baselined it) · `NOT_AN_ERROR` (expected). |
+| Reason | **Mandatory, free text.** A resolution that can be clicked away without a reason is a queue that empties itself, which is the same as having no report. |
+| Immutability | Rows are never created or deleted through the API, and a resolved row cannot be re-resolved (`409`). The first answer stands; overwriting it would destroy the only record of what was concluded. Resolving is audited. |
+| What resolving does **not** do | It moves no stock. Correcting the shortfall is a receipt, a write-off or a count — each of which writes its own ledger row. |
+
+Surfaced at `/admin/inventory/exceptions`, with the open count badged on the inventory page.
 
 ### 1.5 Expired reservations
 
