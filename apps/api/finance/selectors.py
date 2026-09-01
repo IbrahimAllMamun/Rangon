@@ -6,7 +6,7 @@ finance.services.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -209,6 +209,28 @@ def _empty_ageing() -> dict[str, Decimal]:
     return {name: ZERO for name, _, _ in AGEING_BUCKETS}
 
 
+def _ageing_days(*, since: datetime, now: datetime) -> int:
+    """Whole days from `since` to `now`, counted on the calendar.
+
+    Ageing is a business figure, not a stopwatch reading.  An invoice that fell
+    due yesterday evening is one day overdue this morning, and the same report
+    run twice in one afternoon must give the same number both times -- so the
+    count ticks at local midnight, in the shop's own timezone, not at each
+    document's time of day.  This is the same lesson as D42: a day boundary
+    means the *local* day boundary.
+
+    It also removes a real source of flake.  The obvious spelling,
+    `(now - due).days`, floors towards negative infinity, so it turns any
+    backward clock step -- however small -- into a whole missing day.  The
+    container clock here does step backwards (roadmap D46 records the
+    measurement), which made
+    `test_ageing_runs_from_the_due_date_not_the_order_date` report 9 days
+    overdue instead of 10 in a full-suite run.  Counting dates rather than
+    flooring an elapsed interval cannot lose a day to sub-second skew.
+    """
+    return (timezone.localdate(now) - timezone.localdate(since)).days
+
+
 def receivables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, Any]:
     """What customers still owe, derived rather than stored.
 
@@ -245,7 +267,7 @@ def receivables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str,
         if outstanding <= ZERO:
             continue
         placed = order.placed_at or order.created_at
-        days = max((now - placed).days, 0)
+        days = max(_ageing_days(since=placed, now=now), 0)
         bucket = _bucket_for(days)
 
         # `Order.customer` is NOT NULL -- a POS walk-in gets a real customer
@@ -328,7 +350,7 @@ def payables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, An
         supplier = purchase.supplier
         raised = purchase.completed_at or purchase.ordered_at or purchase.created_at
         due = raised + timedelta(days=int(supplier.payment_terms_days or 0))
-        days_overdue = max((now - due).days, 0)
+        days_overdue = max(_ageing_days(since=due, now=now), 0)
         bucket = _bucket_for(days_overdue)
 
         party = parties.setdefault(

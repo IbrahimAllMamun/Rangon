@@ -328,6 +328,12 @@ inclusive pricing it sits inside the line total, so it is removed per line — t
 
 Ageing buckets are current (0–30), 31–60, 61–90 and 90+ days.
 
+**Days are calendar days in the shop's timezone** (`finance.selectors._ageing_days`), counted from the
+local date the document was raised — or fell due — to today's local date, not a floored elapsed
+interval. So the number ticks at local midnight rather than at each document's time of day, the same
+report run twice in one afternoon gives the same answer both times, and a clock that steps backwards
+by a millisecond cannot make an invoice a day younger. Roadmap D46 has the measurements.
+
 **There is deliberately no balance column on `Customer` or `Supplier`.** A stored balance is a second
 source of truth that drifts from the documents it claims to summarise — the same mistake
 `CLAUDE.md` §3.2 forbids for stock. Every figure is recomputed from the orders and purchase orders

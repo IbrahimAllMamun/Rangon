@@ -399,3 +399,44 @@ For a browser pass, this environment ships Chromium at
 already honours `PW_CHROMIUM_PATH` for exactly this. **D7 does not mean
 "Playwright cannot run here"** — it means the *dev container's* Alpine base
 ships no musl browser.
+
+---
+
+## 12. Two pytest runs on this machine will corrupt each other
+
+`docker-compose.test.yml` pins `name: rangon-test`, and `config/settings/test.py` pins
+`TEST["NAME"] = "rangon_test_db"`. So every run of
+
+```bash
+docker compose -f docker-compose.test.yml run --rm -T api-test pytest -q
+```
+
+shares one PostgreSQL **and** one test database, whichever worktree it is
+started from. pytest-django drops and recreates that database at session start,
+so a second run pulls the database out from under a first one.
+
+Observed 2026-09-01, with a second Claude session running in another worktree.
+It does not fail cleanly — it manufactures believable failures somewhere else:
+
+```text
+django.db.utils.OperationalError: database "rangon_test_db" does not exist
+assert '2000.00' == '1000.00'   # the other session's committed rows, read straight through
+```
+
+Both were first read as regressions from the change under test. Check for a
+stray runner before believing any test result:
+
+```bash
+docker ps --format '{{.Names}}	{{.Command}}' | grep api-test
+```
+
+Give each session its own compose project. The image build is cache-warm (~30 s)
+and everything else follows:
+
+```bash
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml build api-test
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml run --rm -T api-test pytest -q
+docker compose -p rangon-<something-unique> -f docker-compose.test.yml down
+```
+
+Recorded as D46's sibling defect, D47, in `../docs/roadmap.md`.
