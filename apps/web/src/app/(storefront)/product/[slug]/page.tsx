@@ -8,6 +8,7 @@ import { ProductGrid } from "@/components/commerce/product-card";
 import { apiServer, isAuthenticated } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 import { dateOnly } from "@/lib/format";
+import { absoluteUrl } from "@/lib/site-url";
 
 type Params = Promise<{ slug: string }>;
 
@@ -63,7 +64,8 @@ export default async function ProductPage({ params }: { params: Params }) {
     "@type": "Product",
     name: product.name,
     description: product.short_description || product.description,
-    image: product.images.map((image) => image.url),
+    // schema.org wants absolute URLs; the payload's are origin-relative.
+    image: product.images.map((image) => absoluteUrl(image.url)),
     sku: product.variants[0]?.sku,
     brand: product.brand ? { "@type": "Brand", name: product.brand.name } : undefined,
     offers: {

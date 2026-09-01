@@ -5,6 +5,7 @@ from typing import Any
 
 from rest_framework import serializers
 
+from core.media import media_url
 from finance.models import Account
 from orders.models import (
     Cart,
@@ -48,7 +49,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     def get_image(self, item: OrderItem) -> str:
         image = item.variant.product.primary_image if item.variant_id else None
-        return image.image.url if image and image.image else ""
+        return media_url(image.image) if image else ""
 
 
 class OrderItemCostSerializer(OrderItemSerializer):
@@ -424,7 +425,7 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     def get_image(self, item: CartItem) -> str:
         image = item.variant.product.primary_image
-        return image.image.url if image and image.image else ""
+        return media_url(image.image) if image else ""
 
     def get_available(self, item: CartItem) -> int:
         snapshots = self.context.get("availability") or {}

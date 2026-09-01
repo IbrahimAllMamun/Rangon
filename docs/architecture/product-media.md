@@ -159,7 +159,72 @@ pytest:
 - an image bound to a non-colour attribute value is rejected;
 - an image bound to a colour the product does not use is rejected;
 - deleting an `AttributeValue` nulls `attribute_value` and keeps the image;
-- the product payload stays within its query budget after grouping is added.
+- the product payload stays within its query budget after grouping is added;
+- every media URL is origin-relative and identical whichever `Host` the request arrived under
+  (§8) — the regression that made uploaded photography invisible;
+- an image uploaded with `DEBUG=0` is downloadable from the URL the API just returned.
 
 Browser: choosing a colour moves the main image; clicking another colour's thumbnail updates the
 selection; shared images appear for every colour; nothing disappears from the strip.
+
+## 8. Serving the bytes
+
+Storing an image and *showing* it are separate problems, and B3 only solved the first. Three
+defects had to be fixed before an uploaded photograph appeared anywhere.
+
+### The URL must not name a host
+
+The payload used to absolutise every media URL with `request.build_absolute_uri()`. The browser
+never talks to Django directly, so the `Host` header it saw was never the public one:
+
+| Path the request took | `Host` Django saw | URL it published |
+| --- | --- | --- |
+| Admin → `/api/proxy/*` → API | `api:8000` | `http://api:8000/media/...` |
+| Storefront → Nginx → API | `localhost` (Nginx forwards `$host`, which drops the port) | `http://localhost/media/...` |
+
+Neither is loadable. The first names an internal Docker service; the second silently loses the port
+of any origin that is not `:80`.
+
+**The API does not know the public origin and must not guess.** Storefront, admin, POS, `/api/` and
+`/media/` are one origin behind Nginx, so a root-relative `/media/products/...` is correct under
+every hostname, port and scheme. `core.media.media_url()` is the single place that decides this: it
+returns `FieldFile.url` untouched, which is relative under `FileSystemStorage` and already absolute
+under `S3Storage`, so `USE_S3=1` keeps working with no branch.
+
+Two consumers still need an absolute URL and convert explicitly:
+
+- **Open Graph** — handled for free by Next's `metadataBase`.
+- **JSON-LD** — schema.org requires absolute `image` values, so the product page maps them through
+  `absoluteUrl()` (`apps/web/src/lib/site-url.ts`).
+
+### Something has to answer `/media/`
+
+`config/urls.py` mounted media through `django.conf.urls.static.static()`, which **returns an empty
+list unless `DEBUG`**. Development worked; every production build 404ed while the upload itself
+reported `201`. WhiteNoise is not an alternative: it indexes its files once at startup, so an image
+uploaded a minute ago would not exist until the next deploy.
+
+The route is now mounted whenever `USE_S3` is off, and Nginx (`local-prod/default.conf`,
+`conf.d/rangon.conf`) sends `/media/` to the API instead of letting it fall through to Next.
+
+`next.config.ts` also rewrites `/media/:path*` to the API. That is not redundant: given a relative
+`src`, the Next image optimizer re-enters the app's own router to fetch the file, so without the
+rewrite `next/image` fails with *"The requested resource isn't a valid image … received null"* even
+though the browser can load the same path through Nginx. It is also what makes `next dev` work,
+where there is no Nginx at all.
+
+Serving user uploads through gunicorn is slower than handing the path to Nginx. That is the price of
+`USE_S3=0`; object storage is the production answer, and `USE_S3=1` removes the route entirely.
+
+### The files have to survive a rebuild
+
+`docker-compose.yml` now mounts `api_media:/app/media` on `api` and `worker`. Without it uploads
+lived in the container's writable layer, so any `up --force-recreate` or image rebuild destroyed
+every photograph the shop had.
+
+### Deleting one used to 500
+
+Unrelated to media on the surface, but it is the other half of the same screen: the proxy built
+every response with `new NextResponse(text, { status })`, and a `204` **must** be constructed with a
+null body — the `Response` constructor throws on anything else, the empty string included. So
+`DELETE /product-images/<id>/` deleted the row and *then* returned 500, and the retry 404ed.

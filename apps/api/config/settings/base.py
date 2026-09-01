@@ -156,7 +156,11 @@ STORAGES = {
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
 
-if env_bool("USE_S3"):
+# Exposed as a setting because the URL conf needs it too: local disk media has
+# to be served by Django, S3 media must not be.
+USE_S3 = env_bool("USE_S3")
+
+if USE_S3:
     STORAGES["default"] = {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
