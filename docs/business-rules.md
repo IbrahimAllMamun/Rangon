@@ -220,12 +220,45 @@ sums). Money is `Decimal`; `float` is forbidden.
 
 ### 3.4 Tax
 
-VAT is configurable per organisation (`RANGON_DEFAULT_TAX_RATE`, default `0.00`) and can be overridden
-per category. Prices are stored and displayed **tax-exclusive**, with tax shown as a separate order
-line.
-*`DECISION REQUIRED` — Bangladesh retail commonly quotes VAT-inclusive prices. Confirm with the
-owner/accountant before go-live; switching to inclusive pricing changes `taxable_base` and every
-historical report, so it must be decided before real sales are recorded.*
+VAT is **set in the admin** at `/admin/settings`, not in an environment variable, because it is a
+decision the owner makes and has to be able to see. Two settings, both on `Organization`:
+
+- **`tax_mode`** — `EXCLUSIVE` (tax added on top of the shown price) or `INCLUSIVE` (the shown price
+  already contains it). Default `EXCLUSIVE`.
+- **`default_tax_rate`** — a fraction, `0.1500` for 15%. Default `0.0000`. A category may override it
+  (`Category.tax_rate`); a mixed-rate basket takes the **highest** rate present.
+
+```text
+taxable_base = subtotal - discount_total
+
+EXCLUSIVE   tax   = round(taxable_base * rate, 2)
+            total = taxable_base + tax + shipping
+
+INCLUSIVE   tax   = round(taxable_base * rate / (1 + rate), 2)
+            total = taxable_base + shipping
+```
+
+**Shipping is never taxed** under either treatment — the carriage line is quoted as it is charged.
+
+**Margin under inclusive pricing.** When the tax sits inside `subtotal`, every profit figure has to
+take it back out again, or margin is overstated by exactly the VAT. That is what `Order.net_revenue`
+is for, and `gross_profit` is built on it rather than on `subtotal` directly.
+
+**History never moves.** Every order freezes the `tax_mode`, `tax_rate` and `tax_total` it was priced
+under, so changing the setting cannot rewrite a total that has already been charged. What it *does*
+change is that a report spanning the change mixes two treatments — so once orders exist the API
+refuses an unconfirmed change (`409 TAX_CHANGE_NEEDS_CONFIRMATION`, carrying the order count) and the
+screen asks before proceeding. Every change is written to the audit log with before and after, and
+stamped with who settled it and when.
+
+Writes go through `PATCH /organization/tax/` (permission `settings.manage`) and
+`accounts.services.update_tax_settings()`. The VAT fields are deliberately **read-only** on the
+generic `PATCH /organization/`, so a change cannot slip through without the guard or the audit entry.
+
+*`DECISION REQUIRED` — the default is still exclusive at 0%, which is a placeholder, not an answer.
+Bangladeshi retail commonly quotes VAT-inclusive prices. Settle it before the first real sale: the
+arithmetic is now implemented for both treatments, but orders taken under the wrong one keep the
+totals they were given.*
 
 ---
 
@@ -252,7 +285,61 @@ gross_profit = revenue − Σ line_cogs
 Profit is never computed as "selling price − current product cost". Reports read the frozen
 `unit_cost`, so historical profit does not move when prices or costs change later.
 
-Returned items credit COGS back at the same frozen `unit_cost`.
+Returned items credit COGS back at the same frozen `unit_cost` — but **only when the goods went back
+on the shelf**. `RESTOCK` recovers the cost; `DAMAGED` is a write-off and `QUARANTINE` is not sellable
+yet, so both keep the cost as a cost until that changes.
+
+### 4.1 Net profit (the business summary)
+
+`reports.services.business_summary(date_range, branch)` is the whole statement, and
+`GET /api/v1/reports/business-summary/` serves it (permission `reports.financial`):
+
+```text
+  revenue from goods            net of VAT, never the gross line total
+− refunds                       completed returns, by completed_at
+= net revenue
+− cost of goods sold            frozen unit_cost × quantity
++ cost recovered from returns   RESTOCK lines only
+= gross profit
+− operating expenses            finance.selectors.expense_totals, voids excluded
+= net profit
+```
+
+Three rules decide which period a figure lands in, and each matches what the money did: sales by
+`placed_at`, returns by `completed_at`, expenses by `spent_at`. A refund in August of a July sale
+reduces August.
+
+**VAT is reported but never counted as revenue or profit.** It is money held for the government. Under
+inclusive pricing it sits inside the line total, so it is removed per line — the order's own frozen
+`tax_mode` decides, not today's setting.
+
+### 4.2 Receivable and payable (the party ledger)
+
+`finance.selectors.party_ledger(branch)` and `GET /api/v1/party-ledger/` (permission
+`reports.financial`). Both sides are **derived on read**:
+
+- **Receivable** — every order where `grand_total > paid_total`. The common case is COD: goods
+  delivered, cash not yet collected. `PENDING` baskets, `CANCELLED` and `REFUNDED` orders are not
+  debts. Aged from `placed_at`.
+- **Payable** — every purchase order where `grand_total > paid_total`, excluding `DRAFT` (nothing
+  committed to the supplier yet) and `CANCELLED`. Aged from the **due date**:
+  `completed_at or ordered_at` plus `Supplier.payment_terms_days`, so a supplier on 30-day terms is
+  not overdue on day one.
+
+Ageing buckets are current (0–30), 31–60, 61–90 and 90+ days.
+
+**There is deliberately no balance column on `Customer` or `Supplier`.** A stored balance is a second
+source of truth that drifts from the documents it claims to summarise — the same mistake
+`CLAUDE.md` §3.2 forbids for stock. Every figure is recomputed from the orders and purchase orders
+behind it, and the screen can expand any party to show exactly which documents make up the number.
+
+This answers **decision D-A** ("does the business sell on credit?") without needing the decision: a
+credit sale is already an order with a balance, so if the answer turns out to be yes, nothing here
+changes.
+
+Gated on `reports.financial` rather than `finance.view`. A cashier holds `finance.view` so they can
+pick which account a sale's money lands in — a deliberately narrow grant that must not also hand them
+every customer's debt and every supplier's balance.
 
 ---
 
@@ -513,6 +600,40 @@ Rules:
 - A cashier can create a sale, but a refund needs `sales.refund`; the POS asks for a manager login when
   the cashier lacks it (elevation is audit-logged).
 - `CUSTOMER` accounts can only ever reach `/api/v1/shop/*` and their own resources.
+
+### 7.1 Staff accounts
+
+Only `OWNER` holds `users.manage`; `MANAGER` holds `users.view` and can see the list without changing
+it. Every edit goes through `accounts.services.update_staff_user()`, never onto the model from a
+serializer, because two guards and one audit entry hang off it:
+
+- **Nobody may lock themselves out.** Deactivating or demoting *your own* account is refused, on the
+  `deactivate` action and on a plain `PATCH` alike. Guarding only the action left the PATCH as a way
+  around it.
+- **The last active owner may not be deactivated or demoted.** Nothing but `OWNER` holds
+  `users.manage` or `settings.manage`, so an organisation with no active owner cannot grant them to
+  anybody again — there is no recovery path short of a shell on the server. Promote a second owner
+  first.
+- **Every change is audited.** A role change decides who may refund, discount and adjust stock; a
+  password reset hands somebody an account. Both write an `AuditLog` entry with before and after.
+  The password itself is never written to it — only `password_reset: true`.
+
+Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
+has to keep pointing at a real row. Customers never appear in the staff list.
+
+### 7.2 Categories, brands and attributes
+
+- A category may not be its own parent, or be moved underneath its own descendant. `Category.path`,
+  `ancestors()` and the serializer's `children` all walk `parent` without a depth guard, so a cycle
+  recurses until the stack gives out — on the navigation menu that renders on every storefront page.
+- `Category.tax_rate` must be between 0 and 1, enforced in the serializer *and* by a database
+  constraint. It overrides the organisation default and a mixed basket takes the **highest** rate
+  present, so one impossible value silently overcharges every order containing that category.
+- **A slug is generated on create only.** Renaming a category or brand keeps its slug: the slug is a
+  URL, and regenerating it on every rename breaks every link and every indexed page pointing at the
+  old one. Changing a slug is a separate, deliberate edit.
+- A category or brand that still holds products cannot be deleted (`PROTECT`); retire it with
+  `is_active` instead.
 
 ---
 

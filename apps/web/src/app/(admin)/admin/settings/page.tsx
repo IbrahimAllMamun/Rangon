@@ -1,6 +1,7 @@
 import { type Branch, BranchEditor } from "@/components/admin/branch-editor";
 import { OrganizationForm } from "@/components/admin/organization-form";
 import { PageHeader } from "@/components/admin/shell";
+import { type TaxMode, TaxSettingsForm } from "@/components/admin/tax-settings-form";
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
@@ -18,6 +19,10 @@ interface Organization {
   vat_registration: string;
   currency: string;
   receipt_footer: string;
+  tax_mode: TaxMode;
+  default_tax_rate: string;
+  tax_settled_at: string | null;
+  tax_settled_by_name: string;
   branches: Branch[];
 }
 
@@ -65,6 +70,16 @@ export default async function SettingsPage() {
               vat_registration: orgResult.vat_registration ?? "",
               currency: orgResult.currency ?? "BDT",
               receipt_footer: orgResult.receipt_footer ?? "",
+            }}
+          />
+
+          <TaxSettingsForm
+            canManage={canManage}
+            initial={{
+              tax_mode: orgResult.tax_mode ?? "EXCLUSIVE",
+              default_tax_rate: orgResult.default_tax_rate ?? "0.0000",
+              tax_settled_at: orgResult.tax_settled_at ?? null,
+              tax_settled_by_name: orgResult.tax_settled_by_name ?? "",
             }}
           />
 
@@ -134,19 +149,20 @@ export default async function SettingsPage() {
             <code>DECISION REQUIRED</code>.
           </p>
           <ul className="mt-3 space-y-2 text-body-sm">
-            <li>
-              <strong>VAT</strong> — currently <em>exclusive at 0%</em>. Settle this before the first
-              real sale: it changes every historical total and report.
-            </li>
             <li><strong>Return window</strong> — assumed 14 days.</li>
             <li><strong>Discount needing manager approval</strong> — assumed above 20%.</li>
             <li><strong>Reservation expiry</strong> for unpaid online orders — assumed 60 minutes.</li>
             <li><strong>Shipping refunded on a change-of-mind return</strong> — assumed no.</li>
           </ul>
           <p className="mt-3 text-caption text-muted">
-            These five stay in environment variables on purpose. They change how money and stock are
+            These four stay in environment variables on purpose. They change how money and stock are
             calculated, so a change should be a deliberate deployment with a record — not a stray
             click in a browser. See <code>.env</code> and <code>config/settings/base.py</code>.
+          </p>
+          <p className="mt-2 text-caption text-muted">
+            VAT used to be on this list. It is now settled in the <strong>VAT</strong> card above:
+            it needed to be visible and changeable by the owner, and every change is audited and
+            asks for confirmation once orders exist.
           </p>
         </CardContent>
       </Card>

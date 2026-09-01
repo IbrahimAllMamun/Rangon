@@ -28,11 +28,20 @@ const RANGES = [
 ] as const;
 
 /**
- * The window, as plain `YYYY-MM-DD` dates.
+ * The window, as exact instants rather than calendar dates.
  *
- * Deliberately dates rather than timestamps: the API widens `date_to` to cover
- * all of that day, so the screen and its CSV export cannot disagree about
- * whether this afternoon's spending counts.
+ * It used to send plain `YYYY-MM-DD`, on the reasoning that the API widens
+ * `date_to` to cover all of that day. It does — **in the shop's timezone**
+ * (`Asia/Dhaka`), while `toISOString()` produced the date in **UTC**. Those two
+ * agree for eighteen hours a day and disagree for the other six:
+ *
+ *   00:18 in Dhaka is still 2026-08-31 in UTC, so `date_to=2026-08-31`,
+ *   which the API reads as 2026-08-31 23:59:59 +06:00 = 17:59 UTC —
+ *   twenty minutes *before* the expense that was just recorded.
+ *
+ * So between midnight and 06:00 local, an expense recorded today could not be
+ * seen on the screen that recorded it. Sending instants removes the question:
+ * both ends are absolute, and "up to now" means now.
  */
 function windowFor(range: string) {
   const preset = RANGES.find((option) => option.value === range) ?? RANGES[1];
@@ -40,8 +49,8 @@ function windowFor(range: string) {
   const start = new Date(end);
   if (preset.value === "year") start.setMonth(0, 1);
   else start.setDate(end.getDate() - preset.days);
-  const iso = (date: Date) => date.toISOString().slice(0, 10);
-  return { range: preset.value, date_from: iso(start), date_to: iso(end) };
+  start.setHours(0, 0, 0, 0);
+  return { range: preset.value, date_from: start.toISOString(), date_to: end.toISOString() };
 }
 
 type Search = Promise<{ range?: string }>;

@@ -114,6 +114,141 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
           NEXT_PUBLIC_SITE_URL: http://localhost:4000
 
+  # ------------------------------------------------------------------- e2e --
+  # The four critical flows, driven in a real browser against a real API and a
+  # real database (docs/testing/strategy.md).
+  #
+  # Runs against `next dev`, not a production build, and that is a known gap
+  # rather than an oversight: one spec fails consistently against a production
+  # build and passes consistently in dev ([D40](../../docs/roadmap.md)). Adding
+  # a knowingly-red job would turn every future build red for a defect
+  # unrelated to whatever the build is checking, and skipping the spec to get
+  # green is what CLAUDE.md §9 forbids. So this job covers the flows now, and
+  # the production-build run lands with D40.
+  #
+  # The suite consumes seeded fixtures -- the returns spec approves the one
+  # seeded REQUESTED return -- so E2E_SEED_CMD restores them first. Without it
+  # the suite is only repeatable once (D18).
+  e2e:
+    name: E2E (Playwright, four critical flows)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: rangon
+          POSTGRES_USER: rangon
+          POSTGRES_PASSWORD: rangon_ci_password
+        options: >-
+          --health-cmd "pg_isready -U rangon" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+        ports: ["5432:5432"]
+      redis:
+        # Not optional: the auth throttle is Redis-backed, so without it
+        # POST /auth/login/ answers 500 and every signed-in spec fails on a
+        # login page that says only "An unexpected error occurred".
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+        ports: ["6379:6379"]
+
+    env:
+      DJANGO_SECRET_KEY: ci-only-key
+      DATABASE_URL: postgresql://rangon:rangon_ci_password@localhost:5432/rangon
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_DEBUG: "1"
+      DJANGO_ALLOWED_HOSTS: "*"
+      REVALIDATE_SECRET: ci-revalidate-secret
+      E2E_BASE_URL: http://127.0.0.1:4000
+      # API_INTERNAL_URL is the one that matters for server-side fetches; it
+      # defaults to the compose hostname, which does not resolve here.
+      API_INTERNAL_URL: http://127.0.0.1:8000/api/v1
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000/api/v1
+      NEXT_PUBLIC_SITE_URL: http://127.0.0.1:4000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/requirements/*.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install the API
+        working-directory: apps/api
+        run: pip install -r requirements/dev.txt
+
+      - name: Migrate and seed
+        working-directory: apps/api
+        run: |
+          python manage.py migrate --noinput
+          python manage.py seed_demo --reset
+
+      - name: Start the API
+        working-directory: apps/api
+        run: |
+          nohup python manage.py runserver 8000 --noreload > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/ || true)
+            # 401 is the right answer for an unauthenticated API root.
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
+              echo "API ready ($code)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API never became ready"
+          cat /tmp/api.log
+          exit 1
+
+      - name: Install the web app
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Start the storefront
+        working-directory: apps/web
+        run: |
+          nohup npx next dev --port 4000 > /tmp/web.log 2>&1 &
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/ || true)
+            if [ "$code" = "200" ]; then
+              echo "Storefront ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Storefront never became ready"
+          cat /tmp/web.log
+          exit 1
+
+      - name: Run the suite
+        working-directory: apps/web
+        env:
+          E2E_SEED_CWD: ${{ github.workspace }}/apps/api
+          E2E_SEED_CMD: python manage.py seed_demo --reset
+        run: npx playwright test
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
   # -------------------------------------------------------------- security --
   security:
     name: Dependency audit

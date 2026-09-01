@@ -334,3 +334,64 @@ class ExpenseTotalsSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=16, decimal_places=2)
     count = serializers.IntegerField()
     by_category = ExpenseCategoryTotalSerializer(many=True)
+
+
+# --------------------------------------------------------------------------- party ledger
+
+MONEY_FIELD = {"max_digits": 16, "decimal_places": 2}
+
+
+class AgeingSerializer(serializers.Serializer):
+    """Outstanding money split by how old it is."""
+
+    current = serializers.DecimalField(**MONEY_FIELD)
+    d31_60 = serializers.DecimalField(**MONEY_FIELD)
+    d61_90 = serializers.DecimalField(**MONEY_FIELD)
+    over_90 = serializers.DecimalField(**MONEY_FIELD)
+
+
+class PartyDocumentSerializer(serializers.Serializer):
+    """One order or purchase order carrying a balance."""
+
+    id = serializers.CharField()
+    number = serializers.CharField()
+    dated = serializers.DateTimeField()
+    due = serializers.DateTimeField(required=False)
+    days = serializers.IntegerField()
+    status = serializers.CharField()
+    channel = serializers.CharField(required=False)
+    invoice_number = serializers.CharField(required=False)
+    total = serializers.DecimalField(**MONEY_FIELD)
+    paid = serializers.DecimalField(**MONEY_FIELD)
+    outstanding = serializers.DecimalField(**MONEY_FIELD)
+
+
+class PartySerializer(serializers.Serializer):
+    party_id = serializers.CharField(allow_blank=True)
+    name = serializers.CharField()
+    phone = serializers.CharField(allow_blank=True)
+    outstanding = serializers.DecimalField(**MONEY_FIELD)
+    document_count = serializers.IntegerField()
+    oldest_days = serializers.IntegerField()
+    ageing = AgeingSerializer()
+    documents = PartyDocumentSerializer(many=True)
+
+
+class PartySideSerializer(serializers.Serializer):
+    total = serializers.DecimalField(**MONEY_FIELD)
+    party_count = serializers.IntegerField()
+    document_count = serializers.IntegerField()
+    ageing = AgeingSerializer()
+    parties = PartySerializer(many=True)
+
+
+class PartyLedgerSerializer(serializers.Serializer):
+    """Shape returned by /party-ledger/.
+
+    Serialized rather than returned raw for the reason spelled out on
+    `CashPositionSerializer`: money leaves as a string, never a JSON float.
+    """
+
+    receivable = PartySideSerializer()
+    payable = PartySideSerializer()
+    net_position = serializers.DecimalField(**MONEY_FIELD)

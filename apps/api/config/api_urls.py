@@ -13,6 +13,7 @@ from rest_framework.routers import DefaultRouter
 from accounts.api.views import (
     AuditLogViewSet,
     BranchViewSet,
+    OrganizationTaxView,
     OrganizationView,
     PermissionViewSet,
     RoleViewSet,
@@ -36,6 +37,7 @@ from finance.api.views import (
     AccountViewSet,
     ExpenseCategoryViewSet,
     ExpenseViewSet,
+    PartyLedgerView,
 )
 from inventory.api.views import (
     InventoryTransactionViewSet,
@@ -115,6 +117,8 @@ router.register("storefront-banners", StorefrontBannerViewSet, basename="storefr
 urlpatterns = [
     path("auth/", include("accounts.api.urls")),
     path("organization/", OrganizationView.as_view(), name="organization"),
+    path("organization/tax/", OrganizationTaxView.as_view(), name="organization-tax"),
+    path("party-ledger/", PartyLedgerView.as_view(), name="party-ledger"),
     path("shop/", include("orders.api.shop_urls")),
     path("pos/", include("orders.api.pos_urls")),
     path("reports/", include("reports.api.urls")),

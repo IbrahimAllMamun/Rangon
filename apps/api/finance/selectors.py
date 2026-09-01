@@ -6,10 +6,12 @@ finance.services.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Count, Q, QuerySet, Sum
+from django.db.models import Count, F, Q, QuerySet, Sum
+from django.utils import timezone
 
 from accounts.models import Branch
 from core.money import ZERO, quantize
@@ -181,4 +183,206 @@ def expense_totals(
             }
             for row in rows
         ],
+    }
+
+
+# --------------------------------------------------------------------------- party ledger
+
+
+#: Ageing buckets, in days.  The last one is open-ended.
+AGEING_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
+    ("current", 0, 30),
+    ("d31_60", 31, 60),
+    ("d61_90", 61, 90),
+    ("over_90", 91, None),
+)
+
+
+def _bucket_for(days: int) -> str:
+    for name, start, end in AGEING_BUCKETS:
+        if days >= start and (end is None or days <= end):
+            return name
+    return AGEING_BUCKETS[0][0]
+
+
+def _empty_ageing() -> dict[str, Decimal]:
+    return {name: ZERO for name, _, _ in AGEING_BUCKETS}
+
+
+def receivables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, Any]:
+    """What customers still owe, derived rather than stored.
+
+    Phase 37.  There is deliberately **no balance column on `Customer`**: a
+    stored balance is a second source of truth that drifts from the orders it
+    claims to summarise, and this codebase already learned that lesson with
+    inventory (CLAUDE.md §3.2).  The figure is the sum of what each order was
+    charged minus what has been paid against it, every time it is asked for.
+
+    The common case today is COD: goods delivered, cash not yet collected.  If
+    the owner ever answers D-A ("do we sell on credit?") with yes, this needs no
+    change -- a credit sale is already an order with a balance.
+
+    An order is only a receivable once it is real trade: PENDING baskets and
+    CANCELLED orders are excluded, and a refunded balance is not money owed.
+    """
+    from orders.models import Order, OrderStatus
+
+    now = as_of or timezone.now()
+    queryset = (
+        Order.objects.filter(grand_total__gt=F("paid_total"))
+        .exclude(status__in=[OrderStatus.PENDING, OrderStatus.CANCELLED, OrderStatus.REFUNDED])
+        .select_related("customer", "branch")
+    )
+    if branch is not None:
+        queryset = queryset.filter(branch=branch)
+
+    parties: dict[str, dict[str, Any]] = {}
+    total = ZERO
+    ageing = _empty_ageing()
+
+    for order in queryset.order_by("placed_at"):
+        outstanding = quantize(order.grand_total - order.paid_total)
+        if outstanding <= ZERO:
+            continue
+        placed = order.placed_at or order.created_at
+        days = max((now - placed).days, 0)
+        bucket = _bucket_for(days)
+
+        # `Order.customer` is NOT NULL -- a POS walk-in gets a real customer
+        # row (`pos.walk_in_customer`), so there is no anonymous case to handle.
+        customer = order.customer
+        party = parties.setdefault(
+            str(customer.pk),
+            {
+                "party_id": str(customer.pk),
+                "name": customer.name or "Unnamed customer",
+                "phone": customer.phone or "",
+                "outstanding": ZERO,
+                "document_count": 0,
+                "oldest_days": 0,
+                "ageing": _empty_ageing(),
+                "documents": [],
+            },
+        )
+        party["outstanding"] = quantize(party["outstanding"] + outstanding)
+        party["document_count"] += 1
+        party["oldest_days"] = max(party["oldest_days"], days)
+        party["ageing"][bucket] = quantize(party["ageing"][bucket] + outstanding)
+        party["documents"].append(
+            {
+                "id": str(order.pk),
+                "number": order.number,
+                "dated": placed,
+                "days": days,
+                "channel": order.channel,
+                "status": order.status,
+                "total": quantize(order.grand_total),
+                "paid": quantize(order.paid_total),
+                "outstanding": outstanding,
+            }
+        )
+
+        total = quantize(total + outstanding)
+        ageing[bucket] = quantize(ageing[bucket] + outstanding)
+
+    rows = sorted(parties.values(), key=lambda row: row["outstanding"], reverse=True)
+    return {
+        "total": total,
+        "party_count": len(rows),
+        "document_count": sum(row["document_count"] for row in rows),
+        "ageing": ageing,
+        "parties": rows,
+    }
+
+
+def payables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, Any]:
+    """What the business still owes suppliers, derived the same way.
+
+    Ageing runs from the **due date**, not the order date: a supplier on 30-day
+    terms is not overdue on day one, and treating it as overdue would make every
+    open purchase look like a late payment.  `Supplier.payment_terms_days`
+    already carries the terms; 0 means due on receipt.
+
+    A DRAFT purchase order is not a liability -- nothing has been committed to
+    the supplier yet -- and a CANCELLED one never will be.
+    """
+    from purchasing.models import PurchaseOrder, PurchaseOrderStatus
+
+    now = as_of or timezone.now()
+    queryset = (
+        PurchaseOrder.objects.filter(grand_total__gt=F("paid_total"))
+        .exclude(status__in=[PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED])
+        .select_related("supplier", "branch")
+    )
+    if branch is not None:
+        queryset = queryset.filter(branch=branch)
+
+    parties: dict[str, dict[str, Any]] = {}
+    total = ZERO
+    ageing = _empty_ageing()
+
+    for purchase in queryset.order_by("ordered_at"):
+        outstanding = quantize(purchase.grand_total - purchase.paid_total)
+        if outstanding <= ZERO:
+            continue
+        supplier = purchase.supplier
+        raised = purchase.completed_at or purchase.ordered_at or purchase.created_at
+        due = raised + timedelta(days=int(supplier.payment_terms_days or 0))
+        days_overdue = max((now - due).days, 0)
+        bucket = _bucket_for(days_overdue)
+
+        party = parties.setdefault(
+            str(supplier.pk),
+            {
+                "party_id": str(supplier.pk),
+                "name": supplier.name,
+                "phone": supplier.phone,
+                "outstanding": ZERO,
+                "document_count": 0,
+                "oldest_days": 0,
+                "ageing": _empty_ageing(),
+                "documents": [],
+            },
+        )
+        party["outstanding"] = quantize(party["outstanding"] + outstanding)
+        party["document_count"] += 1
+        party["oldest_days"] = max(party["oldest_days"], days_overdue)
+        party["ageing"][bucket] = quantize(party["ageing"][bucket] + outstanding)
+        party["documents"].append(
+            {
+                "id": str(purchase.pk),
+                "number": purchase.number,
+                "dated": raised,
+                "due": due,
+                "days": days_overdue,
+                "status": purchase.status,
+                "invoice_number": purchase.invoice_number,
+                "total": quantize(purchase.grand_total),
+                "paid": quantize(purchase.paid_total),
+                "outstanding": outstanding,
+            }
+        )
+
+        total = quantize(total + outstanding)
+        ageing[bucket] = quantize(ageing[bucket] + outstanding)
+
+    rows = sorted(parties.values(), key=lambda row: row["outstanding"], reverse=True)
+    return {
+        "total": total,
+        "party_count": len(rows),
+        "document_count": sum(row["document_count"] for row in rows),
+        "ageing": ageing,
+        "parties": rows,
+    }
+
+
+def party_ledger(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, Any]:
+    """Both sides at once, plus the net position between them."""
+    receivable = receivables(branch=branch, as_of=as_of)
+    payable = payables(branch=branch, as_of=as_of)
+    return {
+        "receivable": receivable,
+        "payable": payable,
+        # Positive: more is owed to the business than by it.
+        "net_position": quantize(receivable["total"] - payable["total"]),
     }

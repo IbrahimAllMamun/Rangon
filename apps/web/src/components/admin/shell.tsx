@@ -5,6 +5,7 @@ import {
   Boxes,
   ClipboardList,
   Factory,
+  FolderTree,
   Landmark,
   LayoutDashboard,
   LogOut,
@@ -18,6 +19,7 @@ import {
   Ticket,
   Truck as TruckIcon,
   Truck,
+  UserCog,
   Users,
   X,
 } from "lucide-react";
@@ -51,12 +53,14 @@ const NAV: NavItem[] = [
   { href: "/admin/finance", label: "Finance", icon: Landmark, permission: "finance.view" },
   { href: "/admin/expenses", label: "Expenses", icon: Receipt, permission: "finance.view" },
   { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
+  { href: "/admin/taxonomy", label: "Categories", icon: FolderTree, permission: "products.view" },
   {
     href: "/admin/reviews",
     label: "Reviews",
     icon: Star,
     permission: "content.review_moderate",
   },
+  { href: "/admin/staff", label: "Staff", icon: UserCog, permission: "users.view" },
   {
     href: "/admin/coupons",
     label: "Coupons",

@@ -24,12 +24,13 @@ from accounts.api.serializers import (
     PermissionSerializer,
     RegisterSerializer,
     RoleSerializer,
+    TaxSettingsSerializer,
     UserSerializer,
     UserWriteSerializer,
 )
 from accounts.models import Branch, Permission, Role, RoleCode, User
 from accounts.permissions import RolePermission
-from accounts.services import get_organization
+from accounts.services import get_organization, priced_order_count, update_tax_settings
 from core import audit
 from core.middleware import get_audit_context
 from core.models import AuditLog
@@ -217,6 +218,68 @@ class OrganizationView(APIView):
         return Response(serializer.data)
 
 
+class OrganizationTaxView(APIView):
+    """Settle the VAT treatment — decision D-C in docs/business-rules.md.
+
+    Separate from PATCH /organization/ on purpose: this is the one setting that
+    changes how money is calculated, so it goes through a service that audits
+    the change and refuses an unconfirmed one once orders exist.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        if not request.user.has_perm_code("settings.view"):
+            return Response(
+                {"error": {"code": "PERMISSION_DENIED", "message": "Not allowed.", "details": {}}},
+                status=403,
+            )
+        organization = get_organization()
+        if organization is None:
+            return Response({"detail": "No organisation configured."}, status=404)
+        return Response(
+            {
+                "tax_mode": organization.tax_mode,
+                "default_tax_rate": str(organization.default_tax_rate),
+                "tax_settled_at": organization.tax_settled_at,
+                "tax_settled_by_name": (
+                    organization.tax_settled_by.full_name if organization.tax_settled_by else ""
+                ),
+                "is_settled": organization.tax_is_settled,
+                "priced_order_count": priced_order_count(),
+            }
+        )
+
+    def patch(self, request: Request) -> Response:
+        if not request.user.has_perm_code("settings.manage"):
+            return Response(
+                {"error": {"code": "PERMISSION_DENIED", "message": "Not allowed.", "details": {}}},
+                status=403,
+            )
+        serializer = TaxSettingsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        organization = update_tax_settings(
+            tax_mode=data["tax_mode"],
+            default_tax_rate=data["default_tax_rate"],
+            actor=request.user,
+            confirm_historical=data["confirm"],
+            reason=data.get("reason", ""),
+        )
+        return Response(
+            {
+                "tax_mode": organization.tax_mode,
+                "default_tax_rate": str(organization.default_tax_rate),
+                "tax_settled_at": organization.tax_settled_at,
+                "tax_settled_by_name": (
+                    organization.tax_settled_by.full_name if organization.tax_settled_by else ""
+                ),
+                "is_settled": organization.tax_is_settled,
+                "priced_order_count": priced_order_count(),
+            }
+        )
+
+
 class BranchViewSet(viewsets.ModelViewSet):
     queryset = Branch.objects.select_related("organization").all()
     serializer_class = BranchSerializer
@@ -262,20 +325,12 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def deactivate(self, request: Request, pk: str | None = None) -> Response:
-        from accounts.services import set_user_status
+        from accounts.services import check_can_lose_access, set_user_status
 
         user = self.get_object()
-        if user == request.user:
-            return Response(
-                {
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "message": "You cannot deactivate your own account.",
-                        "details": {},
-                    }
-                },
-                status=400,
-            )
+        # Same guards as the PATCH path, in the service, so neither route can
+        # lock the caller -- or the whole organisation -- out.
+        check_can_lose_access(user=user, actor=request.user, what="deactivate")
         set_user_status(
             user=user,
             status="INACTIVE",

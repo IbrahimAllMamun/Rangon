@@ -1,6 +1,7 @@
 from django.urls import path
 
 from reports.api.views import (
+    BusinessSummaryView,
     DashboardView,
     ExpenseReportView,
     InventoryMovementView,
@@ -22,4 +23,5 @@ urlpatterns = [
     path("returns/", ReturnsReportView.as_view(), name="report-returns"),
     path("profit/", ProfitReportView.as_view(), name="report-profit"),
     path("expenses/", ExpenseReportView.as_view(), name="report-expenses"),
+    path("business-summary/", BusinessSummaryView.as_view(), name="report-business-summary"),
 ]

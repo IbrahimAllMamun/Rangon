@@ -337,7 +337,11 @@ class TestExpenseReport:
         report = client.get("/api/v1/reports/expenses/")
         assert report.status_code == 200
         assert report.data["results"][0]["category"] == "Rent"
-        assert report.data["results"][0]["total"] == Decimal("6000.00")
+        # A string, not a Decimal: money crosses the API boundary as a string so
+        # it cannot land in a JSON float (CLAUDE.md §4). This assertion used to
+        # read `== Decimal("6000.00")`, which passed only because the report
+        # views skipped COERCE_DECIMAL_TO_STRING and leaked the raw Decimal.
+        assert report.data["results"][0]["total"] == "6000.00"
 
         csv_response = client.get("/api/v1/reports/expenses/?format=csv")
         assert csv_response.status_code == 200

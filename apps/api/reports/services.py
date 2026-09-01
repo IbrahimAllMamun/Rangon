@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from django.db.models import (
+    Case,
     Count,
     DecimalField,
     ExpressionWrapper,
@@ -18,10 +20,12 @@ from django.db.models import (
     Q,
     Sum,
     Value,
+    When,
 )
 from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
 
+from accounts.models import TaxMode
 from core.money import ZERO, quantize
 from inventory.models import Inventory, InventoryTransaction
 from orders.models import (
@@ -31,11 +35,30 @@ from orders.models import (
     OrderStatus,
     Payment,
     PaymentState,
+    RestockDecision,
+    ReturnItem,
     ReturnRequest,
+    ReturnStatus,
 )
 from purchasing.models import PurchaseOrder
 
 MONEY = DecimalField(max_digits=18, decimal_places=2)
+
+#: Revenue from one order line, with VAT taken out when it is sitting inside
+#: the price.  `line_total` is what the customer was charged for the goods; under
+#: INCLUSIVE pricing that figure contains the tax, so counting it as revenue
+#: overstates both turnover and margin by exactly the VAT.  Each line carries its
+#: own allocated `tax_amount`, and the order carries the mode it was priced under,
+#: so the correction is per-line and reads the frozen values rather than today's
+#: setting (docs/business-rules.md §3.4).
+NET_LINE_REVENUE = Case(
+    When(
+        order__tax_mode=TaxMode.INCLUSIVE,
+        then=ExpressionWrapper(F("line_total") - F("tax_amount"), output_field=MONEY),
+    ),
+    default=F("line_total"),
+    output_field=MONEY,
+)
 
 #: Orders that represent real trade.  Cancelled orders are excluded everywhere.
 SOLD_STATUSES = [
@@ -121,7 +144,8 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
             Value(ZERO),
             output_field=MONEY,
         ),
-        net_sales=Coalesce(Sum("line_total"), Value(ZERO), output_field=MONEY),
+        net_sales=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
     )
 
     gross_profit = quantize(items["net_sales"] - items["cogs"])
@@ -170,7 +194,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         .values("sku", "product_name")
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum("line_total"), Value(ZERO), output_field=MONEY),
+            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
         )
         .order_by("-units")[:10]
     )
@@ -180,7 +204,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         .values(category=F("variant__product__category__name"))
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum("line_total"), Value(ZERO), output_field=MONEY),
+            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
         )
         .order_by("-revenue")[:10]
     )
@@ -267,7 +291,7 @@ def product_performance(*, date_range: DateRange, branch: Any = None) -> list[di
         .values("sku", "product_name", "variant_label")
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum("line_total"), Value(ZERO), output_field=MONEY),
+            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
             cost=Coalesce(
                 Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
                 Value(ZERO),
@@ -351,7 +375,7 @@ def profit_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any
         .annotate(day=TruncDate("order__placed_at"))
         .values("day")
         .annotate(
-            revenue=Coalesce(Sum("line_total"), Value(ZERO), output_field=MONEY),
+            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
             cost=Coalesce(
                 Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
                 Value(ZERO),
@@ -422,3 +446,137 @@ def expense_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
         }
         for row in totals["by_category"]
     ]
+
+
+def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
+    """Phase 38: what the business actually made in a period.
+
+    The one report an owner manages by, and the first one that reaches all the
+    way down to net profit rather than stopping at gross margin:
+
+        revenue        goods sold, net of VAT
+        less refunds   completed returns in the period
+        less COGS      the cost frozen on each line (ADR-0006), minus the cost
+                       of goods that came back to sellable stock
+        = gross profit
+        less expenses  finance.selectors.expense_totals, voids excluded
+        = net profit
+
+    Three deliberate choices, because each is a place a plausible-looking
+    figure would be wrong:
+
+    * **VAT is not revenue.**  Under inclusive pricing the tax sits inside the
+      line total, so it is taken out per line before anything is summed.  It is
+      reported separately: it is money held for the government, not turnover.
+    * **Each event lands in the period it happened.**  Sales by `placed_at`,
+      returns by `completed_at`, expenses by `spent_at`.  A refund in August of
+      a July sale reduces August, which is what the cash and the ledger did.
+    * **Only restocked goods give their cost back.**  A return marked DAMAGED
+      is a write-off and its cost stays a cost; one marked QUARANTINE is not
+      sellable yet, so it is treated the same way until it is.  Only RESTOCK
+      recovers the cost, because only RESTOCK put the goods back on the shelf.
+    """
+    from finance import selectors as finance_selectors
+
+    orders = sold_orders(date_range, branch=branch)
+    lines = OrderItem.objects.filter(order__in=orders)
+
+    sales = lines.aggregate(
+        revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
+        cogs=Coalesce(
+            Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
+        units=Coalesce(Sum("quantity"), Value(0)),
+    )
+    order_totals = orders.aggregate(
+        count=Count("id"),
+        shipping=Coalesce(Sum("shipping_total"), Value(ZERO), output_field=MONEY),
+        discounts=Coalesce(Sum("discount_total"), Value(ZERO), output_field=MONEY),
+    )
+
+    completed_returns = ReturnRequest.objects.filter(
+        status=ReturnStatus.COMPLETED,
+        completed_at__gte=date_range.start,
+        completed_at__lte=date_range.end,
+    )
+    if branch is not None:
+        completed_returns = completed_returns.filter(order__branch=branch)
+
+    refunds = quantize(
+        completed_returns.aggregate(
+            total=Coalesce(Sum("refund_amount"), Value(ZERO), output_field=MONEY)
+        )["total"]
+    )
+    cogs_recovered = quantize(
+        ReturnItem.objects.filter(
+            return_request__in=completed_returns,
+            restock_decision=RestockDecision.RESTOCK,
+        ).aggregate(
+            total=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("order_item__unit_cost") * F("quantity"), output_field=MONEY
+                    )
+                ),
+                Value(ZERO),
+                output_field=MONEY,
+            )
+        )["total"]
+    )
+
+    revenue = quantize(sales["revenue"])
+    net_revenue = quantize(revenue - refunds)
+    net_cogs = quantize(sales["cogs"] - cogs_recovered)
+    gross_profit = quantize(net_revenue - net_cogs)
+
+    expense_totals = finance_selectors.expense_totals(
+        branch=branch, date_from=date_range.start, date_to=date_range.end
+    )
+    expenses_total = quantize(expense_totals["total"])
+    net_profit = quantize(gross_profit - expenses_total)
+
+    def _percent(part: Decimal, whole: Decimal) -> Decimal:
+        return quantize(part / whole * 100) if whole else ZERO
+
+    return {
+        "period": {
+            "start": date_range.start,
+            "end": date_range.end,
+            "label": date_range.label,
+        },
+        "revenue": {
+            "goods": revenue,
+            "refunds": refunds,
+            "net": net_revenue,
+            "shipping_charged": quantize(order_totals["shipping"]),
+            "discounts_given": quantize(order_totals["discounts"]),
+            # Held for the government, never income -- shown so the figure on
+            # the VAT return and the figure here come from the same place.
+            "vat_collected": quantize(sales["tax"]),
+        },
+        "cost_of_goods": {
+            "sold": quantize(sales["cogs"]),
+            "recovered_from_returns": cogs_recovered,
+            "net": net_cogs,
+        },
+        "gross_profit": gross_profit,
+        "gross_margin_percent": _percent(gross_profit, net_revenue),
+        "expenses": {
+            "total": expenses_total,
+            "count": expense_totals["count"],
+            "by_category": expense_totals["by_category"],
+        },
+        "net_profit": net_profit,
+        "net_margin_percent": _percent(net_profit, net_revenue),
+        "volume": {
+            "orders": order_totals["count"],
+            "units": sales["units"],
+            "returns": completed_returns.count(),
+            "average_order_value": (
+                quantize(net_revenue / order_totals["count"]) if order_totals["count"] else ZERO
+            ),
+        },
+    }

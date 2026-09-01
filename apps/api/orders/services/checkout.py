@@ -340,6 +340,7 @@ def place_order(
             coupon_discount=priced.coupon_discount,
             discount_total=priced.discount_total,
             tax_rate=priced.tax_rate,
+            tax_mode=priced.tax_mode,
             tax_total=priced.tax_total,
             shipping_total=priced.shipping_total,
             grand_total=priced.grand_total,

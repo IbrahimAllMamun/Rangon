@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
@@ -38,6 +38,7 @@ const REPORTS = [
   { path: "/reports/returns/", label: "Returns", description: "Reasons, quantities and refunds" },
   { path: "/reports/profit/", label: "Profit", description: "Revenue minus frozen COGS, by day" },
   { path: "/reports/expenses/", label: "Expenses", description: "Spending by category, with each category's share" },
+  { path: "/reports/business-summary/", label: "Business summary", description: "Revenue, COGS, expenses and net profit as a statement" },
 ];
 
 type Search = Promise<{ range?: string }>;
@@ -100,6 +101,19 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           </div>
         }
       />
+
+      <Link
+        href={`/admin/reports/business?range=${range}`}
+        className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-border bg-surface p-4 transition-colors duration-fast hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
+      >
+        <span>
+          <span className="block text-body font-semibold">Business summary</span>
+          <span className="block text-body-sm text-muted">
+            The whole statement — revenue, refunds, cost of goods, expenses and net profit.
+          </span>
+        </span>
+        <ArrowRight className="size-5 shrink-0 text-neutral-400" aria-hidden />
+      </Link>
 
       <div className="mb-6">
         <h2 className="mb-2 text-h4">Product performance</h2>
