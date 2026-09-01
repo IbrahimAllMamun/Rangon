@@ -14,6 +14,7 @@ import pytest
 from django.db import connections
 
 from core.exceptions import BusinessError, InsufficientFunds
+from customers.models import Customer
 from finance import services as finance_services
 from finance.models import AccountKind
 from inventory import services as inventory_services
@@ -309,6 +310,28 @@ def test_simultaneous_sales_all_land_in_one_drawer(last_unit):
     drawer.refresh_from_db()
     assert drawer.balance == Decimal("600.00")
     assert finance_services.verify_integrity() == []
+
+
+def test_simultaneous_walk_in_lookups_resolve_to_one_customer(last_unit):
+    """A branch has exactly one anonymous counter customer, however it is asked for.
+
+    `pos.walk_in_customer()` uses get_or_create, which is only atomic because
+    `customers_customer_walk_in_name_uniq` backs its lookup.  Without the
+    constraint every thread misses the SELECT and inserts, and from then on
+    *every* anonymous sale at that branch raises MultipleObjectsReturned until
+    someone deletes a row by hand — the till stops, not just this test.
+    """
+    branch = last_unit["branch"]
+
+    def resolve(index: int) -> str:
+        return str(pos.walk_in_customer(branch).pk)
+
+    results, errors = run_together(resolve, 8)
+
+    assert not errors, f"failures: {errors}"
+    assert len(results) == 8
+    assert len(set(results)) == 1, f"expected one walk-in row, got {sorted(set(results))}"
+    assert Customer.objects.filter(is_walk_in=True, name=f"Walk-in ({branch.code})").count() == 1
 
 
 def test_concurrent_withdrawals_cannot_overdraw_a_drawer(last_unit):
