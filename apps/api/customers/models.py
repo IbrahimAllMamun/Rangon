@@ -57,6 +57,20 @@ class Customer(BaseModel):
     class Meta:
         db_table = "customers_customer"
         ordering = ("name",)
+        constraints = [
+            # One anonymous counter row per branch.  `orders.services.pos.
+            # walk_in_customer()` resolves it with get_or_create, which is only
+            # atomic when its lookup is backed by a unique constraint: without
+            # this, two simultaneous counter sales both miss the SELECT, both
+            # INSERT, and every later call raises MultipleObjectsReturned — so
+            # anonymous sales at that branch stop until a row is deleted by
+            # hand.  Partial, because ordinary customers may share a name.
+            models.UniqueConstraint(
+                fields=["is_walk_in", "name"],
+                condition=models.Q(is_walk_in=True),
+                name="customers_customer_walk_in_name_uniq",
+            )
+        ]
         indexes = [
             models.Index(fields=["phone"]),
             models.Index(fields=["email"]),

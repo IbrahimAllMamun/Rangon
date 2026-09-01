@@ -70,12 +70,25 @@ class SaleInput:
 
 
 def walk_in_customer(branch: Branch) -> Customer:
-    """Every order needs a customer FK; anonymous counter sales use this row."""
-    customer, _ = Customer.objects.get_or_create(
-        is_walk_in=True,
-        name=f"Walk-in ({branch.code})",
-        defaults={"customer_type": "WALK_IN", "phone": None, "email": None},
-    )
+    """Every order needs a customer FK; anonymous counter sales use this row.
+
+    The lookup is backed by `customers_customer_walk_in_name_uniq`, which is
+    what makes `get_or_create` atomic here: two registers ringing up anonymous
+    sales at the same instant both miss the SELECT and both INSERT, and the
+    loser now gets an IntegrityError instead of a second row.  Losing the race
+    is not an error for the caller — the winner's row is the answer — so it is
+    re-fetched rather than raised.
+    """
+    lookup = {"is_walk_in": True, "name": f"Walk-in ({branch.code})"}
+    try:
+        customer, _ = Customer.objects.get_or_create(
+            **lookup,
+            defaults={"customer_type": "WALK_IN", "phone": None, "email": None},
+        )
+    except IntegrityError:
+        # get_or_create rolls its own savepoint back and re-fetches once; this
+        # covers the narrower window where that re-fetch also missed.
+        customer = Customer.objects.get(**lookup)
     return customer
 
 
