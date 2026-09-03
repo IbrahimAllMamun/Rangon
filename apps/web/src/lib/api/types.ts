@@ -330,6 +330,25 @@ export interface PosVariant {
   category: string;
 }
 
+/**
+ * A customer as the POS counter lookup returns them.
+ *
+ * Deliberately narrower than the admin `Customer`: a lookup answers up to ten
+ * results for a partial phone number, most of whom are not the person at the
+ * counter, so it carries no staff notes, tags, lifetime spend or addresses.
+ * `total_orders` and `last_order_at` are there to tell two same-named people
+ * apart, which is the only other question the counter asks.
+ */
+export interface PosCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  customer_type: string;
+  total_orders: number;
+  last_order_at: string | null;
+}
+
 export interface PosSession {
   branch: {
     id: string;
