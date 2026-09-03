@@ -14,6 +14,7 @@ from accounts.permissions import RolePermission
 from customers import services
 from customers.api.serializers import (
     CustomerAddressSerializer,
+    CustomerLookupSerializer,
     CustomerNoteSerializer,
     CustomerSerializer,
 )
@@ -63,14 +64,54 @@ class CustomerViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=["is_active", "updated_at"])
 
+    # How many characters must be typed before the server will search.
+    #
+    # `phone__icontains` compiles to `LIKE '%...%'`, which no index on `phone`
+    # can serve, so every lookup is a sequential scan of the customer table.
+    # That is affordable for a substring specific enough to be worth typing and
+    # not for one digit, which matches most of the table and returns ten
+    # arbitrary strangers. Three is the shortest prefix a cashier reads off a
+    # customer aloud ("last three digits?") and long enough to keep the scan
+    # rare.
+    LOOKUP_MIN_LENGTH = 3
+
     @action(detail=False, methods=["get"])
     def lookup(self, request: Request) -> Response:
-        """Fast phone lookup for the POS counter."""
+        """Fast phone lookup for the POS counter.
+
+        Deliberately *not* `get_queryset()`: that prefetches addresses for the
+        admin list, and this answers with `CustomerLookupSerializer`, which has
+        no addresses to prefetch. Going through it would cost the prefetch and
+        render nothing with it.
+
+        Walk-in rows are excluded. They carry no phone so they cannot match
+        today, but they are the one customer a cashier must never attach to a
+        sale by hand -- `create_pos_sale` resolves the branch's own walk-in row
+        when no customer is given, and picking another branch's from a list
+        would file the sale against the wrong branch's anonymous customer.
+        """
         phone = request.query_params.get("phone", "").strip()
-        if not phone:
-            return Response({"results": []})
-        matches = Customer.objects.filter(phone__icontains=phone, is_active=True)[:10]
-        return Response({"results": CustomerSerializer(matches, many=True).data})
+        if len(phone) < self.LOOKUP_MIN_LENGTH:
+            return Response({"results": [], "min_length": self.LOOKUP_MIN_LENGTH})
+
+        matches = (
+            Customer.objects.filter(phone__icontains=phone, is_active=True)
+            .exclude(is_walk_in=True)
+            # `only` because the serializer drops `notes`, `tags`, `total_spent`
+            # and the rest anyway: there is no reason to read ten strangers'
+            # staff commentary out of the database to then throw it away.
+            .only(
+                "id",
+                "name",
+                "phone",
+                "email",
+                "customer_type",
+                "total_orders",
+                "last_order_at",
+            )
+            .order_by("name", "pk")[:10]
+        )
+        return Response({"results": CustomerLookupSerializer(matches, many=True).data})
 
     @action(detail=True, methods=["get"])
     def orders(self, request: Request, pk: str | None = None) -> Response:

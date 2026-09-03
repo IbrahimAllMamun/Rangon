@@ -10,11 +10,14 @@ import {
   Printer,
   Search,
   Trash2,
+  User,
+  UserPlus,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Logo } from "@/components/brand/logo";
+import { CustomerPanel } from "@/components/pos/customer-panel";
 import { PaymentPanel } from "@/components/pos/payment-panel";
 import { Receipt } from "@/components/pos/receipt";
 import { Badge, Button, Input } from "@/components/ui/primitives";
@@ -46,7 +49,7 @@ const SEARCH_DEBOUNCE_MS = 220;
  * Built barcode-first: the scan field holds focus at all times and a USB
  * scanner (which types then presses Enter) needs no mouse at all.
  *
- * Keyboard: F2 payment · F4 hold · F8 clear · Esc close dialog · / focus search
+ * Keyboard: F2 payment · F3 customer · F4 hold · F8 clear · Esc close dialog · / focus search
  */
 export function PosRegister({ session }: { session: PosSession }) {
   const pos = usePos();
@@ -57,6 +60,7 @@ export function PosRegister({ session }: { session: PosSession }) {
   const [results, setResults] = useState<PosVariant[]>([]);
   const [searching, setSearching] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [customerOpen, setCustomerOpen] = useState(false);
   const [completed, setCompleted] = useState<Order | null>(null);
   const [holds, setHolds] = useState(session.holds);
   const [announcement, setAnnouncement] = useState("");
@@ -79,6 +83,11 @@ export function PosRegister({ session }: { session: PosSession }) {
       if (event.key === "F2") {
         event.preventDefault();
         if (pos.lines.length) setPaymentOpen(true);
+      } else if (event.key === "F3") {
+        event.preventDefault();
+        // Not on top of the payment dialog: two Radix dialogs at once fight
+        // over the focus trap, and the sale is already priced by then.
+        if (!paymentOpen) setCustomerOpen(true);
       } else if (event.key === "F4") {
         event.preventDefault();
         void hold();
@@ -87,6 +96,7 @@ export function PosRegister({ session }: { session: PosSession }) {
         if (pos.lines.length && confirm("Clear the current sale?")) pos.clear();
       } else if (event.key === "Escape") {
         setPaymentOpen(false);
+        setCustomerOpen(false);
         setCompleted(null);
         focusScan();
       }
@@ -94,7 +104,7 @@ export function PosRegister({ session }: { session: PosSession }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos.lines.length]);
+  }, [pos.lines.length, paymentOpen]);
 
   // The hook clears its own timer; the in-flight request is ours to drop.
   useEffect(() => () => searchAbort.current?.abort(), []);
@@ -400,6 +410,44 @@ export function PosRegister({ session }: { session: PosSession }) {
             <Badge tone="neutral">{pos.itemCount()} item(s)</Badge>
           </div>
 
+          {/*
+            Who this sale is for. Attaching a customer is optional -- an
+            unnamed counter sale is filed against the branch's walk-in record
+            by the server -- so this never blocks the sale, and the row states
+            which of the two is in force rather than leaving it implied.
+          */}
+          <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+            {pos.customerId ? (
+              <>
+                <User className="size-4 shrink-0 text-muted" aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => setCustomerOpen(true)}
+                  className="min-w-0 flex-1 truncate text-left text-body-sm font-medium underline-offset-4 hover:underline"
+                >
+                  {pos.customerName}
+                </button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => pos.setCustomer(null, "")}
+                  aria-label={`Remove ${pos.customerName} from this sale`}
+                >
+                  <X aria-hidden /> Remove
+                </Button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCustomerOpen(true)}
+                className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-body-sm text-muted transition-colors duration-fast hover:bg-neutral-100 hover:text-neutral-900"
+              >
+                <UserPlus className="size-4 shrink-0" aria-hidden />
+                Walk-in customer — add one (F3)
+              </button>
+            )}
+          </div>
+
           <div className="min-h-0 flex-1 overflow-y-auto">
             {pos.lines.length === 0 ? (
               <p className="px-4 py-10 text-center text-body-sm text-muted">
@@ -522,6 +570,19 @@ export function PosRegister({ session }: { session: PosSession }) {
           </div>
         </section>
       </div>
+
+      {customerOpen && (
+        <CustomerPanel
+          onClose={() => {
+            setCustomerOpen(false);
+            focusScan();
+          }}
+          onAttach={(customer) => {
+            pos.setCustomer(customer.id, customer.name);
+            setAnnouncement(`${customer.name} attached to this sale`);
+          }}
+        />
+      )}
 
       {paymentOpen && (
         <PaymentPanel
