@@ -48,6 +48,13 @@ Bring that stack up first — a tunnel to nothing is §10's first row:
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
 ```
 
+That command assumes `rangon-api:prod` and `rangon-web:prod` already exist. **It does not build
+them** — `prodlocal` sets `build: !reset null`, so `up -d --build` builds nothing and fails on a
+missing tag. From a machine with no images, follow
+[local-production.md](local-production.md) first: it covers the two `docker build` commands, the
+migrate and seed that an always-empty database needs, and the nginx restart that stops `/api/`
+answering 502.
+
 Then prove the origin is reachable **from Windows**, not from a container
 ([.claude/environment.md](../../.claude/environment.md) §3):
 
