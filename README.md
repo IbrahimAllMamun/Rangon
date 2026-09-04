@@ -244,10 +244,26 @@ silently targets the dev stack instead:
 alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
 ```
 
-**3. Build and start:**
+**3. Build the two images by hand.** `prodlocal` sets `build: !reset null` on `api`, `worker`, `beat`
+and `web`, so **`prodlocal up -d --build` builds nothing** and fails on a missing tag. Build them
+first — these tags collide with nothing:
 
 ```bash
-prodlocal up -d --build
+docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
+```
+
+The two `NEXT_PUBLIC_*` values are inlined into the client bundle at build time and cannot be changed
+afterwards; omit them and the image silently keeps the Dockerfile defaults (`localhost:3000`,
+`localhost:8000`), which yields wrong canonical URLs, OG tags and `sitemap.xml`:
+
+```bash
+docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=http://localhost:4100
+```
+
+**Then start:**
+
+```bash
+prodlocal up -d
 ```
 
 **4. Migrate and seed** (its database is empty and separate from the dev one):
@@ -255,6 +271,15 @@ prodlocal up -d --build
 ```bash
 prodlocal exec api python manage.py migrate
 prodlocal exec api python manage.py seed_demo --reset
+```
+
+**5. Restart Nginx**, which resolves `api` and `web` once at startup and caches the addresses. Any
+container recreated after it gets an address Nginx does not know, and `/api/` answers 502 while the
+storefront still renders — so it reads as an API fault rather than a proxy one. Repeat this after
+every `--force-recreate`:
+
+```bash
+prodlocal restart nginx
 ```
 
 |                               |                                                               |
@@ -292,6 +317,10 @@ immutable tag, and none of the container hardening from `docker-compose.prod.yml
 nothing about what you see in the browser. For a real deployment, and for exposing this on a domain,
 read [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md).
 
+The full runbook for this stack — building from a machine with no images, the failures that look
+like the wrong layer, and starting a Cloudflare tunnel in front of it — is
+[docs/operations/local-production.md](docs/operations/local-production.md).
+
 ## Local run without Docker (fallback)
 
 Docker is the supported path. If you must run on the host you still need PostgreSQL 16 and Redis 7
@@ -315,6 +344,7 @@ Staging/production procedures, migration strategy, rollback and backups are docu
 - [docs/operations/deployment.md](docs/operations/deployment.md)
 - [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — single-server Webuzo VPS
 - [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md) — your own machine + your own domain
+- [docs/operations/local-production.md](docs/operations/local-production.md) — build and run the production images locally, from scratch
 - [docs/operations/cloudflare-local-setup.md](docs/operations/cloudflare-local-setup.md) — Cloudflare Tunnel runbook for the local stack
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)
