@@ -258,6 +258,10 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         source="attribute_values", many=True, read_only=True
     )
     product_name = serializers.CharField(source="product.name", read_only=True)
+    # Brand is nullable, so `default` rather than letting a null propagate: the
+    # barcode label prints this as its heading and wants "" for an unbranded
+    # product, not the string "None".
+    brand_name = serializers.CharField(source="product.brand.name", read_only=True, default="")
     stock = serializers.SerializerMethodField()
 
     class Meta:
@@ -266,6 +270,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             "id",
             "product",
             "product_name",
+            "brand_name",
             "sku",
             "barcode",
             "name",

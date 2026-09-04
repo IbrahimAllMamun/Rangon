@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  Barcode,
   Boxes,
   ClipboardList,
   Factory,
@@ -46,6 +47,7 @@ const NAV: NavItem[] = [
   { href: "/admin/orders", label: "Orders", icon: ShoppingCart, permission: "orders.view" },
   { href: "/admin/products", label: "Products", icon: Package, permission: "products.view" },
   { href: "/admin/inventory", label: "Inventory", icon: Boxes, permission: "inventory.view" },
+  { href: "/admin/labels", label: "Barcode labels", icon: Barcode, permission: "products.view" },
   { href: "/admin/purchases", label: "Purchases", icon: ClipboardList, permission: "purchases.view" },
   { href: "/admin/suppliers", label: "Suppliers", icon: Factory, permission: "purchases.view" },
   { href: "/admin/customers", label: "Customers", icon: Users, permission: "customers.view" },

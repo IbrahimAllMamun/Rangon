@@ -4097,7 +4097,8 @@ Independent of the money layer; may run in parallel.
                                    existing checkout path so pricing and stock rules cannot diverge
 [ ] Cheque register                Pending → Deposited → Cleared / Bounce. A cleared cheque posts to
                                    phase 35; a bounced one reverses. Requires 35.
-[ ] Barcode label sheets           multi-product sheet + single label, reusing the existing generator
+[x] Barcode label sheets           multi-product sheet + single label, reusing the existing generator
+                                   — shipped 2026-09-04 as /admin/labels
 [ ] SR attribution                 optional sales_rep FK on Order, plus a sales-report filter
 ```
 
