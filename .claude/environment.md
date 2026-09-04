@@ -322,6 +322,38 @@ forever. The fix is one line in `apps/web/Dockerfile`: `ENV HOSTNAME=0.0.0.0`.
 
 ---
 
+---
+
+## 13. A new route folder is invisible to a running `next dev`
+
+Added 2026-09-04, after a page that was perfectly correct returned a 500 and
+looked for all the world like a code bug.
+
+Creating `src/app/.../<new-route>/page.tsx` while the dev server is running does
+**not** register the route. Turbopack never sees the new directory, because
+filesystem events do not propagate reliably through the Windows bind mount, and
+the request fails with:
+
+```text
+Error [PageNotFoundError]: Cannot find module for page: /(admin)/admin/labels/page
+code: 'ENOENT'
+```
+
+Everything you would check to diagnose it looks fine, which is what makes it
+expensive: the file is on disk *and* inside the container (`docker exec ... ls`
+confirms both), and `tsc --noEmit` is clean — because nothing is wrong with the
+code. Editing an **existing** file hot-reloads normally; only a newly created
+route folder is missed.
+
+```bash
+docker restart rangon-web-1     # then wait for "Ready in" before curling
+```
+
+Wait for `Ready in` in the logs, then request the page: it compiles on first
+request, around 50 s cold for an admin route. `--since` on `docker logs` is
+useful here, because the pre-restart error stays in the buffer and reads as
+current (see section 5).
+
 ## Commands that actually work here
 
 ```bash
