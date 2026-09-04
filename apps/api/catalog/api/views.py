@@ -253,7 +253,11 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 
 class ProductVariantViewSet(viewsets.ModelViewSet):
-    queryset = ProductVariant.objects.select_related("product").prefetch_related(
+    # `product__brand` is joined, not left to the serializer: `brand_name`
+    # reaches through a nullable FK, and the label screen renders a page of
+    # variants at a time, so without it each row costs a query for its brand
+    # (the D10 shape that bit the three busiest list endpoints).
+    queryset = ProductVariant.objects.select_related("product", "product__brand").prefetch_related(
         "attribute_values__attribute_value", "attribute_values__attribute"
     )
     serializer_class = ProductVariantSerializer

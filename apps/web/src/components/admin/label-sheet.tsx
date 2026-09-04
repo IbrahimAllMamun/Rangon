@@ -39,8 +39,11 @@ export interface LabelLayout {
   /** Barcode sizing tuned to the label — a 38 mm label cannot take 12 mm bars. */
   moduleMm: number;
   barHeightMm: number;
-  /** A small label has no room for the product name as well. */
-  allowName: boolean;
+  /** Type sizes in points, tuned to the label so the block does not overflow. */
+  brandPt: number;
+  numberPt: number;
+  detailPt: number;
+  pricePt: number;
   pageWidthMm: number;
   pageHeightMm: number;
 }
@@ -64,8 +67,11 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginTopMm: 10.7,
     pageMarginLeftMm: 4.75,
     moduleMm: 0.264,
-    barHeightMm: 8,
-    allowName: false,
+    barHeightMm: 7.5,
+    brandPt: 5.5,
+    numberPt: 6.5,
+    detailPt: 4,
+    pricePt: 6.5,
     pageWidthMm: 210,
     pageHeightMm: 297,
   },
@@ -80,7 +86,10 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 0,
     moduleMm: 0.33,
     barHeightMm: 11,
-    allowName: true,
+    brandPt: 7,
+    numberPt: 9,
+    detailPt: 5.5,
+    pricePt: 9,
     pageWidthMm: 210,
     pageHeightMm: 297,
   },
@@ -95,7 +104,10 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 0,
     moduleMm: 0.4,
     barHeightMm: 14,
-    allowName: true,
+    brandPt: 8.5,
+    numberPt: 11,
+    detailPt: 6.5,
+    pricePt: 11,
     pageWidthMm: 210,
     pageHeightMm: 297,
   },
@@ -109,12 +121,36 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginTopMm: 0,
     pageMarginLeftMm: 0,
     moduleMm: 0.33,
-    barHeightMm: 10,
-    allowName: false,
+    barHeightMm: 9,
+    brandPt: 6,
+    numberPt: 7.5,
+    detailPt: 4.5,
+    pricePt: 8,
     pageWidthMm: 50,
     pageHeightMm: 25,
   },
 ];
+
+/**
+ * The variant as one line per attribute — "Size M", "Colour Black".
+ *
+ * Deliberately not `variant.label`, which is those same values joined into a
+ * single "M / Black" string. That string cannot be split back apart safely (a
+ * value may itself contain a slash) and, more to the point, it drops the
+ * attribute *names*, so a label reads "M / Black" where it should read
+ * "Size M" and "Colour Black". Whoever is holding the garment needs to know
+ * which is which.
+ *
+ * Falls back to the joined label for a variant whose attributes did not come
+ * down — an older cached response, or a variant with a free-text name.
+ */
+export function variantLines(variant: PickableVariant): string[] {
+  const attributes = variant.attributes ?? [];
+  if (attributes.length) {
+    return attributes.map((entry) => `${entry.attribute_name} ${entry.label}`.trim());
+  }
+  return variant.label ? [variant.label] : [];
+}
 
 interface Row {
   variant: PickableVariant;
@@ -133,9 +169,9 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
   const [showPrice, setShowPrice] = useState(true);
   const [showSku, setShowSku] = useState(true);
   const [showName, setShowName] = useState(true);
+  const [showBrand, setShowBrand] = useState(true);
 
   const layout = LAYOUTS.find((entry) => entry.id === layoutId) ?? LAYOUTS[0];
-  const nameVisible = showName && layout.allowName;
 
   function update(id: string, change: Partial<Row>) {
     setRows((current) =>
@@ -311,14 +347,17 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
             <legend className="text-body-sm font-medium">Show on each label</legend>
             <label className="flex items-center gap-2 text-body-sm">
               <Checkbox
-                checked={nameVisible}
-                disabled={!layout.allowName}
+                checked={showBrand}
+                onChange={(event) => setShowBrand(event.target.checked)}
+              />
+              Brand
+            </label>
+            <label className="flex items-center gap-2 text-body-sm">
+              <Checkbox
+                checked={showName}
                 onChange={(event) => setShowName(event.target.checked)}
               />
-              Product name
-              {!layout.allowName && (
-                <span className="text-caption text-muted">— no room on this label size</span>
-              )}
+              Product name and variant
             </label>
             <label className="flex items-center gap-2 text-body-sm">
               <Checkbox
@@ -384,32 +423,124 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
                   justifyContent: "center",
                   overflow: "hidden",
                   color: "#000",
+                  padding: "0.8mm",
+                  boxSizing: "border-box",
                 }}
               >
-                {nameVisible && (
+                {showBrand && row.variant.brand_name && (
                   <span
                     style={{
-                      fontSize: "6pt",
-                      lineHeight: 1.1,
+                      fontSize: `${layout.brandPt}pt`,
+                      fontWeight: 700,
+                      lineHeight: 1.15,
                       maxWidth: "100%",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {row.variant.product_name} {row.variant.label}
+                    {row.variant.brand_name}
                   </span>
                 )}
+
+                {/*
+                  The symbol draws without its own digits, and the number is
+                  set below it in HTML instead. The specification's own 1/6/6
+                  split at the foot of the bars is small by design; a counter
+                  reading a code out to key it in wants it large, which is how
+                  retail labels are actually printed.
+                */}
                 <BarcodeSvg
                   value={row.barcode as string}
                   moduleMm={layout.moduleMm}
                   heightMm={layout.barHeightMm}
+                  showDigits={false}
                 />
-                <span style={{ fontSize: "6pt", lineHeight: 1.2 }}>
-                  {showSku && row.variant.sku}
-                  {showSku && showPrice && " · "}
-                  {showPrice && money(row.variant.price)}
+                <span
+                  style={{
+                    fontSize: `${layout.numberPt}pt`,
+                    fontWeight: 700,
+                    lineHeight: 1.1,
+                    letterSpacing: "0.04em",
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {row.barcode}
                 </span>
+
+                {/*
+                  Details left, price right — the price is what a customer
+                  looks for and the details are what staff pick from, so they
+                  do not compete for the same corner.
+                */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-end",
+                    justifyContent: "space-between",
+                    gap: "1mm",
+                    width: "100%",
+                    marginTop: "0.4mm",
+                  }}
+                >
+                  <div style={{ minWidth: 0, textAlign: "left" }}>
+                    {showName && (
+                      <div
+                        style={{
+                          fontSize: `${layout.detailPt}pt`,
+                          lineHeight: 1.25,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.variant.product_name}
+                      </div>
+                    )}
+                    {showName &&
+                      variantLines(row.variant).map((line) => (
+                        <div
+                          key={line}
+                          style={{
+                            fontSize: `${layout.detailPt}pt`,
+                            lineHeight: 1.25,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {line}
+                        </div>
+                      ))}
+                    {showSku && (
+                      <div
+                        style={{
+                          fontSize: `${layout.detailPt}pt`,
+                          lineHeight: 1.25,
+                          fontFamily: "monospace",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.variant.sku}
+                      </div>
+                    )}
+                  </div>
+
+                  {showPrice && (
+                    <span
+                      style={{
+                        fontSize: `${layout.pricePt}pt`,
+                        fontWeight: 700,
+                        lineHeight: 1.1,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {money(row.variant.price)}
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
