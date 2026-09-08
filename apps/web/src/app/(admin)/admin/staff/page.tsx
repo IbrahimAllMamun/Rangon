@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
+import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import {
   type BranchOption,
@@ -10,6 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
 import { type Paginated, apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Staff & roles" };
 
@@ -28,7 +30,17 @@ function rows<T>(payload: MaybePaged<T> | null): T[] {
   return Array.isArray(payload) ? payload : (payload.results ?? []);
 }
 
-export default async function StaffPage() {
+/** A bare array is the whole set; a paginated body knows its own total. */
+function total<T>(payload: MaybePaged<T> | null): number {
+  if (!payload) return 0;
+  return Array.isArray(payload) ? payload.length : payload.count;
+}
+
+type Search = Promise<Record<string, string | undefined>>;
+
+export default async function StaffPage({ searchParams }: { searchParams: Search }) {
+  const params = await searchParams;
+  const paging = readPaging(params);
   const user = await currentUser<SessionUser>();
   if (!user) redirect("/login?next=/admin/staff");
 
@@ -37,17 +49,22 @@ export default async function StaffPage() {
   const canManage = can("users.manage");
 
   let staff: StaffRow[] = [];
+  let staffTotal = 0;
   let roles: RoleDetail[] = [];
   let branches: BranchOption[] = [];
   let error: string | null = null;
 
   try {
+    const staffQuery = applyPaging(new URLSearchParams(), paging);
     const [staffPayload, rolePayload, organization] = await Promise.all([
-      apiServer<MaybePaged<StaffRow>>("/users/?page_size=100"),
+      apiServer<MaybePaged<StaffRow>>(`/users/?${staffQuery.toString()}`),
+      // Roles are a short fixed set and the whole list is needed for the
+      // permission cards below, so this one stays unpaginated.
       apiServer<MaybePaged<RoleDetail>>("/roles/"),
       apiServer<{ branches: BranchOption[] }>("/organization/").catch(() => null),
     ]);
     staff = rows(staffPayload);
+    staffTotal = total(staffPayload);
     roles = rows(rolePayload);
     branches = organization?.branches ?? [];
   } catch (caught) {
@@ -78,6 +95,16 @@ export default async function StaffPage() {
               currentUserId={user.id}
               canManage={canManage}
             />
+            <Card className="mt-4 overflow-hidden">
+              <Pagination
+                count={staffTotal}
+                page={paging.page}
+                pageSize={paging.pageSize}
+                query={params}
+                unit="accounts"
+                className="border-t-0"
+              />
+            </Card>
           </section>
 
           <section aria-labelledby="roles">

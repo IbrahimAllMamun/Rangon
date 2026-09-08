@@ -9,10 +9,15 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { BranchSummary, SessionUser, StockTransfer } from "@/lib/api/types";
 import { dateTime, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Stock transfers" };
 
-export default async function StockTransfersPage() {
+type Search = Promise<Record<string, string | undefined>>;
+
+export default async function StockTransfersPage({ searchParams }: { searchParams: Search }) {
+  const params = await searchParams;
+  const paging = readPaging(params);
   const user = await currentUser<SessionUser>();
   if (!user) redirect("/login?next=/admin/inventory/transfers");
 
@@ -20,14 +25,18 @@ export default async function StockTransfersPage() {
     user.permissions.includes("*") || user.permissions.includes("inventory.transfer");
 
   let transfers: StockTransfer[] = [];
+  let total = 0;
   let branches: BranchSummary[] = [];
   let error: string | null = null;
   try {
+    const query = applyPaging(new URLSearchParams(), paging);
     const [transferPage, branchPage] = await Promise.all([
-      apiServer<Paginated<StockTransfer>>("/stock-transfers/?page_size=50"),
+      apiServer<Paginated<StockTransfer>>(`/stock-transfers/?${query.toString()}`),
+      // The branch picker wants every branch, not a page of them.
       apiServer<Paginated<BranchSummary>>("/branches/?page_size=100"),
     ]);
     transfers = transferPage.results;
+    total = transferPage.count;
     branches = branchPage.results;
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load transfers.";
@@ -109,6 +118,7 @@ export default async function StockTransfersPage() {
               emptyTitle="No transfers yet"
               emptyDescription="Stock has not been moved between branches."
               rowKey={(row) => row.id}
+              paging={{ count: total, ...paging, query: params, unit: "transfers" }}
             />
           </section>
         </div>

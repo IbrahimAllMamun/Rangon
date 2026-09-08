@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Card, EmptyState } from "@/components/ui/primitives";
@@ -7,6 +8,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import type { Order } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Orders" };
 
@@ -30,10 +32,12 @@ const CHANNEL_FILTERS = [
 
 export default async function OrdersPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["status", "channel", "search", "page"]) {
+  for (const key of ["status", "channel", "search"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let orders: Paginated<Order> | null = null;
   let error: string | null = null;
@@ -78,7 +82,8 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
         ) : !orders || orders.results.length === 0 ? (
           <EmptyState title="No orders" description="Nothing matches these filters yet." />
         ) : (
-          <div className="overflow-x-auto">
+          <>
+            <div className="overflow-x-auto">
             <table className="w-full text-body-sm">
               <caption className="sr-only">Orders</caption>
               <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">
@@ -125,7 +130,17 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+            {/* Outside the scroll container, or the controls slide away with a
+                wide table. */}
+            <Pagination
+              count={orders.count}
+              page={paging.page}
+              pageSize={paging.pageSize}
+              query={params}
+              unit="orders"
+            />
+          </>
         )}
       </Card>
     </>

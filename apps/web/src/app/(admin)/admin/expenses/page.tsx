@@ -17,6 +17,7 @@ import type {
   SessionUser,
 } from "@/lib/api/types";
 import { dateOnly, money, percent } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Expenses" };
 
@@ -62,11 +63,15 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
   const can = (permission: string) =>
     user.permissions.includes("*") || user.permissions.includes(permission);
 
-  const { range } = await searchParams;
+  const params = await searchParams;
+  const { range } = params;
+  const paging = readPaging(params);
   const period = windowFor(range ?? "30d");
   const query = `date_from=${period.date_from}&date_to=${period.date_to}`;
+  const listQuery = applyPaging(new URLSearchParams(query), paging).toString();
 
   let expenses: Expense[] = [];
+  let expenseCount = 0;
   let categories: ExpenseCategory[] = [];
   let accounts: Account[] = [];
   let totals: ExpenseTotals | null = null;
@@ -74,12 +79,13 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
 
   try {
     const [list, summary, categoryPage, accountPage] = await Promise.all([
-      apiServer<Paginated<Expense>>(`/expenses/?${query}&page_size=50`),
+      apiServer<Paginated<Expense>>(`/expenses/?${listQuery}`),
       apiServer<ExpenseTotals>(`/expenses/summary/?${query}`),
       apiServer<Paginated<ExpenseCategory>>("/expense-categories/?page_size=100"),
       apiServer<Paginated<Account>>("/accounts/?page_size=100"),
     ]);
     expenses = list.results;
+    expenseCount = list.count;
     totals = summary;
     categories = categoryPage.results;
     accounts = accountPage.results;
@@ -307,6 +313,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
               emptyTitle="Nothing spent in this period"
               emptyDescription="Choose a wider date range, or record the first expense above."
               rowKey={(row) => row.id}
+              paging={{ count: expenseCount, ...paging, query: params, unit: "expenses" }}
             />
             <p className="mt-2 text-caption text-muted">
               A voided expense stays on this list on purpose — the money went out and then came

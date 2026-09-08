@@ -1,9 +1,13 @@
 "use client";
 
 import {
+  ArrowRightLeft,
   BarChart3,
   Boxes,
+  ChevronRight,
+  ClipboardCheck,
   ClipboardList,
+  Compass,
   Factory,
   FolderTree,
   Landmark,
@@ -17,8 +21,8 @@ import {
   ShoppingCart,
   Star,
   Ticket,
-  Truck as TruckIcon,
   Truck,
+  Undo2,
   UserCog,
   Users,
   X,
@@ -41,55 +45,185 @@ interface NavItem {
   permission?: string;
 }
 
-const NAV: NavItem[] = [
-  { href: "/admin", label: "Dashboard", icon: LayoutDashboard, permission: "reports.view" },
-  { href: "/admin/orders", label: "Orders", icon: ShoppingCart, permission: "orders.view" },
-  { href: "/admin/products", label: "Products", icon: Package, permission: "products.view" },
-  { href: "/admin/inventory", label: "Inventory", icon: Boxes, permission: "inventory.view" },
-  { href: "/admin/purchases", label: "Purchases", icon: ClipboardList, permission: "purchases.view" },
-  { href: "/admin/suppliers", label: "Suppliers", icon: Factory, permission: "purchases.view" },
-  { href: "/admin/customers", label: "Customers", icon: Users, permission: "customers.view" },
-  { href: "/admin/returns", label: "Returns", icon: Truck, permission: "orders.view" },
-  { href: "/admin/finance", label: "Finance", icon: Landmark, permission: "finance.view" },
-  { href: "/admin/expenses", label: "Expenses", icon: Receipt, permission: "finance.view" },
-  { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
-  { href: "/admin/taxonomy", label: "Categories", icon: FolderTree, permission: "products.view" },
+interface NavGroup {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  items: NavItem[];
+}
+
+/** Always visible above the groups — the one destination that is not a section. */
+const DASHBOARD: NavItem = {
+  href: "/admin",
+  label: "Dashboard",
+  icon: LayoutDashboard,
+  permission: "reports.view",
+};
+
+/**
+ * The back office grouped by the job being done, not by the table behind it.
+ *
+ * Eighteen flat links made every screen equally prominent and buried the three
+ * inventory tools — stock counts and transfers had no nav entry at all and were
+ * reachable only from buttons on the inventory page. A group is hidden entirely
+ * when the signed-in role can see none of its children.
+ */
+const GROUPS: NavGroup[] = [
   {
-    href: "/admin/reviews",
-    label: "Reviews",
-    icon: Star,
-    permission: "content.review_moderate",
+    id: "sales",
+    label: "Sales",
+    icon: ShoppingCart,
+    items: [
+      { href: "/admin/orders", label: "Orders", icon: ShoppingCart, permission: "orders.view" },
+      { href: "/admin/returns", label: "Returns", icon: Undo2, permission: "orders.view" },
+      {
+        href: "/admin/customers",
+        label: "Customers",
+        icon: Users,
+        permission: "customers.view",
+      },
+    ],
   },
-  { href: "/admin/staff", label: "Staff", icon: UserCog, permission: "users.view" },
   {
-    href: "/admin/coupons",
-    label: "Coupons",
-    icon: Ticket,
-    permission: "content.coupons_manage",
+    id: "catalog",
+    label: "Catalog",
+    icon: Package,
+    items: [
+      { href: "/admin/products", label: "Products", icon: Package, permission: "products.view" },
+      {
+        href: "/admin/taxonomy",
+        label: "Categories",
+        icon: FolderTree,
+        permission: "products.view",
+      },
+      {
+        href: "/admin/reviews",
+        label: "Reviews",
+        icon: Star,
+        permission: "content.review_moderate",
+      },
+    ],
   },
   {
-    href: "/admin/navigation",
-    label: "Navigation",
+    id: "inventory",
+    label: "Inventory",
+    icon: Boxes,
+    items: [
+      {
+        href: "/admin/inventory",
+        label: "Stock on hand",
+        icon: Boxes,
+        permission: "inventory.view",
+      },
+      {
+        href: "/admin/inventory/counts",
+        label: "Stock counts",
+        icon: ClipboardCheck,
+        permission: "inventory.view",
+      },
+      {
+        href: "/admin/inventory/transfers",
+        label: "Transfers",
+        icon: ArrowRightLeft,
+        permission: "inventory.view",
+      },
+    ],
+  },
+  {
+    id: "purchasing",
+    label: "Purchasing",
+    icon: ClipboardList,
+    items: [
+      {
+        href: "/admin/purchases",
+        label: "Purchase orders",
+        icon: ClipboardList,
+        permission: "purchases.view",
+      },
+      {
+        href: "/admin/suppliers",
+        label: "Suppliers",
+        icon: Factory,
+        permission: "purchases.view",
+      },
+    ],
+  },
+  {
+    id: "money",
+    label: "Finance",
+    icon: Landmark,
+    items: [
+      { href: "/admin/finance", label: "Accounts", icon: Landmark, permission: "finance.view" },
+      { href: "/admin/expenses", label: "Expenses", icon: Receipt, permission: "finance.view" },
+      { href: "/admin/reports", label: "Reports", icon: BarChart3, permission: "reports.view" },
+    ],
+  },
+  {
+    id: "storefront",
+    label: "Storefront",
     icon: Megaphone,
-    permission: "content.navigation_manage",
+    items: [
+      {
+        href: "/admin/coupons",
+        label: "Coupons",
+        icon: Ticket,
+        permission: "content.coupons_manage",
+      },
+      {
+        href: "/admin/navigation",
+        label: "Navigation",
+        icon: Compass,
+        permission: "content.navigation_manage",
+      },
+      { href: "/admin/shipping", label: "Shipping", icon: Truck, permission: "settings.view" },
+    ],
   },
   {
-    href: "/admin/shipping",
-    label: "Shipping",
-    icon: TruckIcon,
-    permission: "settings.view",
+    id: "admin",
+    label: "Administration",
+    icon: Settings,
+    items: [
+      { href: "/admin/staff", label: "Staff", icon: UserCog, permission: "users.view" },
+      { href: "/admin/settings", label: "Settings", icon: Settings, permission: "settings.view" },
+    ],
   },
-  { href: "/admin/settings", label: "Settings", icon: Settings, permission: "settings.view" },
 ];
+
+/**
+ * Longest matching href wins, so `/admin/inventory/counts` lights up "Stock
+ * counts" rather than its parent "Stock on hand". A plain `startsWith` marked
+ * both.
+ */
+function activeHrefFor(pathname: string, hrefs: string[]): string | null {
+  return hrefs
+    .filter((href) => pathname === href || pathname.startsWith(`${href}/`))
+    .sort((a, b) => b.length - a.length)[0] ?? null;
+}
 
 export function AdminShell({ user, children }: { user: SessionUser; children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  // Only the groups the user has actually clicked. Everything else falls back to
+  // "open if it holds the current page", so the sidebar always shows where you
+  // are without remembering anything.
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
 
   const can = (permission?: string) =>
     !permission || user.permissions.includes("*") || user.permissions.includes(permission);
-  const visible = NAV.filter((item) => can(item.permission));
+
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => can(item.permission)),
+  })).filter((group) => group.items.length > 0);
+
+  const activeHref = activeHrefFor(pathname, [
+    DASHBOARD.href,
+    ...groups.flatMap((group) => group.items.map((item) => item.href)),
+  ]);
+  const activeGroupId =
+    groups.find((group) => group.items.some((item) => item.href === activeHref))?.id ?? null;
+  const isExpanded = (id: string) => toggled[id] ?? id === activeGroupId;
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -120,32 +254,70 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
           </Button>
         </div>
 
-        <nav aria-label="Admin" className="p-3">
-          <ul className="space-y-0.5">
-            {visible.map((item) => {
-              const active =
-                item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href);
-              const Icon = item.icon;
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    onClick={() => setOpen(false)}
-                    aria-current={active ? "page" : undefined}
+        <nav
+          aria-label="Admin"
+          className="max-h-[calc(100vh-4rem)] space-y-1 overflow-y-auto p-3"
+        >
+          {can(DASHBOARD.permission) && (
+            <NavLink
+              item={DASHBOARD}
+              active={activeHref === DASHBOARD.href}
+              onNavigate={() => setOpen(false)}
+            />
+          )}
+
+          {groups.map((group) => {
+            const expanded = isExpanded(group.id);
+            const holdsActive = group.items.some((item) => item.href === activeHref);
+            const GroupIcon = group.icon;
+            const panelId = `admin-nav-${group.id}`;
+
+            return (
+              <div key={group.id}>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls={panelId}
+                  onClick={() => setToggled((prev) => ({ ...prev, [group.id]: !expanded }))}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-md px-3 py-2 text-body-sm font-medium",
+                    "text-neutral-300 transition-colors duration-fast hover:bg-neutral-800 hover:text-white",
+                    "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]",
+                  )}
+                >
+                  <GroupIcon className="size-4 shrink-0" aria-hidden />
+                  <span className="flex-1 text-left">{group.label}</span>
+                  {/* A collapsed section still has to say it holds the current
+                      page, or closing it loses your place entirely. */}
+                  {holdsActive && !expanded && (
+                    <span className="size-1.5 shrink-0 rounded-full bg-brand-500" aria-hidden />
+                  )}
+                  <ChevronRight
+                    aria-hidden
                     className={cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-body-sm font-medium transition-colors duration-fast",
-                      active
-                        ? "bg-brand-500 text-white"
-                        : "text-neutral-300 hover:bg-neutral-800 hover:text-white",
+                      "size-4 shrink-0 text-neutral-500 transition-transform duration-fast",
+                      "motion-reduce:transition-none",
+                      expanded && "rotate-90",
                     )}
-                  >
-                    <Icon className="size-4" />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+                  />
+                </button>
+
+                {/* Kept mounted but `hidden`, so `aria-controls` always resolves
+                    and the collapsed links stay out of the tab order. */}
+                <ul id={panelId} hidden={!expanded} className="ml-5 border-l border-neutral-800 pl-2">
+                  {group.items.map((item) => (
+                    <li key={item.href}>
+                      <NavLink
+                        item={item}
+                        active={activeHref === item.href}
+                        onNavigate={() => setOpen(false)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
 
           <div className="mt-6 border-t border-neutral-800 pt-4">
             <Link
@@ -208,6 +380,40 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * One destination. Brand red marks the current page and nothing else in the
+ * panel — CLAUDE.md §10 keeps red for action, emphasis and identity.
+ */
+function NavLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate: () => void;
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2 text-body-sm font-medium",
+        "transition-colors duration-fast",
+        "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]",
+        active
+          ? "bg-brand-500 text-white"
+          : "text-neutral-300 hover:bg-neutral-800 hover:text-white",
+      )}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden />
+      {item.label}
+    </Link>
   );
 }
 

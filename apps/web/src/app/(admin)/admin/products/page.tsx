@@ -1,11 +1,13 @@
 import { Plus } from "lucide-react";
 import Link from "next/link";
 
+import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Products" };
 
@@ -29,10 +31,12 @@ type Search = Promise<Record<string, string | undefined>>;
 
 export default async function ProductsPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["search", "status", "category", "page"]) {
+  for (const key of ["search", "status", "category"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let products: Paginated<AdminProduct> | null = null;
   let error: string | null = null;
@@ -78,7 +82,8 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
             }
           />
         ) : (
-          <div className="overflow-x-auto">
+          <>
+            <div className="overflow-x-auto">
             <table className="w-full text-body-sm">
               <caption className="sr-only">Products</caption>
               <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">
@@ -130,7 +135,17 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+            {/* Outside the scroll container, or the controls slide away with a
+                wide table. */}
+            <Pagination
+              count={products.count}
+              page={paging.page}
+              pageSize={paging.pageSize}
+              query={params}
+              unit="products"
+            />
+          </>
         )}
       </Card>
     </>
