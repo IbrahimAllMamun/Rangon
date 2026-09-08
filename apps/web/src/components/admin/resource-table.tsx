@@ -1,4 +1,17 @@
+import { Pagination } from "@/components/admin/pagination";
 import { Card, EmptyState } from "@/components/ui/primitives";
+
+/** What a list screen has to hand over for the footer to page itself. */
+export interface TablePaging {
+  /** Total matching rows, from the API's `count` — not `results.length`. */
+  count: number;
+  page: number;
+  pageSize: number;
+  /** The route's search params, so filters survive a page change. */
+  query?: Record<string, string | undefined>;
+  /** Plural noun for the summary line — "orders", "suppliers". */
+  unit?: string;
+}
 
 export interface Column<T> {
   header: string;
@@ -22,6 +35,7 @@ export function ResourceTable<T>({
   emptyTitle,
   emptyDescription,
   footer,
+  paging,
   rowKey,
 }: {
   rows: T[];
@@ -31,6 +45,8 @@ export function ResourceTable<T>({
   emptyTitle: string;
   emptyDescription?: string;
   footer?: React.ReactNode;
+  /** Omit for a list the API returns whole; supply it for anything paginated. */
+  paging?: TablePaging;
   rowKey: (row: T) => string;
 }) {
   if (error) {
@@ -86,6 +102,15 @@ export function ResourceTable<T>({
         </table>
       </div>
       {footer && <div className="border-t border-border px-4 py-2 text-caption text-muted">{footer}</div>}
+      {paging && (
+        <Pagination
+          count={paging.count}
+          page={paging.page}
+          pageSize={paging.pageSize}
+          query={paging.query}
+          unit={paging.unit}
+        />
+      )}
     </Card>
   );
 }

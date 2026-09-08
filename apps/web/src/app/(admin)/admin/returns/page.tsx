@@ -7,6 +7,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import type { RestockDecision, ReturnRequest, ReturnStatus } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Returns" };
 
@@ -29,10 +30,12 @@ type Search = Promise<Record<string, string | undefined>>;
 
 export default async function ReturnsPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["status", "reason", "page"]) {
+  for (const key of ["status", "reason"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let data: Paginated<ReturnRequest> | null = null;
   let error: string | null = null;
@@ -95,10 +98,9 @@ export default async function ReturnsPage({ searchParams }: { searchParams: Sear
         emptyTitle="No returns"
         emptyDescription="Return requests from the storefront and the counter appear here."
         rowKey={(row) => row.id}
-        footer={
-          data
-            ? `Showing ${data.results.length} of ${data.count}. Open a return to approve, receive and refund it; the POS handles in-store returns in one step.`
-            : undefined
+        footer="Open a return to approve, receive and refund it; the POS handles in-store returns in one step."
+        paging={
+          data ? { count: data.count, ...paging, query: params, unit: "returns" } : undefined
         }
       />
     </>

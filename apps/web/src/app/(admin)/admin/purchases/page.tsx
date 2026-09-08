@@ -7,6 +7,7 @@ import { Badge, Button } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, humanise, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Purchases" };
 
@@ -44,10 +45,12 @@ type Search = Promise<Record<string, string | undefined>>;
 
 export default async function PurchasesPage({ searchParams }: { searchParams: Search }) {
   const params = await searchParams;
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["status", "supplier", "page"]) {
+  for (const key of ["status", "supplier"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let data: Paginated<PurchaseOrder> | null = null;
   let error: string | null = null;
@@ -121,8 +124,10 @@ export default async function PurchasesPage({ searchParams }: { searchParams: Se
         emptyTitle="No purchase orders"
         emptyDescription="Raise one to bring stock in from a supplier."
         rowKey={(row) => row.id}
-        footer={
-          data ? `Showing ${data.results.length} of ${data.count}.` : undefined
+        paging={
+          data
+            ? { count: data.count, ...paging, query: params, unit: "purchase orders" }
+            : undefined
         }
       />
     </>

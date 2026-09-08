@@ -9,6 +9,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser, StockCount, StockCountStatus } from "@/lib/api/types";
 import { dateTime } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Stock counts" };
 
@@ -19,7 +20,11 @@ const TONE: Record<StockCountStatus, "warning" | "success" | "neutral"> = {
   CANCELLED: "neutral",
 };
 
-export default async function StockCountsPage() {
+type Search = Promise<Record<string, string | undefined>>;
+
+export default async function StockCountsPage({ searchParams }: { searchParams: Search }) {
+  const params = await searchParams;
+  const paging = readPaging(params);
   const user = await currentUser<SessionUser>();
   if (!user) redirect("/login?next=/admin/inventory/counts");
 
@@ -27,10 +32,13 @@ export default async function StockCountsPage() {
     user.permissions.includes("*") || user.permissions.includes("inventory.count");
 
   let counts: StockCount[] = [];
+  let total = 0;
   let error: string | null = null;
   try {
-    const page = await apiServer<Paginated<StockCount>>("/stock-counts/?page_size=50");
+    const query = applyPaging(new URLSearchParams(), paging);
+    const page = await apiServer<Paginated<StockCount>>(`/stock-counts/?${query.toString()}`);
     counts = page.results;
+    total = page.count;
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load stock counts.";
   }
@@ -86,6 +94,7 @@ export default async function StockCountsPage() {
             emptyTitle="No counts yet"
             emptyDescription="Open one to compare the shelf against the ledger."
             rowKey={(row) => row.id}
+            paging={{ count: total, ...paging, query: params, unit: "counts" }}
           />
         </div>
       )}

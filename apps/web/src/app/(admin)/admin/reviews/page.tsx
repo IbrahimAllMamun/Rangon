@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { Pagination } from "@/components/admin/pagination";
 import { ReviewModeration, type ReviewRow } from "@/components/admin/review-moderation";
 import { PageHeader } from "@/components/admin/shell";
 import { Card, ErrorState } from "@/components/ui/primitives";
@@ -8,6 +9,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Reviews" };
 
@@ -31,9 +33,10 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Sear
   // Pending first: it is the only state that needs anybody to do something.
   const status = params.status ?? "PENDING";
 
-  const query = new URLSearchParams({ page_size: "50" });
+  const paging = readPaging(params);
+  const query = new URLSearchParams();
   if (status) query.set("status", status);
-  if (params.page) query.set("page", params.page);
+  applyPaging(query, paging);
 
   let data: Paginated<ReviewRow> | null = null;
   let error: string | null = null;
@@ -88,6 +91,18 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Sear
             canModerate={canModerate}
             status={status}
           />
+          {data && (
+            <Card className="mt-4 overflow-hidden">
+              <Pagination
+                count={data.count}
+                page={paging.page}
+                pageSize={paging.pageSize}
+                query={params}
+                unit="reviews"
+                className="border-t-0"
+              />
+            </Card>
+          )}
         </>
       )}
     </>

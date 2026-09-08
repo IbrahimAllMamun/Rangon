@@ -9,6 +9,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import { dateOnly, humanise, money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Customers" };
 
@@ -35,10 +36,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
     user.permissions.includes("*") || user.permissions.includes("customers.create");
 
   const params = await searchParams;
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["search", "customer_type", "page"]) {
+  for (const key of ["search", "customer_type"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let data: Paginated<Customer> | null = null;
   let error: string | null = null;
@@ -106,7 +109,11 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         emptyTitle="No customers yet"
         emptyDescription="Customers appear here after their first sale, online or at the counter — or add one now."
         rowKey={(row) => row.id}
-        footer={data ? `Showing ${data.results.length} of ${data.count}.` : undefined}
+        paging={
+          data
+            ? { count: data.count, ...paging, query: params, unit: "customers" }
+            : undefined
+        }
       />
     </>
   );

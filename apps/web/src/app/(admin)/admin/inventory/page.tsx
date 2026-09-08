@@ -1,6 +1,7 @@
 import { ArrowRightLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
+import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import { StockBadge } from "@/components/admin/status-badge";
 import { WriteOffPanel } from "@/components/admin/write-off-form";
@@ -9,6 +10,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { InventoryRow, SessionUser } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Inventory" };
 
@@ -26,10 +28,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
   const user = await currentUser<SessionUser>();
   const can = (permission: string) =>
     Boolean(user?.permissions.includes("*") || user?.permissions.includes(permission));
+  const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["filter", "search", "category", "page"]) {
+  for (const key of ["filter", "search", "category"]) {
     if (params[key]) query.set(key, params[key]!);
   }
+  applyPaging(query, paging);
 
   let rows: Paginated<InventoryRow> | null = null;
   let error: string | null = null;
@@ -167,9 +171,13 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                 </tfoot>
               </table>
             </div>
-            <p className="border-t border-border px-4 py-2 text-caption text-muted">
-              Showing {rows.results.length} of {rows.count} stock rows.
-            </p>
+            <Pagination
+              count={rows.count}
+              page={paging.page}
+              pageSize={paging.pageSize}
+              query={params}
+              unit="stock rows"
+            />
           </>
         )}
       </Card>
