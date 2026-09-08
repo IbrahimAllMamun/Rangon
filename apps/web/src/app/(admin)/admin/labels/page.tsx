@@ -33,7 +33,15 @@ export default async function LabelsPage() {
           description="Print scannable labels for stock that arrives without them. Products keep the barcode they are given, so a label printed today still scans next year."
         />
       </div>
-      <LabelSheet canAssign={can("products.update")} />
+      {/*
+        The session already carries the organization, so the label heads itself
+        with the shop's configured name rather than a string compiled into the
+        bundle — rename the business in Settings and the next sheet follows.
+      */}
+      <LabelSheet
+        canAssign={can("products.update")}
+        shopName={user.organization?.name ?? "Rangon Fashion"}
+      />
     </>
   );
 }
