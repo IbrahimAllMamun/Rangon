@@ -9,6 +9,11 @@ import { cn } from "@/lib/cn";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { money } from "@/lib/format";
 
+export interface VariantAttribute {
+  attribute_name: string;
+  label: string;
+}
+
 export interface PickableVariant {
   id: string;
   sku: string;
@@ -17,6 +22,14 @@ export interface PickableVariant {
   label: string;
   price: string;
   cost: string;
+  /**
+   * Optional because the ordering screens that first used this type do not
+   * need them. The endpoint has always sent both -- the picker passes the API
+   * object straight through -- and the barcode label prints them: the brand as
+   * the label's heading, the attributes as one line each.
+   */
+  brand_name?: string;
+  attributes?: VariantAttribute[];
 }
 
 /** How long to wait after the last keystroke before searching. */

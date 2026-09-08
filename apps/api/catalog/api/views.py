@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db import transaction
 from django.db.models import Count, Max, Min, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
@@ -252,7 +253,11 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 
 class ProductVariantViewSet(viewsets.ModelViewSet):
-    queryset = ProductVariant.objects.select_related("product").prefetch_related(
+    # `product__brand` is joined, not left to the serializer: `brand_name`
+    # reaches through a nullable FK, and the label screen renders a page of
+    # variants at a time, so without it each row costs a query for its brand
+    # (the D10 shape that bit the three busiest list endpoints).
+    queryset = ProductVariant.objects.select_related("product", "product__brand").prefetch_related(
         "attribute_values__attribute_value", "attribute_values__attribute"
     )
     serializer_class = ProductVariantSerializer
@@ -298,11 +303,36 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def barcode(self, request: Request, pk: str | None = None) -> Response:
-        variant = self.get_object()
-        if not variant.barcode:
+        """Assign this variant an in-store barcode, or return the one it has.
+
+        Locked, because the caller prints the number it is given. Two requests
+        for the same unlabelled variant used to both read `barcode` as empty,
+        both draw a *different* number from the sequence, and both save — so
+        the first caller printed and stuck on a label carrying a number the
+        database no longer held, and that label scanned as nothing. Taking the
+        row lock makes the second request wait and return the first's number.
+
+        Idempotent by design: a variant that already has a barcode keeps it.
+        Re-issuing would strand every label already on the shelf.
+        """
+        with transaction.atomic():
+            variant = ProductVariant.objects.select_for_update().get(pk=self.get_object().pk)
+            if variant.barcode:
+                return Response({"barcode": variant.barcode, "created": False})
+
             variant.barcode = generate_barcode(variant)
-            variant.save(update_fields=["barcode"])
-        return Response({"barcode": variant.barcode})
+            variant.save(update_fields=["barcode", "updated_at"])
+            # The neighbouring writes in this file all record one, and this is
+            # the more permanent change: a barcode ends up printed on physical
+            # stock, so "who gave this SKU that number" outlives the row.
+            audit.record(
+                action=audit.AuditAction.UPDATE,
+                entity=variant,
+                actor=request.user,
+                new_values={"barcode": variant.barcode},
+                reason="In-store barcode assigned for labelling",
+            )
+        return Response({"barcode": variant.barcode, "created": True})
 
     def perform_destroy(self, instance: ProductVariant) -> None:
         """Archive a variant with history; only ever hard-delete a clean one.

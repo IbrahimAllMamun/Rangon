@@ -250,4 +250,36 @@
   @page {
     margin: 8mm;
   }
+
+  /*
+    Barcode label sheets.
+
+    The grid is already sized in millimetres by the component, because it has
+    to line up with the physical label stock in the printer. What print needs
+    on top of that is for the sheet to be the *only* thing on the page: the
+    admin shell, the picker and the controls are all `.no-print`, and the
+    sheet itself has to escape the shell's padding and start at the paper's
+    own origin, or every label lands a couple of centimetres off.
+  */
+  .print-labels {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+  }
+
+  .print-label {
+    /* A label must never be split across two pages. */
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /*
+    Label sheets carry their own margins, measured from the stock. The 8 mm
+    above is for receipts and invoices and would push every label out of
+    alignment, so a sheet page sets its own to zero.
+  */
+  @page labels {
+    margin: 0;
+  }
 }

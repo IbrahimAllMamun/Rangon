@@ -100,3 +100,36 @@ class CustomerSerializer(serializers.ModelSerializer):
                 {"phone": ["Provide a phone number or an email address."]}
             )
         return attrs
+
+
+class CustomerLookupSerializer(serializers.ModelSerializer):
+    """A customer as the POS counter sees them, and no more than that.
+
+    The counter asks one question -- "is this the person standing here?" -- and
+    answering it needs a name, the number that was typed, and enough history to
+    tell two Rahims apart.  It does not need `notes`, which is internal staff
+    commentary, or `tags`, `total_spent`, `loyalty_points` and every address,
+    which is what the full `CustomerSerializer` sends.
+
+    That matters because a lookup returns up to ten *strangers*: a cashier
+    typing a common substring would otherwise pull ten unrelated customers'
+    private records onto a screen the whole shop floor can see.  A cashier who
+    genuinely needs the full record can still fetch it by id.
+
+    Omitting `addresses` also removes the nested serializer, and with it the
+    query per result that the full serializer costs on a queryset that cannot
+    prefetch (`lookup` does not go through `get_queryset`).
+    """
+
+    class Meta:
+        model = Customer
+        fields = [
+            "id",
+            "name",
+            "phone",
+            "email",
+            "customer_type",
+            "total_orders",
+            "last_order_at",
+        ]
+        read_only_fields = fields

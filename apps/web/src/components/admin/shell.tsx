@@ -3,6 +3,7 @@
 import {
   ArrowRightLeft,
   BarChart3,
+  Barcode,
   Boxes,
   ChevronRight,
   ClipboardCheck,
@@ -90,6 +91,15 @@ const GROUPS: NavGroup[] = [
     icon: Package,
     items: [
       { href: "/admin/products", label: "Products", icon: Package, permission: "products.view" },
+      // Arrived on main while this branch was open. Grouped under Catalog
+      // because it is gated on `products.view` and is printed from catalog
+      // data; move it to Inventory if the stockroom is the real audience.
+      {
+        href: "/admin/labels",
+        label: "Barcode labels",
+        icon: Barcode,
+        permission: "products.view",
+      },
       {
         href: "/admin/taxonomy",
         label: "Categories",
