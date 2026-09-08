@@ -39,8 +39,25 @@ export interface LabelLayout {
   /** Barcode sizing tuned to the label — a 38 mm label cannot take 12 mm bars. */
   moduleMm: number;
   barHeightMm: number;
+  /**
+   * Quiet space inside each label, in millimetres.
+   *
+   * Labels sit edge to edge on the sheet, so the gap a reader sees between two
+   * neighbouring symbols is twice this — 0.8 mm all round left barely a
+   * millimetre and a half between one barcode and the next, which reads as a
+   * single block of bars. Horizontal is the generous one: columns are where
+   * symbols end up side by side, and every layout has spare width once the
+   * 113-module symbol is placed. Vertical stays tight because rows are what the
+   * text stack actually competes for.
+   *
+   * This is padding, not grid gap, on purpose: the label pitch has to keep
+   * matching the die-cut stock, and a gap would shift every label after the
+   * first.
+   */
+  paddingXMm: number;
+  paddingYMm: number;
   /** Type sizes in points, tuned to the label so the block does not overflow. */
-  brandPt: number;
+  headingPt: number;
   numberPt: number;
   detailPt: number;
   pricePt: number;
@@ -68,7 +85,9 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 4.75,
     moduleMm: 0.264,
     barHeightMm: 7.5,
-    brandPt: 5.5,
+    paddingXMm: 1.6,
+    paddingYMm: 1,
+    headingPt: 5.5,
     numberPt: 6.5,
     detailPt: 4,
     pricePt: 6.5,
@@ -86,7 +105,9 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 0,
     moduleMm: 0.33,
     barHeightMm: 11,
-    brandPt: 7,
+    paddingXMm: 2.5,
+    paddingYMm: 1.5,
+    headingPt: 7,
     numberPt: 9,
     detailPt: 5.5,
     pricePt: 9,
@@ -104,7 +125,9 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 0,
     moduleMm: 0.4,
     barHeightMm: 14,
-    brandPt: 8.5,
+    paddingXMm: 3,
+    paddingYMm: 2,
+    headingPt: 8.5,
     numberPt: 11,
     detailPt: 6.5,
     pricePt: 11,
@@ -122,7 +145,9 @@ export const LAYOUTS: LabelLayout[] = [
     pageMarginLeftMm: 0,
     moduleMm: 0.33,
     barHeightMm: 9,
-    brandPt: 6,
+    paddingXMm: 2,
+    paddingYMm: 1.4,
+    headingPt: 6,
     numberPt: 7.5,
     detailPt: 4.5,
     pricePt: 8,
@@ -163,12 +188,20 @@ interface Row {
 
 const MAX_QUANTITY = 500;
 
-export function LabelSheet({ canAssign }: { canAssign: boolean }) {
+export function LabelSheet({
+  canAssign,
+  shopName,
+}: {
+  canAssign: boolean;
+  /** The organization's own name, which heads every label. */
+  shopName: string;
+}) {
   const [rows, setRows] = useState<Row[]>([]);
   const [layoutId, setLayoutId] = useState(LAYOUTS[0].id);
   const [showPrice, setShowPrice] = useState(true);
   const [showSku, setShowSku] = useState(true);
   const [showName, setShowName] = useState(true);
+  const [showShopName, setShowShopName] = useState(true);
   const [showBrand, setShowBrand] = useState(true);
 
   const layout = LAYOUTS.find((entry) => entry.id === layoutId) ?? LAYOUTS[0];
@@ -347,6 +380,13 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
             <legend className="text-body-sm font-medium">Show on each label</legend>
             <label className="flex items-center gap-2 text-body-sm">
               <Checkbox
+                checked={showShopName}
+                onChange={(event) => setShowShopName(event.target.checked)}
+              />
+              Shop name
+            </label>
+            <label className="flex items-center gap-2 text-body-sm">
+              <Checkbox
                 checked={showBrand}
                 onChange={(event) => setShowBrand(event.target.checked)}
               />
@@ -423,14 +463,20 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
                   justifyContent: "center",
                   overflow: "hidden",
                   color: "#000",
-                  padding: "0.8mm",
+                  padding: `${layout.paddingYMm}mm ${layout.paddingXMm}mm`,
                   boxSizing: "border-box",
                 }}
               >
-                {showBrand && row.variant.brand_name && (
+                {/*
+                  The shop heads the label, not the garment's brand. On a rail
+                  of mixed stock the question a label answers first is "whose
+                  shop is this", and the brand is a detail of the product like
+                  its size — so it sits with the rest of them below.
+                */}
+                {showShopName && shopName && (
                   <span
                     style={{
-                      fontSize: `${layout.brandPt}pt`,
+                      fontSize: `${layout.headingPt}pt`,
                       fontWeight: 700,
                       lineHeight: 1.15,
                       maxWidth: "100%",
@@ -439,7 +485,7 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {row.variant.brand_name}
+                    {shopName}
                   </span>
                 )}
 
@@ -484,6 +530,20 @@ export function LabelSheet({ canAssign }: { canAssign: boolean }) {
                   }}
                 >
                   <div style={{ minWidth: 0, textAlign: "left" }}>
+                    {showBrand && row.variant.brand_name && (
+                      <div
+                        style={{
+                          fontSize: `${layout.detailPt}pt`,
+                          fontWeight: 700,
+                          lineHeight: 1.25,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.variant.brand_name}
+                      </div>
+                    )}
                     {showName && (
                       <div
                         style={{
