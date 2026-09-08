@@ -51,32 +51,49 @@ describe("the variant lines on a label", () => {
 });
 
 describe("the label stock presets", () => {
-  it("every layout is wide enough for the symbol it will draw", () => {
+  it("every layout is wide enough for the symbol once its padding is taken out", () => {
     // An EAN-13 with its quiet zones is 113 modules. A label narrower than the
     // symbol does not fail loudly — it clips the quiet zone, and the label
-    // simply stops scanning.
+    // simply stops scanning. The padding is real width the symbol cannot use,
+    // so it counts against the budget: widening it is exactly how a previously
+    // fine layout would start clipping.
     for (const layout of LAYOUTS) {
       const symbolMm = 113 * layout.moduleMm;
+      const usableMm = layout.widthMm - layout.paddingXMm * 2;
       expect(
         symbolMm,
-        `${layout.id}: symbol is ${symbolMm.toFixed(1)}mm on a ${layout.widthMm}mm label`,
-      ).toBeLessThanOrEqual(layout.widthMm);
+        `${layout.id}: symbol is ${symbolMm.toFixed(1)}mm in ${usableMm.toFixed(1)}mm of usable width`,
+      ).toBeLessThanOrEqual(usableMm);
     }
   });
 
   it("every layout leaves room for the bars and the text under them", () => {
     for (const layout of LAYOUTS) {
-      // Bars, plus the four text rows the reference layout stacks: brand,
-      // number, and at least two detail lines. Points to millimetres is
-      // 25.4/72; line-height and padding are folded in generously.
+      // Bars, plus the rows the reference layout stacks: the shop heading, the
+      // number, and three detail lines. Points to millimetres is 25.4/72;
+      // line-height is folded in generously.
+      //
+      // Three, not four, even though the brand is now a detail line too: on the
+      // 21.2mm stock a fourth line does not fit, which is why every field is
+      // toggled independently and the label clips rather than reflowing.
       const pt = 25.4 / 72;
-      const text =
-        (layout.brandPt + layout.numberPt + layout.detailPt * 3) * pt * 1.3 + 1.6;
-      const needed = layout.barHeightMm + text;
+      const text = (layout.headingPt + layout.numberPt + layout.detailPt * 3) * pt * 1.3;
+      const needed = layout.barHeightMm + text + layout.paddingYMm * 2;
       expect(
         needed,
         `${layout.id}: needs ${needed.toFixed(1)}mm on a ${layout.heightMm}mm label`,
       ).toBeLessThanOrEqual(layout.heightMm);
+    }
+  });
+
+  it("puts a visible gutter between two neighbouring symbols", () => {
+    // Labels butt up against each other, so the white space a reader sees
+    // between one barcode and the next is two lots of padding. Below about 3mm
+    // a row of labels reads as one continuous block of bars — the complaint
+    // this padding exists to answer.
+    for (const layout of LAYOUTS.filter((entry) => entry.columns > 1)) {
+      const gutterMm = layout.paddingXMm * 2;
+      expect(gutterMm, `${layout.id}: only ${gutterMm}mm between symbols`).toBeGreaterThanOrEqual(3);
     }
   });
 
