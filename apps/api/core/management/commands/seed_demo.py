@@ -657,7 +657,6 @@ class Command(BaseCommand):
                     "featured": len(products) % 4 == 0,
                     "material": "Cotton" if spec["category"] in {"Shirts", "T-Shirts"} else "",
                     "care_instructions": "Machine wash cold. Do not bleach.",
-                    "seo_title": f"{spec['name']} | Rangon Fashion",
                     "seo_description": f"Buy {spec['name']} online at Rangon Fashion.",
                 },
             )

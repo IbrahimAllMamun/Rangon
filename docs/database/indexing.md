@@ -88,13 +88,45 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /shop/home/` | 45 | **yes** | 29 · 0.16 s | **511 · 2.42 s** |
 | `GET /shop/products/` | 25 | **yes** | 13 · 0.09 s | **363 · 1.29 s** |
 | `GET /purchase-orders/` | — | **yes** (growth only) | 15 · 0.10 s | **156 · 0.58 s** |
-| `GET /shop/products/{slug}/` | 10 | no | 13 · 0.05 s | 15 |
-| `GET /products/` (admin) | — | no | 21 · 0.10 s | 21 · 0.42 s |
-| `GET /pos/products/` | — | no | 9 · 0.06 s | — |
-| `GET /pos/lookup/` | 4 | no | 13 · 0.05 s | — |
-| `POST /pos/sales/` (3 lines) | 30 | no | — | — |
-| `GET /orders/` (25 orders) | 10 | no | 6 · 0.07 s | — |
-| `GET /reports/dashboard/` | 15 | no | 14 · 0.07 s | — |
+| `GET /shop/products/{slug}/` | 18 | **yes** (+ growth) | 13 | 15 |
+| `GET /pos/products/` | 12 | **yes** (+ growth) | 5 | **81 for 8 products** |
+| `GET /pos/lookup/` | 12 | **yes** | 9 | — |
+| `GET /products/` (admin) | 25 | **yes** (+ growth) | 6 | 21 · 0.42 s |
+| `GET /orders/` (25 orders) | 12 | **yes** (+ growth) | 3 | 6 · 0.07 s |
+| `GET /reports/dashboard/` | 20 | **yes** | 11 | 14 · 0.07 s |
+| `POST /pos/sales/` (2 lines) | 75, and 13 per extra line | **yes** (+ per-line) | 63; 53 for one line, +10 a line | — |
+
+All ten are asserted in `apps/api/tests/test_performance.py`. That was not true
+until 2026-09-09: the heading said "enforced in tests" while only the first two
+were, and the paragraph underneath admitted it. Writing the missing seven found
+that one of them was not merely unenforced but wrong.
+
+### `GET /pos/products/` was issuing 81 queries — the same trap, twice in a loop
+
+The counter's grid search cost **nine queries per matching row**: 21 for a
+search of two products, 75 for eight. A cashier who taps rather than scans hits
+this on every sale, and a shop with twenty matches for "shirt" was paying 180
+queries for one keystroke's worth of search.
+
+Both causes are named in the section below, and neither reads like a query at
+the call site:
+
+- `variant.label` joins the variant's attribute values. The view prefetched
+  `product__images` and never `attribute_values__attribute_value`.
+- `Product.primary_image` was `self.images.filter(is_primary=True).first()`.
+  **`.filter()` on a related manager ignores `prefetch_related` entirely** and
+  issues a fresh query per product, so the prefetch that was there did nothing.
+  It now reads `images.all()` and picks in Python, which uses the cache and
+  chooses the same row (both paths share `Meta.ordering`).
+
+Fixed 2026-09-09: **81 → 5 queries, flat as the catalogue grows.**
+
+Two figures were documented and wrong rather than merely unmeasured. Product
+detail was budgeted at 10 against a measured 13, and is flat whatever the
+variant count, so the cost is fixed and the budget was raised to 18 deliberately
+rather than the endpoint being changed. `POST /pos/sales/` was budgeted at 30
+and had never been measured; it costs 53 for one line and 10 for each line
+after, which is what a ledger-driven sale with a row lock per line should cost.
 
 Every other list endpoint was swept on 2026-08-18 and sits at 4–7 queries: suppliers, coupons, reviews,
 shipments, shipping methods and zones, stock transfers and counts, audit logs, categories, brands,
@@ -114,10 +146,11 @@ order line, inventory row — must prefetch `attribute_values__attribute_value` 
 as the data grows. That is why these are guarded by *growth* tests rather than constants: the failure
 is invisible at seed scale and only appears in production.
 
-Only the first two rows are asserted, in `apps/api/tests/test_performance.py`. The rest are intentions,
-not guarantees — do not cite them as evidence. Note that product detail measures **13** against a
-documented budget of 10: the budget was never measured, and nothing enforces it yet. Either raise it
-deliberately or bring the endpoint down, but do not leave the doc claiming a number the code misses.
+Every row above is now asserted. Where a budget was documented and the code missed it, the number was
+settled rather than left standing: raised deliberately where the cost is real and fixed, and the
+endpoint brought down where the cost was an N+1. A budget nothing enforces is a claim, not a
+guarantee — that is how `/pos/products/` sat at 81 queries under a table that read "enforced in
+tests".
 
 All three storefront read paths serialise through `_product_payload`, so they share one failure mode.
 `orders/api/shop_views._payload_queryset` is now the single place that declares the relations that

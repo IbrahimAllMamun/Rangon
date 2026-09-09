@@ -8,6 +8,7 @@ import { ProductGrid } from "@/components/commerce/product-card";
 import { apiServer, isAuthenticated } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 import { dateOnly } from "@/lib/format";
+import { pageTitle } from "@/lib/seo";
 import { absoluteUrl } from "@/lib/site-url";
 
 type Params = Promise<{ slug: string }>;
@@ -36,7 +37,9 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
   const image = product.images[0]?.url;
   return {
-    title: product.seo_title || product.name,
+    // Absolute, so the root layout's template cannot append the shop name to a
+    // title that already ends with it (D4).
+    title: pageTitle(product.seo_title || product.name),
     description: product.seo_description || product.short_description,
     alternates: { canonical: `/product/${product.slug}` },
     openGraph: {

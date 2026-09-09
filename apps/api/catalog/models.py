@@ -246,7 +246,18 @@ class Product(BaseModel):
 
     @property
     def primary_image(self):
-        return self.images.filter(is_primary=True).first() or self.images.first()
+        """The flagged image, else the first one.
+
+        Reads `images.all()` rather than filtering it.  `.filter()` on a related
+        manager ignores a `prefetch_related("images")` and issues a fresh query
+        per product, so the old form quietly reintroduced the N+1 that every
+        caller's prefetch was added to prevent -- the POS grid was paying nine
+        queries a row for exactly this and the variant label together.
+
+        Both paths read the same `Meta.ordering`, so the row chosen is the same.
+        """
+        images = list(self.images.all())
+        return next((image for image in images if image.is_primary), images[0] if images else None)
 
     def price_range(self) -> tuple[Decimal, Decimal] | None:
         prices = [v.price for v in self.variants.all() if v.is_sellable]
