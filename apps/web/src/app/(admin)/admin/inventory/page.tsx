@@ -2,8 +2,8 @@ import { ArrowRightLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
 import { Pagination } from "@/components/admin/pagination";
+import { InventoryRows } from "@/components/admin/inventory-rows";
 import { PageHeader } from "@/components/admin/shell";
-import { StockBadge } from "@/components/admin/status-badge";
 import { WriteOffPanel } from "@/components/admin/write-off-form";
 import { Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
@@ -53,6 +53,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
   // duplicates are indistinguishable — which only became a real problem once
   // transfers made multi-branch stock ordinary rather than theoretical.
   const showBranch = new Set((rows?.results ?? []).map((row) => row.branch_code)).size > 1;
+  const canAdjust = can("inventory.adjust");
 
   return (
     <>
@@ -77,7 +78,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         }
       />
 
-      {can("inventory.adjust") && user?.branch && (
+      {canAdjust && user?.branch && (
         <div className="mb-4">
           <WriteOffPanel branchId={user.branch.id} branchLabel={user.branch.name} />
         </div>
@@ -133,30 +134,18 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Avg cost</th>
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Value</th>
                     <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
+                    {canAdjust && (
+                      <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                        <span className="sr-only">Adjust stock</span>
+                      </th>
+                    )}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-border">
-                  {rows.results.map((row) => (
-                    <tr key={row.id} className="hover:bg-neutral-50">
-                      <td className="px-4 py-2.5">
-                        <span className="block font-medium">{row.product_name}</span>
-                        <span className="block text-caption text-muted">
-                          {row.variant_label} · {row.category}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-caption">{row.sku}</td>
-                      {showBranch && <td className="px-4 py-2.5">{row.branch_code}</td>}
-                      <td className="tabular px-4 py-2.5 text-right">{row.on_hand}</td>
-                      <td className="tabular px-4 py-2.5 text-right text-muted">{row.reserved}</td>
-                      <td className="tabular px-4 py-2.5 text-right font-medium">{row.available}</td>
-                      <td className="tabular px-4 py-2.5 text-right">{money(row.average_cost)}</td>
-                      <td className="tabular px-4 py-2.5 text-right">{money(row.stock_value)}</td>
-                      <td className="px-4 py-2.5">
-                        <StockBadge available={row.available} reorderPoint={row.reorder_point} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
+                <InventoryRows
+                  rows={rows.results}
+                  showBranch={showBranch}
+                  canAdjust={canAdjust}
+                />
                 <tfoot className="border-t-2 border-border bg-neutral-50">
                   <tr>
                     <td
@@ -167,6 +156,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                     </td>
                     <td className="tabular px-4 py-2.5 text-right font-bold">{money(totalValue)}</td>
                     <td />
+                    {canAdjust && <td />}
                   </tr>
                 </tfoot>
               </table>

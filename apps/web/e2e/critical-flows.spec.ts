@@ -299,4 +299,16 @@ test.describe("Accessibility basics", () => {
     expect(jsonLd).toContain("schema.org");
     expect(jsonLd).toContain("Product");
   });
+
+  test("product page names the shop once in its title", async ({ page }) => {
+    // D4: the seed wrote "<name> | Rangon Fashion" into `seo_title` while the
+    // root layout appended the same suffix, so the tab read the shop name
+    // twice. A clean typecheck never saw it — only the rendered title does.
+    await page.goto("/shop");
+    await page.locator("article a").first().click();
+
+    const title = await page.title();
+    expect(title).toContain("Rangon Fashion");
+    expect(title.split("Rangon Fashion").length - 1).toBe(1);
+  });
 });

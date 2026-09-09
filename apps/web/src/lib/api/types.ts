@@ -276,6 +276,7 @@ export interface Order {
 
 export interface InventoryRow {
   id: string;
+  branch: string;
   branch_code: string;
   variant: string;
   sku: string;

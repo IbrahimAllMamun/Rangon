@@ -592,7 +592,7 @@ export function ProductForm({
           <Field
             label="SEO title"
             htmlFor="product-seo-title"
-            hint='Do not add "| Rangon Fashion" — the site appends it (D4).'
+            hint="Leave blank to use the product name. The shop name is added for you."
             error={errorFor("seo_title")}
           >
             <Input

@@ -64,14 +64,18 @@ class InventoryViewSet(
         queryset = branch_queryset(self.request.user, queryset)
 
         params = self.request.query_params
+        # Soonest-expiring first is the whole point of that filter, so it sets
+        # its own ordering.  It used to call `.order_by()` here and have it
+        # thrown away by the `.order_by()` at the end of this method, which
+        # silently sorted the expiring view by product name instead.
+        ordering = ["variant__product__name", "variant__position"]
         if params.get("filter") == "low-stock":
             queryset = queryset.filter(on_hand__lte=F("reorder_point"))
         elif params.get("filter") == "out-of-stock":
             queryset = queryset.filter(on_hand__lte=F("reserved"))
         elif params.get("filter") == "expiring":
-            queryset = queryset.filter(variant__expiry_date__isnull=False).order_by(
-                "variant__expiry_date"
-            )
+            queryset = queryset.filter(variant__expiry_date__isnull=False)
+            ordering = ["variant__expiry_date"]
 
         if category := params.get("category"):
             queryset = queryset.filter(variant__product__category__slug=category)
@@ -81,7 +85,13 @@ class InventoryViewSet(
                 | Q(variant__barcode=search)
                 | Q(variant__product__name__icontains=search)
             )
-        return queryset.order_by("variant__product__name", "variant__position")
+        # `pk` last, so the order is total.  Every one of a product's variants
+        # is `position` 0 until somebody reorders them, and PostgreSQL may
+        # return tied rows in any order it likes: page 2 could repeat a row
+        # from page 1, and refreshing after an adjustment could move the row
+        # that was just corrected somewhere else on the page.  Same defect as
+        # D13 on the admin product list, one table over.
+        return queryset.order_by(*ordering, "pk")
 
     def update(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         """Only the reorder point and bin are directly editable.

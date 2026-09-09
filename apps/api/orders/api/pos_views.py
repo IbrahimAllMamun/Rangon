@@ -130,7 +130,12 @@ class PosProductSearchView(APIView):
 
         variants = (
             ProductVariant.objects.select_related("product", "product__category")
-            .prefetch_related("product__images")
+            # `label` joins the variant's attribute values and `primary_image`
+            # reads the product's images. Both are properties, so nothing about
+            # the loop below hints that they cost a query each -- which is the
+            # trap docs/database/indexing.md documents, and this is where it was
+            # still being paid: 81 queries for one search of eight products.
+            .prefetch_related("product__images", "attribute_values__attribute_value")
             .filter(status=PublishStatus.ACTIVE, product__status=PublishStatus.ACTIVE)
         )
         if query:

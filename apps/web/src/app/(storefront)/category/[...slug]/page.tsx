@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import type { ShopCategory, ShopProduct } from "@/lib/api/types";
+import { pageTitle } from "@/lib/seo";
 import { type Facets, ListingPagination, toQuery } from "@/components/commerce/listing";
 
 type Params = Promise<{ slug: string[] }>;
@@ -44,7 +45,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   if (!category) return { title: "Category not found" };
 
   return {
-    title: category.seo_title || category.name,
+    title: pageTitle(category.seo_title || category.name),
     description:
       category.seo_description ||
       `Shop ${category.name.toLowerCase()} at Rangon Fashion.`,
