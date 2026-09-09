@@ -12,6 +12,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.utils import timezone
 
+from core import phone as phone_utils
 from core.models import BaseModel, rate_field
 
 
@@ -252,6 +253,12 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         self.email = self.email.lower().strip()
+        # Staff and customers share this table, and a registering customer's
+        # number is copied onto their `Customer` row, which stores it
+        # canonically.  Normalise leniently: a mobile becomes `8801XXXXXXXXX`
+        # so both rows agree, while a staff landline is kept as typed rather
+        # than refused at the one place an owner adds their team.
+        self.phone = phone_utils.normalize_if_mobile(self.phone)
         # `is_active` is what Django checks on login; `status` is what staff see.
         self.is_active = self.status == Status.ACTIVE
         super().save(*args, **kwargs)

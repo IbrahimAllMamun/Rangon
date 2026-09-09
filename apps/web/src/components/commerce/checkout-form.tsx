@@ -15,9 +15,11 @@ import {
   Input,
   Textarea,
 } from "@/components/ui/primitives";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Order, ShippingOption } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { INVALID_MESSAGE, isValidPhone, toCanonical } from "@/lib/phone";
 import { useCart } from "@/lib/store/cart";
 
 interface FormState {
@@ -103,8 +105,8 @@ export function CheckoutForm() {
         found.push({ field: key, message: `${labelFor(key)} is required.` });
       }
     }
-    if (form.phone && !/^01[3-9]\d{8}$/.test(form.phone.replace(/[\s-]/g, ""))) {
-      found.push({ field: "phone", message: "Enter a valid Bangladeshi mobile number (01XXXXXXXXX)." });
+    if (form.phone && !isValidPhone(form.phone)) {
+      found.push({ field: "phone", message: INVALID_MESSAGE });
     }
     if (form.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email)) {
       found.push({ field: "email", message: "Enter a valid email address." });
@@ -131,7 +133,10 @@ export function CheckoutForm() {
           body: {
             shipping_address: {
               recipient_name: form.recipient_name,
-              phone: form.phone,
+              // Canonical on the wire. This is the number a returning guest is
+              // matched on, so the spelling they happened to use this time must
+              // not decide whether they are recognised.
+              phone: toCanonical(form.phone),
               line1: form.line1,
               line2: form.line2,
               area: form.area,
@@ -142,7 +147,7 @@ export function CheckoutForm() {
             payment_method: paymentMethod,
             shipping_method: shippingId,
             contact_name: form.recipient_name,
-            contact_phone: form.phone,
+            contact_phone: toCanonical(form.phone),
             contact_email: form.email,
             note: form.note,
           },
@@ -218,13 +223,10 @@ export function CheckoutForm() {
               hint="We will call this number about your delivery."
               error={errorFor("phone")}
             >
-              <Input
+              <PhoneInput
                 id="phone"
-                type="tel"
-                inputMode="numeric"
-                autoComplete="tel"
                 value={form.phone}
-                onChange={(event) => set("phone", event.target.value)}
+                onChange={(subscriber) => set("phone", subscriber)}
                 invalid={Boolean(errorFor("phone"))}
                 aria-describedby={errorFor("phone") ? "phone-error" : "phone-hint"}
               />

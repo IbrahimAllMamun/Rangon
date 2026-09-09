@@ -35,6 +35,7 @@ from catalog.models import (
     PublishStatus,
 )
 from catalog.services import create_variant
+from core import phone as phone_utils
 from customers.models import Customer, CustomerAddress, CustomerType
 from finance.models import Expense
 from inventory.models import Inventory
@@ -885,8 +886,12 @@ class Command(BaseCommand):
         ]
         customers = []
         for name, phone in names:
+            # Seeded in the local spelling a shopper would type, and looked up
+            # in the canonical one the table stores -- `Customer.save()`
+            # normalises, so a lookup on the raw string would miss its own row
+            # on a second run and then fail the unique constraint.
             customer, created = Customer.objects.get_or_create(
-                phone=phone,
+                phone=phone_utils.canonical(phone),
                 defaults={
                     "name": name,
                     "email": f"{phone}@example.test",

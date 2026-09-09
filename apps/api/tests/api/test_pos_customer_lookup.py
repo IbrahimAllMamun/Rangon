@@ -181,7 +181,7 @@ class TestTheMinimumSearch:
 
 class TestWhoMayLookUpAndCreate:
     def test_a_cashier_may_look_up(self, shop, auth_client) -> None:
-        assert auth_client(shop["cashier"]).get(LOOKUP, {"phone": "017"}).status_code == 200
+        assert auth_client(shop["cashier"]).get(LOOKUP, {"phone": "0171"}).status_code == 200
 
     def test_a_cashier_may_create_a_customer_at_the_counter(self, shop, auth_client) -> None:
         response = auth_client(shop["cashier"]).post(
@@ -191,7 +191,7 @@ class TestWhoMayLookUpAndCreate:
         )
 
         assert response.status_code == 201
-        assert Customer.objects.filter(phone="01712345678").exists()
+        assert Customer.objects.filter(phone="8801712345678").exists()
 
     def test_a_counter_creation_records_who_made_it(self, shop, auth_client) -> None:
         auth_client(shop["cashier"]).post(
@@ -200,7 +200,7 @@ class TestWhoMayLookUpAndCreate:
             format="json",
         )
 
-        assert Customer.objects.get(phone="01712345678").created_by == shop["cashier"]
+        assert Customer.objects.get(phone="8801712345678").created_by == shop["cashier"]
 
     def test_a_customer_needs_a_way_to_be_found_again(self, shop, auth_client) -> None:
         """Phone-first identity: a record with neither contact detail cannot be
@@ -223,7 +223,7 @@ class TestWhoMayLookUpAndCreate:
         )
 
         assert response.status_code == 400
-        assert Customer.objects.filter(phone="01712345678").count() == 1
+        assert Customer.objects.filter(phone="8801712345678").count() == 1
 
     def test_an_inventory_manager_may_not_look_up_customers(self, shop, auth_client) -> None:
         """`customers.view` is not on that role; the counter is not their screen."""

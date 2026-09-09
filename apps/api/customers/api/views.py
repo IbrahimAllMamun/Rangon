@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
+from core import phone as phone_utils
 from customers import services
 from customers.api.serializers import (
     CustomerAddressSerializer,
@@ -51,9 +52,16 @@ class CustomerViewSet(viewsets.ModelViewSet):
     def get_queryset(self) -> Any:
         queryset = Customer.objects.prefetch_related("addresses")
         if search := self.request.query_params.get("search"):
-            queryset = queryset.filter(
-                Q(name__icontains=search) | Q(phone__icontains=search) | Q(email__icontains=search)
-            )
+            matches = Q(name__icontains=search) | Q(email__icontains=search)
+            # Numbers are stored canonically, so a search for `+8801712345678`
+            # would find nothing under a plain substring match.  Search on the
+            # subscriber digits instead, which every spelling reduces to.
+            # A query that is only a country code or a trunk `0` identifies
+            # nobody, and `phone__icontains` on one would match every
+            # canonical number in the table, so it contributes no clause.
+            if digits := phone_utils.search_digits(search):
+                matches |= Q(phone__contains=digits)
+            queryset = queryset.filter(matches)
         return queryset.order_by("-created_at")
 
     def perform_create(self, serializer: Any) -> None:
@@ -66,7 +74,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
     # How many characters must be typed before the server will search.
     #
-    # `phone__icontains` compiles to `LIKE '%...%'`, which no index on `phone`
+    # `phone__contains` compiles to `LIKE '%...%'`, which no index on `phone`
     # can serve, so every lookup is a sequential scan of the customer table.
     # That is affordable for a substring specific enough to be worth typing and
     # not for one digit, which matches most of the table and returns ten
@@ -90,12 +98,19 @@ class CustomerViewSet(viewsets.ModelViewSet):
         when no customer is given, and picking another branch's from a list
         would file the sale against the wrong branch's anonymous customer.
         """
-        phone = request.query_params.get("phone", "").strip()
-        if len(phone) < self.LOOKUP_MIN_LENGTH:
+        # What the cashier typed, reduced to the digits that identify someone.
+        # Numbers are stored as `8801XXXXXXXXX`, so a cashier typing the local
+        # `01712345678`, the international `+8801712345678` or just the last
+        # few digits are all asking about the same row -- and each is a
+        # substring of the stored form once the country code and the trunk `0`
+        # are taken off.  `search_digits` returns "" for a query that is only a
+        # prefix, so `880` cannot pull back the whole table.
+        digits = phone_utils.search_digits(request.query_params.get("phone", ""))
+        if len(digits) < self.LOOKUP_MIN_LENGTH:
             return Response({"results": [], "min_length": self.LOOKUP_MIN_LENGTH})
 
         matches = (
-            Customer.objects.filter(phone__icontains=phone, is_active=True)
+            Customer.objects.filter(phone__contains=digits, is_active=True)
             .exclude(is_walk_in=True)
             # `only` because the serializer drops `notes`, `tags`, `total_spent`
             # and the rest anyway: there is no reason to read ten strangers'

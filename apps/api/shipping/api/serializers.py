@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from core.fields import ContactPhoneField
 from shipping.models import (
     Courier,
     Shipment,
@@ -13,6 +14,8 @@ from shipping.models import (
 
 
 class CourierSerializer(serializers.ModelSerializer):
+    phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
+
     class Meta:
         model = Courier
         fields = [

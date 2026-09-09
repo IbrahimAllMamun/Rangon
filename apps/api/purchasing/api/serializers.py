@@ -4,6 +4,7 @@ from typing import Any
 
 from rest_framework import serializers
 
+from core.fields import ContactPhoneField
 from purchasing.models import (
     PurchaseOrder,
     PurchaseOrderItem,
@@ -17,6 +18,7 @@ from purchasing.services import unique_supplier_code
 
 class SupplierSerializer(serializers.ModelSerializer):
     outstanding_orders = serializers.IntegerField(read_only=True, required=False)
+    phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
 
     class Meta:
         model = Supplier

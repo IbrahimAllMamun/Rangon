@@ -185,7 +185,12 @@ class TestCheckout:
     def test_placing_an_order_reserves_stock_without_deducting_it(self, shop):
         order = checkout_services.place_order(
             cart=self._cart(shop),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.COD,
             customer=shop["customer"],
             idempotency_key="web-1",
@@ -200,7 +205,12 @@ class TestCheckout:
     def test_stock_is_deducted_when_the_order_is_packed(self, shop):
         order = checkout_services.place_order(
             cart=self._cart(shop),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.COD,
             customer=shop["customer"],
             idempotency_key="web-2",
@@ -217,7 +227,12 @@ class TestCheckout:
     def test_cancelling_before_dispatch_releases_the_reservation(self, shop):
         order = checkout_services.place_order(
             cart=self._cart(shop),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.COD,
             customer=shop["customer"],
             idempotency_key="web-3",
@@ -232,7 +247,12 @@ class TestCheckout:
     def test_cannot_cancel_after_stock_has_left_the_shelf(self, shop):
         order = checkout_services.place_order(
             cart=self._cart(shop),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.COD,
             customer=shop["customer"],
             idempotency_key="web-4",
@@ -252,7 +272,7 @@ class TestCheckout:
                 cart=self._cart(shop),
                 shipping_address={
                     "recipient_name": "A",
-                    "phone": "017",
+                    "phone": "01712345678",
                     "line1": "x",
                     "city": "Dhaka",
                 },
@@ -275,7 +295,7 @@ class TestCheckout:
                 cart=cart,
                 shipping_address={
                     "recipient_name": "A",
-                    "phone": "017",
+                    "phone": "01712345678",
                     "line1": "x",
                     "city": "Dhaka",
                 },
@@ -288,7 +308,7 @@ class TestCheckout:
         kwargs = {
             "shipping_address": {
                 "recipient_name": "A",
-                "phone": "017",
+                "phone": "01712345678",
                 "line1": "x",
                 "city": "Dhaka",
             },
@@ -324,7 +344,12 @@ class TestLifecycle:
                     customer=shop["customer"], branch=shop["branch"]
                 )
             ),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.COD,
             customer=shop["customer"],
             idempotency_key="web-timeline",
@@ -487,7 +512,12 @@ class TestPayments:
                     customer=shop["customer"], branch=shop["branch"]
                 )
             ),
-            shipping_address={"recipient_name": "A", "phone": "017", "line1": "x", "city": "Dhaka"},
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
             payment_method=PaymentMethod.BANK,
             customer=shop["customer"],
             idempotency_key="web-partial",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
+from core.fields import BangladeshiPhoneField
 from customers.models import Customer, CustomerAddress, CustomerNote
 
 
@@ -13,6 +15,8 @@ class CustomerAddressSerializer(serializers.ModelSerializer):
     a client cannot write an address onto somebody else's record by posting an
     id.  `customers.services` attaches the customer.
     """
+
+    phone = BangladeshiPhoneField(max_length=32)
 
     class Meta:
         model = CustomerAddress
@@ -49,6 +53,22 @@ class CustomerNoteSerializer(serializers.ModelSerializer):
 class CustomerSerializer(serializers.ModelSerializer):
     addresses = CustomerAddressSerializer(many=True, read_only=True)
     has_account = serializers.SerializerMethodField()
+    # Declared rather than inferred so that the number is canonical *before*
+    # `UniqueValidator` runs against it.  Left to the ModelSerializer, the
+    # uniqueness of `+8801712345678` would be checked against a table storing
+    # `8801712345678`, pass, and then fail in the database.
+    phone = BangladeshiPhoneField(
+        max_length=32,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        validators=[
+            UniqueValidator(
+                queryset=Customer.objects.all(),
+                message="Another customer is already filed under this number.",
+            )
+        ],
+    )
 
     class Meta:
         model = Customer

@@ -269,7 +269,9 @@ class TestPhoneFirstIdentity:
 
         assert response.status_code == 400
         customer.refresh_from_db()
-        assert customer.phone == "01798765432"
+        # Stored canonically (D48), which is why this is not the string the
+        # factory was handed.
+        assert customer.phone == "8801798765432"
 
     def test_an_edit_may_swap_phone_for_email(self, shop, auth_client) -> None:
         customer = factories.customer(phone="01798765432")

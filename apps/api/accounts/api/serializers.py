@@ -18,10 +18,13 @@ from accounts.models import (
     TaxMode,
     User,
 )
+from core.fields import BangladeshiPhoneField, ContactPhoneField
 from core.models import AuditLog
 
 
 class BranchSerializer(serializers.ModelSerializer):
+    phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
+
     class Meta:
         model = Branch
         fields = [
@@ -45,6 +48,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
     tax_settled_by_name = serializers.CharField(
         source="tax_settled_by.full_name", read_only=True, default=""
     )
+
+    phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
 
     class Meta:
         model = Organization
@@ -145,6 +150,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserWriteSerializer(serializers.ModelSerializer):
+    phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, required=False, min_length=10)
     role_code = serializers.ChoiceField(choices=RoleCode.choices, write_only=True, required=False)
 
@@ -273,7 +279,7 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, min_length=10)
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
     last_name = serializers.CharField(required=False, allow_blank=True, max_length=80)
-    phone = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    phone = BangladeshiPhoneField(required=False, allow_blank=True, max_length=32)
 
     def validate_email(self, value: str) -> str:
         if User.objects.filter(email__iexact=value.strip()).exists():

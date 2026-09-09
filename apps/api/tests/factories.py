@@ -200,7 +200,9 @@ def expense(branch_obj: Branch, account_obj: Any = None, **kwargs: Any):
 def customer(**kwargs: Any) -> Customer:
     defaults = {
         "name": f"Customer {unique()}",
-        "phone": f"0171{unique('')}"[:11],
+        # A real Bangladeshi mobile, because `Customer.save()` now refuses
+        # anything else: `017` plus eight digits, unique per call.
+        "phone": f"017{unique('').zfill(8)}",
         "customer_type": CustomerType.REGISTERED,
     }
     return Customer.objects.create(**{**defaults, **kwargs})

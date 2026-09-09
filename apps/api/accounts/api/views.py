@@ -152,7 +152,9 @@ class RegisterView(GenericAPIView):
             role=Role.objects.get(code=RoleCode.CUSTOMER),
             organization=get_organization(),
         )
-        phone = (data.get("phone") or "").strip()
+        # Already canonical: `RegisterSerializer.phone` normalises it, so the
+        # match is against the one spelling the table stores.
+        phone = data.get("phone") or ""
         customer = Customer.objects.filter(phone=phone).first() if phone else None
         if customer is None:
             customer = Customer.objects.create(

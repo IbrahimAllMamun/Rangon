@@ -1,12 +1,14 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2, Search, UserPlus, X } from "lucide-react";
+import { Loader2, UserPlus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Button, Field, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { PosCustomer } from "@/lib/api/types";
+import { formatPhone, toCanonical } from "@/lib/phone";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 
 /**
@@ -105,7 +107,7 @@ export function CustomerPanel({
     // since changed.
     setCreating(false);
 
-    if (value.trim().length < MIN_SEARCH_LENGTH) {
+    if (value.length < MIN_SEARCH_LENGTH) {
       cancelQueuedSearch();
       searchAbort.current?.abort();
       setResults([]);
@@ -113,7 +115,7 @@ export function CustomerPanel({
       setSearching(false);
       return;
     }
-    queueSearch(value.trim());
+    queueSearch(value);
   }
 
   function attach(customer: PosCustomer) {
@@ -168,6 +170,14 @@ export function CustomerPanel({
     setError(null);
     setFieldErrors({});
     try {
+      const number = toCanonical(phone);
+      if (!number) {
+        // The search box takes a partial number on purpose -- "the last three
+        // digits" is how a customer gives it -- but a record filed under one
+        // is a record nobody can ring.
+        setFieldErrors({ phone: "Type the whole mobile number to create a customer." });
+        return;
+      }
       const customer = await apiClient<PosCustomer>("/customers/", {
         method: "POST",
         // `customer_type` is deliberately not sent: the model defaults to
@@ -176,7 +186,7 @@ export function CustomerPanel({
         // A named customer must not claim it.
         body: {
           name: name.trim(),
-          phone: phone.trim(),
+          phone: number,
           ...(email.trim() ? { email: email.trim() } : {}),
         },
       });
@@ -192,7 +202,7 @@ export function CustomerPanel({
         // more use than repeating the server's "already exists".
         if (fields.phone) {
           setError(
-            `${phone.trim()} is already on file but was not in the results — it may belong to a deactivated customer. An admin can reactivate them from the customers screen.`,
+            `${formatPhone(phone)} is already on file but was not in the results — it may belong to a deactivated customer. An admin can reactivate them from the customers screen.`,
           );
         } else if (!Object.keys(fields).length) {
           setError(caught.message);
@@ -205,7 +215,7 @@ export function CustomerPanel({
     }
   }
 
-  const tooShort = phone.trim().length > 0 && phone.trim().length < MIN_SEARCH_LENGTH;
+  const tooShort = phone.length > 0 && phone.length < MIN_SEARCH_LENGTH;
   const noMatches = searched && !searching && results.length === 0;
 
   return (
@@ -235,28 +245,27 @@ export function CustomerPanel({
                   ? `Type at least ${MIN_SEARCH_LENGTH} digits to search.`
                   : "The last few digits are enough."
               }
+              error={fieldErrors.phone}
             >
               <div className="relative">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 size-5 -translate-y-1/2 text-muted"
-                  aria-hidden
-                />
-                <Input
+                <PhoneInput
                   id="customer-phone"
                   ref={phoneRef}
                   inputSize="lg"
-                  className="pl-10"
-                  type="tel"
-                  inputMode="tel"
                   autoComplete="off"
-                  placeholder="01712345678"
                   value={phone}
-                  onChange={(event) => onPhoneChange(event.target.value)}
+                  invalid={Boolean(fieldErrors.phone)}
+                  onChange={onPhoneChange}
                   onKeyDown={onPhoneKeyDown}
-                  // `Field` renders the hint but leaves the association to the
-                  // caller, so both ids are named here or the hint is
-                  // announced to nobody.
-                  aria-describedby="customer-phone-hint customer-search-status"
+                  // `Field` renders the hint and the error but leaves the
+                  // association to the caller, so each id is named here or it
+                  // is announced to nobody. `Field` swaps the hint for the
+                  // error, so only one of the two exists at a time.
+                  aria-describedby={
+                    fieldErrors.phone
+                      ? "customer-phone-error customer-search-status"
+                      : "customer-phone-hint customer-search-status"
+                  }
                 />
                 {searching && (
                   <Loader2
@@ -297,7 +306,7 @@ export function CustomerPanel({
                           {customer.name}
                         </span>
                         <span className="tabular block text-body-sm text-muted">
-                          {customer.phone}
+                          {formatPhone(customer.phone)}
                         </span>
                       </span>
                       <span className="shrink-0 text-caption text-muted">
@@ -315,7 +324,7 @@ export function CustomerPanel({
                   Nobody on file with that number.
                 </p>
                 <Button type="button" variant="secondary" className="mt-3" onClick={startCreating}>
-                  <UserPlus aria-hidden /> Add {phone.trim()} as a new customer
+                  <UserPlus aria-hidden /> Add {formatPhone(phone)} as a new customer
                 </Button>
               </div>
             )}
@@ -324,7 +333,9 @@ export function CustomerPanel({
               <form onSubmit={create} className="mt-4 space-y-3 border-t border-border pt-4">
                 <p className="text-body-sm text-muted">
                   New customer ·{" "}
-                  <span className="tabular font-medium text-neutral-900">{phone.trim()}</span>
+                  <span className="tabular font-medium text-neutral-900">
+                    {formatPhone(phone)}
+                  </span>
                 </p>
                 <Field label="Name" htmlFor="customer-name" required error={fieldErrors.name}>
                   <Input
