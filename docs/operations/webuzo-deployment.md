@@ -33,36 +33,43 @@ file alone requests 2 GB for Postgres and 1 GB per API replica.
 
 ---
 
-## 2. Fix these three things first — they will break the first deploy
+## 2. Three things that would break the first deploy — two are now fixed
 
-Found by reading the production setup, not by deploying. Each one stops the stack cold.
+Found by reading the production setup, not by deploying. Each one stopped the stack cold. §2.1 and
+§2.2 were fixed on 2026-09-09 (D15); §2.3 is unchanged and still applies to you.
 
-### 2.1 `${RANGON_DOMAIN}` is never substituted
+### 2.1 `${RANGON_DOMAIN}` is never substituted — **fixed**
 
-[`infrastructure/docker/nginx/conf.d/rangon.conf`](../../infrastructure/docker/nginx/conf.d/rangon.conf)
-contains `server_name ${RANGON_DOMAIN};` and
+The Nginx config used to be mounted straight into `conf.d/`, where `server_name ${RANGON_DOMAIN};` and
 
 ```nginx
 ssl_certificate /etc/letsencrypt/live/${RANGON_DOMAIN}/fullchain.pem;
 ```
 
-Nginx does **not** expand environment variables in config files. The official image only runs `envsubst`
-on files in `/etc/nginx/templates/*.template`, and compose mounts this straight into `conf.d/`. Nginx
-would look for a certificate in a directory literally named `${RANGON_DOMAIN}` and fail to start.
+are literal strings: Nginx does **not** expand environment variables in config files. It would look
+for a certificate in a directory literally named `${RANGON_DOMAIN}` and refuse to start.
 
-**On Webuzo you avoid this entirely** by not running that container at all — see §3.
+It is now
+[`infrastructure/docker/nginx/templates/default.conf.template`](../../infrastructure/docker/nginx/templates/default.conf.template),
+which the official image renders with `envsubst` at container start. `docker-compose.prod.yml` passes
+`RANGON_DOMAIN` (required — the stack refuses to start without it) and sets
+`NGINX_ENVSUBST_FILTER=RANGON_` so only our own names are substituted.
 
-### 2.2 `/static/` would 404
+**On Webuzo it does not arise either way**, because you do not run that container — see §3.
 
-The prod compose mounts an `api_static` volume into Nginx read-only, but **nothing ever populates it** —
-the `api` service never mounts it. The `location /static/` alias would serve an empty directory.
+### 2.2 `/static/` would 404 — **fixed**
 
-Harmless here, because the API already ships **WhiteNoise**
+The prod compose mounted an `api_static` volume into Nginx read-only and **nothing ever populated it**:
+the `api` service never mounted it, so the `location /static/` alias served an empty directory. The
+`api` service now mounts `api_static:/app/staticfiles`, and `collectstatic` is step 3b of the release
+procedure — a named volume is seeded from the image only on first creation, so without that step every
+later release would serve the first release's assets.
+
+Harmless here regardless, because the API ships **WhiteNoise**
 (`whitenoise.storage.CompressedManifestStaticFilesStorage`) and serves its own hashed, compressed static
-files. Django admin and the DRF browsable API work as long as nothing intercepts `/static/`. Another
-reason to drop the container Nginx rather than fix it.
+files. Django admin and the DRF browsable API work as long as nothing intercepts `/static/`.
 
-### 2.3 The production compose cannot build images
+### 2.3 The production compose cannot build images — still true
 
 `docker-compose.prod.yml` sets `build: !reset null` and pulls
 `${REGISTRY}/rangon-api:${TAG}`. CI builds and scans images but **does not push them** — no registry is

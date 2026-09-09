@@ -9,6 +9,10 @@ services:
     ports: ["6379:6379"]
 
   api:
+    # A tag of its own. The base file's services are tagged `:latest`, and
+    # without overriding it here the dev build would overwrite the production
+    # image under that name (D8 in docs/roadmap.md).
+    image: rangon-api:dev
     build:
       dockerfile: Dockerfile.dev
     command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
@@ -23,6 +27,7 @@ services:
     tty: true
 
   worker:
+    image: rangon-api:dev
     build:
       dockerfile: Dockerfile.dev
     command: ["watchmedo", "auto-restart", "--directory=/app", "--pattern=*.py", "--recursive",
@@ -35,6 +40,7 @@ services:
       - api_media:/app/media
 
   beat:
+    image: rangon-api:dev
     build:
       dockerfile: Dockerfile.dev
     environment:
@@ -44,6 +50,7 @@ services:
       - ./apps/api:/app
 
   web:
+    image: rangon-web:dev
     build:
       dockerfile: Dockerfile.dev
     command: ["npm", "run", "dev"]

@@ -52,6 +52,13 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   run --rm api python manage.py migrate --noinput
 
+# 3b. refresh the static assets Nginx serves from the api_static volume.
+#     The image collects them at build time, but a named volume is seeded from
+#     the image only the first time it is created — so without this step every
+#     later release serves the FIRST release's Django-admin and DRF assets.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  run --rm api python manage.py collectstatic --noinput
+
 # 4. roll out the application
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps api worker beat web
 
@@ -109,6 +116,9 @@ web. If the hosting platform already provides a managed load balancer with TLS, 
 and record that decision here rather than running two proxies.
 
 A worked example of exactly that: [webuzo-deployment.md](webuzo-deployment.md), where the panel's own
-web server terminates TLS and the project's Nginx container is not used. It also records three defects
-in the shipped prod stack that stop a first deploy: `${RANGON_DOMAIN}` is never substituted, the
-`api_static` volume is never populated, and the prod overlay cannot build images.
+web server terminates TLS and the project's Nginx container is not used. It also recorded three defects
+in the shipped prod stack that stopped a first deploy. Two are fixed as of 2026-09-09: the Nginx
+config is now a `templates/default.conf.template` the image renders with `envsubst`, so
+`${RANGON_DOMAIN}` is substituted at start, and `api_static` is mounted on the `api` service and
+refreshed by step 3b above. The third stands: the prod overlay sets `build: !reset null` on purpose,
+because production pulls images CI built and scanned rather than building them on the server.

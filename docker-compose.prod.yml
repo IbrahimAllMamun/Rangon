@@ -41,6 +41,14 @@ services:
     security_opt: ["no-new-privileges:true"]
     volumes:
       - api_logs:/app/logs
+      # Nginx serves /static/ from this volume, and nothing used to put anything
+      # in it: the image collects static at build time into /app/staticfiles,
+      # which nginx cannot see, so every Django-admin and DRF asset 404ed
+      # (D15 in docs/roadmap.md). Mounting it here seeds the volume from the
+      # image the first time -- and only the first time, which is why
+      # `collectstatic` is a step in the release procedure rather than a
+      # property of the image.
+      - api_static:/app/staticfiles
     deploy:
       replicas: 2
       resources:
@@ -80,12 +88,23 @@ services:
   nginx:
     image: nginx:1.27-alpine
     depends_on: [api, web]
+    environment:
+      # Substituted into default.conf.template. No default: a blank server_name
+      # would match nothing and the certificate path would not exist, which is
+      # a worse failure than refusing to start.
+      RANGON_DOMAIN: ${RANGON_DOMAIN:?set RANGON_DOMAIN to the public hostname}
+      # Restrict substitution to our own names so nginx's runtime variables
+      # ($host, $scheme, ...) survive whatever else is in the environment.
+      NGINX_ENVSUBST_FILTER: RANGON_
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infrastructure/docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      # Templates, not conf.d: the image renders these with envsubst at start
+      # and writes the result into conf.d, which must stay writable. See the
+      # header of default.conf.template.
+      - ./infrastructure/docker/nginx/templates:/etc/nginx/templates:ro
       - ${TLS_CERT_PATH:-/etc/letsencrypt}:/etc/letsencrypt:ro
       - api_static:/var/www/static:ro
     networks: [frontend]

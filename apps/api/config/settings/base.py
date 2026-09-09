@@ -296,6 +296,12 @@ RANGON = {
     "PRICES_INCLUDE_TAX": env_bool("RANGON_PRICES_INCLUDE_TAX", False),
     "DEFAULT_PAYMENT_PROVIDER": env("PAYMENT_DEFAULT_PROVIDER", "manual"),
     "GUEST_ORDER_TOKEN_DAYS": 90,
+    # The origin customers actually reach the shop on. The API cannot infer it
+    # -- see the note in `core/media.py` -- and the product feed needs absolute
+    # links, because Meta is not on this origin and cannot resolve a relative
+    # one. Blank means the feed refuses to render rather than publishing links
+    # nothing can follow.
+    "PUBLIC_URL": env("RANGON_PUBLIC_URL"),
 }
 
 # --------------------------------------------------------------------------- storefront cache

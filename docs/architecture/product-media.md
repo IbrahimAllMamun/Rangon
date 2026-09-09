@@ -205,7 +205,7 @@ reported `201`. WhiteNoise is not an alternative: it indexes its files once at s
 uploaded a minute ago would not exist until the next deploy.
 
 The route is now mounted whenever `USE_S3` is off, and Nginx (`local-prod/default.conf`,
-`conf.d/rangon.conf`) sends `/media/` to the API instead of letting it fall through to Next.
+`templates/default.conf.template`) sends `/media/` to the API instead of letting it fall through to Next.
 
 `next.config.ts` also rewrites `/media/:path*` to the API. That is not redundant: given a relative
 `src`, the Next image optimizer re-enters the app's own router to fetch the file, so without the

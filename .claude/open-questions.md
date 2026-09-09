@@ -93,9 +93,15 @@ areas the roadmap had called "not load-bearing". Keep the habit for whatever is 
 
 ## 5. Deliberately out of scope
 
-- **Offline POS** — V2 by the plan. It needs an oversell exception report first,
-  because it is the one case where selling below zero is legitimate. Design
-  notes already exist in `docs/architecture/offline-pos.md`.
+- **Offline POS** — **dropped 2026-09-09, owner's decision.** Declined, not
+  deferred: the build is large (local queue, sync, conflict resolution on a
+  ledger that must not oversell) and the outage it answers is covered by a
+  paper pad at one counter. `docs/architecture/offline-pos.md` keeps the design
+  notes as a record, not as a plan.
+- **Quotation and the cheque register** (roadmap 39) — **dropped 2026-09-09,
+  owner's decision.** Both are wholesale instruments and this shop sells retail.
+  A cheque is still recordable as a payment into a `BANK` account; the declined
+  part is the Pending → Deposited → Cleared / Bounced lifecycle.
 - Loyalty, multi-branch transfers at scale, courier APIs, marketplace
   integrations, AI features. All listed as V2/V3 in the plan.
 

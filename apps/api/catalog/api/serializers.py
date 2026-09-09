@@ -401,3 +401,38 @@ class GenerateVariantsSerializer(serializers.Serializer):
     selections = serializers.DictField(child=serializers.ListField(child=serializers.CharField()))
     price = serializers.DecimalField(max_digits=14, decimal_places=2)
     cost = serializers.DecimalField(max_digits=14, decimal_places=2, required=False, default=0)
+
+
+class ProductImportSerializer(serializers.Serializer):
+    """The upload behind `POST /products/import/`.
+
+    `dry_run` defaults to **true** on purpose. A client that forgets the flag
+    gets a preview, never several hundred products it did not mean to create;
+    committing has to be asked for.
+    """
+
+    #: 5 MB. `importers.MAX_ROWS` is the real limit; this stops a wrong file
+    #: (a photograph, a database dump) from being read into memory at all.
+    MAX_BYTES = 5 * 1024 * 1024
+
+    file = serializers.FileField(write_only=True)
+    dry_run = serializers.BooleanField(required=False, default=True)
+    branch = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate_file(self, uploaded: Any) -> str:
+        if uploaded.size > self.MAX_BYTES:
+            raise serializers.ValidationError(
+                f"The file is {uploaded.size // 1024} KB. The limit is "
+                f"{self.MAX_BYTES // 1024 // 1024} MB — is this a spreadsheet?"
+            )
+        raw = uploaded.read()
+        try:
+            # `utf-8-sig` because Excel on Windows writes a byte-order mark, and
+            # without stripping it the first header reads as "\ufeffproduct_name"
+            # and the file is rejected for a column it plainly has.
+            return raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise serializers.ValidationError(
+                "The file is not readable as UTF-8 text. Export it from your "
+                "spreadsheet as CSV UTF-8."
+            ) from None

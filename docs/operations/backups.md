@@ -25,19 +25,35 @@ is not a backup.
 `backup-db.sh` writes `rangon-<env>-<UTC timestamp>[-label].dump`, uploads it, verifies the object size,
 and exits non-zero if anything fails — so a broken backup pages someone instead of failing silently.
 
-### It cannot run in the API container
+### Where the dump actually runs
 
-Tested on 2026-08-18 against the running stack:
+Run it **from the host, in the repository root.** Both scripts drive the database container
+themselves; you do not have to be inside a container, and you must not be inside the API one.
 
-| Runs in | `pg_dump` version | Result |
+Tested on 2026-08-18 against the running stack, which is what forced the design:
+
+| `pg_dump` from | Version | Result |
 |---|---|---|
 | `api` container | 15.19 | **Fails** — `pg_dump: error: aborting because of server version mismatch` |
 | `db` container | 16.15 | **Works** — produced a 398 KB dump |
 
 `pg_dump` refuses to read a server newer than itself, and the API image (Debian bookworm, `libpq5`)
-carries the PostgreSQL 15 client against a PostgreSQL 16 server. The script also resolves the host `db`,
-which only exists on the Docker network. Run it from the **database** container — which has both
-`pg_dump` 16 and `bash` — or from a host that has a matching client and can reach the database.
+carries the PostgreSQL 15 client against a PostgreSQL 16 server. Pinning a client version into the API
+image only moves that failure to the next major upgrade, so instead the scripts run `pg_dump` and
+`pg_restore` **inside the database container** — where the client is the same build as the server, by
+construction — and stream the bytes to the host over stdout, where the AWS CLI and the retention
+policy live. Fixed 2026-09-09; D14 is closed.
+
+For a managed database with no `db` container, set `BACKUP_VIA=direct` (and `RESTORE_VIA=direct`) and
+the scripts use the local client instead. That path compares the client's major version against
+`server_version_num` first and refuses with a readable message rather than letting libpq produce the
+one above.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BACKUP_VIA` / `RESTORE_VIA` | `compose` | `compose` runs the client in the db container; `direct` uses the local one |
+| `COMPOSE_FILES` | `-f docker-compose.yml` | Which compose files identify the stack |
+| `DB_SERVICE` | `db` | The database service name |
 
 A worked cron example for a single-host Docker deployment is in
 [webuzo-deployment.md](webuzo-deployment.md#7-backups--do-this-on-day-one-not-later).

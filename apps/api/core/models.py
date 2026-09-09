@@ -129,6 +129,7 @@ class AuditAction(models.TextChoices):
     PRICE_OVERRIDE = "PRICE_OVERRIDE", "Price override"
     SETTINGS_CHANGED = "SETTINGS_CHANGED", "Settings changed"
     USER_CHANGED = "USER_CHANGED", "User changed"
+    PRODUCT_IMPORT = "PRODUCT_IMPORT", "Product import"
 
 
 class AuditLog(AppendOnlyModel):

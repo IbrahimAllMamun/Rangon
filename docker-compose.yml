@@ -29,6 +29,11 @@ x-api-env: &api-env
   EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
   EMAIL_USE_TLS: ${EMAIL_USE_TLS:-0}
   DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-Rangon Fashion <no-reply@rangonfashion.test>}
+  # Same origin as NEXT_PUBLIC_SITE_URL, but stated separately rather than
+  # nested-interpolated off it, because nested defaults are a Compose-version
+  # question and a feed silently pointing at the wrong host is worse than one
+  # that says it is unset. Blank means /shop/feed.xml answers 503.
+  RANGON_PUBLIC_URL: ${RANGON_PUBLIC_URL:-}
   RANGON_CURRENCY: ${RANGON_CURRENCY:-BDT}
   RANGON_ALLOW_OVERSELL: ${RANGON_ALLOW_OVERSELL:-0}
   RANGON_RESERVATION_MINUTES: ${RANGON_RESERVATION_MINUTES:-60}
@@ -72,6 +77,12 @@ services:
     restart: unless-stopped
 
   api:
+    # Explicit tags on every built service. Without them Compose derives the tag
+    # from project + service, so `docker compose build web` (this file) and the
+    # dev overlay's build both wrote `rangon-web:latest` and the second silently
+    # replaced the first -- a production image started with `npm run dev`, which
+    # fails, because the production runtime deletes npm (D8 in docs/roadmap.md).
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -87,6 +98,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -104,6 +116,7 @@ services:
 
   beat:
     # Exactly one replica, ever — two schedulers fire every job twice.
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -117,6 +130,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: rangon-web:latest
     build:
       context: ./apps/web
       dockerfile: Dockerfile

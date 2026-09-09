@@ -1,7 +1,11 @@
 # Finance — accounts and the cash book
 
-> Phase 35 (F1) of the money layer. Foundation for expenses (36), the party ledger (37), net profit
-> (38) and the cheque register (39).
+> Phase 35 (F1) of the money layer. Foundation for expenses (36), the party ledger (37) and net
+> profit (38).
+>
+> The cheque register that was to sit on top of this was dropped on 2026-09-09 (owner's decision,
+> roadmap phase 39). A cheque is still recorded as a payment into a `BANK` account; what does not
+> exist is a Pending → Deposited → Cleared / Bounced lifecycle around it.
 >
 > Rules: [CLAUDE.md](../../CLAUDE.md) §3.3 · Decisions: [ADR-0011](decisions/0011-append-only-cash-book.md)
 > · Business rules: [business-rules.md §6b.1](../business-rules.md)
