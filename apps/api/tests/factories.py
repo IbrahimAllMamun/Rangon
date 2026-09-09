@@ -15,6 +15,7 @@ from accounts.models import Branch, Organization, Role, RoleCode, User
 from accounts.services import sync_permissions
 from catalog.models import (
     Attribute,
+    AttributeKind,
     AttributeValue,
     Brand,
     Category,
@@ -81,8 +82,33 @@ def brand(**kwargs: Any) -> Brand:
     return Brand.objects.create(name=name, slug=f"brand-{unique()}", **kwargs)
 
 
-def attribute(code: str = "size", *, name: str = "Size", values: list[str] | None = None):
-    attr, _ = Attribute.objects.get_or_create(code=code, defaults={"name": name})
+#: What the seed sets, mirrored so a factory-built shop behaves like a real one.
+#: `kind` is how the code tells a size from a colour -- this shop has two of
+#: each (`size`/`shoe-size`, `color`/`shade`) -- so leaving every factory
+#: attribute as TEXT made tests disagree with production for no good reason.
+_ATTRIBUTE_KINDS = {
+    "size": AttributeKind.SIZE,
+    "shoe-size": AttributeKind.SIZE,
+    "color": AttributeKind.COLOR,
+    "colour": AttributeKind.COLOR,
+    "shade": AttributeKind.COLOR,
+}
+
+
+def attribute(
+    code: str = "size",
+    *,
+    name: str = "Size",
+    values: list[str] | None = None,
+    kind: str | None = None,
+):
+    attr, _ = Attribute.objects.get_or_create(
+        code=code,
+        defaults={
+            "name": name,
+            "kind": kind or _ATTRIBUTE_KINDS.get(code, AttributeKind.TEXT),
+        },
+    )
     created = [
         AttributeValue.objects.get_or_create(attribute=attr, value=value)[0]
         for value in (values or ["S", "M", "L"])

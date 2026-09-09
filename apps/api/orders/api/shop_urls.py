@@ -1,5 +1,6 @@
 from django.urls import path
 
+from catalog.api.feed_views import ProductFeedCSVView, ProductFeedXMLView
 from content.api.views import ShopNavigationView
 from orders.api.shop_views import (
     AccountAddressView,
@@ -27,6 +28,11 @@ urlpatterns = [
     path("products/", product_list, name="shop-products"),
     path("products/<slug:slug>/", product_detail, name="shop-product-detail"),
     path("products/<slug:slug>/reviews/", product_reviews, name="shop-product-reviews"),
+    # The product feed Meta and Google poll. `.xml` and `.csv` rather than a
+    # query parameter, because both platforms want a URL that ends in the
+    # format they are about to parse.
+    path("feed.xml", ProductFeedXMLView.as_view(), name="shop-product-feed-xml"),
+    path("feed.csv", ProductFeedCSVView.as_view(), name="shop-product-feed-csv"),
     path("navigation/", ShopNavigationView.as_view(), name="shop-navigation"),
     path("categories/", ShopCategoryView.as_view(), name="shop-categories"),
     path("categories/<slug:slug>/", ShopCategoryView.as_view(), name="shop-category-detail"),

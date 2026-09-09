@@ -217,6 +217,7 @@ return itself), so a retried request cannot pay a customer twice.
 | GET/POST/DELETE | `wishlist/` | authenticated customer |
 | POST | `products/{slug}/reviews/` | verified purchase required, enters moderation |
 | POST | `payments/{provider}/webhook/` | signature-verified, deduplicated, no auth |
+| GET | `feed.xml` · `feed.csv` | product feed for Meta / Google. Public, cached 15 min, one row per sellable variant. 503 if `RANGON_PUBLIC_URL` is unset — see [marketing-feeds.md](../operations/marketing-feeds.md) |
 
 ## Reports — `/api/v1/reports/`
 

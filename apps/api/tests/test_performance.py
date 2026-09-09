@@ -20,6 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from django.core.cache import cache
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -37,6 +38,7 @@ pytestmark = pytest.mark.django_db
 
 LISTING_URL = "/api/v1/shop/products/"
 HOME_URL = "/api/v1/shop/home/"
+FEED_URL = "/api/v1/shop/feed.csv"
 
 # Generous on purpose: these catch gross regressions, while the growth tests
 # catch N+1s. Raising either should require a reason in the PR.
@@ -44,6 +46,10 @@ LISTING_QUERY_BUDGET = 25
 # Home renders three product rails plus categories and brands, so its floor is
 # higher than the listing's. It was measured at 511 before the fix.
 HOME_QUERY_BUDGET = 45
+# The feed is the only endpoint with no page size: it walks the WHOLE
+# catalogue, so an N+1 here is not a slow page, it is a fetch Meta times out on
+# and a catalogue that silently stops updating.
+FEED_QUERY_BUDGET = 12
 
 
 def _add_products(count: int, *, branch: Any, values: list[Any]) -> None:
@@ -478,4 +484,64 @@ class TestPosSaleQueryBudget:
             f"({one_line} for one line, {four_lines} for four), over the "
             f"{POS_SALE_PER_LINE_BUDGET} budgeted. A sale that reads the "
             f"catalogue per line grows here first."
+        )
+
+
+class TestProductFeedQueryBudget:
+    """The feed has no pagination to hide behind.
+
+    Every other list endpoint on this storefront serves one page at a time, so
+    an N+1 costs a page's worth of queries. The feed serialises every published
+    variant in the shop, so the same mistake costs the whole catalogue's worth
+    — and it fails in the least visible way there is, because nobody watches a
+    feed fetch. It stops updating, and the adverts keep running at last month's
+    prices.
+    """
+
+    def _fetch(self, api: Any) -> int:
+        """Measure a real render, not the cached copy of one.
+
+        The feed view is wrapped in `cache_page`, so without this clear the
+        second fetch answers from the cache in **zero** queries and every
+        assertion below passes no matter how bad the selector is. The first
+        version of this test did exactly that. `cache.clear()` is what makes it
+        a measurement.
+        """
+        cache.clear()
+        with CaptureQueriesContext(connection) as captured:
+            response = api.get(FEED_URL)
+            assert response.status_code == 200, response.content[:400]
+        return len(captured)
+
+    def test_query_count_does_not_grow_with_the_catalogue(self, api, shop, settings):
+        settings.RANGON = {**settings.RANGON, "PUBLIC_URL": "https://rangonfashion.test"}
+        _, values = factories.attribute("size", values=["S", "M", "L"])
+        branch = shop["branch"]
+
+        _add_products(3, branch=branch, values=values)
+        self._fetch(api)  # warm one-off lookups (organisation, branch)
+        with_few = self._fetch(api)
+
+        _add_products(9, branch=branch, values=values)
+        with_many = self._fetch(api)
+
+        assert with_many == with_few, (
+            f"Queries grew from {with_few} to {with_many} as the catalogue grew "
+            f"from 4 to 13 products: `feed_items()` has an N+1. It walks every "
+            f"product's images, variants and attribute links, so all three have "
+            f"to be prefetched — and `primary_image` must read `images.all()` "
+            f"rather than filtering it, which ignores the prefetch."
+        )
+
+    def test_the_feed_stays_within_its_documented_budget(self, api, shop, settings):
+        settings.RANGON = {**settings.RANGON, "PUBLIC_URL": "https://rangonfashion.test"}
+        _, values = factories.attribute("size", values=["S", "M", "L"])
+        _add_products(8, branch=shop["branch"], values=values)
+
+        self._fetch(api)  # warm
+        count = self._fetch(api)
+
+        assert count <= FEED_QUERY_BUDGET, (
+            f"The product feed used {count} queries for a whole catalogue, over "
+            f"its budget of {FEED_QUERY_BUDGET} (docs/database/indexing.md)."
         )

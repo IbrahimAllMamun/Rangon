@@ -95,8 +95,9 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /orders/` (25 orders) | 12 | **yes** (+ growth) | 3 | 6 · 0.07 s |
 | `GET /reports/dashboard/` | 20 | **yes** | 11 | 14 · 0.07 s |
 | `POST /pos/sales/` (2 lines) | 75, and 13 per extra line | **yes** (+ per-line) | 63; 53 for one line, +10 a line | — |
+| `GET /shop/feed.csv` (whole catalogue) | 12 | **yes** (+ growth) | 9 for 9 products / 27 variants | — |
 
-All ten are asserted in `apps/api/tests/test_performance.py`. That was not true
+All eleven are asserted in `apps/api/tests/test_performance.py`. That was not true
 until 2026-09-09: the heading said "enforced in tests" while only the first two
 were, and the paragraph underneath admitted it. Writing the missing seven found
 that one of them was not merely unenforced but wrong.
@@ -166,6 +167,22 @@ the variant attribute relations its serialiser reads — while the *detail* path
 serialiser, always had. The budget above is the measured figure plus headroom, and the test that guards
 it asserts something stronger than a constant: that the count **does not grow with catalogue size**. A
 budget can be quietly raised; a growth check cannot be satisfied by an N+1 at all.
+
+### The feed is the one with no page size
+
+Added 2026-09-09 with `GET /shop/feed.xml` / `.csv`. Every other row above serves
+one page, so an N+1 there costs a page's worth of queries and somebody notices a
+slow screen. The feed serialises **every published variant in the shop**, and
+nobody watches a feed fetch: the same mistake costs the whole catalogue's worth
+of queries, Meta times the request out, and the adverts quietly keep running at
+last month's prices. Sabotaging the prefetch takes it from 9 queries to 309 on a
+13-product catalogue, which is what the growth test was checked against.
+
+Its guard needs one thing the others do not. The view is wrapped in
+`cache_page`, so a second fetch answers from the cache in **zero** queries — the
+first version of this test measured exactly that and would have passed with any
+N+1 at all. `_fetch()` clears the cache before measuring, which is what makes it
+a measurement rather than a formality.
 
 The remaining rows are the obvious next tests. Each one written is one fewer place a regression can
 hide behind documentation.

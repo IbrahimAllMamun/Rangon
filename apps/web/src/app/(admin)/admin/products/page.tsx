@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Upload } from "lucide-react";
 import Link from "next/link";
 
 import { Pagination } from "@/components/admin/pagination";
@@ -54,12 +54,20 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
           products ? `${products.count} product${products.count === 1 ? "" : "s"}` : undefined
         }
         actions={
-          <Button asChild>
-            <Link href="/admin/products/new">
-              <Plus className="size-4" aria-hidden />
-              New product
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="ghost">
+              <Link href="/admin/products/import">
+                <Upload className="size-4" aria-hidden />
+                Import
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href="/admin/products/new">
+                <Plus className="size-4" aria-hidden />
+                New product
+              </Link>
+            </Button>
+          </div>
         }
       />
 
@@ -71,14 +79,22 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
         ) : !products || products.results.length === 0 ? (
           <EmptyState
             title="No products yet"
-            description="Create the first one, or run the demo seed to populate the catalogue."
+            description="Create the first one, import a spreadsheet, or run the demo seed to populate the catalogue."
             action={
-              <Button asChild>
-                <Link href="/admin/products/new">
-                  <Plus className="size-4" aria-hidden />
-                  New product
-                </Link>
-              </Button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button asChild>
+                  <Link href="/admin/products/new">
+                    <Plus className="size-4" aria-hidden />
+                    New product
+                  </Link>
+                </Button>
+                <Button asChild variant="ghost">
+                  <Link href="/admin/products/import">
+                    <Upload className="size-4" aria-hidden />
+                    Import a spreadsheet
+                  </Link>
+                </Button>
+              </div>
             }
           />
         ) : (

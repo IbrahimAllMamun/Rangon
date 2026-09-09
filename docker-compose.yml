@@ -29,6 +29,11 @@ x-api-env: &api-env
   EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
   EMAIL_USE_TLS: ${EMAIL_USE_TLS:-0}
   DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-Rangon Fashion <no-reply@rangonfashion.test>}
+  # Same origin as NEXT_PUBLIC_SITE_URL, but stated separately rather than
+  # nested-interpolated off it, because nested defaults are a Compose-version
+  # question and a feed silently pointing at the wrong host is worse than one
+  # that says it is unset. Blank means /shop/feed.xml answers 503.
+  RANGON_PUBLIC_URL: ${RANGON_PUBLIC_URL:-}
   RANGON_CURRENCY: ${RANGON_CURRENCY:-BDT}
   RANGON_ALLOW_OVERSELL: ${RANGON_ALLOW_OVERSELL:-0}
   RANGON_RESERVATION_MINUTES: ${RANGON_RESERVATION_MINUTES:-60}

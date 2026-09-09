@@ -9,14 +9,17 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-09**, across three passes. The first stored phone numbers one way (D48),
+Last updated: **2026-09-09**, across four passes. The first stored phone numbers one way (D48),
 which was the last defect that could silently corrupt business data. The second finished phases 06,
 26 and 28: a stock adjustment from the inventory screen, the doubled brand in product titles, and
 every documented query budget finally asserted — which found the counter's grid search issuing 81
 queries per search and the inventory list with no total order. The third recorded two scope
 decisions rather than code: **offline POS (23) and the last two trade documents — quotation and the
-cheque register (39) — were dropped**, on the owner's decision. Before that: the walk-in and media
-defects on 09-01, the POS customer lookup on 09-03, and printable barcode labels on 09-04.
+cheque register (39) — were dropped**, on the owner's decision. The fourth built the two things that
+needed nobody's permission and closed the three defects that would each have broken a first
+deployment: **a product feed for Meta and Google**, **product import from a spreadsheet**, and
+**D8, D14 and D15**. Before that: the walk-in and media defects on 09-01, the POS customer lookup on
+09-03, and printable barcode labels on 09-04.
 
 **Every phase is now ✅, or ❌ with the reason written down.** Nothing is left in the "someday"
 state that a roadmap accumulates and never resolves. What remains is not building: a payment
@@ -919,12 +922,14 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
 3. ~~**Unblock and run E2E**, then wire both Vitest and Playwright into `ci.yml`.~~ Done. Vitest
    landed 2026-08-28 and the Playwright job 2026-08-31. What is left is running the suite against a
    **production build** in CI, which waits on [D40](#known-defects).
-4. ~~**Restore rehearsal.**~~ Done 2026-08-22, for real (see the verification log). What is
-   still missing is **automation**: the dump that saved the database was taken by hand, stored only
-   on this machine, on no schedule and with no retention. Schedule it, copy it off the host, and
-   keep the restore drill.
+4. ~~**Restore rehearsal.**~~ Done 2026-08-22, for real (see the verification log). The script it
+   used could not run where the docs pointed it (D14); that is fixed as of 2026-09-09 — both
+   scripts now run the client inside the database container, so the version can never drift again.
+   What is still missing is **automation**: the dump that saved the database was taken by hand,
+   stored only on this machine, on no schedule and with no retention. Schedule it (the script takes
+   `BACKUP_S3_BUCKET` and `BACKUP_RETAIN_DAYS`), and keep the restore drill.
 5. **Load test** product listing, checkout and POS search at expected peak. The query budgets from
-   `docs/database/indexing.md` are no longer part of this item — all ten are asserted as of
+   `docs/database/indexing.md` are no longer part of this item — all eleven are asserted as of
    2026-09-09 — but a budget is a query count, not a latency under concurrency, and nothing has
    driven these paths at peak.
 6. **Make mypy mean something** (D6) — fix the errors or annotate them deliberately, then drop the
@@ -960,9 +965,12 @@ given, and no later setting change corrects it.
 
 ## Suggested next task
 
-Phases 35–39 are complete, and 06, 26 and 28 were finished on 2026-09-09. Every admin screen exists,
-no open defect can silently corrupt business data, and every documented query budget is asserted. The
-remaining work needs a decision, a provider, or an environment.
+Phases 35–39 are complete; 06, 26 and 28 were finished on 2026-09-09; and on the same day the
+selling and deployment work that needed nobody's permission was built: the **Meta/Google product
+feed** (`/api/v1/shop/feed.xml`), **product import from a spreadsheet** (`/admin/products/import`),
+and the three defects that would each have stopped a first deploy — **D8, D14 and D15**.
+
+Everything now remaining needs a decision, a provider, or an environment.
 
 **1. The payment gateway.** Nothing prepaid can be sold until one exists, and a gateway's settled
 takings need a `BANK` account to land in. Implement against
@@ -987,12 +995,17 @@ security review, `verify_accounts` against real data) needs an environment to be
 - *Audit the endpoint before building the screen.* Eight passes, eight sets of defects, no
   exceptions. The eighth was over the two areas this file called "not load-bearing" and found
   eleven, five of them security-sensitive.
+- *Read what the running system serves, not what the code says it will.* The product feed passed 35
+  tests, a clean lint and a clean typecheck while publishing every variant's shop-generated barcode
+  as a **GTIN** — a global identity those numbers explicitly do not have, which
+  `generate_barcode`'s own docstring says in as many words. Nothing caught it until the feed the
+  live API actually served was read. The regression test now uses `generate_barcode` itself.
 - *Run it, do not typecheck it.* Two defects this pass survived a clean `tsc` and a clean lint and
   died the moment a browser loaded the page: a function passed from a server component to a client
   one, and a serializer field typed as an object that is really a string. A green typecheck is not
   evidence the app works.
 
-**The still-open backlog** from the Dostishop review — CSV import, a media library, four-state
-variant availability, Quick View, a Meta feed, merchandising endpoints, abandoned-checkout capture —
-is tracked in [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md) and is
-product work rather than gaps.
+**The still-open backlog** from the Dostishop review — a media library, four-state variant
+availability, Quick View, merchandising endpoints, abandoned-checkout capture — is tracked in
+[planning/dostishop-feature-review.md](planning/dostishop-feature-review.md) and is product work
+rather than gaps. **CSV import and the Meta feed shipped 2026-09-09** and are off that list.

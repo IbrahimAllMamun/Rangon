@@ -8,12 +8,14 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import resolve_branch
+from catalog import importers
 from catalog.api.serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
@@ -22,6 +24,7 @@ from catalog.api.serializers import (
     GenerateVariantsSerializer,
     ProductDetailSerializer,
     ProductImageSerializer,
+    ProductImportSerializer,
     ProductListSerializer,
     ProductVariantSerializer,
     ProductWriteSerializer,
@@ -106,6 +109,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         "generate_variants": ["products.create"],
         "publish": ["products.update"],
         "unpublish": ["products.update"],
+        # An import creates products and can receive stock, so it needs both.
+        # `products.create` alone would let somebody load a catalogue without
+        # the right to touch a single stock figure by hand.
+        "import_csv": ["products.create", "inventory.adjust"],
     }
     filterset_fields = ["status", "published", "featured", "category", "brand"]
     ordering_fields = ["name", "created_at"]
@@ -250,6 +257,36 @@ class ProductViewSet(viewsets.ModelViewSet):
         product.published = False
         product.save(update_fields=["published", "updated_at"])
         return Response(ProductDetailSerializer(product, context={"request": request}).data)
+
+    @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser])
+    def import_csv(self, request: Request) -> Response:
+        """Load a catalogue from a spreadsheet.
+
+        Two-step by design, and the client cannot skip the first: `dry_run`
+        defaults to **true**, so a caller that forgets the flag gets a preview
+        rather than several hundred products. Committing is the deliberate act.
+
+        The service owns the transaction; this only reads the upload and hands
+        it over (CLAUDE.md §4).
+        """
+        serializer = ProductImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        content = serializer.validated_data["file"]
+        dry_run = serializer.validated_data["dry_run"]
+
+        if dry_run:
+            result = importers.plan(content)
+            return Response({"dry_run": True, **result.as_dict()})
+
+        branch = resolve_branch(request.user, serializer.validated_data.get("branch"))
+        result = importers.apply(content, branch=branch, actor=request.user)
+        return Response(
+            {"dry_run": False, **result.as_dict()},
+            # A rejected file is the client's to fix, so it is a 400 -- even
+            # though the rows themselves are in the body either way.
+            status=status.HTTP_201_CREATED if result.ok else status.HTTP_400_BAD_REQUEST,
+        )
 
 
 class ProductVariantViewSet(viewsets.ModelViewSet):
