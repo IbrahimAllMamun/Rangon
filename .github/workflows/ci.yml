@@ -216,7 +216,16 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: apps/web
-        run: npx playwright install --with-deps chromium
+        run: |
+          # `--with-deps` runs `apt-get update` over every source the runner
+          # image ships, and one of them is Google's Chrome repository. We
+          # install Playwright's own Chromium build and never Google Chrome,
+          # so that source contributes nothing here and can break the step
+          # from outside the repository: on 2026-09-09 it served a
+          # Packages.gz whose hash did not match its own Release file, and
+          # apt failed the whole update before a single spec ran.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          npx playwright install --with-deps chromium
 
       - name: Start the storefront
         working-directory: apps/web
