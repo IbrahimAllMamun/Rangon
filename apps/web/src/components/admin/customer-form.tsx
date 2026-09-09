@@ -17,7 +17,9 @@ import {
   Select,
   Textarea,
 } from "@/components/ui/primitives";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { INVALID_MESSAGE, isValidPhone, toCanonical, toInputValue } from "@/lib/phone";
 
 export interface CustomerAddressRow {
   id: string;
@@ -83,7 +85,7 @@ function blank(): Draft {
 function fromRow(row: CustomerRow): Draft {
   return {
     name: row.name,
-    phone: row.phone ?? "",
+    phone: toInputValue(row.phone),
     email: row.email ?? "",
     customer_type: row.customer_type,
     date_of_birth: row.date_of_birth ?? "",
@@ -134,6 +136,9 @@ export function CustomerForm({
         message: "Provide a phone number or an email address, so this customer can be found again.",
       });
     }
+    if (draft.phone.trim() && !isValidPhone(draft.phone)) {
+      found.push({ field: "phone", message: INVALID_MESSAGE });
+    }
     if (draft.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(draft.email)) {
       found.push({ field: "email", message: "Enter a valid email address." });
     }
@@ -145,7 +150,9 @@ export function CustomerForm({
       const body = {
         name: draft.name.trim(),
         // Empty string, not omitted: on an edit this is how a field is cleared.
-        phone: draft.phone.trim(),
+        // Sent canonical so the server's uniqueness check compares the number
+        // against the one spelling the table holds.
+        phone: toCanonical(draft.phone),
         email: draft.email.trim(),
         customer_type: draft.customer_type,
         date_of_birth: draft.date_of_birth || null,
@@ -199,19 +206,16 @@ export function CustomerForm({
             </Field>
 
             <Field
-              label="Phone"
+              label="Mobile number"
               htmlFor="cus-phone"
-              hint="How the counter finds this customer."
+              hint="How the counter finds this customer. Stored as +880 1712-345678."
               error={errorFor("phone")}
             >
-              <Input
+              <PhoneInput
                 id="cus-phone"
-                type="tel"
-                inputMode="tel"
                 value={draft.phone}
-                onChange={(event) => set("phone", event.target.value)}
+                onChange={(subscriber) => set("phone", subscriber)}
                 invalid={Boolean(errorFor("phone"))}
-                autoComplete="off"
               />
             </Field>
 

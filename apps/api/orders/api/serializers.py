@@ -5,6 +5,8 @@ from typing import Any
 
 from rest_framework import serializers
 
+from core import phone
+from core.fields import BangladeshiPhoneField
 from core.media import media_url
 from finance.models import Account
 from orders.models import (
@@ -474,7 +476,7 @@ class CheckoutSerializer(serializers.Serializer):
     shipping_method = serializers.UUIDField(required=False, allow_null=True)
     payment_method = serializers.ChoiceField(choices=PaymentMethod.choices)
     contact_name = serializers.CharField(required=False, allow_blank=True, max_length=160)
-    contact_phone = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    contact_phone = BangladeshiPhoneField(required=False, allow_blank=True, max_length=32)
     contact_email = serializers.EmailField(required=False, allow_blank=True)
     note = serializers.CharField(required=False, allow_blank=True)
     expected_total = serializers.DecimalField(
@@ -489,4 +491,25 @@ class CheckoutSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {field: ["This field is required."] for field in missing}
             )
-        return value
+        return self._with_canonical_phone(value)
+
+    def validate_billing_address(self, value: dict[str, Any]) -> dict[str, Any]:
+        return self._with_canonical_phone(value)
+
+    @staticmethod
+    def _with_canonical_phone(value: dict[str, Any]) -> dict[str, Any]:
+        """Canonicalise the delivery contact before the address is stored.
+
+        The address arrives as a free-form dict, so nothing else in this
+        serializer would touch it.  It is the number a returning guest is
+        matched on, and it is snapshotted onto the order, so a spelling that
+        slipped through here would create the duplicate customer the
+        normalisation exists to prevent.
+        """
+        raw = value.get("phone")
+        if not raw:
+            return value
+        number = phone.canonical(raw)
+        if number is None:
+            raise serializers.ValidationError({"phone": [phone.INVALID_MESSAGE]})
+        return {**value, "phone": number}

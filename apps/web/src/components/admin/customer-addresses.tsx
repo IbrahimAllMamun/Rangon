@@ -19,7 +19,9 @@ import {
   Input,
   Select,
 } from "@/components/ui/primitives";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { INVALID_MESSAGE, formatPhone, isValidPhone, toCanonical, toInputValue } from "@/lib/phone";
 
 interface Draft {
   label: string;
@@ -43,7 +45,7 @@ function blank(customerName: string, customerPhone: string): Draft {
     // Pre-filling saves retyping in the common case: the customer is the
     // recipient. It stays editable for gifts and office deliveries.
     recipient_name: customerName,
-    phone: customerPhone,
+    phone: toInputValue(customerPhone),
     line1: "",
     line2: "",
     area: "",
@@ -60,7 +62,7 @@ function fromRow(row: CustomerAddressRow): Draft {
     label: row.label,
     address_type: row.address_type,
     recipient_name: row.recipient_name,
-    phone: row.phone,
+    phone: toInputValue(row.phone),
     line1: row.line1,
     line2: row.line2,
     area: row.area,
@@ -136,6 +138,8 @@ export function CustomerAddresses({
     }
     if (!draft.phone.trim()) {
       found.push({ field: "phone", message: "A delivery phone number is required." });
+    } else if (!isValidPhone(draft.phone)) {
+      found.push({ field: "phone", message: INVALID_MESSAGE });
     }
     if (!draft.line1.trim()) found.push({ field: "line1", message: "A street address is required." });
     if (!draft.city.trim()) found.push({ field: "city", message: "A city is required." });
@@ -143,14 +147,17 @@ export function CustomerAddresses({
     if (found.length) return;
 
     setBusy(true);
+    // The draft holds the ten subscriber digits the input box shows; the API
+    // stores and matches on the canonical `8801XXXXXXXXX`.
+    const body = { ...draft, phone: toCanonical(draft.phone) };
     try {
       if (editing) {
         await apiClient(`/customers/${customerId}/addresses/${editing.id}/`, {
           method: "PATCH",
-          body: draft,
+          body,
         });
       } else {
-        await apiClient(`/customers/${customerId}/addresses/`, { method: "POST", body: draft });
+        await apiClient(`/customers/${customerId}/addresses/`, { method: "POST", body });
       }
       close();
       router.refresh();
@@ -241,12 +248,17 @@ export function CustomerAddresses({
                 />
               </Field>
 
-              <Field label="Phone" htmlFor="adr-phone" required error={errorFor("phone")}>
-                <Input
+              <Field
+                label="Mobile number"
+                htmlFor="adr-phone"
+                required
+                hint="The number the courier rings."
+                error={errorFor("phone")}
+              >
+                <PhoneInput
                   id="adr-phone"
-                  type="tel"
                   value={draft.phone}
-                  onChange={(event) => set("phone", event.target.value)}
+                  onChange={(subscriber) => set("phone", subscriber)}
                   invalid={Boolean(errorFor("phone"))}
                 />
               </Field>
@@ -384,7 +396,7 @@ export function CustomerAddresses({
                         .filter(Boolean)
                         .join(", ")}
                     </p>
-                    <p className="text-muted">{row.phone}</p>
+                    <p className="text-muted">{formatPhone(row.phone)}</p>
                     {row.is_default && (
                       <Badge tone="brand" className="mt-1.5">
                         <Star className="size-3" aria-hidden />

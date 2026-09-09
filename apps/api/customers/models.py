@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from django.db import models
 
+from core import phone as phone_utils
 from core.models import BaseModel, money_field
 
 
@@ -84,6 +85,17 @@ class Customer(BaseModel):
         # Empty strings would collide under the unique index; NULLs do not.
         if not self.phone:
             self.phone = None
+        else:
+            # One spelling per subscriber, always (core.phone).  `phone` is
+            # unique and is how the counter finds someone, so two spellings of
+            # one number are two people as far as every query is concerned.
+            #
+            # This is the last line of defence rather than the first: the
+            # serializers normalise user input, so a customer sees a field
+            # error against the field they typed in.  Anything reaching here
+            # unnormalised is a caller that skipped them, and storing it as
+            # given is the defect this method exists to close.
+            self.phone = phone_utils.normalize(self.phone)
         if not self.email:
             self.email = None
         else:
@@ -122,6 +134,18 @@ class CustomerAddress(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.recipient_name}, {self.line1}, {self.city}"
+
+    def save(self, *args, **kwargs) -> None:
+        # The delivery contact is a mobile by design -- it is what the courier
+        # rings -- and checkout has always required one.  Normalising it keeps
+        # the number a customer types at checkout identical to the one on their
+        # record, so a returning guest is matched rather than duplicated.
+        #
+        # `as_snapshot` copies whatever is stored onto an order, and an order
+        # already placed is never rewritten: history keeps the spelling it was
+        # given.
+        self.phone = phone_utils.normalize(self.phone) or ""
+        super().save(*args, **kwargs)
 
     def as_snapshot(self) -> dict:
         """Frozen copy stored on an order — editing an address must not rewrite history."""

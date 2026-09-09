@@ -411,6 +411,35 @@ verification call may capture a payment.
   of phone or email. An edit that would clear both is refused, because it produces exactly the
   unfindable record the rule exists to prevent. Swapping one for the other is allowed.
 
+### 6.0 One number, one spelling
+
+Phone-first identity only works if a subscriber has exactly one spelling, so **every customer phone
+number is stored canonically as `8801XXXXXXXXX`** — country code, no `+`, no separators, no national
+trunk `0`. `01712345678`, `+8801712345678`, `8801712345678` and `+880 1712-345678` are one person and
+one row.
+
+- The rule lives in `core.phone` and is applied in three places: the serializers, so a customer sees a
+  field error against the field they typed in; `Customer.save()`, so a management command or a shell
+  cannot go round them; and a data migration, which canonicalised what was already stored.
+- A **Bangladeshi mobile** is ten digits beginning `1`, with an operator digit of 3-9 (013/017
+  Grameenphone, 014/019 Banglalink, 015 Teletalk, 016 Airtel, 018 Robi). 011 was Citycell and is
+  withdrawn; 010 and 012 were never issued. Anything else is refused rather than stored, because
+  storing a number nobody can read is how one person becomes two records.
+- **On screen** the country code is a fixed `+880` beside the box and never typed into it, so the box
+  holds the ten digits that vary. Whatever is pasted in — the local form, the international form,
+  brackets, dashes — is reduced to those ten as it is typed.
+- **Searching** is on the subscriber digits, so a cashier may type the whole number, the local
+  `0`-prefixed form, or only the last few digits the customer reads out. A query of `880` alone
+  matches nobody rather than everybody.
+- The same rule applies to a **delivery address contact number**, which is what the courier rings and
+  what a returning guest is matched on at checkout.
+- It does **not** apply to a branch, supplier, courier or organization number. Those are contact
+  details rather than identities, and may legitimately be a landline or a short hotline
+  (`+8809610003030`). A mobile there is still canonicalised so it matches everywhere else; anything
+  else is kept as typed.
+- Order address snapshots are **not** rewritten. An order already placed keeps the spelling it was
+  given (CLAUDE.md §3).
+
 ### 6.1 Addresses
 
 - A customer has **at most one default address, and never zero while any address exists.**

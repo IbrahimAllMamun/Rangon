@@ -20,6 +20,7 @@ from accounts.models import Branch
 from accounts.services import default_branch
 from catalog.models import ProductVariant, PublishStatus
 from core import audit
+from core import phone as phone_utils
 from core.exceptions import Conflict, PriceChanged, ValidationError
 from core.money import ZERO, quantize
 from core.services import next_number
@@ -461,8 +462,14 @@ def place_order(
 
 
 def _resolve_guest_customer(*, name: str, phone: str, email: str) -> Customer:
-    """Match an existing customer by phone (identity is phone-first) or create one."""
-    phone = (phone or "").strip()
+    """Match an existing customer by phone (identity is phone-first) or create one.
+
+    The number is canonicalised before the match, not after.  A returning guest
+    types their number however they please -- `01712345678` at one checkout,
+    `+8801712345678` at the next -- and an exact match on what they typed is
+    what filed them twice and split their order history (D48).
+    """
+    phone = phone_utils.normalize(phone, field="contact_phone") or ""
     email = (email or "").strip().lower()
 
     if phone:

@@ -52,9 +52,18 @@ test.describe("Storefront", () => {
     await page.getByLabel("Address").first().fill("House 1, Road 1");
     await page.getByLabel("City / District").fill("Dhaka");
 
-    // Delivery options load from the server once a city is known.
-    await page.getByRole("radio").first().waitFor();
-    await page.getByRole("radio").first().check();
+    // Delivery options load from the server once a city is known, and until
+    // they arrive the delivery card renders no radios at all. Scoped to that
+    // card on purpose: `getByRole("radio").first()` also matches the *payment*
+    // radios, which render unconditionally and further down the page, so it
+    // resolved immediately, checked "Cash on delivery" instead of a delivery
+    // option, and let "Place order" run with no shipping method chosen. The
+    // spec then failed on "Choose a delivery option" whenever the fetch was
+    // slower than the fills above — intermittently, and more often on a slow
+    // machine. See D41 in docs/roadmap.md.
+    const deliveryOptions = page.locator("#shipping").getByRole("radio");
+    await deliveryOptions.first().waitFor();
+    await deliveryOptions.first().check();
 
     await page.getByRole("button", { name: /place order/i }).click();
 

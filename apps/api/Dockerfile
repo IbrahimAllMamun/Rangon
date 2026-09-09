@@ -29,7 +29,19 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DJANGO_SETTINGS_MODULE=config.settings.prod
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade` patches the OS layer to whatever Debian has published at
+# build time, and is the Debian half of the fix the web image already carries
+# for its Alpine base (D21 in docs/roadmap.md).  It is here because the base
+# image lags its own security suite: python:3.12-slim-bookworm shipped
+# libssh2-1 1.10.0-3+b1 while bookworm-security already carried the
+# 1.10.0-3+deb12u1 fix for CVE-2026-58050 and CVE-2026-7598, and no pin in
+# requirements/ can answer an OS-package finding.  Safe to run unconditionally
+# *because* the scan gate sets `ignore-unfixed: true` -- it only ever fails on
+# a CVE whose fix is already published, which is exactly the set this installs.
+# Without it every image scan stays red until upstream rebuilds the base.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
         libpq5 curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1001 appuser \

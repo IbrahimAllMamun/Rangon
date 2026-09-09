@@ -13,6 +13,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset
+from core import phone as phone_utils
 from orders.api.serializers import (
     CompleteReturnSerializer,
     CreateReturnSerializer,
@@ -60,11 +61,15 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
 
         params = self.request.query_params
         if search := params.get("search"):
-            queryset = queryset.filter(
-                Q(number__icontains=search)
-                | Q(customer__name__icontains=search)
-                | Q(customer__phone__icontains=search)
-            )
+            matches = Q(number__icontains=search) | Q(customer__name__icontains=search)
+            # Canonical storage means `+8801712345678` is not a substring of
+            # anything; its subscriber digits are.
+            # A query that is only a country code or a trunk `0` identifies
+            # nobody, and `customer__phone__icontains` on one would match every
+            # canonical number in the table, so it contributes no clause.
+            if digits := phone_utils.search_digits(search):
+                matches |= Q(customer__phone__contains=digits)
+            queryset = queryset.filter(matches)
         if date_from := params.get("date_from"):
             queryset = queryset.filter(placed_at__date__gte=date_from)
         if date_to := params.get("date_to"):
