@@ -119,7 +119,7 @@ Backend APIs are complete and tested for all of these; what is missing is the ad
 |---|---|---|
 | Live payment gateway | COD works; the card option is visibly **disabled**, not faked | `orders/payments/providers/base.py` |
 | Admin customer/returns/coupon screens | Every operation is available through the API and tested. **Products and purchasing are done** — products at `/admin/products`, purchase orders and suppliers at `/admin/purchases` and `/admin/suppliers` — as are organization and branch settings at `/admin/settings` | `docs/api/endpoints.md` |
-| Offline POS | Explicitly V2 in the plan; needs an oversell exception report first | `architecture/offline-pos.md` |
+| Offline POS | **Dropped 2026-09-09, owner's decision** — declined, not deferred. The POS needs connectivity, and an outage is covered by a paper pad and a re-key | `architecture/offline-pos.md` (design notes only) |
 | SMS notifications | Email + in-app work | `notifications/tasks.py` |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
 

@@ -201,8 +201,8 @@ EDIT · REPORT · LEDGER`.
 | G3 | **Expenses** | Rent, salary, utilities, transport. Without them, "profit" is gross margin, not profit. |
 | G4 | **Business Report / Net Profit** | The single figure the owner actually manages by. Rangon's profit report stops at gross margin. |
 | G5 | **Damage / write-off screen** | `inventory.services.write_off` exists and is tested; there is no UI. |
-| G6 | **Quotation** | Quote → convert to sale. Nothing in Rangon. |
-| G7 | **Cheque register** | Common in BD wholesale. Rangon has `CHEQUE` as a supplier payment *method* with no lifecycle. |
+| G6 | **Quotation** | Quote → convert to sale. Nothing in Rangon. **Declined 2026-09-09** — a wholesale instrument; this shop sells retail. |
+| G7 | **Cheque register** | Common in BD wholesale. Rangon has `CHEQUE` as a supplier payment *method* with no lifecycle. **Declined 2026-09-09** — the method is enough until suppliers are actually paid by cheque. |
 | G8 | **Barcode label sheets** | Rangon generates barcodes but cannot print a sheet of labels. |
 | G9 | **Bengali UI toggle** | CLAUDE.md §11 already requires Bengali text to render; the UI is English-only. |
 | G10 | **SMS** | Already on the roadmap as gap #8. Bseba sells SMS credit and fires it on sale. |
@@ -355,9 +355,9 @@ Independent of the money layer; can run in parallel with F2–F4 if there is cap
 |---|---|
 | **Damage / write-off screen** (G5) | `inventory.services.write_off` is built and tested. This is form work: product picker, quantity, DAMAGE/LOSS, required reason. |
 | **Stock count and transfer screens** | Same story — services exist, screens do not. |
-| **Quotation** (G6) | New `quotations` app: `Quotation` + `QuotationLine`, statuses `DRAFT → SENT → ACCEPTED → EXPIRED / CONVERTED`, printable A4, and one service `convert_to_order()` that reuses the existing checkout path so pricing and stock rules cannot diverge. |
+| ~~**Quotation** (G6)~~ **declined 2026-09-09** | New `quotations` app: `Quotation` + `QuotationLine`, statuses `DRAFT → SENT → ACCEPTED → EXPIRED / CONVERTED`, printable A4, and one service `convert_to_order()` that reuses the existing checkout path so pricing and stock rules cannot diverge. |
 | **Purchase order create → receive UI** | Already the roadmap's next task; unchanged by this audit. |
-| **Cheque register** (G7) | `Cheque` model with the Bseba lifecycle (Pending → Deposited → Cleared / Bounce). A cleared cheque posts to F1; a bounced one reverses. Only worth building after F1. |
+| ~~**Cheque register** (G7)~~ **declined 2026-09-09** | `Cheque` model with the Bseba lifecycle (Pending → Deposited → Cleared / Bounce). A cleared cheque posts to F1; a bounced one reverses. Only worth building after F1. |
 | **Barcode label sheets** (G8) | Print CSS + a selection screen; reuses the existing barcode generator. |
 | **SR attribution** (G11) | An optional `sales_rep` FK on `Order`, a filter on the sales report. Do **not** build attendance or payroll. |
 | **Bengali toggle** (G9) | `next-intl`, message catalogues, `৳` and Bengali numerals already handled in `lib/format.ts`. Sizeable — treat as its own phase. |
@@ -374,8 +374,8 @@ F2 Expenses                      ████            small, high value
 F3 Party ledger                  ██████          only if credit sales — decision 5.1
 F4 Business report                   ████        needs VAT settled — decision 5.3
 F5 Damage / count / transfer ████                parallel, services already exist
-   Quotation                     ██████          parallel
-   Cheques                            ████       after F1
+   Quotation                     ──────          declined 2026-09-09
+   Cheques                            ────       declined 2026-09-09
    Barcode sheets               ██               parallel, small
    Bengali                          ████████     own phase, whole-UI sweep
 ```

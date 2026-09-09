@@ -1,9 +1,16 @@
-# Offline POS — design notes (V2, not implemented)
+# Offline POS — design notes (declined)
 
-Per plan §29, offline POS is only built **after** the online POS has proven itself in production. This
-document records the intended design so the online POS is not built in a way that blocks it.
+> **Dropped 2026-09-09 on the owner's decision.** This is no longer a plan; it is the record of what
+> was considered and why it was not worth building. A local queue, a sync path and conflict
+> resolution on a ledger that must not oversell is a large build to set against an occasional
+> outage that one counter covers with a paper pad and a re-key. Revisit only if the shop runs
+> several busy counters on an unreliable line.
 
-Status: **not implemented.** The POS today requires connectivity.
+Per plan §29, offline POS was only ever to be built **after** the online POS had proven itself in
+production. What follows records the intended design, and it still earns its place: the online POS
+was deliberately built in a way that does not block it, and those properties are worth keeping.
+
+Status: **declined.** The POS requires connectivity.
 
 ## What the online POS already does to keep this possible
 
