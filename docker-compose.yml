@@ -72,6 +72,12 @@ services:
     restart: unless-stopped
 
   api:
+    # Explicit tags on every built service. Without them Compose derives the tag
+    # from project + service, so `docker compose build web` (this file) and the
+    # dev overlay's build both wrote `rangon-web:latest` and the second silently
+    # replaced the first -- a production image started with `npm run dev`, which
+    # fails, because the production runtime deletes npm (D8 in docs/roadmap.md).
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -87,6 +93,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -104,6 +111,7 @@ services:
 
   beat:
     # Exactly one replica, ever — two schedulers fire every job twice.
+    image: rangon-api:latest
     build:
       context: ./apps/api
       dockerfile: Dockerfile
@@ -117,6 +125,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: rangon-web:latest
     build:
       context: ./apps/web
       dockerfile: Dockerfile
