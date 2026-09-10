@@ -302,6 +302,19 @@ RANGON = {
     # one. Blank means the feed refuses to render rather than publishing links
     # nothing can follow.
     "PUBLIC_URL": env("RANGON_PUBLIC_URL"),
+    # --- SMS.  Identity here is phone-first, so this is the channel that
+    # actually reaches a customer (docs/operations/sms.md).
+    #
+    # `console` logs and sends nothing, and is the default on purpose: a
+    # deployment that has not deliberately named a gateway must not be able to
+    # text anybody.
+    "SMS_PROVIDER": env("SMS_PROVIDER", "console"),
+    "SMS_SENDER_ID": env("SMS_SENDER_ID", "RANGON"),
+    # A real send costs money and reaches a real person. Off a live
+    # environment only these numbers are texted; everyone else is recorded as
+    # SUPPRESSED. Empty means nobody, which is the safe way round.
+    "SMS_LIVE": env_bool("SMS_LIVE", False),
+    "SMS_ALLOWLIST": [n.strip() for n in env("SMS_ALLOWLIST", "").split(",") if n.strip()],
 }
 
 # --------------------------------------------------------------------------- storefront cache
