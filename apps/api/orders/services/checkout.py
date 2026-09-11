@@ -458,6 +458,16 @@ def place_order(
             link=f"/admin/orders/{order.pk}",
         )
     )
+
+    # And tell the customer. Until now nobody did: the staff were notified of
+    # every online order and the person who placed it was told nothing at all
+    # until it shipped. `send_order_email` has carried an "ORDER_CONFIRMED"
+    # subject line the whole time with no caller to reach it.
+    notification_services.notify_customer(
+        order=order,
+        notification_type="ORDER_CONFIRMED",
+        title=f"We have your order {order.number}",
+    )
     return order
 
 

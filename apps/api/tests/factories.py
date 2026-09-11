@@ -252,6 +252,31 @@ def shipping_method(**kwargs: Any) -> ShippingMethod:
     return ShippingMethod.objects.create(**{**defaults, **kwargs})
 
 
+def order(shop_data: dict[str, Any] | None = None, **kwargs: Any):
+    """An order row, for tests about what happens *to* an order.
+
+    Deliberately does NOT go through `checkout.place_order`: a test about the
+    wording of a text message should not have to build a cart, reserve stock
+    and pick a shipping method to get an order number. Anything testing how an
+    order comes to *exist* — pricing, reservation, idempotency — must still use
+    the service, and `tests/test_orders.py` does.
+    """
+    from orders.models import Channel, Order
+
+    branch_obj = kwargs.pop("branch", None) or (shop_data or {}).get("branch") or branch()
+    customer_obj = kwargs.pop("customer", None) or (shop_data or {}).get("customer") or customer()
+    defaults: dict[str, Any] = {
+        "number": f"RGN-{unique('')}",
+        "channel": Channel.ONLINE,
+        "branch": branch_obj,
+        "customer": customer_obj,
+        "currency": "BDT",
+        "subtotal": Decimal("1000.00"),
+        "grand_total": Decimal("1000.00"),
+    }
+    return Order.objects.create(**{**defaults, **kwargs})
+
+
 def full_shop() -> dict[str, Any]:
     """A minimal but complete shop: org, branch, staff, product with stock."""
     org = organization()

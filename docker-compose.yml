@@ -34,6 +34,10 @@ x-api-env: &api-env
   # question and a feed silently pointing at the wrong host is worse than one
   # that says it is unset. Blank means /shop/feed.xml answers 503.
   RANGON_PUBLIC_URL: ${RANGON_PUBLIC_URL:-}
+  SMS_PROVIDER: ${SMS_PROVIDER:-console}
+  SMS_SENDER_ID: ${SMS_SENDER_ID:-RANGON}
+  SMS_LIVE: ${SMS_LIVE:-0}
+  SMS_ALLOWLIST: ${SMS_ALLOWLIST:-}
   RANGON_CURRENCY: ${RANGON_CURRENCY:-BDT}
   RANGON_ALLOW_OVERSELL: ${RANGON_ALLOW_OVERSELL:-0}
   RANGON_RESERVATION_MINUTES: ${RANGON_RESERVATION_MINUTES:-60}

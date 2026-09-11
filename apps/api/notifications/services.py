@@ -71,8 +71,19 @@ def notify_customer(
     title: str,
     body: str = "",
     email: bool = True,
+    sms: bool = True,
 ) -> Notification | None:
-    """Notify the customer behind an order, if they have an account."""
+    """Tell the customer behind an order what has happened.
+
+    All three channels are best-effort and none of them can fail the order:
+    the in-app row is written here because it is a local insert, and email and
+    SMS go out through Celery `on_commit` (CLAUDE.md §4).
+
+    SMS is on by default and costs money, so the guard is in the templates
+    rather than at the call site: `sms.body_for` returns nothing for a type it
+    has no template for, and the task stops there. Adding a message is adding a
+    template; there is no second switch to remember.
+    """
     user = getattr(order.customer, "user", None)
     notification = Notification.objects.create(
         user=user,
@@ -86,6 +97,10 @@ def notify_customer(
         from notifications.tasks import send_order_email
 
         transaction.on_commit(lambda: send_order_email.delay(str(order.pk), notification_type))
+    if sms:
+        from notifications.tasks import send_order_sms
+
+        transaction.on_commit(lambda: send_order_sms.delay(str(order.pk), notification_type))
     return notification
 
 
