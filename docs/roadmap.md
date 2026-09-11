@@ -15,6 +15,16 @@ lost its contrast over the black hero (D57), and up to three logo loaders drew o
 during a slow navigation (D58). The fourth was not a defect — the admin header was mostly empty
 space, and now carries a breadcrumb and a single identity block instead of three loose elements.
 
+Also on 09-12: **attributes became editable**. `/admin/taxonomy` could list them and nothing
+else — no create, no edit, no reordering of a value, no way to set a colour. It now does all
+four, and a colour attribute gets a picker and a hex box on every value. Auditing the endpoint
+first found two things (D59, D60), one of which was the reason the screen had been read-only.
+
+The same day closed the three CVEs the image scan gates on — two critical Next.js RCEs and a HIGH in
+sharp — by moving `next` to 15.5.24 and `sharp` to 0.35.4. **`main` is now green for the first time.**
+The three merges before it (#24, #25, #26) all landed with `Build & scan images` red, so that gate had
+been failing for weeks; it passes clean as of `ba9aa2f`.
+
 Before that, **2026-09-11**, the dashboard's date filters, which the owner
 reported as doing nothing. They were right, and for seven reasons: the presets computed their day
 boundaries in UTC while the shop keeps Dhaka time (D49), `7d`/`30d`/`90d` were rolling hours rather
@@ -79,7 +89,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 24  | Barcode + printing                    | ✅      | 🟡       | Keyboard-wedge scanning, barcode generation, and **printable label sheets shipped 2026-09-04** — `/admin/labels`, EAN-13 drawn as vector SVG with quiet zones, on A4 65/40/24-up or a 50x25 mm thermal label. Print CSS for 80 mm receipt and A4. No ESC/POS driver |
 | 25  | Notifications                         | 🟡      | ✅       | Model, in-app feed API, Celery email tasks.**UI shipped 2026-08-21** — a polling bell in the admin header and `/admin/notifications` with all/unread filtering and mark-as-read. **SMS built 2026-09-10** — provider interface, `console` no-op default, registry, an `SmsMessage` log, segment counting and an allowlist guard, wired to order confirmed / shipped / refunded. Partial only because the **last mile needs an account**: a real gateway is one class and a settings line. See [operations/sms.md](operations/sms.md). The same pass found the customer was never told their order was placed at all, and that every order email carried an unusable relative tracking link |
 | 26  | SEO                                   | ✅      | ✅       | Metadata, OG, sitemap, robots, canonicals, JSON-LD product + breadcrumbs. The doubled brand in product titles ([D4](#known-defects)) was fixed 2026-09-09                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 27  | Security                              | 🟡      | 🟡       | Controls implemented and documented; CI runs`pip-audit` + `npm audit` and Trivy-scans both images. CSP is now nonce-based and sent by the app itself (D16 fixed). **No independent penetration test**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: four N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15, and **POS grid search 81→5** on 2026-09-09) plus a per-keystroke POS request storm. **All ten documented budgets are now asserted** — that table had said "enforced in tests" while two of ten were, which is how the counter's own search sat at nine queries a row. Product detail's budget was raised from an unmeasured 10 to 18 deliberately. Remaining: no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. Against a production build 18/20 pass; the two that do not are [D40](#known-defects) and [D41](#known-defects), which is why the CI job runs against dev |
 | 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -847,10 +857,15 @@ Do not describe any of these as working.
 ## Known defects
 
 Found by diagnosis on 2026-08-18. None is a data-integrity or money bug; all are user-visible or
-process gaps. D1, D2, D3, D4, D5, D10, D11, D12, D13, D16, D17, D41, D43, D44, D45, D46, D48 and D49-D54 have since been fixed and are struck through.
-**D49-D55 were not found by diagnosis but by a complaint** — the owner said the dashboard's date
-filters did nothing. Seven separate causes sat behind that one sentence, and only one of them
-(D54, the seed) was what it first looked like.
+process gaps. D1, D2, D3, D4, D5, D10, D11, D12, D13, D16, D17, D41, D43, D44, D45, D46, D48 and
+D49-D60 have since been fixed and are struck through.
+
+**Everything from D49 on was found by a complaint or by an audit, not by diagnosis.**
+D49-D55 came from one sentence — the owner said the dashboard's date filters did nothing —
+behind which sat seven separate causes, only one of them (D54, the seed) the obvious one.
+D56-D58 were three more the owner could see: the sidebar, the header, the loaders. D59 and D60
+came out of checking the attribute endpoints before building a screen over them, which is the
+habit this file keeps recommending; D60 is the reason that screen had been read-only at all.
 **D16 no longer blocks deployment** — the CSP is nonce-based and verified against the production build.
 
 | #        | Defect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Where                                                                                                 | Impact                                                                                                                                          |
@@ -920,14 +935,20 @@ filters did nothing. Seven separate causes sat behind that one sentence, and onl
 | ~~D56~~  | ~~**The admin sidebar scrolled away with the page.**~~ **Fixed 2026-09-12.** The panel was `lg:static`, so above `lg` it sat in normal flow and the whole navigation scrolled up and out of sight with whatever table the reader was scrolling — on a long list there was no nav on screen at all. It is now `lg:sticky lg:top-0 lg:h-screen` with its own `overflow-y-auto` region. Two things `sticky` needs inside a flex row and neither is obvious: `self-start`, or the item stretches to the container's full height and has no room left to stick, and `bottom-auto` to undo the mobile drawer's `inset-y-0`. The nav list needs `min-h-0` for the same family of reason — a flex child's default `min-height: auto` refuses to shrink below its content, so it would grow the panel instead of scrolling inside it | `apps/web/src/components/admin/shell.tsx` | The sidebar scrollbar is hidden (`.scrollbar-none`) at the owner's request. Wheel, touch, keyboard and scroll-into-view-on-focus all still work; only the indicator is gone. Deliberately **not** applied to the main content column, where the scrollbar is the only thing saying there is more page |
 | ~~D57~~  | ~~**The storefront header lost contrast over dark sections.**~~ **Fixed 2026-09-12.** It was `bg-surface/95 backdrop-blur-sm`, so the page showed through — and the storefront scrolls over a near-black hero and full-bleed photography, which meant the nav's contrast changed with whatever happened to be under it. Now a solid `bg-surface`, which holds the same ratio over every section (WCAG 1.4.3). The shrink-on-scroll behaviour and the shadow are unchanged | `apps/web/src/components/commerce/site-header.tsx` | The translucent wishlist heart is left alone: it is a small control floating on product photography, not a bar that has to stay legible over everything |
 | ~~D58~~  | ~~**Up to three logo loaders drew at once.**~~ **Fixed 2026-09-12.** Three things render the brand mark while the app is busy and nothing stopped them doing it together: a route's `loading.tsx`, `PendingRegion` (which fires on *any* navigation, not only same-segment ones), and the full-screen `LogoLoaderOverlay` after 480 ms. Cross a segment boundary slowly and all three conditions held — and because the overlay tints and blurs what is behind it, the extra marks showed through as washed-out ghosts rather than being hidden, which is exactly how it was reported. A loader now draws only if nothing **more specific** is already drawing: the route's own screen beats a region, a region beats the global overlay. The overlay keeps the job only it does — blocking clicks — and drops its mark, its tint and its blur when outranked | `apps/web/src/lib/navigation/logo-loader-slot.tsx`, `logo-loader-overlay.tsx`, `logo-loader-screen.tsx`, `ui/pending-region.tsx` | Nine tests pin the resolution; five of them fail if the suppression is removed. `LogoLoaderScreen` became a client component to claim its rank |
+| ~~D59~~  | ~~**A swatch that is not a colour was stored happily and rendered as nothing.**~~ **Fixed 2026-09-12.** `AttributeValue.swatch` is a plain `CharField(max_length=32)` whose help text says "hex colour" and whose value is written straight into `style={{ backgroundColor }}` on the product form and the media grouper. Nothing validated it, so `navy`, `rgb(0,0,128)` and `#12345` were all accepted and all invisible — the swatch simply vanished and the shopper was left choosing between two identical circles. The serializer now takes `#rgb`, `#rrggbb` or `#rrggbbaa` and lower-cases it, so two spellings of one colour compare equal. Found while building the colour picker, which would otherwise have been the first thing to write a value nothing checked | `apps/api/catalog/api/serializers.py` | Six tests; all six fail with the validator removed |
+| ~~D60~~  | ~~**The attributes screen was read-only for a reason the schema contradicts.**~~ **Fixed 2026-09-12.** The panel carried the note "variants reference these values, so editing one rewrites history". `OrderItem` snapshots `sku`, `product_name` and `variant_label` under the comment "history must not move when the catalogue changes" — so renaming a value cannot touch a single order, and the whole screen had been withheld on a premise that was never checked. What is genuinely unsafe is narrower and is now guarded where it lives: `code` is a live facet key (`search.py` matches on `attribute__code`) so it warns rather than forbids, an attribute cannot stop being variant-defining while variants rely on it, and deleting anything in use is refused in a sentence instead of a bare 409 | `apps/web/src/components/admin/attribute-manager.tsx`, `apps/api/catalog/api/views.py` | The read-only note had been there since the screen shipped on 2026-08-31 |
 
 ## Still API-only (no UI)
 
 **Nothing.** The last two — categories/brands/attributes and users/roles — shipped 2026-08-31 as
 `/admin/taxonomy` and `/admin/staff`.
 
+**Attributes were the exception, and are no longer.** They had a full `ModelViewSet` behind a list
+that could only read — the UI was the gap, not the API. Create, edit, reorder and a colour picker
+shipped 2026-09-12; [D60](#known-defects) says why the screen had been left read-only.
+
 The rule that got us here is worth keeping for whatever is built next: **check each endpoint against
-the documented behaviour before building over it.** It has now paid for itself six times — a CSV
+the documented behaviour before building over it.** It has now paid for itself seven times — a CSV
 export that had never worked, a stock count that could not be counted, a restock decision in the
 wrong place, the four customer defects D24–D27, a coupon redeemable twice under a race, and eleven
 more in the two "safe" areas above. "Exists" is not "tested", and "rarely touched" is a reason
@@ -1001,49 +1022,80 @@ every change is audited, and changing it once orders exist needs explicit confir
 blocks is the *first real sale* — an order priced under the wrong treatment keeps the total it was
 given, and no later setting change corrects it.
 
-## Suggested next task
+## What to build next
 
-Phases 35–39 are complete; 06, 26 and 28 were finished on 2026-09-09; and on the same day the
-selling and deployment work that needed nobody's permission was built: the **Meta/Google product
-feed** (`/api/v1/shop/feed.xml`), **product import from a spreadsheet** (`/admin/products/import`),
-and the three defects that would each have stopped a first deploy — **D8, D14 and D15**.
+Reviewed 2026-09-12, against the code rather than against this file.
 
-Everything now remaining needs a decision, a provider, or an environment.
+The question that orders everything below: **this shop has never traded.** Nothing is deployed, no
+real order has ever been placed. So the test for any piece of work is not "is it valuable" but "does
+the first real sale wait on it". Most of the backlog does not.
 
-**1. The payment gateway.** Nothing prepaid can be sold until one exists, and a gateway's settled
-takings need a `BANK` account to land in. Implement against
-`orders.payments.providers.base.PaymentProvider`, with signature verification and webhook replay
-tests. This is the largest remaining gap between the software and a shop that can trade online.
+### Tier 0 — the first sale genuinely waits on these
 
-**2. [D40](#known-defects)**, which is now the only thing keeping the E2E suite off a production
-build in CI. It is narrowed to a single sentence — only `router.refresh()` fails to apply, on one
-screen, in a production build — with five hypotheses ruled out by experiment. Its companion
-[D41](#known-defects) turned out not to be a production-build problem at all and is fixed.
+| # | Item | Why it blocks | Whose move |
+|---|---|---|---|
+| 1 | **Deploy somewhere** | Nothing below can be true of an environment that does not exist. A load test, a backup schedule, a security review and `verify_accounts` against real data all wait here | Needs a server |
+| 2 | **Settle VAT** (D-C) | Orders freeze the treatment they were priced under. The default is exclusive at 0% — a placeholder, not an answer — and no later setting change corrects an order already taken | Owner's answer |
+| 3 | **Real product photography** (D9) | Every storefront card and product page renders "no image available". A clothing shop with no product images cannot sell, and it makes every demo read as broken | Needs photos |
+| 4 | **Automate the backup** | The production database was destroyed once already (2026-08-22) and survived only because a hand-taken dump happened to be 14 minutes old. `scripts/backup-db.sh` takes `BACKUP_S3_BUCKET` and `BACKUP_RETAIN_DAYS`; nothing schedules it | Ours, once deployed |
 
-**3. Settle VAT.** No code waits on it any more; the first real sale does. Both treatments are
-implemented and the setting is on `/admin/settings` with an audit trail and a confirmation guard —
-but the default is still exclusive at 0%, which is a placeholder rather than an answer.
+Tier 0 is four items and **three of them are not code**. That is the honest position.
 
-**4. Deployment.** Compose prod stack, green CI, images built and scanned — and nothing has ever
-been deployed. Everything after this point (a real backup schedule, a load test, an independent
-security review, `verify_accounts` against real data) needs an environment to be true of.
+### Tier 1 — build these, in this order
 
-**Two habits to keep**, because both earned their place this pass:
+No decision, no provider, no environment. Ordered by value per day of work.
 
-- *Audit the endpoint before building the screen.* Eight passes, eight sets of defects, no
-  exceptions. The eighth was over the two areas this file called "not load-bearing" and found
-  eleven, five of them security-sensitive.
-- *Read what the running system serves, not what the code says it will.* The product feed passed 35
-  tests, a clean lint and a clean typecheck while publishing every variant's shop-generated barcode
-  as a **GTIN** — a global identity those numbers explicitly do not have, which
-  `generate_barcode`'s own docstring says in as many words. Nothing caught it until the feed the
-  live API actually served was read. The regression test now uses `generate_barcode` itself.
-- *Run it, do not typecheck it.* Two defects this pass survived a clean `tsc` and a clean lint and
-  died the moment a browser loaded the page: a function passed from a server component to a client
-  one, and a serializer field typed as an object that is really a string. A green typecheck is not
-  evidence the app works.
+| # | Item | Why now |
+|---|---|---|
+| 1 | **Abandoned checkout capture** | The highest revenue-per-line item left. Capture the phone the moment it is typed, hold an `OPEN` row, flip to `RECOVERED` when an order with that phone lands, give the counter a call-back list. For COD retail the recovery action *is* a phone call. Nothing exists — `expire_abandoned_carts` only deactivates stale carts after 30 days |
+| 2 | **Product spec attributes** | The catalogue sells clothing, shoes, bags *and* cosmetics, and the only spec fields are free-text `material` and `care_instructions`. Cosmetics need Volume and Skin Type, bags need Dimensions, shoes need Sole. `CategoryAttribute` already exists to say which attributes a category uses |
+| 3 | **Brand landing pages** | `ShopHomeView` already serves eight featured brands with logos, and clicking one goes nowhere — there is no `/brand/[slug]` route. Smallest item here and it closes a dead end that is live |
+| 4 | **WhatsApp float button** | Env-gated, disappears when unconfigured. Close to mandatory for retail in Bangladesh. An afternoon |
+| 5 | **Finish the four-state variant picker** | Three of four states exist (`fits`, `soldOut`, `dead`); the missing one is `stale` — "no such combination, but in stock elsewhere", clickable, repairs the other axes. The spec is already written |
+| 6 | **Price drops + "customers also bought"** | `compare_at_price` exists per variant and nothing surfaces it. `related` is currently "same category", not real basket co-occurrence |
+| 7 | **Quick View** | A card with more than one variant should say "Choose options" and open a picker instead of guessing |
 
-**The still-open backlog** from the Dostishop review — a media library, four-state variant
-availability, Quick View, merchandising endpoints, abandoned-checkout capture — is tracked in
-[planning/dostishop-feature-review.md](planning/dostishop-feature-review.md) and is product work
-rather than gaps. **CSV import and the Meta feed shipped 2026-09-09** and are off that list.
+### Tier 2 — real, but wait
+
+| Item | Why it waits |
+|---|---|
+| **Payment gateway** | Only prepaid waits on it; **COD works today** and COD is how this market buys. The card option is visibly disabled rather than faked. Needs a provider account, so it is Tier 0-shaped work that cannot start — but it does not block trading |
+| **SMS account** | The layer shipped 2026-09-10. What is left is choosing an aggregator and getting a masked sender ID approved (days to weeks). Start the paperwork early; the provider class is an afternoon |
+| **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
+| **D47** — concurrent pytest runs corrupt each other | A live footgun for anyone running the suite in two terminals, and the workaround (a unique `-p` project) is one flag. Fix it when it next bites |
+| **D40** — `router.refresh()` in a production build | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out. Worth finishing, but it guards a gap in test coverage, not behaviour |
+| **D6** — mypy's 98 errors | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
+
+### Skip — and the reason, so it is not re-litigated
+
+| Item | Why not |
+|---|---|
+| **EMI / instalments** | Real in BD electronics, rare in fashion. Cheap to add later if it ever comes up |
+| **Investor list** | A capital-account feature for a business that tracks investors. Ask before building |
+| **Attendance / payroll** | HR, not retail. A salary *expense* already captures the money |
+| **Marketplace / multi-vendor** | A different product. `Branch` covers the real need |
+| **Quotation** (G6) | A wholesale instrument; this shop sells retail. Declined 2026-09-09 |
+| **Cheque register** (G7) | `CHEQUE` as a supplier payment method is enough until suppliers are actually paid by cheque. Declined 2026-09-09 |
+| **Offline POS** | Declined 2026-09-09 on the owner's decision |
+| **Bengali UI toggle** (G9) | Not cheap — every string, twice, forever — and the return is unknown until there is real traffic to measure. Bengali *content* already renders correctly, which is what CLAUDE.md §11 requires. Revisit when someone asks for it |
+| **Colour registry** | Normalising `swatch` off `AttributeValue` is tidy and changes nothing a shopper sees |
+| **Category icon** | Cosmetic |
+| **DataTable upgrade** | `resource-table.tsx` works. Rebuild it when a screen actually needs selection and bulk actions |
+| **Search `word_similarity`** | The suggest endpoint and the `SearchTerm` log already shipped. Swapping `trigram_similar` for `word_similarity` is a marginal recall improvement on a 12-product catalogue |
+| **Sales-rep attribution** (G11) | There are no sales reps |
+| **Backup download from the UI** (G12) | The script exists and has been used in anger. Scheduling it (Tier 0 #4) is the real need; a button is not |
+
+### Two habits to keep
+
+Both earned their place again this pass.
+
+- *Read what the running system serves, not what the code says it will.* D55 — the admin rendering
+  every date in the container's UTC — survived a clean `tsc`, a clean lint and 871 passing backend
+  tests. It died the moment a browser showed a statement headed "31 Jul 2026".
+- *Prove the test fails first.* Every regression test written on 09-11 and 09-12 was run against the
+  old code and seen to fail before the fix landed. A test written after a fix, never seen red, is a
+  test of nothing.
+
+And one learned the hard way on 09-12: *a green job is not a green commit.* `gh pr checks` reports
+whatever checks exist on a PR, not the checks for the SHA you just pushed — which read as a passing
+run for a commit CI had never seen. Query `actions/runs?head_sha=<sha>` instead.

@@ -31,6 +31,29 @@ step 5 and step 6 are not optional the first time.
 
 ---
 
+## 1a. The short version
+
+Sections 3–8 are one script:
+
+```bash
+./scripts/rebuild-local-prod.sh
+```
+
+It migrates whatever is running, builds both images, brings the stack up, waits for the API to
+report healthy, migrates again, reseeds (after asking), restarts nginx and then smoke-tests the
+result — so it fails loudly rather than exiting `0` on a stack that is not serving.
+
+```text
+--no-build     reuse the existing :prod images
+--no-seed      keep the current data
+-y, --yes      do not prompt before the reseed
+```
+
+Read the rest of this page anyway the first time. The script encodes the traps below, but knowing
+*why* nginx has to be restarted is what saves you the next time something 502s.
+
+---
+
 ## 2. Before you start
 
 **`.env.prod.local` must exist.** It needs at least `DJANGO_SECRET_KEY` — compose refuses to start

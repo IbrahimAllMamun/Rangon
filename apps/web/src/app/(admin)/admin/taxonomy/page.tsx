@@ -1,9 +1,8 @@
 import { redirect } from "next/navigation";
 
 import { PageHeader } from "@/components/admin/shell";
+import { type AttributeRow, AttributeManager } from "@/components/admin/attribute-manager";
 import {
-  type AttributeRow,
-  AttributeList,
   BrandManager,
   type BrandRow,
   CategoryManager,
@@ -94,7 +93,7 @@ export default async function TaxonomyPage() {
             <h2 id="attributes" className="mb-3 text-h4 font-semibold">
               Attributes
             </h2>
-            <AttributeList attributes={attributes} />
+            <AttributeManager attributes={attributes} canManage={canManage} />
           </section>
         </div>
       )}

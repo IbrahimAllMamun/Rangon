@@ -43,13 +43,6 @@ export interface BrandRow {
   is_featured: boolean;
 }
 
-export interface AttributeRow {
-  id: string;
-  code: string;
-  name: string;
-  values: { id: string; value: string; display?: string }[];
-}
-
 type FieldError = { field: string; message: string };
 
 function toFieldErrors(caught: unknown, fallbackField: string): FieldError[] {
@@ -562,43 +555,6 @@ export function BrandManager({
           </table>
         </div>
       </Card>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------ attributes -- */
-
-/** Read-only: variants reference these values, so editing one rewrites history. */
-export function AttributeList({ attributes }: { attributes: AttributeRow[] }) {
-  return (
-    <div className="space-y-4">
-      <Card className="overflow-hidden">
-        <ul className="divide-y divide-border">
-          {attributes.map((attribute) => (
-            <li key={attribute.id} className="px-4 py-3">
-              <div className="flex items-baseline gap-2">
-                <span className="text-body-sm font-medium">{attribute.name}</span>
-                <code className="text-caption text-muted">{attribute.code}</code>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {attribute.values.map((value) => (
-                  <Badge key={value.id} tone="neutral">
-                    {value.display || value.value}
-                  </Badge>
-                ))}
-                {attribute.values.length === 0 && (
-                  <span className="text-caption text-muted">No values yet</span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </Card>
-      <p className="text-caption text-muted">
-        Attributes and their values are shown here but edited on a product, where the variant matrix
-        is generated from them. A value in use cannot be deleted — every variant that carries it
-        would lose the label its orders were recorded against.
-      </p>
     </div>
   );
 }

@@ -237,6 +237,13 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,api,web,nginx   # must not be empty, mu
 POSTGRES_PASSWORD=<any local password>
 ```
 
+**1a. Or run the lot**, which is steps 2-6 below plus a smoke test that makes it fail loudly
+instead of exiting `0` on a stack that is not serving:
+
+```bash
+./scripts/rebuild-local-prod.sh          # --no-build / --no-seed / -y
+```
+
 **2. Name the stack once**, because every command needs the same four flags and getting one wrong
 silently targets the dev stack instead:
 
