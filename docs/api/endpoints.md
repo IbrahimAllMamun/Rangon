@@ -223,13 +223,40 @@ return itself), so a retried request cannot pay a customer twice.
 
 | Path | Perm |
 |---|---|
-| `dashboard/?range=today\|7d\|30d\|custom` | `reports.view` |
+| `dashboard/?range=<preset>` — see [§ Date ranges](#date-ranges) | `reports.view` |
 | `sales/`, `sales/by-channel/`, `sales/by-payment/` | `reports.view` |
 | `products/performance/` | `reports.view` |
 | `inventory/valuation/`, `inventory/movement/` | `reports.financial` |
 | `purchases/`, `returns/`, `profit/` | `reports.financial` |
 | `expenses/` — spend by category, with each category's share | `reports.financial` |
 | any of the above + `&format=csv` | `reports.export` |
+
+### Date ranges
+
+Every dated report takes the same window. Either a preset:
+
+`today` · `yesterday` · `7d` · `30d` · `90d` · `month` · `last_month` · `year`
+
+or an explicit `date_from` / `date_to` pair (`YYYY-MM-DD`, both inclusive), which
+wins over `range` when present. An unrecognised preset falls back to `30d`, and
+the response's `range.label` says `30d` rather than echoing what was asked for.
+
+Two things about the boundaries, because they are easy to get wrong and both
+have been:
+
+- **Days are the shop's days, not UTC days.** A window opens at midnight in
+  `TIME_ZONE` (`Asia/Dhaka`). Deriving them from a UTC clock put the start of
+  "today" at 06:00 local, and before dawn it reached back into the previous day.
+- **`7d`/`30d`/`90d` are that many whole calendar days *including today*,** not a
+  rolling N×24 hours, so `sales_over_time` returns exactly N buckets instead of
+  N+1 with a part-day at each end.
+
+`month` is this calendar month to date; `last_month` is the whole of the previous
+one, and is a different question from `30d`.
+
+`sales_over_time` carries one row per day in the window, zero-filled where
+nothing sold, so a quiet day is flat on a chart rather than missing from its
+axis. Windows wider than 370 days are not filled.
 
 ## Infra
 

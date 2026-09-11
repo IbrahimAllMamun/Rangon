@@ -354,6 +354,39 @@ request, around 50 s cold for an admin route. `--since` on `docker logs` is
 useful here, because the pre-restart error stays in the buffer and reads as
 current (see section 5).
 
+---
+
+## 14. This machine is `Asia/Dhaka`; the containers are UTC
+
+Added 2026-09-11, after a date bug that was invisible here and wrong in production.
+
+The Windows host runs `Asia/Dhaka` (UTC+6). The Node and Python containers run
+UTC. So anything that formats or bins a timestamp **without naming a timezone**
+behaves differently in the two places, and the difference is exactly six hours —
+which means it only shows up between **00:00 and 06:00 local**.
+
+```bash
+node -e "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"   # Asia/Dhaka
+MSYS_NO_PATHCONV=1 docker exec rangon-prod-web-1 node -e "console.log(Intl.DateTimeFormat().resolvedOptions().timeZone)"  # UTC
+```
+
+This is why D55 shipped: `toLocaleDateString` with no `timeZone` rendered every
+admin date correctly on the developer's machine and a day early inside the
+container. `npx vitest run` passed; the same suite under `TZ=UTC` failed.
+
+**Run frontend date tests in UTC, the way the container and CI do:**
+
+```bash
+TZ=UTC npx vitest run src/lib
+```
+
+The same trap on the backend is D49: `timezone.now()` is UTC-aware, so
+`now.replace(hour=0)` is midnight **UTC**, not midnight in the shop's day. Use
+`timezone.localdate()` / `timezone.localtime()` and build boundaries from the
+current timezone — `reports.services._day_start` is the pattern.
+
+A green test run on this host is not evidence that a date is right.
+
 ## Commands that actually work here
 
 ```bash

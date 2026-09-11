@@ -123,6 +123,23 @@
     }
   }
 
+  /* Scrollable, with nothing drawn to say so.
+     For the admin sidebar, which is a pinned panel of its own: a gutter that
+     appeared and vanished as nav groups expanded shifted the whole list
+     sideways. Only the indicator goes -- wheel, touch, keyboard and
+     scroll-into-view-on-focus all still work, so the links below the fold stay
+     reachable without a mouse. Do not put this on the main content column,
+     where the scrollbar is the only thing telling a reader there is more page. */
+  .scrollbar-none {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
   /* A region whose content is being replaced by a navigation: it stays exactly
      where it is and dims, so the eye keeps its place and nothing reflows. */
   .is-stale {

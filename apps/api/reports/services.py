@@ -26,6 +26,7 @@ from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
 
 from accounts.models import TaxMode
+from core.dates import parse_moment
 from core.money import ZERO, quantize
 from inventory.models import Inventory, InventoryTransaction
 from orders.models import (
@@ -79,39 +80,124 @@ class DateRange:
     end: datetime
     label: str = ""
 
+    #: The presets the admin offers, in the order it offers them.
+    #:
+    #: Every one is anchored to a **local** calendar day.  The shop's day starts
+    #: at midnight in `TIME_ZONE`, and for Asia/Dhaka that is six hours away from
+    #: midnight UTC -- so deriving these from a UTC `now()` put the start of
+    #: "today" at 06:00 local, dropped the night's trade from it, and between
+    #: midnight and 06:00 reported twenty hours of *yesterday* as today.
+    #: `date_from`/`date_to` were always read in local time, so the two controls
+    #: disagreed about where a day ends.
+    PRESETS = ("today", "yesterday", "7d", "30d", "90d", "month", "last_month", "year")
+    DEFAULT_PRESET = "30d"
+
+    #: Rolling presets, as a count of calendar days **including today**.  Whole
+    #: days rather than a rolling N*24 hours, because `sales_over_time` buckets
+    #: by `TruncDate`: a rolling window puts a part-day at each end, so "7 days"
+    #: drew eight bars, two of them short for no reason a reader could see.
+    _DAY_COUNTS = {"7d": 7, "30d": 30, "90d": 90}
+
     @classmethod
     def from_params(cls, params: Any) -> DateRange:
         now = timezone.now()
-        preset = params.get("range", "30d")
         start_param, end_param = params.get("date_from"), params.get("date_to")
 
         if start_param or end_param:
-            start = _parse_date(start_param) or (now - timedelta(days=30))
-            end = _parse_date(end_param, end_of_day=True) or now
+            # `core.dates.parse_moment` rather than a second parser here: it
+            # takes a whole day *or* an exact timestamp, and it raises on
+            # anything unreadable instead of returning None. The local version
+            # took only `YYYY-MM-DD` and fell through to the default window on
+            # everything else -- so a timestamp, or a typo, silently showed
+            # thirty days and called it the answer. `core/dates.py` exists so a
+            # screen and its CSV export cannot disagree about where a period
+            # starts; reports were the one caller not using it.
+            start = parse_moment(start_param) or (now - timedelta(days=30))
+            end = parse_moment(end_param, end_of_day=True) or now
             return cls(start, end, "custom")
 
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        presets = {
-            "today": (today_start, now),
-            "yesterday": (today_start - timedelta(days=1), today_start),
-            "7d": (now - timedelta(days=7), now),
-            "30d": (now - timedelta(days=30), now),
-            "90d": (now - timedelta(days=90), now),
-            "year": (now.replace(month=1, day=1, hour=0, minute=0, second=0), now),
-        }
-        start, end = presets.get(preset, presets["30d"])
+        preset = params.get("range") or cls.DEFAULT_PRESET
+        # An unknown preset falls back, and says so.  Echoing the caller's
+        # spelling back labelled a 30-day window with whatever was typed.
+        if preset not in cls.PRESETS:
+            preset = cls.DEFAULT_PRESET
+        start, end = cls.preset_bounds(preset, now=now)
         return cls(start, end, preset)
 
+    @classmethod
+    def preset_bounds(
+        cls, preset: str, *, now: datetime | None = None
+    ) -> tuple[datetime, datetime]:
+        """Resolve a preset to (start, end), both aware, both on local days."""
+        now = now or timezone.now()
+        today = timezone.localdate(now)
 
-def _parse_date(value: str | None, *, end_of_day: bool = False) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError:
-        return None
-    moment = datetime.combine(parsed, datetime.max.time() if end_of_day else datetime.min.time())
-    return timezone.make_aware(moment, timezone.get_current_timezone())
+        if preset == "today":
+            return _day_start(today), now
+        if preset == "yesterday":
+            # Ends on yesterday, not at midnight today: every report filters
+            # with `__lte`, so a next-midnight end counted an order placed at
+            # exactly 00:00:00 in both "yesterday" and "today".
+            return _day_start(today - timedelta(days=1)), _day_end(today - timedelta(days=1))
+        if preset == "month":
+            return _day_start(today.replace(day=1)), now
+        if preset == "last_month":
+            this_month = today.replace(day=1)
+            last_day = this_month - timedelta(days=1)
+            # The whole of the previous calendar month -- the figure an owner
+            # compares against, and the one a rolling "30 days" never gives
+            # them.  Ends on its last day (see "yesterday" above).
+            return _day_start(last_day.replace(day=1)), _day_end(last_day)
+        if preset == "year":
+            return _day_start(today.replace(month=1, day=1)), now
+        days = cls._DAY_COUNTS[preset]
+        return _day_start(today - timedelta(days=days - 1)), now
+
+
+def _day_start(day: date) -> datetime:
+    """Midnight at the start of `day`, in the shop's timezone."""
+    return timezone.make_aware(
+        datetime.combine(day, datetime.min.time()), timezone.get_current_timezone()
+    )
+
+
+def _day_end(day: date) -> datetime:
+    """The last instant of `day`, in the shop's timezone."""
+    return timezone.make_aware(
+        datetime.combine(day, datetime.max.time()), timezone.get_current_timezone()
+    )
+
+
+#: A zero-filled series is capped here so a wide custom range cannot return a
+#: row per day for years.  Beyond it the caller gets only the days that traded,
+#: which is the old behaviour and acceptable at that zoom.
+_MAX_FILLED_DAYS = 370
+
+
+def _fill_missing_days(rows: list[dict], date_range: DateRange) -> list[dict]:
+    """Put a zero row on every day of the window that saw no sales.
+
+    The chart plots exactly the rows it is given, so a day with no orders used
+    to be absent from the axis rather than flat on it: a quiet week drew as a
+    straight line between the two days either side of it, and "7 days" drew six
+    bars.  Filling here rather than in the component keeps the CSV export, the
+    chart and anything else reading this endpoint telling the same story
+    (CLAUDE.md §4 -- the backend owns the shape of the answer).
+    """
+    first, last = timezone.localdate(date_range.start), timezone.localdate(date_range.end)
+    if last < first or (last - first).days + 1 > _MAX_FILLED_DAYS:
+        return rows
+
+    traded = {row["day"]: row for row in rows}
+    filled = []
+    day = first
+    while day <= last:
+        filled.append(
+            traded.get(day)
+            or {"day": day, "orders": 0, "revenue": ZERO, "pos": ZERO, "online": ZERO}
+        )
+        day += timedelta(days=1)
+    return filled
 
 
 def sold_orders(date_range: DateRange, *, branch: Any = None, channel: str = "") -> Any:
@@ -177,6 +263,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         )
         .order_by("day")
     )
+    daily = _fill_missing_days(daily, date_range)
 
     payments = list(
         Payment.objects.filter(

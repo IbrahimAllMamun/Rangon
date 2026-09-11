@@ -11,7 +11,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { moneyCompact } from "@/lib/format";
+import { calendarDate, moneyCompact } from "@/lib/format";
 
 interface Point {
   day: string;
@@ -31,7 +31,7 @@ export function SalesChart({ data }: { data: Point[] }) {
   }
 
   const series = data.map((point) => ({
-    day: new Date(point.day).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
+    day: calendarDate(point.day, { day: "2-digit", month: "short" }),
     Total: Number(point.revenue),
     POS: Number(point.pos),
     Online: Number(point.online),

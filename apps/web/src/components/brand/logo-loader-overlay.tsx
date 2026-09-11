@@ -15,6 +15,7 @@
 
 import LogoLoader from "@/components/brand/LogoLoader";
 import { cn } from "@/lib/cn";
+import { useLogoLoaderSlot } from "@/lib/navigation/logo-loader-slot";
 import { useDelayedFlag } from "@/lib/use-delayed-flag";
 
 export function LogoLoaderOverlay({
@@ -32,24 +33,33 @@ export function LogoLoaderOverlay({
   className?: string;
 }) {
   const visible = useDelayedFlag(active, delay);
+  // The page may already be showing a loader of its own — a `loading.tsx`
+  // screen, or a dimmed region. This is the least specific of the three, so it
+  // gives up the mark and keeps only the part no one else does: blocking
+  // clicks. Drawn tint and blur go with it, because they were what turned the
+  // loader underneath into a washed-out ghost of the one on top.
+  const { outranked } = useLogoLoaderSlot("overlay", visible);
+
   if (!visible) return null;
 
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[100] grid animate-fade-in place-items-center",
-        "bg-[var(--background)]/80 backdrop-blur-[2px]",
+        "fixed inset-0 z-[100] grid place-items-center",
+        outranked ? "bg-transparent" : "animate-fade-in bg-[var(--background)]/80 backdrop-blur-[2px]",
         className,
       )}
       style={{ cursor: "progress" }}
     >
-      <div className="flex flex-col items-center gap-4">
-        {/* LogoLoader carries role="status" and the accessible label. */}
-        <LogoLoader size={size} label={label} />
-        <p aria-hidden className="text-caption text-muted">
-          {label}…
-        </p>
-      </div>
+      {!outranked && (
+        <div className="flex flex-col items-center gap-4">
+          {/* LogoLoader carries role="status" and the accessible label. */}
+          <LogoLoader size={size} label={label} />
+          <p aria-hidden className="text-caption text-muted">
+            {label}…
+          </p>
+        </div>
+      )}
     </div>
   );
 }

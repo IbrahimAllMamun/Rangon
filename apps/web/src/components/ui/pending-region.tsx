@@ -18,6 +18,7 @@ import * as React from "react";
 
 import LogoLoader from "@/components/brand/LogoLoader";
 import { cn } from "@/lib/cn";
+import { useLogoLoaderSlot } from "@/lib/navigation/logo-loader-slot";
 import { useNavigationPending } from "@/lib/navigation/route-transition";
 import { useDelayedFlag } from "@/lib/use-delayed-flag";
 
@@ -37,13 +38,18 @@ export function PendingRegion({
   const pending = pendingOverride ?? navigationPending;
   const showLoader = useDelayedFlag(pending);
 
+  // A navigation that crosses into a new segment renders that segment's
+  // `loading.tsx` *inside* this region — so without this the region dimmed the
+  // loading screen and centred a second mark on top of it.
+  const { outranked } = useLogoLoaderSlot("region", showLoader);
+
   return (
     <div className={cn("relative", className)}>
       <div aria-busy={pending || undefined} className={cn(pending && "is-stale")}>
         {children}
       </div>
 
-      {showLoader && (
+      {showLoader && !outranked && (
         <div className="pointer-events-none absolute inset-0 flex animate-fade-in items-start justify-center">
           <div className="sticky top-1/3 flex flex-col items-center gap-3">
             <LogoLoader size={64} label={label} />

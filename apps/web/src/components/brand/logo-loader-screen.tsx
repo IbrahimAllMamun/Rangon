@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Route-transition loader.
  *
@@ -8,9 +10,15 @@
  *
  * LogoLoader handles `prefers-reduced-motion` itself (it swaps the trace for a
  * gentle fade), so nothing extra is needed here.
+ *
+ * A client component only so it can claim the loader slot: this is the most
+ * specific loader there is, so it always wins, and claiming is how the region
+ * loader and the global overlay learn to stand down instead of drawing the same
+ * mark on top of it. See `lib/navigation/logo-loader-slot.tsx`.
  */
 import LogoLoader from "@/components/brand/LogoLoader";
 import { cn } from "@/lib/cn";
+import { useLogoLoaderSlot } from "@/lib/navigation/logo-loader-slot";
 
 export function LogoLoaderScreen({
   label = "Loading",
@@ -24,6 +32,10 @@ export function LogoLoaderScreen({
   variant?: "page" | "section";
   className?: string;
 }) {
+  // Nothing outranks a route's own loader, so this never stands down — it
+  // claims the slot purely so the others can see it.
+  useLogoLoaderSlot("screen");
+
   return (
     <div
       className={cn(

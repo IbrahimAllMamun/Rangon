@@ -43,7 +43,12 @@ export function SiteHeader({ children }: { children: React.ReactNode }) {
       <header
         data-scrolled={scrolled || undefined}
         className={cn(
-          "group sticky top-0 z-40 border-b border-border bg-surface/95 backdrop-blur-sm",
+          // Opaque, not a translucent blur. At 95% the page showed through, and
+          // the storefront scrolls over full-bleed photography and near-black
+          // modules -- so the nav's contrast changed with whatever happened to
+          // be under it, which is exactly the contrast WCAG 1.4.3 asks us to
+          // guarantee. A solid surface keeps the same ratio over every section.
+          "group sticky top-0 z-40 border-b border-border bg-surface",
           "transition-shadow duration-normal ease-rangon data-[scrolled]:shadow-md",
         )}
       >
