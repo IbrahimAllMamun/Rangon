@@ -28,6 +28,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as React from "react";
 
 import { RouteTransitionIndicator } from "@/components/brand/route-transition-indicator";
+import { LogoLoaderSlotProvider } from "@/lib/navigation/logo-loader-slot";
 
 /** Longest a transition may hold the indicator before we assume we missed the end. */
 const MAX_PENDING_MS = 10_000;
@@ -120,13 +121,17 @@ export function RouteTransitionProvider({ children }: { children: React.ReactNod
 
   return (
     <RouteTransitionContext.Provider value={value}>
-      {/* useSearchParams needs a Suspense boundary or every page above it opts
-          out of static rendering. Nothing renders here, so the fallback is null. */}
-      <React.Suspense fallback={null}>
-        <ArrivalListener onArrive={stop} />
-      </React.Suspense>
-      {children}
-      <RouteTransitionIndicator pending={pending} />
+      {/* Both the page's own loaders and the global indicator sit inside this,
+          so they can agree on which one of them draws the brand mark. */}
+      <LogoLoaderSlotProvider>
+        {/* useSearchParams needs a Suspense boundary or every page above it opts
+            out of static rendering. Nothing renders here, so the fallback is null. */}
+        <React.Suspense fallback={null}>
+          <ArrivalListener onArrive={stop} />
+        </React.Suspense>
+        {children}
+        <RouteTransitionIndicator pending={pending} />
+      </LogoLoaderSlotProvider>
     </RouteTransitionContext.Provider>
   );
 }

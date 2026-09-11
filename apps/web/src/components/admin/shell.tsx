@@ -200,6 +200,22 @@ const GROUPS: NavGroup[] = [
 ];
 
 /**
+ * Up to two initials for the header avatar.
+ *
+ * Falls back to the first letter of whatever there is, and then to nothing
+ * rather than a placeholder glyph: a seeded or imported user can have a
+ * single-word name, and "?" in a circle reads as an error.
+ */
+function initialsOf(name: string): string {
+  return (name ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/**
  * Longest matching href wins, so `/admin/inventory/counts` lights up "Stock
  * counts" rather than its parent "Stock on hand". A plain `startsWith` marked
  * both.
@@ -235,6 +251,15 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
     groups.find((group) => group.items.some((item) => item.href === activeHref))?.id ?? null;
   const isExpanded = (id: string) => toggled[id] ?? id === activeGroupId;
 
+  // The header used to be empty on the left at every width above `lg`. The
+  // sidebar already knows where you are; saying it in words costs nothing and
+  // gives the bar something to be about.
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
+  const activeItem =
+    activeHref === DASHBOARD.href
+      ? DASHBOARD
+      : (groups.flatMap((group) => group.items).find((item) => item.href === activeHref) ?? null);
+
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
@@ -243,14 +268,24 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Sidebar: brand red marks the active item only, never the whole panel. */}
+      {/* Sidebar: brand red marks the active item only, never the whole panel.
+          It is a panel of its own, pinned to the viewport, and it scrolls
+          independently of the page. It used to be `lg:static`, which put it in
+          normal flow — so on any long screen the whole nav scrolled up and out
+          of sight with the table the reader was scrolling.
+          `sticky` needs two things inside a flex row that are easy to miss:
+          `self-start`, or the item stretches to the container's full height and
+          has no room left to stick, and an explicit `bottom-auto` to undo the
+          mobile drawer's `inset-y-0`. */}
       <aside
         className={cn(
-          "no-print fixed inset-y-0 left-0 z-50 w-64 shrink-0 border-r border-border bg-neutral-950 transition-transform duration-normal ease-rangon lg:static lg:translate-x-0",
+          "no-print fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-border bg-neutral-950",
+          "transition-transform duration-normal ease-rangon motion-reduce:transition-none",
+          "lg:sticky lg:top-0 lg:bottom-auto lg:h-screen lg:self-start lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 items-center justify-between border-b border-neutral-800 px-4">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-neutral-800 px-4">
           {/* Sidebar is near-black -> white wordmark. */}
           <LogoLink href="/admin" variant="full-on-dark" height={26} />
           <Button
@@ -264,9 +299,13 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
           </Button>
         </div>
 
+        {/* `min-h-0` is what makes this scroll: a flex child's default
+            `min-height: auto` refuses to shrink below its content, so the list
+            would grow the panel instead of scrolling inside it. `scrollbar-none`
+            hides the indicator without touching the scrolling itself. */}
         <nav
           aria-label="Admin"
-          className="max-h-[calc(100vh-4rem)] space-y-1 overflow-y-auto p-3"
+          className="scrollbar-none min-h-0 flex-1 space-y-1 overflow-y-auto p-3"
         >
           {can(DASHBOARD.permission) && (
             <NavLink
@@ -350,8 +389,11 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Chrome is hidden when printing an invoice or packing slip. */}
-        <header className="no-print sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-surface px-4">
+        {/* Chrome is hidden when printing an invoice or packing slip.
+            Solid `bg-surface`, never a translucent blur: this bar sits over
+            dense tables and has to hold the same contrast whatever scrolls
+            beneath it. */}
+        <header className="no-print sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-surface px-4 sm:px-6">
           <Button
             variant="ghost"
             size="icon"
@@ -362,15 +404,45 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
             <Menu aria-hidden />
           </Button>
 
-          <div className="ml-auto flex items-center gap-3">
+          <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+            <ol className="flex items-center gap-1.5">
+              {activeGroup && (
+                <>
+                  {/* The section is context, not a destination — a group header
+                      opens a list, it has no page of its own. */}
+                  <li className="hidden text-body-sm text-muted sm:block">{activeGroup.label}</li>
+                  <li aria-hidden className="hidden sm:block">
+                    <ChevronRight className="size-3.5 text-neutral-400" />
+                  </li>
+                </>
+              )}
+              <li className="truncate text-body-sm font-semibold" aria-current="page">
+                {activeItem?.label ?? "Admin"}
+              </li>
+            </ol>
+          </nav>
+
+          <div className="flex items-center gap-2">
             {/* Staff alerts: low stock, new online orders, returns (D3). */}
             <NotificationBell />
-            <div className="text-right">
-              <p className="text-body-sm font-medium leading-tight">{user.full_name}</p>
-              <p className="text-caption text-muted">
-                {user.role_name}
-                {user.branch ? ` · ${user.branch.code}` : ""}
-              </p>
+            <span aria-hidden className="mx-1 h-6 w-px bg-border" />
+            {/* One identity block rather than three loose elements: the initials
+                give the bar a fixed anchor at every width, and the name and role
+                fall away on small screens without the avatar moving. */}
+            <div className="flex items-center gap-2.5">
+              <span
+                aria-hidden
+                className="grid size-9 shrink-0 place-items-center rounded-full bg-neutral-900 text-caption font-semibold text-white"
+              >
+                {initialsOf(user.full_name)}
+              </span>
+              <div className="hidden min-w-0 sm:block">
+                <p className="truncate text-body-sm font-medium leading-tight">{user.full_name}</p>
+                <p className="truncate text-caption leading-tight text-muted">
+                  {user.role_name}
+                  {user.branch ? ` · ${user.branch.code}` : ""}
+                </p>
+              </div>
             </div>
             <Button variant="ghost" size="icon" onClick={signOut} aria-label="Sign out">
               <LogOut aria-hidden />
