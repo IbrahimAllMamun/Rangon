@@ -15,6 +15,11 @@ lost its contrast over the black hero (D57), and up to three logo loaders drew o
 during a slow navigation (D58). The fourth was not a defect — the admin header was mostly empty
 space, and now carries a breadcrumb and a single identity block instead of three loose elements.
 
+The same day closed the three CVEs the image scan gates on — two critical Next.js RCEs and a HIGH in
+sharp — by moving `next` to 15.5.24 and `sharp` to 0.35.4. **`main` is now green for the first time.**
+The three merges before it (#24, #25, #26) all landed with `Build & scan images` red, so that gate had
+been failing for weeks; it passes clean as of `ba9aa2f`.
+
 Before that, **2026-09-11**, the dashboard's date filters, which the owner
 reported as doing nothing. They were right, and for seven reasons: the presets computed their day
 boundaries in UTC while the shop keeps Dhaka time (D49), `7d`/`30d`/`90d` were rolling hours rather
@@ -79,7 +84,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 24  | Barcode + printing                    | ✅      | 🟡       | Keyboard-wedge scanning, barcode generation, and **printable label sheets shipped 2026-09-04** — `/admin/labels`, EAN-13 drawn as vector SVG with quiet zones, on A4 65/40/24-up or a 50x25 mm thermal label. Print CSS for 80 mm receipt and A4. No ESC/POS driver |
 | 25  | Notifications                         | 🟡      | ✅       | Model, in-app feed API, Celery email tasks.**UI shipped 2026-08-21** — a polling bell in the admin header and `/admin/notifications` with all/unread filtering and mark-as-read. **SMS built 2026-09-10** — provider interface, `console` no-op default, registry, an `SmsMessage` log, segment counting and an allowlist guard, wired to order confirmed / shipped / refunded. Partial only because the **last mile needs an account**: a real gateway is one class and a settings line. See [operations/sms.md](operations/sms.md). The same pass found the customer was never told their order was placed at all, and that every order email carried an unusable relative tracking link |
 | 26  | SEO                                   | ✅      | ✅       | Metadata, OG, sitemap, robots, canonicals, JSON-LD product + breadcrumbs. The doubled brand in product titles ([D4](#known-defects)) was fixed 2026-09-09                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 27  | Security                              | 🟡      | 🟡       | Controls implemented and documented; CI runs`pip-audit` + `npm audit` and Trivy-scans both images. CSP is now nonce-based and sent by the app itself (D16 fixed). **No independent penetration test**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: four N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15, and **POS grid search 81→5** on 2026-09-09) plus a per-keystroke POS request storm. **All ten documented budgets are now asserted** — that table had said "enforced in tests" while two of ten were, which is how the counter's own search sat at nine queries a row. Product detail's budget was raised from an unmeasured 10 to 18 deliberately. Remaining: no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. Against a production build 18/20 pass; the two that do not are [D40](#known-defects) and [D41](#known-defects), which is why the CI job runs against dev |
 | 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -1001,49 +1006,80 @@ every change is audited, and changing it once orders exist needs explicit confir
 blocks is the *first real sale* — an order priced under the wrong treatment keeps the total it was
 given, and no later setting change corrects it.
 
-## Suggested next task
+## What to build next
 
-Phases 35–39 are complete; 06, 26 and 28 were finished on 2026-09-09; and on the same day the
-selling and deployment work that needed nobody's permission was built: the **Meta/Google product
-feed** (`/api/v1/shop/feed.xml`), **product import from a spreadsheet** (`/admin/products/import`),
-and the three defects that would each have stopped a first deploy — **D8, D14 and D15**.
+Reviewed 2026-09-12, against the code rather than against this file.
 
-Everything now remaining needs a decision, a provider, or an environment.
+The question that orders everything below: **this shop has never traded.** Nothing is deployed, no
+real order has ever been placed. So the test for any piece of work is not "is it valuable" but "does
+the first real sale wait on it". Most of the backlog does not.
 
-**1. The payment gateway.** Nothing prepaid can be sold until one exists, and a gateway's settled
-takings need a `BANK` account to land in. Implement against
-`orders.payments.providers.base.PaymentProvider`, with signature verification and webhook replay
-tests. This is the largest remaining gap between the software and a shop that can trade online.
+### Tier 0 — the first sale genuinely waits on these
 
-**2. [D40](#known-defects)**, which is now the only thing keeping the E2E suite off a production
-build in CI. It is narrowed to a single sentence — only `router.refresh()` fails to apply, on one
-screen, in a production build — with five hypotheses ruled out by experiment. Its companion
-[D41](#known-defects) turned out not to be a production-build problem at all and is fixed.
+| # | Item | Why it blocks | Whose move |
+|---|---|---|---|
+| 1 | **Deploy somewhere** | Nothing below can be true of an environment that does not exist. A load test, a backup schedule, a security review and `verify_accounts` against real data all wait here | Needs a server |
+| 2 | **Settle VAT** (D-C) | Orders freeze the treatment they were priced under. The default is exclusive at 0% — a placeholder, not an answer — and no later setting change corrects an order already taken | Owner's answer |
+| 3 | **Real product photography** (D9) | Every storefront card and product page renders "no image available". A clothing shop with no product images cannot sell, and it makes every demo read as broken | Needs photos |
+| 4 | **Automate the backup** | The production database was destroyed once already (2026-08-22) and survived only because a hand-taken dump happened to be 14 minutes old. `scripts/backup-db.sh` takes `BACKUP_S3_BUCKET` and `BACKUP_RETAIN_DAYS`; nothing schedules it | Ours, once deployed |
 
-**3. Settle VAT.** No code waits on it any more; the first real sale does. Both treatments are
-implemented and the setting is on `/admin/settings` with an audit trail and a confirmation guard —
-but the default is still exclusive at 0%, which is a placeholder rather than an answer.
+Tier 0 is four items and **three of them are not code**. That is the honest position.
 
-**4. Deployment.** Compose prod stack, green CI, images built and scanned — and nothing has ever
-been deployed. Everything after this point (a real backup schedule, a load test, an independent
-security review, `verify_accounts` against real data) needs an environment to be true of.
+### Tier 1 — build these, in this order
 
-**Two habits to keep**, because both earned their place this pass:
+No decision, no provider, no environment. Ordered by value per day of work.
 
-- *Audit the endpoint before building the screen.* Eight passes, eight sets of defects, no
-  exceptions. The eighth was over the two areas this file called "not load-bearing" and found
-  eleven, five of them security-sensitive.
-- *Read what the running system serves, not what the code says it will.* The product feed passed 35
-  tests, a clean lint and a clean typecheck while publishing every variant's shop-generated barcode
-  as a **GTIN** — a global identity those numbers explicitly do not have, which
-  `generate_barcode`'s own docstring says in as many words. Nothing caught it until the feed the
-  live API actually served was read. The regression test now uses `generate_barcode` itself.
-- *Run it, do not typecheck it.* Two defects this pass survived a clean `tsc` and a clean lint and
-  died the moment a browser loaded the page: a function passed from a server component to a client
-  one, and a serializer field typed as an object that is really a string. A green typecheck is not
-  evidence the app works.
+| # | Item | Why now |
+|---|---|---|
+| 1 | **Abandoned checkout capture** | The highest revenue-per-line item left. Capture the phone the moment it is typed, hold an `OPEN` row, flip to `RECOVERED` when an order with that phone lands, give the counter a call-back list. For COD retail the recovery action *is* a phone call. Nothing exists — `expire_abandoned_carts` only deactivates stale carts after 30 days |
+| 2 | **Product spec attributes** | The catalogue sells clothing, shoes, bags *and* cosmetics, and the only spec fields are free-text `material` and `care_instructions`. Cosmetics need Volume and Skin Type, bags need Dimensions, shoes need Sole. `CategoryAttribute` already exists to say which attributes a category uses |
+| 3 | **Brand landing pages** | `ShopHomeView` already serves eight featured brands with logos, and clicking one goes nowhere — there is no `/brand/[slug]` route. Smallest item here and it closes a dead end that is live |
+| 4 | **WhatsApp float button** | Env-gated, disappears when unconfigured. Close to mandatory for retail in Bangladesh. An afternoon |
+| 5 | **Finish the four-state variant picker** | Three of four states exist (`fits`, `soldOut`, `dead`); the missing one is `stale` — "no such combination, but in stock elsewhere", clickable, repairs the other axes. The spec is already written |
+| 6 | **Price drops + "customers also bought"** | `compare_at_price` exists per variant and nothing surfaces it. `related` is currently "same category", not real basket co-occurrence |
+| 7 | **Quick View** | A card with more than one variant should say "Choose options" and open a picker instead of guessing |
 
-**The still-open backlog** from the Dostishop review — a media library, four-state variant
-availability, Quick View, merchandising endpoints, abandoned-checkout capture — is tracked in
-[planning/dostishop-feature-review.md](planning/dostishop-feature-review.md) and is product work
-rather than gaps. **CSV import and the Meta feed shipped 2026-09-09** and are off that list.
+### Tier 2 — real, but wait
+
+| Item | Why it waits |
+|---|---|
+| **Payment gateway** | Only prepaid waits on it; **COD works today** and COD is how this market buys. The card option is visibly disabled rather than faked. Needs a provider account, so it is Tier 0-shaped work that cannot start — but it does not block trading |
+| **SMS account** | The layer shipped 2026-09-10. What is left is choosing an aggregator and getting a masked sender ID approved (days to weeks). Start the paperwork early; the provider class is an afternoon |
+| **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
+| **D47** — concurrent pytest runs corrupt each other | A live footgun for anyone running the suite in two terminals, and the workaround (a unique `-p` project) is one flag. Fix it when it next bites |
+| **D40** — `router.refresh()` in a production build | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out. Worth finishing, but it guards a gap in test coverage, not behaviour |
+| **D6** — mypy's 98 errors | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
+
+### Skip — and the reason, so it is not re-litigated
+
+| Item | Why not |
+|---|---|
+| **EMI / instalments** | Real in BD electronics, rare in fashion. Cheap to add later if it ever comes up |
+| **Investor list** | A capital-account feature for a business that tracks investors. Ask before building |
+| **Attendance / payroll** | HR, not retail. A salary *expense* already captures the money |
+| **Marketplace / multi-vendor** | A different product. `Branch` covers the real need |
+| **Quotation** (G6) | A wholesale instrument; this shop sells retail. Declined 2026-09-09 |
+| **Cheque register** (G7) | `CHEQUE` as a supplier payment method is enough until suppliers are actually paid by cheque. Declined 2026-09-09 |
+| **Offline POS** | Declined 2026-09-09 on the owner's decision |
+| **Bengali UI toggle** (G9) | Not cheap — every string, twice, forever — and the return is unknown until there is real traffic to measure. Bengali *content* already renders correctly, which is what CLAUDE.md §11 requires. Revisit when someone asks for it |
+| **Colour registry** | Normalising `swatch` off `AttributeValue` is tidy and changes nothing a shopper sees |
+| **Category icon** | Cosmetic |
+| **DataTable upgrade** | `resource-table.tsx` works. Rebuild it when a screen actually needs selection and bulk actions |
+| **Search `word_similarity`** | The suggest endpoint and the `SearchTerm` log already shipped. Swapping `trigram_similar` for `word_similarity` is a marginal recall improvement on a 12-product catalogue |
+| **Sales-rep attribution** (G11) | There are no sales reps |
+| **Backup download from the UI** (G12) | The script exists and has been used in anger. Scheduling it (Tier 0 #4) is the real need; a button is not |
+
+### Two habits to keep
+
+Both earned their place again this pass.
+
+- *Read what the running system serves, not what the code says it will.* D55 — the admin rendering
+  every date in the container's UTC — survived a clean `tsc`, a clean lint and 871 passing backend
+  tests. It died the moment a browser showed a statement headed "31 Jul 2026".
+- *Prove the test fails first.* Every regression test written on 09-11 and 09-12 was run against the
+  old code and seen to fail before the fix landed. A test written after a fix, never seen red, is a
+  test of nothing.
+
+And one learned the hard way on 09-12: *a green job is not a green commit.* `gh pr checks` reports
+whatever checks exist on a PR, not the checks for the SHA you just pushed — which read as a passing
+run for a commit CI had never seen. Query `actions/runs?head_sha=<sha>` instead.
