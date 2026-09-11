@@ -1,6 +1,7 @@
 import { Download, Receipt, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import Link from "next/link";
 
+import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
@@ -42,14 +43,6 @@ interface BusinessSummary {
   };
 }
 
-const RANGES = [
-  { value: "today", label: "Today" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "90d", label: "90 days" },
-  { value: "year", label: "This year" },
-];
-
 type Search = Promise<{ range?: string }>;
 
 /** A statement line. `level` drives indentation; `weight` marks a subtotal. */
@@ -63,7 +56,7 @@ interface Line {
 }
 
 export default async function BusinessSummaryPage({ searchParams }: { searchParams: Search }) {
-  const { range = "30d" } = await searchParams;
+  const range = resolveRange((await searchParams).range);
 
   let summary: BusinessSummary | null = null;
   let error: string | null = null;
@@ -81,26 +74,7 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
         title="Business summary"
         description="Revenue through to net profit. Costs come from the price frozen on each order line at sale time, so history does not move when today's prices do."
         actions={
-          <div
-            className="flex rounded-md border border-border bg-surface p-0.5"
-            role="group"
-            aria-label="Date range"
-          >
-            {RANGES.map((option) => (
-              <Link
-                key={option.value}
-                href={`/admin/reports/business?range=${option.value}`}
-                aria-current={range === option.value ? "true" : undefined}
-                className={`rounded px-3 py-1.5 text-body-sm font-medium ${
-                  range === option.value
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {option.label}
-              </Link>
-            ))}
-          </div>
+          <DateRangeTabs basePath="/admin/reports/business" active={range} />
         }
       />
 

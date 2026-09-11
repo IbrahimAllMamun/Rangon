@@ -5,6 +5,19 @@
 
 const CURRENCY_SYMBOL = process.env.NEXT_PUBLIC_CURRENCY_SYMBOL ?? "৳";
 
+/**
+ * The shop's timezone, and the only one any timestamp is ever shown in.
+ *
+ * Must match `DJANGO_TIME_ZONE`: the API decides what "today" means in this
+ * zone, so a page that renders the answer in another one contradicts it.
+ * Without it `toLocaleDateString` uses whatever the runtime sits in -- UTC in
+ * the server container, the visitor's own zone in the browser -- so the same
+ * instant rendered as two different dates depending on where the component ran,
+ * and anything between midnight and 06:00 Dhaka displayed as the previous day.
+ * A statement for 1-31 August was headed "31 Jul 2026 to 31 Aug 2026".
+ */
+const SHOP_TIME_ZONE = process.env.NEXT_PUBLIC_TIME_ZONE || "Asia/Dhaka";
+
 export function money(value: string | number | null | undefined, withSymbol = true): string {
   if (value === null || value === undefined || value === "") return withSymbol ? `${CURRENCY_SYMBOL} 0.00` : "0.00";
   const amount = typeof value === "string" ? Number.parseFloat(value) : value;
@@ -35,13 +48,35 @@ export function dateTime(value: string | Date | null | undefined): string {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: SHOP_TIME_ZONE,
   });
 }
 
 export function dateOnly(value: string | Date | null | undefined): string {
   if (!value) return "—";
   const date = typeof value === "string" ? new Date(value) : value;
-  return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: SHOP_TIME_ZONE,
+  });
+}
+
+/**
+ * Format a date-only string (`YYYY-MM-DD`) that is already a calendar date.
+ *
+ * `new Date("2026-08-01")` is midnight **UTC**, so rendering it in any zone
+ * behind UTC gives 31 July. These values come from `TruncDate` and are days,
+ * not instants -- they carry no time to convert -- so they are formatted back
+ * in UTC, which returns the same date they arrived as, in every timezone.
+ */
+export function calendarDate(
+  value: string,
+  options: Intl.DateTimeFormatOptions = { day: "2-digit", month: "short", year: "numeric" },
+): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("en-GB", { ...options, timeZone: "UTC" });
 }
 
 export function relativeTime(value: string | Date | null | undefined): string {

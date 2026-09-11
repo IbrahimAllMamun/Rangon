@@ -1,6 +1,7 @@
 import { ArrowRight, Download } from "lucide-react";
 import Link from "next/link";
 
+import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
@@ -21,13 +22,6 @@ interface ProductRow {
   returned: number;
 }
 
-const RANGES = [
-  { value: "today", label: "Today" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "90d", label: "90 days" },
-];
-
 /** Every report the API exposes, so nothing is hidden behind a URL you must know. */
 const REPORTS = [
   { path: "/reports/sales/", label: "Sales", description: "Every order with totals, channel and payment status" },
@@ -44,7 +38,7 @@ const REPORTS = [
 type Search = Promise<{ range?: string }>;
 
 export default async function ReportsPage({ searchParams }: { searchParams: Search }) {
-  const { range = "30d" } = await searchParams;
+  const range = resolveRange((await searchParams).range);
 
   let rows: ProductRow[] = [];
   let error: string | null = null;
@@ -83,22 +77,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         title="Reports"
         description="Profit uses the cost frozen on each order line at sale time, so history does not move when prices change."
         actions={
-          <div className="flex rounded-md border border-border bg-surface p-0.5" role="group" aria-label="Date range">
-            {RANGES.map((option) => (
-              <Link
-                key={option.value}
-                href={`/admin/reports?range=${option.value}`}
-                aria-current={range === option.value ? "true" : undefined}
-                className={`rounded px-3 py-1.5 text-body-sm font-medium ${
-                  range === option.value
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {option.label}
-              </Link>
-            ))}
-          </div>
+          <DateRangeTabs basePath="/admin/reports" active={range} />
         }
       />
 

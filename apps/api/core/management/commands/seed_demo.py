@@ -14,12 +14,13 @@ Tests do NOT depend on this command; they use tests/factories.py.
 from __future__ import annotations
 
 import random
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from accounts.models import Branch, Organization, Role, RoleCode, Status, User
@@ -239,6 +240,12 @@ class Command(BaseCommand):
         parser.add_argument(
             "--orders", type=int, default=40, help="How many demo orders to create."
         )
+        parser.add_argument(
+            "--history-days",
+            type=int,
+            default=90,
+            help="Spread the demo orders back over this many days (0 leaves them all today).",
+        )
 
     @transaction.atomic
     def handle(self, *args: Any, **options: Any) -> None:
@@ -263,6 +270,7 @@ class Command(BaseCommand):
         self._coupons()
         customers = self._customers()
         self._orders(branch, users, customers, options["orders"])
+        self._backdate_orders(options["history_days"])
         self._expenses(branch, accounts, users["manager@rangon.test"])
         self._returns(users["manager@rangon.test"])
 
@@ -1015,3 +1023,143 @@ class Command(BaseCommand):
                 pending = order.payments.filter(status="PENDING").first()
                 if pending is not None:
                     payment_services.capture_payment(payment=pending, actor=manager)
+
+    #: How the demo's orders fall across the history, newest band first, as
+    #: (share of orders, earliest day offset, latest day offset).
+    #:
+    #: Shaped so that *every* preset on the dashboard answers with a different
+    #: number.  That is the point: with all of them landing on the seed instant,
+    #: "Today", "7 days", "30 days" and "90 days" returned identical totals and
+    #: the date filter looked broken because, to a reader, it was.
+    HISTORY_SHAPE = (
+        (0.12, 0, 0),  # today
+        (0.10, 1, 1),  # yesterday
+        (0.18, 2, 6),  # the rest of the last seven days
+        (0.25, 7, 29),  # inside thirty days
+        (0.35, 30, 89),  # older, so 90 days and "last month" differ from 30
+    )
+
+    def _backdate_orders(self, days: int) -> None:
+        """Give the seeded orders a past.
+
+        Every order above is written by the real services, so each one carries
+        the instant the seed ran.  That left the dashboard unable to tell its
+        date presets apart and drew "sales over time" as a single spike -- a
+        demo whose stated job is that "every screen and report has something to
+        show" has to have a history to show.
+
+        This is the one place allowed to move a financial row, for exactly the
+        reason `--reset` is the one place allowed to delete one: `seed_demo`
+        builds fixtures, it does not run a shop.  **Nothing here may be copied
+        into a service** -- CLAUDE.md §3.3 and §13 still hold everywhere else.
+
+        Each order moves together with every row that hangs off it -- items,
+        payments, timeline, stock ledger, cash book -- by one shared delta, so
+        relative ordering survives, the ledger still reconciles against the
+        orders it was written for, and no report can disagree with another about
+        when a sale happened.  `.update()` rather than `.save()` throughout,
+        because `created_at`/`updated_at` are `auto_now_add`/`auto_now` and
+        would otherwise stamp themselves back to now.
+        """
+        from finance.models import AccountTransaction
+        from inventory.models import InventoryTransaction
+        from orders.models import Order, OrderEvent, OrderItem, Payment
+
+        if days <= 0:
+            return
+
+        orders = list(Order.objects.order_by("placed_at", "pk"))
+        if not orders:
+            return
+
+        today = timezone.localdate()
+        tz = timezone.get_current_timezone()
+
+        # Per channel, not over the whole set.  `_orders` creates every counter
+        # sale before every online one, so spreading them as one list handed the
+        # oldest dates to POS and the newest to ONLINE -- and "By channel" then
+        # read 100% POS on a wide range and 100% online on a narrow one, which
+        # is not a shop.  POS and web draw from separate number sequences
+        # (`RGN-POS-*`, `RGN-WEB-*`), so doing it per channel also keeps each
+        # sequence running in step with time: within a channel, the oldest sale
+        # still holds the lowest number.
+        placements: list[tuple[Any, int]] = []
+        for channel in sorted({order.channel for order in orders}):
+            group = [order for order in orders if order.channel == channel]
+            offsets = sorted(self._history_offsets(len(group), days), reverse=True)
+            placements.extend(zip(group, offsets, strict=True))
+
+        # One sale in the small hours, on purpose: 00:00-06:00 local is exactly
+        # the window a UTC-derived "today" used to drop, so the demo can show
+        # that it no longer does.
+        before_dawn = next((pair for pair in placements if pair[1] == 0), None)
+
+        for order, offset in placements:
+            # Shop hours otherwise, so a day's takings read like a day's trade
+            # rather than forty sales in the same second.
+            clock = (
+                time(hour=1, minute=40)
+                if before_dawn is not None and order.pk == before_dawn[0].pk
+                else time(hour=random.randint(9, 20), minute=random.randint(0, 59))
+            )
+            target = timezone.make_aware(
+                datetime.combine(today - timedelta(days=offset), clock), tz
+            )
+            delta = target - order.placed_at
+
+            stamps = {"placed_at": target}
+            lifecycle = ("confirmed_at", "packed_at", "shipped_at", "delivered_at", "cancelled_at")
+            for field in lifecycle:
+                moment = getattr(order, field)
+                if moment is not None:
+                    stamps[field] = moment + delta
+            Order.objects.filter(pk=order.pk).update(
+                created_at=order.created_at + delta,
+                updated_at=order.updated_at + delta,
+                **stamps,
+            )
+
+            OrderItem.objects.filter(order=order).update(
+                created_at=F("created_at") + delta, updated_at=F("updated_at") + delta
+            )
+            OrderEvent.objects.filter(order=order).update(created_at=F("created_at") + delta)
+
+            payments = list(Payment.objects.filter(order=order))
+            for payment in payments:
+                moved = {
+                    field: getattr(payment, field) + delta
+                    for field in ("authorized_at", "captured_at", "failed_at")
+                    if getattr(payment, field) is not None
+                }
+                Payment.objects.filter(pk=payment.pk).update(
+                    created_at=payment.created_at + delta,
+                    updated_at=payment.updated_at + delta,
+                    **moved,
+                )
+
+            # The ledger rows the sale wrote, found the way they were filed:
+            # inventory movements against the order, cash movements against the
+            # payments (orders/services/pos.py, orders/services/payments.py).
+            InventoryTransaction.objects.filter(
+                reference_type="order", reference_id=str(order.pk)
+            ).update(created_at=F("created_at") + delta)
+            AccountTransaction.objects.filter(
+                reference_type="payment", reference_id__in=[str(p.pk) for p in payments]
+            ).update(created_at=F("created_at") + delta, occurred_at=F("occurred_at") + delta)
+
+        self.stdout.write(f"  Spread {len(orders)} orders over the last {days} days.")
+
+    def _history_offsets(self, count: int, days: int) -> list[int]:
+        """One day-offset per order, following HISTORY_SHAPE."""
+        offsets: list[int] = []
+        for share, earliest, latest in self.HISTORY_SHAPE:
+            if earliest > days:
+                continue
+            for _ in range(round(count * share)):
+                offsets.append(random.randint(earliest, min(latest, days)))
+        # Rounding rarely lands on exactly `count`; settle the difference
+        # against the oldest band so the recent ones keep the shape above.
+        del offsets[count:]
+        while len(offsets) < count:
+            offsets.append(random.randint(min(30, days), days))
+        return offsets

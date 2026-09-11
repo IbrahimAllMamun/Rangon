@@ -440,3 +440,43 @@ wrong server.
 1. Audit the endpoint before building the screen. Eight passes, eight sets of
    defects, no exceptions.
 2. Run it. A green typecheck is not evidence the app works.
+
+---
+
+## 2026-09-11 — "the dashboard filters are not working"
+
+The owner reported one symptom. It had **seven** causes, and only one of them was
+the one the symptom pointed at.
+
+| # | Cause | How it was found |
+|---|---|---|
+| D49 | Presets derived their day boundaries from a UTC `now()` while the shop keeps Dhaka time, so "today" began at 06:00 local — and before dawn, at 06:00 *yesterday* | Reading `DateRange.from_params`, then confirming against the live API: `start: 2026-09-11T00:00:00Z` |
+| D50 | `7d`/`30d`/`90d` were rolling 168/720/2160 hours, so `TruncDate` returned N+1 buckets with a part-day at each end | Same read |
+| D51 | `sales_over_time` omitted days that sold nothing, and the chart plots exactly what it is given, so a quiet week drew as a straight line | Reading `sales-chart.tsx` after seeing a 7-day window return 6 points |
+| D52 | `yesterday`/`last_month` ended at the *next* midnight while every report filters `__lte`, double-counting a 00:00:00 order | Noticed while writing the boundary tests |
+| D53 | An unknown preset fell back to 30 days and echoed the caller's spelling as the label | Probing the live API with `?range=bogus` |
+| D54 | **Every seeded order carried the instant the seed ran**, so all four presets returned identical totals | Querying the orders API: 40 orders, one timestamp |
+| D55 | The admin formatted timestamps with no `timeZone`, so the container's UTC won: a 1–31 August statement was headed **"31 Jul 2026"** | Only by loading the page in a browser |
+
+### The lessons, in order of how much they cost
+
+1. **A complaint is a symptom, not a diagnosis.** "The filter does nothing" was
+   literally true and had nothing to do with the filter — D54, demo data with no
+   past, made six real code defects invisible behind one obvious one. Had the
+   seed been fixed alone, the filters would have *looked* fine and still been
+   wrong by six hours.
+2. **This machine is `Asia/Dhaka`; the containers are UTC.** D55 passed every
+   local test and failed under `TZ=UTC`. See `environment.md` §14. A green date
+   test here is not evidence.
+3. **Read the rendered page.** D55 survived a clean `tsc`, a clean lint and 871
+   passing backend tests. It died the moment a browser showed the statement
+   header. This is the third pass in a row where that was the only thing that
+   caught a real defect.
+4. **Prove the test fails first.** Every regression test here was run against the
+   old code before the fix landed — 6 of the backend ones failed with
+   `assert (6, 0, 0) == (0, 0, 0)`, which is the Dhaka offset in a tuple. A test
+   written after a fix that was never seen red is a test of nothing.
+5. **One parser, or the laxer one wins.** `core/dates.py` already existed, raised
+   on garbage, and documented why. `reports/services.py` kept a private copy that
+   silently returned `None`, so an unreadable `date_from` showed thirty days and
+   called it the answer. Reports now use `core.dates.parse_moment`.

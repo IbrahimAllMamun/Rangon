@@ -1,6 +1,6 @@
 import { AlertTriangle, Landmark, Package, ShoppingCart, TrendingUp, Undo2, Wallet } from "lucide-react";
-import Link from "next/link";
 
+import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { SalesChart } from "@/components/admin/sales-chart";
 import { StatCard } from "@/components/admin/stat-card";
@@ -19,15 +19,8 @@ const KIND_LABEL: Record<AccountKind, string> = {
   OTHER: "Other",
 };
 
-const RANGES = [
-  { value: "today", label: "Today" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
-  { value: "90d", label: "90 days" },
-];
-
 export default async function DashboardPage({ searchParams }: { searchParams: Search }) {
-  const { range = "30d" } = await searchParams;
+  const range = resolveRange((await searchParams).range);
 
   let data: DashboardData | null = null;
   let error: string | null = null;
@@ -70,22 +63,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         title="Dashboard"
         description="Everything below is aggregated in the database, not in the browser."
         actions={
-          <div className="flex rounded-md border border-border bg-surface p-0.5" role="group" aria-label="Date range">
-            {RANGES.map((option) => (
-              <Link
-                key={option.value}
-                href={`/admin?range=${option.value}`}
-                aria-current={range === option.value ? "true" : undefined}
-                className={`rounded px-3 py-1.5 text-body-sm font-medium ${
-                  range === option.value
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {option.label}
-              </Link>
-            ))}
-          </div>
+          <DateRangeTabs basePath="/admin" active={range} />
         }
       />
 
