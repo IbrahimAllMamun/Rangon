@@ -15,6 +15,11 @@ lost its contrast over the black hero (D57), and up to three logo loaders drew o
 during a slow navigation (D58). The fourth was not a defect — the admin header was mostly empty
 space, and now carries a breadcrumb and a single identity block instead of three loose elements.
 
+Also on 09-12: **attributes became editable**. `/admin/taxonomy` could list them and nothing
+else — no create, no edit, no reordering of a value, no way to set a colour. It now does all
+four, and a colour attribute gets a picker and a hex box on every value. Auditing the endpoint
+first found two things (D59, D60), one of which was the reason the screen had been read-only.
+
 The same day closed the three CVEs the image scan gates on — two critical Next.js RCEs and a HIGH in
 sharp — by moving `next` to 15.5.24 and `sharp` to 0.35.4. **`main` is now green for the first time.**
 The three merges before it (#24, #25, #26) all landed with `Build & scan images` red, so that gate had
@@ -852,10 +857,15 @@ Do not describe any of these as working.
 ## Known defects
 
 Found by diagnosis on 2026-08-18. None is a data-integrity or money bug; all are user-visible or
-process gaps. D1, D2, D3, D4, D5, D10, D11, D12, D13, D16, D17, D41, D43, D44, D45, D46, D48 and D49-D54 have since been fixed and are struck through.
-**D49-D55 were not found by diagnosis but by a complaint** — the owner said the dashboard's date
-filters did nothing. Seven separate causes sat behind that one sentence, and only one of them
-(D54, the seed) was what it first looked like.
+process gaps. D1, D2, D3, D4, D5, D10, D11, D12, D13, D16, D17, D41, D43, D44, D45, D46, D48 and
+D49-D60 have since been fixed and are struck through.
+
+**Everything from D49 on was found by a complaint or by an audit, not by diagnosis.**
+D49-D55 came from one sentence — the owner said the dashboard's date filters did nothing —
+behind which sat seven separate causes, only one of them (D54, the seed) the obvious one.
+D56-D58 were three more the owner could see: the sidebar, the header, the loaders. D59 and D60
+came out of checking the attribute endpoints before building a screen over them, which is the
+habit this file keeps recommending; D60 is the reason that screen had been read-only at all.
 **D16 no longer blocks deployment** — the CSP is nonce-based and verified against the production build.
 
 | #        | Defect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Where                                                                                                 | Impact                                                                                                                                          |
@@ -925,14 +935,20 @@ filters did nothing. Seven separate causes sat behind that one sentence, and onl
 | ~~D56~~  | ~~**The admin sidebar scrolled away with the page.**~~ **Fixed 2026-09-12.** The panel was `lg:static`, so above `lg` it sat in normal flow and the whole navigation scrolled up and out of sight with whatever table the reader was scrolling — on a long list there was no nav on screen at all. It is now `lg:sticky lg:top-0 lg:h-screen` with its own `overflow-y-auto` region. Two things `sticky` needs inside a flex row and neither is obvious: `self-start`, or the item stretches to the container's full height and has no room left to stick, and `bottom-auto` to undo the mobile drawer's `inset-y-0`. The nav list needs `min-h-0` for the same family of reason — a flex child's default `min-height: auto` refuses to shrink below its content, so it would grow the panel instead of scrolling inside it | `apps/web/src/components/admin/shell.tsx` | The sidebar scrollbar is hidden (`.scrollbar-none`) at the owner's request. Wheel, touch, keyboard and scroll-into-view-on-focus all still work; only the indicator is gone. Deliberately **not** applied to the main content column, where the scrollbar is the only thing saying there is more page |
 | ~~D57~~  | ~~**The storefront header lost contrast over dark sections.**~~ **Fixed 2026-09-12.** It was `bg-surface/95 backdrop-blur-sm`, so the page showed through — and the storefront scrolls over a near-black hero and full-bleed photography, which meant the nav's contrast changed with whatever happened to be under it. Now a solid `bg-surface`, which holds the same ratio over every section (WCAG 1.4.3). The shrink-on-scroll behaviour and the shadow are unchanged | `apps/web/src/components/commerce/site-header.tsx` | The translucent wishlist heart is left alone: it is a small control floating on product photography, not a bar that has to stay legible over everything |
 | ~~D58~~  | ~~**Up to three logo loaders drew at once.**~~ **Fixed 2026-09-12.** Three things render the brand mark while the app is busy and nothing stopped them doing it together: a route's `loading.tsx`, `PendingRegion` (which fires on *any* navigation, not only same-segment ones), and the full-screen `LogoLoaderOverlay` after 480 ms. Cross a segment boundary slowly and all three conditions held — and because the overlay tints and blurs what is behind it, the extra marks showed through as washed-out ghosts rather than being hidden, which is exactly how it was reported. A loader now draws only if nothing **more specific** is already drawing: the route's own screen beats a region, a region beats the global overlay. The overlay keeps the job only it does — blocking clicks — and drops its mark, its tint and its blur when outranked | `apps/web/src/lib/navigation/logo-loader-slot.tsx`, `logo-loader-overlay.tsx`, `logo-loader-screen.tsx`, `ui/pending-region.tsx` | Nine tests pin the resolution; five of them fail if the suppression is removed. `LogoLoaderScreen` became a client component to claim its rank |
+| ~~D59~~  | ~~**A swatch that is not a colour was stored happily and rendered as nothing.**~~ **Fixed 2026-09-12.** `AttributeValue.swatch` is a plain `CharField(max_length=32)` whose help text says "hex colour" and whose value is written straight into `style={{ backgroundColor }}` on the product form and the media grouper. Nothing validated it, so `navy`, `rgb(0,0,128)` and `#12345` were all accepted and all invisible — the swatch simply vanished and the shopper was left choosing between two identical circles. The serializer now takes `#rgb`, `#rrggbb` or `#rrggbbaa` and lower-cases it, so two spellings of one colour compare equal. Found while building the colour picker, which would otherwise have been the first thing to write a value nothing checked | `apps/api/catalog/api/serializers.py` | Six tests; all six fail with the validator removed |
+| ~~D60~~  | ~~**The attributes screen was read-only for a reason the schema contradicts.**~~ **Fixed 2026-09-12.** The panel carried the note "variants reference these values, so editing one rewrites history". `OrderItem` snapshots `sku`, `product_name` and `variant_label` under the comment "history must not move when the catalogue changes" — so renaming a value cannot touch a single order, and the whole screen had been withheld on a premise that was never checked. What is genuinely unsafe is narrower and is now guarded where it lives: `code` is a live facet key (`search.py` matches on `attribute__code`) so it warns rather than forbids, an attribute cannot stop being variant-defining while variants rely on it, and deleting anything in use is refused in a sentence instead of a bare 409 | `apps/web/src/components/admin/attribute-manager.tsx`, `apps/api/catalog/api/views.py` | The read-only note had been there since the screen shipped on 2026-08-31 |
 
 ## Still API-only (no UI)
 
 **Nothing.** The last two — categories/brands/attributes and users/roles — shipped 2026-08-31 as
 `/admin/taxonomy` and `/admin/staff`.
 
+**Attributes were the exception, and are no longer.** They had a full `ModelViewSet` behind a list
+that could only read — the UI was the gap, not the API. Create, edit, reorder and a colour picker
+shipped 2026-09-12; [D60](#known-defects) says why the screen had been left read-only.
+
 The rule that got us here is worth keeping for whatever is built next: **check each endpoint against
-the documented behaviour before building over it.** It has now paid for itself six times — a CSV
+the documented behaviour before building over it.** It has now paid for itself seven times — a CSV
 export that had never worked, a stock count that could not be counted, a restock decision in the
 wrong place, the four customer defects D24–D27, a coupon redeemable twice under a race, and eleven
 more in the two "safe" areas above. "Exists" is not "tested", and "rarely touched" is a reason

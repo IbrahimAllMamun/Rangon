@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +22,10 @@ from catalog.models import (
 from catalog.services import unique_slug
 from core.media import RelativeImageField, media_url
 
+#: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
+#: emit and everything `background-color` will accept from us.
+_HEX_COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
 
 class AttributeValueSerializer(serializers.ModelSerializer):
     attribute_code = serializers.CharField(source="attribute.code", read_only=True)
@@ -39,9 +44,31 @@ class AttributeValueSerializer(serializers.ModelSerializer):
             "position",
         ]
 
+    def validate_swatch(self, value: str) -> str:
+        """A swatch is a colour or it is nothing.
+
+        It is rendered straight into `style={{ backgroundColor }}` on the
+        product form and the media grouper, so anything that is not a colour
+        silently paints nothing at all -- the swatch just disappears and the
+        shopper is left choosing between two identical circles. The field is a
+        plain `CharField(max_length=32)`, so until now "navy", "rgb(0,0,128)"
+        and "#12345" were all accepted and all equally invisible.
+        """
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        if not _HEX_COLOUR.match(cleaned):
+            raise serializers.ValidationError(
+                "Use a hex colour such as #1E3A8A. A colour name or an rgb() "
+                "string is stored happily and then renders as nothing."
+            )
+        return cleaned.lower()
+
 
 class AttributeSerializer(serializers.ModelSerializer):
     values = AttributeValueSerializer(many=True, read_only=True)
+    #: So the admin can warn *before* the save rather than refuse after it.
+    variant_usage = serializers.SerializerMethodField()
 
     class Meta:
         model = Attribute
@@ -54,7 +81,43 @@ class AttributeSerializer(serializers.ModelSerializer):
             "is_filterable",
             "position",
             "values",
+            "variant_usage",
         ]
+
+    def get_variant_usage(self, obj: Attribute) -> int:
+        """How many variants are defined by this attribute.
+
+        Read from the annotation the viewset adds, so a list of attributes stays
+        one query. `VariantAttributeValue.attribute` is `related_name="+"`, so
+        there is no reverse accessor to annotate across and no prefetch to fall
+        back on -- the fallback below is a real query, and exists only for
+        callers that build this serializer by hand.
+        """
+        annotated = getattr(obj, "variant_usage_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return VariantAttributeValue.objects.filter(attribute=obj).count()
+
+    def validate_is_variant_defining(self, value: bool) -> bool:
+        """It may be turned on freely, and off only while nothing depends on it.
+
+        Variants were generated from the attributes that were variant-defining
+        at the time, and `VariantAttributeValue` still points at this row. Turn
+        it off underneath them and the matrix that produced those SKUs no longer
+        describes them: `models.py` refuses to attach a value whose attribute is
+        not variant-defining, so the existing variants become rows the app can
+        read but could never have created. Rename it or retire it instead.
+        """
+        if value or self.instance is None or self.instance.is_variant_defining == value:
+            return value
+        used_by = VariantAttributeValue.objects.filter(attribute=self.instance).count()
+        if used_by:
+            raise serializers.ValidationError(
+                f"{used_by} variant{'' if used_by == 1 else 's'} are defined by this "
+                "attribute, so it cannot stop being variant-defining. Those SKUs exist "
+                "because of it."
+            )
+        return value
 
 
 class CategorySerializer(serializers.ModelSerializer):

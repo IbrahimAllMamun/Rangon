@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Count, Max, Min, Q
+from django.db.models import Count, IntegerField, Max, Min, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -38,9 +39,11 @@ from catalog.models import (
     ProductImage,
     ProductVariant,
     PublishStatus,
+    VariantAttributeValue,
 )
 from catalog.services import generate_barcode, generate_variants
 from core import audit
+from core.exceptions import Conflict, ValidationError
 from inventory import services as inventory_services
 
 PRODUCT_PERMISSIONS = {
@@ -85,12 +88,48 @@ class BrandViewSet(viewsets.ModelViewSet):
     pagination_class = None
 
 
+#: How many variants each attribute defines, as one subquery rather than a
+#: COUNT per row. `VariantAttributeValue.attribute` is `related_name="+"`, so
+#: there is no reverse relation to annotate across.
+_VARIANT_USAGE = Coalesce(
+    Subquery(
+        VariantAttributeValue.objects.filter(attribute=OuterRef("pk"))
+        .values("attribute")
+        .annotate(total=Count("pk"))
+        .values("total")[:1],
+        output_field=IntegerField(),
+    ),
+    Value(0),
+)
+
+
 class AttributeViewSet(viewsets.ModelViewSet):
-    queryset = Attribute.objects.prefetch_related("values").all()
+    queryset = (
+        Attribute.objects.prefetch_related("values")
+        .annotate(variant_usage_count=_VARIANT_USAGE)
+        .all()
+    )
     serializer_class = AttributeSerializer
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = PRODUCT_PERMISSIONS
     pagination_class = None
+
+    def perform_destroy(self, instance: Attribute) -> None:
+        """Refuse in words rather than with a bare 409.
+
+        `VariantAttributeValue` PROTECTs both the attribute and its values, so
+        the database already stops this. What it does not do is say why, and a
+        409 with no body leaves the admin clicking Delete again.
+        """
+        used_by = VariantAttributeValue.objects.filter(attribute=instance).count()
+        if used_by:
+            raise Conflict(
+                f"“{instance.name}” defines {used_by} variant"
+                f"{'' if used_by == 1 else 's'} and cannot be deleted. "
+                "Those SKUs would lose the axis they were generated on.",
+                details={"variant_usage": used_by},
+            )
+        super().perform_destroy(instance)
 
 
 class AttributeValueViewSet(viewsets.ModelViewSet):
@@ -100,6 +139,56 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
     required_permissions = PRODUCT_PERMISSIONS
     filterset_fields = ["attribute"]
     pagination_class = None
+
+    def perform_destroy(self, instance: AttributeValue) -> None:
+        """Refuse in words rather than with a bare 409 (see AttributeViewSet)."""
+        used_by = instance.variant_links.count()
+        if used_by:
+            raise Conflict(
+                f"“{instance.display}” is carried by {used_by} variant"
+                f"{'' if used_by == 1 else 's'} and cannot be deleted. "
+                "Rename it instead — orders froze their own label at sale time, "
+                "so history does not move.",
+                details={"variant_usage": used_by},
+            )
+        super().perform_destroy(instance)
+
+    @action(detail=True, methods=["post"])
+    def move(self, request: Request, pk: str | None = None) -> Response:
+        """Swap `position` with the previous/next value of the same attribute.
+
+        Up/down rather than drag-and-drop, so the control is operable by
+        keyboard and screen reader — the same choice, and the same reason, as
+        the navigation editor (ADR-0009).
+        """
+        direction = str(request.data.get("direction", "")).lower()
+        if direction not in {"up", "down"}:
+            raise ValidationError("Direction must be 'up' or 'down'.")
+
+        value = self.get_object()
+        siblings = AttributeValue.objects.filter(attribute_id=value.attribute_id).order_by(
+            "position", "value"
+        )
+
+        with transaction.atomic():
+            ordered = list(siblings.select_for_update())
+            index = next(i for i, row in enumerate(ordered) if row.pk == value.pk)
+            target = index - 1 if direction == "up" else index + 1
+            if 0 <= target < len(ordered):
+                neighbour = ordered[target]
+                value.position, neighbour.position = neighbour.position, value.position
+                # Seeded values all share position 0, where a swap is invisible
+                # because the ordering falls through to `value`. Renumber the
+                # whole run instead (the navigation editor hits this too).
+                if value.position == neighbour.position:
+                    ordered[index], ordered[target] = ordered[target], ordered[index]
+                    for offset, row in enumerate(ordered):
+                        row.position = offset
+                    AttributeValue.objects.bulk_update(ordered, ["position"])
+                else:
+                    AttributeValue.objects.bulk_update([value, neighbour], ["position"])
+
+        return Response(self.get_serializer(self.get_object()).data)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
