@@ -34,6 +34,7 @@ from inventory import services as inventory_services
 from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDetailSerializer
 from orders.models import Order
 from orders.services import checkout as checkout_services
+from orders.services import leads
 
 CART_HEADER = "HTTP_X_CART_TOKEN"
 
@@ -558,6 +559,40 @@ class ShippingOptionsView(APIView):
                 city=request.query_params.get("city", ""), subtotal=view.priced.subtotal
             )
         )
+
+
+class AbandonedCheckoutCaptureView(APIView):
+    """Hold the phone number a shopper typed into checkout but did not use.
+
+    Fire-and-forget by design. It answers `204` whether or not a lead was held,
+    because the storefront calls it while someone is mid-form and must never
+    show them an error about a follow-up list they did not ask to be on. A
+    number that is not a mobile is simply not a lead: there is nothing to ring.
+
+    Throttled on the `checkout` scope, which it shares with placing an order —
+    the same shopper, the same page, and a rate that already assumes a human.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "checkout"
+
+    def post(self, request: Request) -> Response:
+        cart = _cart_for(request)
+        # Server-priced, never a figure the browser sent: the value on the
+        # call-back list is what the shop would have taken, and CLAUDE.md §13
+        # does not make an exception for a number that is only ever read.
+        priced = checkout_services.price_cart(cart=cart).priced
+
+        leads.capture(
+            phone=str(request.data.get("phone", "")),
+            branch=cart.branch,
+            cart=cart,
+            name=str(request.data.get("name", "")),
+            email=str(request.data.get("email", "")),
+            cart_total=priced.grand_total,
+            item_count=priced.item_count,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CheckoutView(APIView):

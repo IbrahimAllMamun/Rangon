@@ -10,6 +10,7 @@ from core.fields import BangladeshiPhoneField
 from core.media import media_url
 from finance.models import Account
 from orders.models import (
+    AbandonedCheckout,
     Cart,
     CartItem,
     HeldSale,
@@ -513,3 +514,36 @@ class CheckoutSerializer(serializers.Serializer):
         if number is None:
             raise serializers.ValidationError({"phone": [phone.INVALID_MESSAGE]})
         return {**value, "phone": number}
+
+
+class AbandonedCheckoutSerializer(serializers.ModelSerializer):
+    """The call-back list. Read-mostly: only the note is writable.
+
+    Status moves through the `recover`/`lost` paths, never by PATCH — a lead
+    marked RECOVERED by hand would claim an order that does not exist, and the
+    recovery figure is the only thing this list is measured by.
+    """
+
+    recovered_order_number = serializers.CharField(
+        source="recovered_order.number", read_only=True, default=""
+    )
+    branch_code = serializers.CharField(source="branch.code", read_only=True, default="")
+
+    class Meta:
+        model = AbandonedCheckout
+        fields = [
+            "id",
+            "phone",
+            "name",
+            "email",
+            "status",
+            "cart_total",
+            "item_count",
+            "branch_code",
+            "last_seen_at",
+            "recovered_at",
+            "recovered_order_number",
+            "note",
+            "created_at",
+        ]
+        read_only_fields = [field for field in fields if field != "note"]

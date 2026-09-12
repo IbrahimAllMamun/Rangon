@@ -428,6 +428,13 @@ def place_order(
     cart.is_active = False
     cart.save(update_fields=["is_active", "updated_at"])
 
+    # This order may be the phone call someone was about to make. Closing the
+    # lead inside the same transaction keeps the call-back list from ever
+    # showing a customer who has already bought.
+    from orders.services import leads
+
+    leads.recover_for_order(order)
+
     log_event(
         order,
         OrderEventType.CREATED,

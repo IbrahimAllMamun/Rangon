@@ -3,6 +3,7 @@ from django.urls import path
 from catalog.api.feed_views import ProductFeedCSVView, ProductFeedXMLView
 from content.api.views import ShopNavigationView
 from orders.api.shop_views import (
+    AbandonedCheckoutCaptureView,
     AccountAddressView,
     AccountOrdersView,
     CartCouponView,
@@ -42,6 +43,12 @@ urlpatterns = [
     path("cart/coupon/", CartCouponView.as_view(), name="shop-cart-coupon"),
     path("shipping-options/", ShippingOptionsView.as_view(), name="shop-shipping-options"),
     path("checkout/", CheckoutView.as_view(), name="shop-checkout"),
+    # Held before the order exists, so it survives the shopper leaving.
+    path(
+        "checkout/lead/",
+        AbandonedCheckoutCaptureView.as_view(),
+        name="shop-checkout-lead",
+    ),
     path("orders/<str:number>/", OrderTrackingView.as_view(), name="shop-order-tracking"),
     path("account/orders/", AccountOrdersView.as_view(), name="shop-account-orders"),
     path(
