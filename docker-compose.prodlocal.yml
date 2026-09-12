@@ -15,9 +15,10 @@
 #     not applied — it changes nothing about what you see in the browser
 #
 # Nginx fronts the whole thing on 4100 as a single origin, exactly as the
-# deployed topology does; the API is *also* published on 8100 so it can be
-# poked directly. Mailpit is on ${MAILPIT_PORT:-8125} — override it in the env
-# file when Windows has reserved 8125 (see .claude/environment.md).
+# deployed topology does; the API is *also* published on ${API_PORT:-8100} so
+# it can be poked directly, and Mailpit on ${MAILPIT_PORT:-8125}. Override
+# either in the env file when Windows has reserved that range — it moves on
+# every reboot and has already taken 8125 and 8100 (.claude/environment.md §2).
 # For the real thing see docker-compose.prod.yml and docs/operations/.
 
 # docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml down
@@ -33,7 +34,7 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DJANGO_SECURE_SSL_REDIRECT: "0"
     ports:
-      - "8100:8000"
+      - "${API_PORT:-8100}:8000"
     restart: unless-stopped
 
   worker:

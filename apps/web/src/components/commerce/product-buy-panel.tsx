@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button } from "@/components/ui/primitives";
 import type { ShopProduct, ShopVariant } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
-import { buildAxes, findVariant } from "@/lib/commerce/variants";
+import { buildAxes, resolveVariant, type VariantMatch } from "@/lib/commerce/variants";
 import { money } from "@/lib/format";
 import { useCart } from "@/lib/store/cart";
 
@@ -93,9 +93,10 @@ export function ProductBuyPanel({
 
             <div className="mt-2 flex flex-wrap gap-2">
               {axis.values.map((value) => {
-                const candidate = findVariant(product.variants, selected, axis.code, value.value);
+                const match = resolveVariant(product.variants, selected, axis.code, value.value);
+                const candidate = match.variant;
                 const isSelected = selected?.attributes[axis.code]?.value === value.value;
-                const state = availability(candidate);
+                const state = availability(match);
                 const reason = describe(value.label, state);
 
                 if (axis.kind === "COLOR") {
@@ -111,7 +112,8 @@ export function ProductBuyPanel({
                       className={cn(
                         "relative size-10 rounded-full border-2 transition-transform duration-fast",
                         isSelected ? "border-brand-500 scale-110" : "border-neutral-300",
-                        state !== "fits" && "opacity-40",
+                        state === "soldOut" && "opacity-40",
+                        state === "dead" && "opacity-25",
                       )}
                       style={{ backgroundColor: value.swatch || "var(--neutral-200)" }}
                     />
@@ -134,6 +136,9 @@ export function ProductBuyPanel({
                       // Struck through only when it cannot be bought at all.
                       state === "dead" && "text-neutral-400 line-through",
                       state === "soldOut" && "text-neutral-400",
+                      // Reachable, just not from here — dotted rather than
+                      // struck, because choosing it works.
+                      state === "stale" && "border-dashed text-neutral-600",
                     )}
                   >
                     {value.label}
@@ -220,23 +225,33 @@ export function ProductBuyPanel({
 }
 
 /**
- * Four states, not two: "out of stock" and "we do not make that combination"
- * are different facts, and a shopper deserves to be told which one they hit.
+ * Four states, not two: "out of stock", "we do not make that combination" and
+ * "we make it, just not with what you have picked" are three different facts,
+ * and a shopper deserves to be told which one they hit.
  *
  *  - `fits`    — buyable with the current picks
- *  - `soldOut` — the combination exists but has no stock; still clickable, so
- *                the shopper can land on it and read why
+ *  - `soldOut` — that exact combination exists and has no stock; still
+ *                clickable, so the shopper can land on it and read why
+ *  - `stale`   — no such combination, but the value is in stock elsewhere;
+ *                clickable, and choosing it repairs the other axes
  *  - `dead`    — nothing carries this value at all; the only disabled state
+ *
+ * `stale` is the one worth the extra branch. Without it a Medium that exists
+ * only in Navy looked identical to a Medium that is sold out everywhere —
+ * both greyed, both saying "out of stock", one of them a sale waiting to
+ * happen behind a colour change.
  */
-type Availability = "fits" | "soldOut" | "dead";
+type Availability = "fits" | "soldOut" | "stale" | "dead";
 
-function availability(candidate: ShopVariant | undefined): Availability {
-  if (!candidate) return "dead";
-  return candidate.in_stock ? "fits" : "soldOut";
+function availability(match: VariantMatch): Availability {
+  if (!match.variant) return "dead";
+  if (!match.exact) return "stale";
+  return match.variant.in_stock ? "fits" : "soldOut";
 }
 
 function describe(label: string, state: Availability): string {
   if (state === "fits") return label;
   if (state === "soldOut") return `${label} — out of stock`;
+  if (state === "stale") return `${label} — available in another combination`;
   return `${label} — not available`;
 }

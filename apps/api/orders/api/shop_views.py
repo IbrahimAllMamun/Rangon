@@ -300,6 +300,58 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         )
 
 
+class ShopBrandView(APIView):
+    """Brands, and one brand.
+
+    The home page has served eight featured brands with their logos since it
+    was built, and every one of them linked nowhere — there was no brand route
+    at all. This is the page those logos were always pointing at.
+
+    Counts come from one grouped query rather than a count per brand: a brand
+    index is a small page and should not scale with the catalogue.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, slug: str | None = None) -> Response:
+        visible = visible_products()
+
+        if slug:
+            brand = get_object_or_404(Brand, slug=slug, is_active=True)
+            return Response(
+                {
+                    "id": str(brand.pk),
+                    "name": brand.name,
+                    "slug": brand.slug,
+                    "description": brand.description,
+                    "logo": media_url(brand.logo),
+                    "product_count": visible.filter(brand=brand).count(),
+                }
+            )
+
+        counts = dict(
+            visible.values_list("brand_id")
+            .annotate(total=Count("id"))
+            .values_list("brand_id", "total")
+        )
+        brands = Brand.objects.filter(is_active=True).order_by("name")
+        return Response(
+            [
+                {
+                    "name": brand.name,
+                    "slug": brand.slug,
+                    "description": brand.description,
+                    "logo": media_url(brand.logo),
+                    "is_featured": brand.is_featured,
+                    "product_count": counts.get(brand.pk, 0),
+                }
+                for brand in brands
+                # A brand with nothing to sell is a dead end, not a destination.
+                if counts.get(brand.pk, 0) > 0
+            ]
+        )
+
+
 class ShopCategoryView(APIView):
     permission_classes = [AllowAny]
 

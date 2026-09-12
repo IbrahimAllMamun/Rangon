@@ -148,6 +148,35 @@ export default async function HomePage() {
         </Section>
       ) : null}
 
+      {/* Featured brands have been in the home payload since this page was
+          built and were never rendered, so every brand logo the API served
+          pointed nowhere. They link to /brand/[slug] now. */}
+      {data?.brands?.length ? (
+        <Section title="Shop by brand" href="/brand">
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+            {data.brands.map((brand) => (
+              <li key={brand.slug}>
+                <Link
+                  href={`/brand/${brand.slug}`}
+                  className="flex h-24 flex-col items-center justify-center gap-2 rounded-xl border border-border bg-surface p-3 transition-colors duration-fast hover:border-brand-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
+                >
+                  {brand.logo ? (
+                    <Image
+                      src={brand.logo}
+                      alt=""
+                      width={56}
+                      height={32}
+                      className="h-8 w-auto object-contain"
+                    />
+                  ) : null}
+                  <span className="truncate text-caption font-medium">{brand.name}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
       {!data && (
         <div className="container-rangon py-20 text-center">
           <h2 className="text-h3">The shop is warming up</h2>
