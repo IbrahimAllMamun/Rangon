@@ -129,6 +129,11 @@ CATEGORY_ATTRIBUTES = {
     "Fragrance": ["volume"],
 }
 
+#: How deep each reduction is, cycled across the catalogue. Zero means full
+#: price, which most of the shop should be — a shop where everything is on sale
+#: is a shop where nothing is.
+DEMO_DISCOUNTS = [Decimal("0.00"), Decimal("0.00"), Decimal("0.30"), Decimal("0.15")]
+
 PRODUCTS: list[dict[str, Any]] = [
     # name, category, brand, price, cost, variant attributes
     {
@@ -684,12 +689,24 @@ class Command(BaseCommand):
 
             import itertools
 
+            # Every third product is reduced, at a depth that varies, so the
+            # price-drops row has something to rank and the discount badge has
+            # something to say. Without this the feature is invisible in a
+            # demo — the seed set `compare_at_price` on nothing at all, so
+            # "Price drops" was an empty section on a shop with 12 products.
+            discount = DEMO_DISCOUNTS[len(products) % len(DEMO_DISCOUNTS)]
+            price = Decimal(spec["price"])
+            compare_at = (
+                (price / (Decimal("1.00") - discount)).quantize(Decimal("1")) if discount else None
+            )
+
             for combination in itertools.product(*groups):
                 create_variant(
                     product=product,
                     attribute_values=list(combination),
-                    price=Decimal(spec["price"]),
+                    price=price,
                     cost=Decimal(spec["cost"]),
+                    compare_at_price=compare_at,
                     batch_number=f"B{random.randint(1000, 9999)}" if expiry else "",
                     expiry_date=expiry,
                 )

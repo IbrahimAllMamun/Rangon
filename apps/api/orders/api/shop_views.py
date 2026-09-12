@@ -92,6 +92,24 @@ def _payload_queryset(queryset: Any) -> Any:
     )
 
 
+def _ranked(products: Any) -> list[Product]:
+    """Re-fetch with the payload's prefetches, keeping the given order.
+
+    `pk__in` answers in whatever order the database finds convenient, so a
+    merchandised row re-fetched that way arrives unranked — a "price drops"
+    row that leads with 15% off while a 30% sits below it, which is the one
+    thing the row is for. This is a small function because it is a mistake
+    that has now been made twice.
+    """
+    ordered = list(products)
+    if not ordered:
+        return []
+    position = {item.pk: index for index, item in enumerate(ordered)}
+    rows = list(_payload_queryset(Product.objects.filter(pk__in=list(position))))
+    rows.sort(key=lambda item: position.get(item.pk, len(position)))
+    return rows
+
+
 def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
     images = [
         {
@@ -237,10 +255,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         # Real basket co-occurrence, not "same category" wearing its name.
         # `bought_together` degrades to the category itself when the catalogue
         # is too young to have any, so the row is never empty on a new shop.
-        ranked = merchandising.bought_together(product=product, limit=8)
-        related = list(_payload_queryset(Product.objects.filter(pk__in=[p.pk for p in ranked])))
-        order = {item.pk: index for index, item in enumerate(ranked)}
-        related.sort(key=lambda item: order.get(item.pk, len(order)))
+        related = _ranked(merchandising.bought_together(product=product, limit=8))
 
         related_snapshots = inventory_services.availability(
             branch=branch,
@@ -535,14 +550,10 @@ class ShopHomeView(APIView):
                 "best_sellers": serialise(best_sellers),
                 # Deepest reduction first, so the row leads with what a shopper
                 # would call a bargain rather than the dearest thing that
-                # happens to be marked down.
-                "price_drops": serialise(
-                    _payload_queryset(
-                        Product.objects.filter(
-                            pk__in=[item.pk for item in merchandising.price_drops(limit=8)]
-                        )
-                    )
-                ),
+                # happens to be marked down. `pk__in` answers in whatever order
+                # the database likes and throws the ranking away, so it is
+                # reapplied -- the ordering *is* the feature.
+                "price_drops": serialise(_ranked(merchandising.price_drops(limit=8))),
                 "brands": [
                     {
                         "name": brand.name,

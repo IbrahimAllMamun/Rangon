@@ -11,6 +11,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/primitives";
+import { QuickViewTrigger } from "@/components/commerce/quick-view-trigger";
 import { WishlistHeart } from "@/components/commerce/wishlist-heart";
 import type { ShopProduct } from "@/lib/api/types";
 import { Reveal } from "@/components/ui/reveal";
@@ -97,6 +98,11 @@ export function ProductCard({
           </p>
         </div>
       </Link>
+
+      {/* Sibling of the link, like the wishlist heart: a button inside an
+          anchor is invalid HTML. Positioned against the card, which shares the
+          image's box. */}
+      <QuickViewTrigger product={product} />
 
       {colours.length > 1 && (
         <ul className="mt-2 flex items-center gap-1.5" aria-label="Available colours">

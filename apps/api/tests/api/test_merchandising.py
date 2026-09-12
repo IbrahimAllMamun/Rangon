@@ -17,6 +17,7 @@ from decimal import Decimal
 import pytest
 
 from catalog import merchandising
+from catalog.models import Product
 from orders.models import OrderStatus, PaymentMethod
 from orders.services import checkout as checkout_services
 from tests import factories
@@ -193,6 +194,32 @@ class TestThroughTheApi:
 
         assert "price_drops" in payload
         assert any(item["name"] == "Reduced online" for item in payload["price_drops"])
+
+    def test_the_payload_refetch_keeps_the_order_it_was_given(self, shop):
+        """The ordering *is* the feature, and `pk__in` throws it away.
+
+        `price_drops()` ranks correctly, and the view re-fetched the rows by
+        primary key to attach the payload's prefetches — which answers in
+        whatever order the database finds convenient. The live row arrived
+        leading with 15% off while a 30% sat below it.
+
+        Asserting "deep before shallow" through the API does **not** catch
+        this: the database often returns them in the right order by luck, and
+        the test passes against the broken code. So this asks for the reverse
+        of whatever order the database gives, which no-op reordering cannot
+        satisfy however the rows happen to come back.
+        """
+        from orders.api.shop_views import _ranked
+
+        for index in range(6):
+            product = factories.product(name=f"Ranked {index}")
+            factories.variant(product, price=Decimal("100.00"))
+
+        pks = [item.pk for item in Product.objects.all()[:6]]
+        natural = list(Product.objects.filter(pk__in=pks))
+        wanted = list(reversed(natural))
+
+        assert [item.pk for item in _ranked(wanted)] == [item.pk for item in wanted]
 
     def test_a_listed_product_carries_its_discount_percentage(self, api, shop):
         product = factories.product(name="Badged online")
