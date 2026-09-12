@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsCustomer
 from accounts.services import default_branch
-from catalog import search
+from catalog import merchandising, search
 from catalog.api.serializers import colour_payload
 from catalog.models import Brand, Category, Product, ProductImage, ProductVariant, PublishStatus
 from catalog.search import facets, search_products, visible_products
@@ -148,6 +148,9 @@ def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
         "price_min": str(min(prices)),
         "price_max": str(max(prices)),
         "in_stock": any(v["in_stock"] for v in variants),
+        # Read off the variants already prefetched above, so a listing gains a
+        # discount badge without gaining a query.
+        **merchandising.price_drop_payload(product),
         "featured": product.featured,
         "seo_title": product.seo_title or product.name,
         "seo_description": product.seo_description or product.short_description,
@@ -231,9 +234,14 @@ class ShopProductViewSet(viewsets.GenericViewSet):
                 for review in reviews[:20]
             ],
         }
-        related = _payload_queryset(
-            visible_products().filter(category=product.category).exclude(pk=product.pk)
-        )[:8]
+        # Real basket co-occurrence, not "same category" wearing its name.
+        # `bought_together` degrades to the category itself when the catalogue
+        # is too young to have any, so the row is never empty on a new shop.
+        ranked = merchandising.bought_together(product=product, limit=8)
+        related = list(_payload_queryset(Product.objects.filter(pk__in=[p.pk for p in ranked])))
+        order = {item.pk: index for index, item in enumerate(ranked)}
+        related.sort(key=lambda item: order.get(item.pk, len(order)))
+
         related_snapshots = inventory_services.availability(
             branch=branch,
             variants=list(ProductVariant.objects.filter(product__in=related)),
@@ -525,6 +533,16 @@ class ShopHomeView(APIView):
                 "new_arrivals": serialise(base.order_by("-created_at")[:8]),
                 "featured": serialise(base.filter(featured=True)[:8]),
                 "best_sellers": serialise(best_sellers),
+                # Deepest reduction first, so the row leads with what a shopper
+                # would call a bargain rather than the dearest thing that
+                # happens to be marked down.
+                "price_drops": serialise(
+                    _payload_queryset(
+                        Product.objects.filter(
+                            pk__in=[item.pk for item in merchandising.price_drops(limit=8)]
+                        )
+                    )
+                ),
                 "brands": [
                     {
                         "name": brand.name,

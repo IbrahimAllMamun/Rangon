@@ -78,6 +78,8 @@ export interface ShopProduct {
   price_min: string;
   price_max: string;
   in_stock: boolean;
+  /** Deepest reduction across the variants, as a whole percentage. 0 = none. */
+  drop_percent: number;
   featured: boolean;
   seo_title: string;
   seo_description: string;

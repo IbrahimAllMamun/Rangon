@@ -72,7 +72,14 @@ export function ProductCard({
 
           <div className="absolute left-3 top-3 flex flex-col gap-1">
             {!product.in_stock && <Badge tone="dark">Sold out</Badge>}
-            {product.in_stock && onSale && <Badge tone="brand">Sale</Badge>}
+            {/* The number, not the word: "40% off" is a reason to look and
+                "Sale" is wallpaper. Falls back to the word when the API has
+                not sent a percentage (an older cached payload). */}
+            {product.in_stock && onSale && (
+              <Badge tone="brand">
+                {product.drop_percent ? `${product.drop_percent}% off` : "Sale"}
+              </Badge>
+            )}
           </div>
         </div>
 

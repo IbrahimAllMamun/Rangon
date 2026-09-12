@@ -14,6 +14,7 @@ interface HomePayload {
   new_arrivals: ShopProduct[];
   featured: ShopProduct[];
   best_sellers: ShopProduct[];
+  price_drops: ShopProduct[];
   brands: { name: string; slug: string; logo: string }[];
 }
 
@@ -133,6 +134,14 @@ export default async function HomePage() {
       {data?.new_arrivals?.length ? (
         <Section title="New arrivals" href="/shop?sort=newest">
           <ProductGrid products={data.new_arrivals} />
+        </Section>
+      ) : null}
+
+      {/* Deepest reduction first, so the row leads with what a shopper would
+          call a bargain rather than the dearest thing that is marked down. */}
+      {data?.price_drops?.length ? (
+        <Section title="Price drops" href="/shop?sort=price-asc">
+          <ProductGrid products={data.price_drops} priorityCount={0} />
         </Section>
       ) : null}
 
