@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsCustomer
 from accounts.services import default_branch
-from catalog import search
+from catalog import merchandising, search
 from catalog.api.serializers import colour_payload
 from catalog.models import Brand, Category, Product, ProductImage, ProductVariant, PublishStatus
 from catalog.search import facets, search_products, visible_products
@@ -34,6 +34,7 @@ from inventory import services as inventory_services
 from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDetailSerializer
 from orders.models import Order
 from orders.services import checkout as checkout_services
+from orders.services import leads
 
 CART_HEADER = "HTTP_X_CART_TOKEN"
 
@@ -89,6 +90,24 @@ def _payload_queryset(queryset: Any) -> Any:
         .prefetch_related(None)
         .prefetch_related(*_PAYLOAD_PREFETCH_RELATED)
     )
+
+
+def _ranked(products: Any) -> list[Product]:
+    """Re-fetch with the payload's prefetches, keeping the given order.
+
+    `pk__in` answers in whatever order the database finds convenient, so a
+    merchandised row re-fetched that way arrives unranked — a "price drops"
+    row that leads with 15% off while a 30% sits below it, which is the one
+    thing the row is for. This is a small function because it is a mistake
+    that has now been made twice.
+    """
+    ordered = list(products)
+    if not ordered:
+        return []
+    position = {item.pk: index for index, item in enumerate(ordered)}
+    rows = list(_payload_queryset(Product.objects.filter(pk__in=list(position))))
+    rows.sort(key=lambda item: position.get(item.pk, len(position)))
+    return rows
 
 
 def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
@@ -147,6 +166,9 @@ def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
         "price_min": str(min(prices)),
         "price_max": str(max(prices)),
         "in_stock": any(v["in_stock"] for v in variants),
+        # Read off the variants already prefetched above, so a listing gains a
+        # discount badge without gaining a query.
+        **merchandising.price_drop_payload(product),
         "featured": product.featured,
         "seo_title": product.seo_title or product.name,
         "seo_description": product.seo_description or product.short_description,
@@ -230,9 +252,11 @@ class ShopProductViewSet(viewsets.GenericViewSet):
                 for review in reviews[:20]
             ],
         }
-        related = _payload_queryset(
-            visible_products().filter(category=product.category).exclude(pk=product.pk)
-        )[:8]
+        # Real basket co-occurrence, not "same category" wearing its name.
+        # `bought_together` degrades to the category itself when the catalogue
+        # is too young to have any, so the row is never empty on a new shop.
+        related = _ranked(merchandising.bought_together(product=product, limit=8))
+
         related_snapshots = inventory_services.availability(
             branch=branch,
             variants=list(ProductVariant.objects.filter(product__in=related)),
@@ -296,6 +320,58 @@ class ShopProductViewSet(viewsets.GenericViewSet):
                 "message": "Thank you — your review will appear once it has been checked.",
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class ShopBrandView(APIView):
+    """Brands, and one brand.
+
+    The home page has served eight featured brands with their logos since it
+    was built, and every one of them linked nowhere — there was no brand route
+    at all. This is the page those logos were always pointing at.
+
+    Counts come from one grouped query rather than a count per brand: a brand
+    index is a small page and should not scale with the catalogue.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request, slug: str | None = None) -> Response:
+        visible = visible_products()
+
+        if slug:
+            brand = get_object_or_404(Brand, slug=slug, is_active=True)
+            return Response(
+                {
+                    "id": str(brand.pk),
+                    "name": brand.name,
+                    "slug": brand.slug,
+                    "description": brand.description,
+                    "logo": media_url(brand.logo),
+                    "product_count": visible.filter(brand=brand).count(),
+                }
+            )
+
+        counts = dict(
+            visible.values_list("brand_id")
+            .annotate(total=Count("id"))
+            .values_list("brand_id", "total")
+        )
+        brands = Brand.objects.filter(is_active=True).order_by("name")
+        return Response(
+            [
+                {
+                    "name": brand.name,
+                    "slug": brand.slug,
+                    "description": brand.description,
+                    "logo": media_url(brand.logo),
+                    "is_featured": brand.is_featured,
+                    "product_count": counts.get(brand.pk, 0),
+                }
+                for brand in brands
+                # A brand with nothing to sell is a dead end, not a destination.
+                if counts.get(brand.pk, 0) > 0
+            ]
         )
 
 
@@ -472,6 +548,12 @@ class ShopHomeView(APIView):
                 "new_arrivals": serialise(base.order_by("-created_at")[:8]),
                 "featured": serialise(base.filter(featured=True)[:8]),
                 "best_sellers": serialise(best_sellers),
+                # Deepest reduction first, so the row leads with what a shopper
+                # would call a bargain rather than the dearest thing that
+                # happens to be marked down. `pk__in` answers in whatever order
+                # the database likes and throws the ranking away, so it is
+                # reapplied -- the ordering *is* the feature.
+                "price_drops": serialise(_ranked(merchandising.price_drops(limit=8))),
                 "brands": [
                     {
                         "name": brand.name,
@@ -558,6 +640,40 @@ class ShippingOptionsView(APIView):
                 city=request.query_params.get("city", ""), subtotal=view.priced.subtotal
             )
         )
+
+
+class AbandonedCheckoutCaptureView(APIView):
+    """Hold the phone number a shopper typed into checkout but did not use.
+
+    Fire-and-forget by design. It answers `204` whether or not a lead was held,
+    because the storefront calls it while someone is mid-form and must never
+    show them an error about a follow-up list they did not ask to be on. A
+    number that is not a mobile is simply not a lead: there is nothing to ring.
+
+    Throttled on the `checkout` scope, which it shares with placing an order —
+    the same shopper, the same page, and a rate that already assumes a human.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "checkout"
+
+    def post(self, request: Request) -> Response:
+        cart = _cart_for(request)
+        # Server-priced, never a figure the browser sent: the value on the
+        # call-back list is what the shop would have taken, and CLAUDE.md §13
+        # does not make an exception for a number that is only ever read.
+        priced = checkout_services.price_cart(cart=cart).priced
+
+        leads.capture(
+            phone=str(request.data.get("phone", "")),
+            branch=cart.branch,
+            cart=cart,
+            name=str(request.data.get("name", "")),
+            email=str(request.data.get("email", "")),
+            cart_total=priced.grand_total,
+            item_count=priced.item_count,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CheckoutView(APIView):

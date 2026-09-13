@@ -3,6 +3,7 @@ from django.urls import path
 from catalog.api.feed_views import ProductFeedCSVView, ProductFeedXMLView
 from content.api.views import ShopNavigationView
 from orders.api.shop_views import (
+    AbandonedCheckoutCaptureView,
     AccountAddressView,
     AccountOrdersView,
     CartCouponView,
@@ -11,6 +12,7 @@ from orders.api.shop_views import (
     OrderTrackingView,
     PaymentWebhookView,
     ShippingOptionsView,
+    ShopBrandView,
     ShopCategoryView,
     ShopFacetsView,
     ShopHomeView,
@@ -34,6 +36,8 @@ urlpatterns = [
     path("feed.xml", ProductFeedXMLView.as_view(), name="shop-product-feed-xml"),
     path("feed.csv", ProductFeedCSVView.as_view(), name="shop-product-feed-csv"),
     path("navigation/", ShopNavigationView.as_view(), name="shop-navigation"),
+    path("brands/", ShopBrandView.as_view(), name="shop-brands"),
+    path("brands/<slug:slug>/", ShopBrandView.as_view(), name="shop-brand-detail"),
     path("categories/", ShopCategoryView.as_view(), name="shop-categories"),
     path("categories/<slug:slug>/", ShopCategoryView.as_view(), name="shop-category-detail"),
     path("facets/", ShopFacetsView.as_view(), name="shop-facets"),
@@ -42,6 +46,12 @@ urlpatterns = [
     path("cart/coupon/", CartCouponView.as_view(), name="shop-cart-coupon"),
     path("shipping-options/", ShippingOptionsView.as_view(), name="shop-shipping-options"),
     path("checkout/", CheckoutView.as_view(), name="shop-checkout"),
+    # Held before the order exists, so it survives the shopper leaving.
+    path(
+        "checkout/lead/",
+        AbandonedCheckoutCaptureView.as_view(),
+        name="shop-checkout-lead",
+    ),
     path("orders/<str:number>/", OrderTrackingView.as_view(), name="shop-order-tracking"),
     path("account/orders/", AccountOrdersView.as_view(), name="shop-account-orders"),
     path(

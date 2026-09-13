@@ -241,7 +241,7 @@ POSTGRES_PASSWORD=<any local password>
 instead of exiting `0` on a stack that is not serving:
 
 ```bash
-./scripts/rebuild-local-prod.sh          # --no-build / --no-seed / -y
+./scripts/rebuild-local-prod.sh          # DESTRUCTIVE: down -v, rebuild, reseed
 ```
 
 **2. Name the stack once**, because every command needs the same four flags and getting one wrong

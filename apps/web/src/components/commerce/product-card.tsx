@@ -11,6 +11,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/primitives";
+import { QuickViewTrigger } from "@/components/commerce/quick-view-trigger";
 import { WishlistHeart } from "@/components/commerce/wishlist-heart";
 import type { ShopProduct } from "@/lib/api/types";
 import { Reveal } from "@/components/ui/reveal";
@@ -72,7 +73,14 @@ export function ProductCard({
 
           <div className="absolute left-3 top-3 flex flex-col gap-1">
             {!product.in_stock && <Badge tone="dark">Sold out</Badge>}
-            {product.in_stock && onSale && <Badge tone="brand">Sale</Badge>}
+            {/* The number, not the word: "40% off" is a reason to look and
+                "Sale" is wallpaper. Falls back to the word when the API has
+                not sent a percentage (an older cached payload). */}
+            {product.in_stock && onSale && (
+              <Badge tone="brand">
+                {product.drop_percent ? `${product.drop_percent}% off` : "Sale"}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -90,6 +98,11 @@ export function ProductCard({
           </p>
         </div>
       </Link>
+
+      {/* Sibling of the link, like the wishlist heart: a button inside an
+          anchor is invalid HTML. Positioned against the card, which shares the
+          image's box. */}
+      <QuickViewTrigger product={product} />
 
       {colours.length > 1 && (
         <ul className="mt-2 flex items-center gap-1.5" aria-label="Available colours">

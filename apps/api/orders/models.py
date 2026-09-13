@@ -630,3 +630,90 @@ class HeldSale(BaseModel):
 
     def __str__(self) -> str:
         return self.label or f"Hold {str(self.pk)[:8]}"
+
+
+class AbandonedCheckoutStatus(models.TextChoices):
+    OPEN = "OPEN", "Open"
+    RECOVERED = "RECOVERED", "Recovered"
+    LOST = "LOST", "Lost"
+
+
+class AbandonedCheckout(BaseModel):
+    """A shopper who typed a phone number at checkout and did not finish.
+
+    Cash on delivery is how this market buys, and the recovery action for a COD
+    shop is a phone call — not an email sequence. So the lead is captured at the
+    moment the number is entered, before the order exists and before anything
+    else about the checkout is known to be valid.
+
+    One row per phone number per open lead, not one per attempt: a shopper who
+    comes back twice in an afternoon is one call to make, not two. The row is
+    updated in place while it stays `OPEN`, which is why `phone` is unique among
+    open leads rather than unique outright — once recovered or written off, the
+    history stays and a later abandonment opens a new row.
+
+    `phone` is canonical subscriber digits (`core.phone`, D48), so the same
+    person typing `01712…`, `+8801712…` or `8801712…` is one lead and matches
+    the order that eventually arrives.
+    """
+
+    phone = models.CharField(max_length=20, db_index=True)
+    name = models.CharField(max_length=120, blank=True)
+    email = models.EmailField(blank=True)
+    branch = models.ForeignKey(
+        "accounts.Branch", on_delete=models.PROTECT, related_name="abandoned_checkouts"
+    )
+    # SET_NULL, not CASCADE: the cart is swept away by `expire_abandoned_carts`
+    # after 30 days and the lead has to outlive it, or the call-back list empties
+    # itself exactly when the follow-up matters least and the data matters most.
+    cart = models.ForeignKey(
+        Cart, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    customer = models.ForeignKey(
+        "customers.Customer", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    status = models.CharField(
+        max_length=16,
+        choices=AbandonedCheckoutStatus.choices,
+        default=AbandonedCheckoutStatus.OPEN,
+        db_index=True,
+    )
+    #: What the basket was worth when they walked away. A snapshot, like an
+    #: order line's: the cart can be emptied or re-priced afterwards, and the
+    #: figure a caller is looking at must be the one that was on the screen.
+    cart_total = money_field()
+    item_count = models.PositiveIntegerField(default=0)
+
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    recovered_at = models.DateTimeField(null=True, blank=True)
+    recovered_order = models.ForeignKey(
+        Order, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    #: Free text from whoever made the call. Not a status: "no answer, try
+    #: after 6" is the useful part and does not fit in an enum.
+    note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "orders_abandonedcheckout"
+        ordering = ("-last_seen_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["phone"],
+                condition=models.Q(status="OPEN"),
+                name="orders_abandonedcheckout_one_open_per_phone",
+            )
+        ]
+        indexes = [
+            # The call-back list: open leads, most recently seen first.
+            models.Index(
+                fields=["status", "-last_seen_at"],
+                name="orders_aband_status_seen_idx",
+            ),
+            # The same list for one shop, which is how a multi-branch owner
+            # reads it — nobody in Panthapath rings Dhanmondi's leads.
+            models.Index(fields=["branch", "status"], name="orders_aband_branch_stat_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.phone} ({self.status})"

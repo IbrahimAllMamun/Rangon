@@ -21,6 +21,7 @@ import type { Order, ShippingOption } from "@/lib/api/types";
 import { money } from "@/lib/format";
 import { INVALID_MESSAGE, isValidPhone, toCanonical } from "@/lib/phone";
 import { useCart } from "@/lib/store/cart";
+import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 
 interface FormState {
   recipient_name: string;
@@ -88,6 +89,29 @@ export function CheckoutForm() {
   useEffect(() => {
     if (form.city) void loadShipping(form.city);
   }, [form.city, loadShipping]);
+
+  /**
+   * Hold the shopper's number the moment it is a number we could ring.
+   *
+   * Cash on delivery is how this market buys, so an abandoned checkout is a
+   * phone call someone can make this afternoon -- but only if the number was
+   * kept before they left the page. Debounced so it fires once a mobile is
+   * complete rather than on every keystroke, and `void`-ed so a failure can
+   * never surface to someone who is trying to buy something: a missed lead is
+   * a missed call, an exception is a lost order.
+   */
+  const [captureLead] = useDebouncedCallback((phone: string, name: string, email: string) => {
+    if (!isValidPhone(phone)) return;
+    void apiClient("/shop/checkout/lead/", {
+      method: "POST",
+      body: { phone: toCanonical(phone), name, email },
+    }).catch(() => {});
+  }, 900);
+
+  useEffect(() => {
+    if (!form.phone) return;
+    captureLead(form.phone, form.recipient_name, form.email);
+  }, [form.phone, form.recipient_name, form.email, captureLead]);
 
   const selectedShipping = shippingOptions.find((option) => option.id === shippingId);
   const shippingCost = Number(selectedShipping?.price ?? 0);
