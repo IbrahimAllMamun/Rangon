@@ -39,15 +39,14 @@ Sections 3–8 are one script:
 ./scripts/rebuild-local-prod.sh
 ```
 
-It migrates whatever is running, builds both images, brings the stack up, waits for the API to
-report healthy, migrates again, reseeds (after asking), restarts nginx and then smoke-tests the
-result — so it fails loudly rather than exiting `0` on a stack that is not serving.
+It tears the stack down with `compose down -v`, builds both images, brings it up, waits for the API
+to report healthy, migrates, reseeds, restarts nginx and then smoke-tests the result — so it fails
+loudly rather than exiting `0` on a stack that is not serving.
 
-```text
---no-build     reuse the existing :prod images
---no-seed      keep the current data
--y, --yes      do not prompt before the reseed
-```
+**It is destructive and unconditionally so.** `down -v` removes this project's volumes, which takes
+the database with them, so the reseed is not a step you can skip — it is how the stack gets a
+database at all. There is no `--no-seed` for that reason. The dev stack's volumes are a separate
+project and are untouched.
 
 Read the rest of this page anyway the first time. The script encodes the traps below, but knowing
 *why* nginx has to be restarted is what saves you the next time something 502s.
