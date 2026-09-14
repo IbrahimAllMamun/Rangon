@@ -930,10 +930,48 @@ Three things the build found, none of them the feature:
    passed. Demo data rather than code, like [D54](#known-defects); each product now carries care
    advice that suits it.
 
-**Deliberately not done, and now Tier 2 #2:** the *variant matrix* above the new card still offers
-every axis in the shop, so editing a pair of shoes shows Shade, Volume and Capacity. Scoping it needs
-the same endpoint this pass added plus a fallback for a category that declares nothing, and it
-changes a screen that works today — so it is written down rather than folded in.
+**The variant matrix was scoped too, later the same day.** It had been left out of the pass above and
+written down as Tier 2 #2, because it changes a screen that works today; it is now done, and the
+reasoning is below.
+
+### The variant matrix scoped by category, 2026-09-14
+
+The Specifications card asked the category what was relevant while the *variant matrix above it*
+still offered every axis in the shop — editing a pair of shoes showed Shade, Volume and Capacity.
+Half a form scoped is worse than none, because it reads as arbitrary.
+
+Two rules make it safe, and both are pinned by tests that were watched fail first
+(`lib/commerce/category-attributes.test.ts`, 11 cases):
+
+1. **A category that declares nothing offers everything.** The seed wires attributes to *leaf*
+   categories, so a product filed against "Men" — or any category somebody has just created —
+   would otherwise have no axis at all and could never be given a variant. That reads as a broken
+   form rather than as missing configuration.
+2. **An axis the product already uses is always offered**, declared or not. This is the one that
+   matters: `buildMatrix` appends every saved variant whatever is ticked, so hiding the fieldset for
+   an axis a product is built on would leave those rows visible, unlabelled and un-editable — rows
+   that may hold stock and that the ledger and order history still point at. Proven in the browser
+   by re-filing the shoes under Handbags, which declares no shoe size: the axis stayed, all four
+   matrix rows stayed, and all five ticked values stayed reachable.
+
+A failed lookup falls back to offering everything and says so, rather than blocking the form.
+
+The fetch moved into `ProductForm` and `ProductSpecPicker` became presentational, so **one request
+serves both halves** — two would let the axes and the specifications disagree about what the same
+category declares.
+
+```text
+seen in a browser, signed in as owner
+  Leather Formal Shoes (Formal) .. axes: Shoe size, Colour        specs: Material, Gender, Sole
+  City Handbag (Handbags) ........ axes: Colour                   specs: Material, Dimensions
+  Matte Lipstick (Lipstick) ...... axes: Shade                    specs: Skin type
+  re-filed shoes -> Handbags ..... axes: Shoe size, Colour (kept), 4 matrix rows intact
+vitest .......................... 198 passed, 13 files (11 new)
+tsc --noEmit / eslint src ....... clean
+```
+
+Before this, all three of those products offered Size, Shoe size, Colour, Shade, Volume and
+Capacity. No backend change: the endpoint added earlier in the day was already the right shape.
 
 ## Still unproven
 
@@ -1173,7 +1211,7 @@ Ordered by value per day of work.
 | # | Item | Why now |
 |---|---|---|
 | 1 | **[D47](#known-defects) — concurrent pytest runs corrupt each other** | It bit again on 2026-09-14, during the spec-attribute work: a targeted `-k` run against the database the full suite was already using errored on collection. The workaround is one flag (`-p <unique>`) and the fix is a per-run test database name. It manufactures *plausible* failures in unrelated assertions, which is the expensive kind |
-| 2 | **Scope the variant matrix by category** | The Specifications card asks `GET /categories/{id}/attributes/` and offers only what the category declares. The **variant matrix above it still offers every axis in the shop** — editing a pair of shoes shows Shade, Volume and Capacity. The endpoint now exists, so this is a filter and a fallback (offer everything when a category declares nothing, or a new category cannot be given variants at all). Found by looking at the screen on 09-14 |
+| 2 | ~~**Scope the variant matrix by category**~~ | **Done 2026-09-14**, same day it was written down. See the verification log |
 | 3 | **[D40](#known-defects) — `router.refresh()` in a production build** | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out |
 | 4 | **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
 | 5 | **[D6](#known-defects) — mypy's 98 errors** | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |

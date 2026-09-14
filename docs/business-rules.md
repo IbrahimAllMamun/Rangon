@@ -499,6 +499,14 @@ Three rules follow, and the API enforces all three rather than trusting the form
    product without it, because refusing would make every existing product unsaveable the moment
    somebody ticks the box.
 
+   This scopes **both** halves of the product form, the variant axes as well as the specifications,
+   under two rules that keep the scoping from becoming a trap. A category that declares nothing
+   offers everything, because the alternative is a category whose products can never be given a
+   variant. And an axis a product's saved variants are already built on is always offered, declared
+   or not — those rows exist, may hold stock, and are referenced by the inventory ledger and by
+   order history, so hiding the control over them would leave them visible and un-editable.
+   Scoping is a convenience; it never removes the only way to manage an existing SKU.
+
 A product's specifications are **replaced, not merged**: `spec_values` on the product write endpoint
 is the set as it now stands. Omitting the key leaves them alone; sending `[]` clears them. A caller
 that had to diff before saving would eventually forget to, and the failure mode — a spec list that

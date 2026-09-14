@@ -1,23 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-
 import { Badge, Button, Checkbox, Skeleton } from "@/components/ui/primitives";
-import { ApiError, apiClient } from "@/lib/api/client";
+import type { CategoryAttributeRow } from "@/lib/commerce/category-attributes";
 import { cn } from "@/lib/cn";
-
-/** One attribute a category uses, as `GET /categories/{id}/attributes/` answers. */
-export interface CategoryAttribute {
-  id: string;
-  code: string;
-  name: string;
-  kind: string;
-  is_variant_defining: boolean;
-  is_required: boolean;
-  /** Which category in the chain declared it — a parent, usually. */
-  declared_by: string;
-  values: { id: string; value: string; label: string; display: string; swatch: string }[];
-}
 
 /**
  * The specifications a product states: Material and Fit on a shirt, Sole on a
@@ -33,59 +18,30 @@ export interface CategoryAttribute {
  *     Shoe size. `CategoryAttribute` has held that answer since the first
  *     migration and nothing but the seed had ever read it.
  *
- * The list reloads whenever the category changes, which on the create form is
- * before anything has been saved — so it is a client fetch rather than
- * server-rendered data.
+ * Presentational: the fetch lives in `ProductForm`, because the variant axes
+ * above need the same answer and a second request would let the two halves of
+ * one form disagree about what the category declares.
  */
 export function ProductSpecPicker({
-  categoryId,
+  attributes,
+  categoryChosen,
+  loading,
+  failed,
+  onRetry,
   selected,
   onChange,
   error,
 }: {
-  categoryId: string;
+  /** The specification half of the category's attributes. */
+  attributes: CategoryAttributeRow[];
+  categoryChosen: boolean;
+  loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
   selected: string[];
   onChange: (next: string[]) => void;
   error?: string;
 }) {
-  const [attributes, setAttributes] = useState<CategoryAttribute[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!categoryId) {
-        setAttributes(null);
-        setFailed(false);
-        return;
-      }
-      setLoading(true);
-      setFailed(false);
-      try {
-        const rows = await apiClient<CategoryAttribute[]>(
-          `/categories/${categoryId}/attributes/`,
-          { signal },
-        );
-        if (signal?.aborted) return;
-        setAttributes(rows.filter((row) => !row.is_variant_defining));
-      } catch (caught) {
-        if (signal?.aborted) return;
-        // An abort is the next keystroke, not a failure.
-        if (caught instanceof DOMException && caught.name === "AbortError") return;
-        setFailed(caught instanceof ApiError || caught instanceof Error);
-      } finally {
-        if (!signal?.aborted) setLoading(false);
-      }
-    },
-    [categoryId],
-  );
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
-
   function toggle(valueId: string) {
     onChange(
       selected.includes(valueId)
@@ -94,7 +50,7 @@ export function ProductSpecPicker({
     );
   }
 
-  if (!categoryId) {
+  if (!categoryChosen) {
     return (
       <p className="text-body-sm text-muted">
         Choose a category first — it decides which specifications this product can state.
@@ -102,7 +58,20 @@ export function ProductSpecPicker({
     );
   }
 
-  if (loading && attributes === null) {
+  if (failed) {
+    return (
+      <div role="alert" className="space-y-2">
+        <p className="text-body-sm text-[var(--error)]">
+          Could not load this category&rsquo;s specifications.
+        </p>
+        <Button type="button" variant="secondary" onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="space-y-3" aria-busy="true">
         <Skeleton className="h-4 w-32" />
@@ -113,20 +82,7 @@ export function ProductSpecPicker({
     );
   }
 
-  if (failed) {
-    return (
-      <div role="alert" className="space-y-2">
-        <p className="text-body-sm text-[var(--error)]">
-          Could not load this category&rsquo;s specifications.
-        </p>
-        <Button type="button" variant="secondary" onClick={() => void load()}>
-          Try again
-        </Button>
-      </div>
-    );
-  }
-
-  if (!attributes?.length) {
+  if (!attributes.length) {
     return (
       <p className="text-body-sm text-muted">
         This category has no specification attributes yet. Add them on{" "}
