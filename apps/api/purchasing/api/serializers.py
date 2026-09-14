@@ -189,6 +189,10 @@ class ReceivePurchaseSerializer(serializers.Serializer):
 
 class SupplierPaymentSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    #: `SupplierPayment.paid_at` is non-null, which made DRF require it, so the
+    #: endpoint could not be called without one -- while the service has always
+    #: defaulted it to now().  Optional here so the two agree.
+    paid_at = serializers.DateTimeField(required=False, allow_null=True)
     purchase_number = serializers.CharField(
         source="purchase_order.number", read_only=True, default=""
     )

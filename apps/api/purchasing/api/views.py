@@ -200,5 +200,6 @@ class SupplierPaymentViewSet(
             notes=data.get("notes", ""),
             account=data.get("account"),
             branch=resolve_branch(request.user, request.data.get("branch")),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(SupplierPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)

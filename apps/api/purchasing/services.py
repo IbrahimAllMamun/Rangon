@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.models import Branch, User
 from core import audit
-from core.exceptions import Conflict, ValidationError
+from core.exceptions import Conflict, PaymentExceedsOutstanding, ValidationError
 from core.money import quantize
 from core.services import next_number
 from inventory import services as inventory_services
@@ -32,6 +32,11 @@ from purchasing.models import (
     Supplier,
     SupplierPayment,
 )
+
+#: Statuses that owe the supplier nothing, so no money may be paid against them.
+#: Kept identical to the pair finance.selectors excludes when deriving payables
+#: -- if the ledger says an order is not a liability, the till must agree.
+UNPAYABLE_STATUSES = frozenset({PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED})
 
 
 def unique_supplier_code(name: str) -> str:
@@ -295,12 +300,17 @@ def record_supplier_payment(
     notes: str = "",
     account: Any = None,
     branch: Any = None,
+    idempotency_key: str | None = None,
 ) -> SupplierPayment:
     """Pay a supplier, taking the money out of one of our own accounts.
 
     ``account`` names it explicitly; otherwise the branch's default account for
     the method's kind is used.  ``branch`` is only needed when there is no
     purchase order to take it from.
+
+    Never exceeds what is outstanding, never pays an order the supplier was not
+    sent, and is idempotent on the caller's key so a retried request cannot pay
+    a supplier twice (business-rules.md §6b.1b).
     """
     from finance import services as finance_services
     from finance.models import AccountTransactionType
@@ -309,18 +319,83 @@ def record_supplier_payment(
     if amount <= 0:
         raise ValidationError("Payment amount must be positive.")
 
+    # Before any lock is taken and before any money moves: a retry returns the
+    # payment already recorded, exactly as refund_order does on the sales side.
+    if idempotency_key:
+        existing = SupplierPayment.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
+    # The order is locked up front -- before the account lock that
+    # finance.record_movement takes -- so the outstanding check below is decided
+    # under the same lock that the increment uses, and two simultaneous payments
+    # cannot both read the same balance.  PurchaseOrder-then-Account is also the
+    # order refund_order uses (Order-then-Account), so the two money paths can
+    # never deadlock against each other.
+    locked_order: PurchaseOrder | None = None
+    if purchase_order is not None:
+        locked_order = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)
+
+        # Both submits can pass the check above before either commits, and the
+        # lock is what serialises them -- so the loser asks again now that the
+        # winner has committed, rather than colliding with the unique index.
+        if idempotency_key:
+            existing = SupplierPayment.objects.filter(idempotency_key=idempotency_key).first()
+            if existing is not None:
+                return existing
+
+        if locked_order.supplier_id != supplier.pk:
+            raise ValidationError(
+                f"{locked_order.number} belongs to a different supplier.",
+                details={
+                    "purchase_order_supplier": str(locked_order.supplier_id),
+                    "payment_supplier": str(supplier.pk),
+                },
+            )
+
+        if locked_order.status in UNPAYABLE_STATUSES:
+            raise Conflict(
+                f"A {locked_order.get_status_display().lower()} purchase order cannot be paid.",
+                details={"status": locked_order.status},
+            )
+
+        outstanding = quantize(locked_order.grand_total - locked_order.paid_total)
+        if amount > outstanding:
+            raise PaymentExceedsOutstanding(
+                f"Only {outstanding} is outstanding on {locked_order.number}.",
+                details={
+                    "requested": str(amount),
+                    "outstanding": str(outstanding),
+                    "grand_total": str(locked_order.grand_total),
+                    "paid_total": str(locked_order.paid_total),
+                },
+            )
+
     when = paid_at or timezone.now()
-    payment = SupplierPayment.objects.create(
-        supplier=supplier,
-        purchase_order=purchase_order,
-        amount=amount,
-        method=method,
-        reference=reference,
-        paid_at=when,
-        notes=notes,
-        account=account,
-        created_by=actor,
-    )
+    try:
+        # A savepoint, so losing the race to the unique index does not poison
+        # the surrounding transaction.  Reachable when there is no purchase
+        # order to lock: an advance against no particular delivery.
+        with transaction.atomic():
+            payment = SupplierPayment.objects.create(
+                supplier=supplier,
+                purchase_order=purchase_order,
+                amount=amount,
+                method=method,
+                reference=reference,
+                paid_at=when,
+                notes=notes,
+                account=account,
+                created_by=actor,
+                idempotency_key=idempotency_key or None,
+            )
+    except IntegrityError:
+        if not idempotency_key:
+            raise
+        existing = SupplierPayment.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is None:
+            raise
+        return existing
 
     # Paying a supplier is money leaving the business, so it comes out of an
     # account.  A cash drawer that does not hold enough refuses here
@@ -345,14 +420,13 @@ def record_supplier_payment(
             payment.account_id = entry.account_id
             payment.save(update_fields=["account", "updated_at"])
 
-    if purchase_order is not None:
-        locked = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)
-        locked.paid_total = quantize(locked.paid_total + amount)
-        if locked.paid_total >= locked.grand_total:
-            locked.payment_status = PaymentStatus.PAID
-        elif locked.paid_total > 0:
-            locked.payment_status = PaymentStatus.PARTIALLY_PAID
-        locked.save(update_fields=["paid_total", "payment_status", "updated_at"])
+    if locked_order is not None:
+        locked_order.paid_total = quantize(locked_order.paid_total + amount)
+        if locked_order.paid_total >= locked_order.grand_total:
+            locked_order.payment_status = PaymentStatus.PAID
+        elif locked_order.paid_total > 0:
+            locked_order.payment_status = PaymentStatus.PARTIALLY_PAID
+        locked_order.save(update_fields=["paid_total", "payment_status", "updated_at"])
 
     audit.record(
         action=audit.AuditAction.PAYMENT_RECORDED,

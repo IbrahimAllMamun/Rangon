@@ -600,6 +600,52 @@ after the payment.
 accountant — deliberately not by a cashier. Opening or retiring a **category** needs
 `finance.manage`, because categories shape every report.*
 
+### 6b.1b Paying a supplier
+
+Money paid to a supplier is recorded by `record_supplier_payment()`, which writes the
+`SupplierPayment` document, posts a `SUPPLIER_PAYMENT` movement through §6b.1's engine and advances
+the purchase order's `paid_total` — all inside one `transaction.atomic()` block, for the same reason
+an expense is never just a row.
+
+**A payment may not exceed what is outstanding.** Paying more than `grand_total - paid_total` raises
+`PAYMENT_EXCEEDS_OUTSTANDING` (422), the exact mirror of `REFUND_EXCEEDS_CAPTURED` on the customer
+side (§2.4). Without it `outstanding` goes negative, and because the payables selector (§4.2) matches
+on `grand_total > paid_total`, an overpaid order silently disappears from the payable list rather
+than showing as a problem.
+
+*`DECISION REQUIRED` — assumed **no**. The counter-case is real: suppliers in this market are often
+paid an advance against future deliveries. That is a different instrument, not an overpayment of a
+specific order, and it is covered below.*
+
+**The purchase order and the supplier must agree.** Both reach the service as separate arguments, so
+a payment naming supplier A against supplier B's order would credit A's ledger while reducing B's
+outstanding — two wrong balances from one row. Refused as a validation error.
+
+**A `DRAFT` or `CANCELLED` purchase order cannot be paid**, and the refusal is a `CONFLICT` (409).
+§4.2 already excludes both from payables, so paying one writes cash out against a liability the
+ledger says does not exist. A draft has not been sent to the supplier at all.
+
+*`DECISION REQUIRED` — assumed **no** for both.*
+
+**A payment is idempotent on the caller's `Idempotency-Key`.** A retried or double-clicked submission
+returns the payment already recorded rather than paying the supplier twice, exactly as a refund does
+(§5.5). Required by CLAUDE.md §7 for any endpoint where a retry could double-spend.
+
+**A supplier advance with no purchase order is out of scope for now.** The service accepts
+`purchase_order=None` with an explicit branch, and the cash book records it correctly, but nothing
+allocates that credit against a later delivery.
+
+*`DECISION REQUIRED` — assumed **not offered from the purchase-order screen**. Building it needs an
+allocation rule (which order a later delivery draws the advance down against), and inventing that
+silently is what CLAUDE.md §13 forbids.*
+
+**A recorded payment is never edited or deleted.** It reached the ledger, so §3.3 of CLAUDE.md
+applies. There is deliberately no undo in this release; correcting one needs a compensating
+instrument (a reversal row or a supplier credit note) that has not been designed yet, so the screen
+says so rather than implying a delete exists.
+
+*Recording a payment needs `purchases.pay`; reading the history needs `purchases.view`.*
+
 ### 6b.2 Selling on credit
 
 *`DECISION REQUIRED` — assumed **no**: every sale is paid in full at the point of sale or is a COD

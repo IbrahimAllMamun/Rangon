@@ -288,6 +288,136 @@ class TestPurchaseOrderFlow:
         assert response.status_code == 403
 
 
+class TestSupplierPaymentApi:
+    """Paying a supplier from the purchase-order screen (business-rules.md §6b.1b)."""
+
+    def _sent_order(self, client: Any, supplier: Any, total: str = "1000.00") -> str:
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": str(supplier.pk),
+                "lines": [
+                    {
+                        "variant": str(factories.variant(cost="0.00").pk),
+                        "quantity": 1,
+                        "unit_cost": total,
+                    }
+                ],
+            },
+            format="json",
+        )
+        assert created.status_code == 201
+        order_id = created.data["id"]
+        client.post(f"/api/v1/purchase-orders/{order_id}/send/", {}, format="json")
+        return str(order_id)
+
+    def test_a_payment_advances_the_order(self, owner: Any, auth_client: Any) -> None:
+        client = auth_client(owner)
+        supplier = factories.supplier()
+        order_id = self._sent_order(client, supplier)
+
+        response = client.post(
+            "/api/v1/supplier-payments/",
+            {
+                "supplier": str(supplier.pk),
+                "purchase_order": order_id,
+                "amount": "400.00",
+                "method": "BANK",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        detail = client.get(f"/api/v1/purchase-orders/{order_id}/")
+        assert Decimal(detail.data["paid_total"]) == Decimal("400.00")
+        assert detail.data["payment_status"] == "PARTIALLY_PAID"
+
+    def test_overpaying_is_refused_in_the_error_envelope(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        client = auth_client(owner)
+        supplier = factories.supplier()
+        order_id = self._sent_order(client, supplier)
+
+        response = client.post(
+            "/api/v1/supplier-payments/",
+            {
+                "supplier": str(supplier.pk),
+                "purchase_order": order_id,
+                "amount": "1500.00",
+                "method": "BANK",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 422
+        assert response.data["error"]["code"] == "PAYMENT_EXCEEDS_OUTSTANDING"
+        assert response.data["error"]["details"]["outstanding"] == "1000.00"
+
+    def test_the_same_idempotency_key_header_pays_once(self, owner: Any, auth_client: Any) -> None:
+        client = auth_client(owner)
+        supplier = factories.supplier()
+        order_id = self._sent_order(client, supplier)
+        body = {
+            "supplier": str(supplier.pk),
+            "purchase_order": order_id,
+            "amount": "400.00",
+            "method": "BANK",
+        }
+
+        first = client.post(
+            "/api/v1/supplier-payments/", body, format="json", HTTP_IDEMPOTENCY_KEY="pay-once"
+        )
+        second = client.post(
+            "/api/v1/supplier-payments/", body, format="json", HTTP_IDEMPOTENCY_KEY="pay-once"
+        )
+
+        assert first.status_code == 201
+        assert second.data["id"] == first.data["id"]
+        detail = client.get(f"/api/v1/purchase-orders/{order_id}/")
+        assert Decimal(detail.data["paid_total"]) == Decimal("400.00")
+
+    def test_paying_another_suppliers_order_is_refused(self, owner: Any, auth_client: Any) -> None:
+        client = auth_client(owner)
+        order_id = self._sent_order(client, factories.supplier())
+
+        response = client.post(
+            "/api/v1/supplier-payments/",
+            {
+                "supplier": str(factories.supplier().pk),
+                "purchase_order": order_id,
+                "amount": "100.00",
+                "method": "CASH",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert response.data["error"]["code"] == "VALIDATION_ERROR"
+        # Assert on the guard's own details, so this cannot pass because some
+        # unrelated field failed validation.
+        assert "payment_supplier" in response.data["error"]["details"]
+
+    def test_paying_needs_the_pay_permission(
+        self, cashier: Any, owner: Any, auth_client: Any
+    ) -> None:
+        supplier = factories.supplier()
+        order_id = self._sent_order(auth_client(owner), supplier)
+
+        response = auth_client(cashier).post(
+            "/api/v1/supplier-payments/",
+            {
+                "supplier": str(supplier.pk),
+                "purchase_order": order_id,
+                "amount": "100.00",
+                "method": "CASH",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 403
+
+
 class TestPickerSearch:
     """The purchasing screens search for suppliers and variants.
 
