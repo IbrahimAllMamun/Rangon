@@ -88,7 +88,7 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /shop/home/` | 45 | **yes** | 29 · 0.16 s | **511 · 2.42 s** |
 | `GET /shop/products/` | 25 | **yes** | 13 · 0.09 s | **363 · 1.29 s** |
 | `GET /purchase-orders/` | — | **yes** (growth only) | 15 · 0.10 s | **156 · 0.58 s** |
-| `GET /shop/products/{slug}/` | 18 | **yes** (+ growth) | 13 | 15 |
+| `GET /shop/products/{slug}/` | 18 | **yes** (+ growth × 2) | 14 | 15 |
 | `GET /pos/products/` | 12 | **yes** (+ growth) | 5 | **81 for 8 products** |
 | `GET /pos/lookup/` | 12 | **yes** | 9 | — |
 | `GET /products/` (admin) | 25 | **yes** (+ growth) | 6 | 21 · 0.42 s |
@@ -97,10 +97,33 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `POST /pos/sales/` (2 lines) | 75, and 13 per extra line | **yes** (+ per-line) | 63; 53 for one line, +10 a line | — |
 | `GET /shop/feed.csv` (whole catalogue) | 12 | **yes** (+ growth) | 9 for 9 products / 27 variants | — |
 
+Product detail went 13 → 14 on 2026-09-14, when it gained the specification list
+(`ProductAttributeValue`). One query, and it stays one however many specifications a product
+states — see below. Four of its eighteen are still spare.
+
 All eleven are asserted in `apps/api/tests/test_performance.py`. That was not true
 until 2026-09-09: the heading said "enforced in tests" while only the first two
 were, and the paragraph underneath admitted it. Writing the missing seven found
 that one of them was not merely unenforced but wrong.
+
+### The spec list: three ways to write one prefetch, two of them wrong
+
+`_product_payload` reads `link.attribute_value.attribute` for every stated specification, so the
+detail queryset has to reach two relations deep. Three spellings, measured on 2026-09-14 against a
+product with four specifications:
+
+| Spelling | Queries |
+|---|---|
+| `prefetch_related("spec_values")` | **22** — one per value, then one per attribute. An N+1 |
+| `prefetch_related("spec_values__attribute_value__attribute")` | 18 — flat, but Django issues one query **per prefetch level**, so three |
+| `Prefetch("spec_values", queryset=…select_related("attribute_value__attribute"))` | **16** — one query, two joins |
+
+The third is what ships, in both the storefront detail view and the admin `ProductViewSet`. The
+joins are not optional work either: `ProductAttributeValue.Meta.ordering` sorts by the attribute's
+position and then the value's, so the query needs those tables regardless.
+
+`test_query_count_does_not_grow_with_the_spec_count` pins it, and fails with
+`assert 22 == 16` if the bare form comes back.
 
 ### `GET /pos/products/` was issuing 81 queries — the same trap, twice in a loop
 

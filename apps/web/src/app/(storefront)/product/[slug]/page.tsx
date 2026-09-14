@@ -84,6 +84,17 @@ export default async function ProductPage({ params }: { params: Params }) {
       rating && product.reviews?.count
         ? { "@type": "AggregateRating", ratingValue: rating, reviewCount: product.reviews.count }
         : undefined,
+    // The same specifications the Details list renders. `additionalProperty`
+    // is how schema.org carries a fact a Product has no named field for —
+    // Material, Fit, Sole, Skin type — and `undefined` when there are none, so
+    // a product with no specs emits no empty array.
+    additionalProperty: product.specs?.length
+      ? product.specs.map((spec) => ({
+          "@type": "PropertyValue",
+          name: spec.attribute_name,
+          value: spec.values.map((value) => value.label).join(", "),
+        }))
+      : undefined,
   };
 
   const breadcrumbLd = {
@@ -145,7 +156,24 @@ export default async function ProductPage({ params }: { params: Params }) {
           <dl className="mt-6 divide-y divide-border border-y border-border">
             {product.brand && <SpecRow term="Brand" value={product.brand.name} />}
             <SpecRow term="Category" value={product.category.name} />
-            {product.material && <SpecRow term="Material" value={product.material} />}
+            {/* Structured specifications, whatever the category uses: Material
+                and Fit on a shirt, Sole on a shoe, Skin type on a serum. One
+                attribute may hold several values, so they join into one row
+                rather than repeating the term. */}
+            {(product.specs ?? []).map((spec) => (
+              <SpecRow
+                key={spec.attribute_code}
+                term={spec.attribute_name}
+                value={spec.values.map((value) => value.label).join(", ")}
+              />
+            ))}
+            {/* Free-text, and older than the attributes above. `material` is
+                only shown when no Material attribute is stated, so a product
+                carrying both does not print the term twice. */}
+            {product.material &&
+              !(product.specs ?? []).some((spec) => spec.attribute_code === "material") && (
+                <SpecRow term="Material" value={product.material} />
+              )}
             {product.care_instructions && (
               <SpecRow term="Care" value={product.care_instructions} />
             )}

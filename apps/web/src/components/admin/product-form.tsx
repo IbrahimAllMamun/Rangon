@@ -4,6 +4,7 @@ import { Check, Eye, EyeOff, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { ProductSpecPicker } from "@/components/admin/product-spec-picker";
 import { VariantMatrixEditor, type RowDraft, draftFromRow } from "@/components/admin/variant-matrix-editor";
 import {
   Badge,
@@ -17,9 +18,16 @@ import {
   Field,
   Input,
   Select,
+  Skeleton,
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import {
+  axesInUse,
+  declaredAxes,
+  declaredSpecs,
+  resolveVariantAxes,
+} from "@/lib/commerce/category-attributes";
 import type { ProductValues } from "@/lib/commerce/product-values";
 import {
   type ExistingVariant,
@@ -32,6 +40,7 @@ import {
   selectionsFromVariants,
 } from "@/lib/commerce/variant-matrix";
 import { cn } from "@/lib/cn";
+import { useCategoryAttributes } from "@/lib/use-category-attributes";
 
 export interface CategoryOption {
   id: string;
@@ -69,6 +78,7 @@ export function ProductForm({
   productId,
   initial,
   initialVariants,
+  initialSpecValues,
   categories,
   brands,
   attributes,
@@ -80,6 +90,8 @@ export function ProductForm({
   productId?: string;
   initial: ProductValues;
   initialVariants: ExistingVariant[];
+  /** Attribute-value ids this product already states as specifications. */
+  initialSpecValues: string[];
   categories: CategoryOption[];
   brands: BrandOption[];
   attributes: MatrixAttribute[];
@@ -94,6 +106,7 @@ export function ProductForm({
     selectionsFromVariants(initialVariants),
   );
   const [variants, setVariants] = useState<ExistingVariant[]>(initialVariants);
+  const [specValues, setSpecValues] = useState<string[]>(initialSpecValues);
   const [defaultPrice, setDefaultPrice] = useState("");
   const [defaultCost, setDefaultCost] = useState("");
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
@@ -182,6 +195,9 @@ export function ProductForm({
         ...values,
         brand: values.brand || null,
         slug: values.slug || undefined,
+        // The set as it now stands, not a diff — the API replaces it. Sending
+        // it on every save is what makes un-ticking the last one stick.
+        spec_values: specValues,
       };
 
       // 1. The product row itself.
@@ -332,7 +348,16 @@ export function ProductForm({
   }
 
   const errorFor = (field: string) => errors.find((error) => error.field === field)?.message;
-  const variantAttributes = attributes.filter((attribute) => attribute.values.length > 0);
+
+  // One request for both halves of the form: the axes below and the
+  // specifications above. Two would let them disagree about what the category
+  // declares, and cost a round trip for the privilege.
+  const category = useCategoryAttributes(values.category);
+  const specAttributes = useMemo(() => declaredSpecs(category.rows), [category.rows]);
+  const variantAttributes = useMemo(
+    () => resolveVariantAxes(attributes, declaredAxes(category.rows), axesInUse(variants)),
+    [attributes, category.rows, variants],
+  );
 
   return (
     <form onSubmit={submit} noValidate className="space-y-6">
@@ -480,6 +505,31 @@ export function ProductForm({
 
       <Card>
         <CardHeader>
+          <CardTitle>Specifications</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <p className="text-body-sm text-muted">
+            Stated once on the product and shown on its page. These never create a SKU — the
+            category decides which are offered, so a handbag is not asked for a shoe size.
+          </p>
+          <ProductSpecPicker
+            attributes={specAttributes}
+            categoryChosen={Boolean(values.category)}
+            loading={category.loading && category.rows === null}
+            failed={category.failed}
+            onRetry={category.reload}
+            selected={specValues}
+            error={errorFor("spec_values")}
+            onChange={(next) => {
+              setSpecValues(next);
+              setSaved(false);
+            }}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Variants</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -488,6 +538,31 @@ export function ProductForm({
             own price, barcode and stock.
           </p>
 
+          {/* A failed lookup falls back to offering every axis rather than
+              blocking the form — narrowing the list is a convenience, and a
+              merchant who cannot build a variant has a worse problem than a
+              long one. Say so rather than silently showing the wrong set. */}
+          {category.failed && (
+            <p role="alert" className="text-body-sm text-muted">
+              Could not load this category&rsquo;s attributes, so every axis is offered.{" "}
+              <button
+                type="button"
+                onClick={category.reload}
+                className="underline hover:text-brand-600"
+              >
+                Try again
+              </button>
+            </p>
+          )}
+
+          {category.loading && category.rows === null ? (
+            <div className="space-y-4" aria-busy="true">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-9 w-3/4" />
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-9 w-2/3" />
+            </div>
+          ) : (
           <div className="space-y-4">
             {variantAttributes.map((attribute) => {
               const picked = selections[attribute.code] ?? [];
@@ -532,6 +607,7 @@ export function ProductForm({
               );
             })}
           </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:w-1/2">
             <Field

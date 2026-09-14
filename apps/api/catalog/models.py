@@ -355,6 +355,57 @@ class VariantAttributeValue(BaseModel):
         return f"{self.variant.sku}: {self.attribute_value}"
 
 
+class ProductAttributeValue(BaseModel):
+    """A specification stated once on the product, never multiplied into SKUs.
+
+    `VariantAttributeValue` is the other half of the same idea and the
+    opposite shape.  A variant carries **exactly one** value per attribute,
+    because those values *are* the SKU's identity -- hence its
+    `(variant, attribute)` uniqueness.  A spec is a property of the product as
+    a whole, and one attribute may legitimately hold several values ("Features:
+    Waterproof, Lightweight"), so uniqueness here is per *value* instead.
+
+    The attribute is deliberately **not** stored.  It is always
+    `attribute_value.attribute`, and a second column holding the same fact is a
+    column that can drift from it; `VariantAttributeValue` carries one only
+    because its unique constraint needs it.  Which attributes a product may
+    state is `CategoryAttribute` plus `Attribute.is_variant_defining`, and that
+    rule is enforced in `catalog.services.set_product_specs`.
+    """
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="spec_values")
+    attribute_value = models.ForeignKey(
+        AttributeValue, on_delete=models.PROTECT, related_name="product_links"
+    )
+
+    class Meta:
+        db_table = "catalog_productattributevalue"
+        # Attribute order first, then the value's own order, so a spec list
+        # reads the same way on the product page, in the admin and in the API.
+        ordering = (
+            "attribute_value__attribute__position",
+            "attribute_value__attribute__name",
+            "attribute_value__position",
+            "attribute_value__value",
+        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "attribute_value"], name="catalog_productattr_uniq"
+            )
+        ]
+        # No explicit index. Both queries this table serves are already
+        # covered: "which products state this value" (the delete refusals in
+        # `catalog.api.views` and the guard on turning `is_variant_defining`
+        # on) by Django's automatic index on the `attribute_value` FK, and "a
+        # product's own specs" by the unique constraint's leading column. A
+        # third index on the same leading column would be write cost for no
+        # read gain -- CLAUDE.md section 6 wants each one to name the query it
+        # serves, and this one could not.
+
+    def __str__(self) -> str:
+        return f"{self.product.name}: {self.attribute_value}"
+
+
 class SearchTerm(BaseModel):
     """What shoppers type, and whether it found anything.
 

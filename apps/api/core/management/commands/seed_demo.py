@@ -35,7 +35,7 @@ from catalog.models import (
     Product,
     PublishStatus,
 )
-from catalog.services import create_variant
+from catalog.services import create_variant, set_product_specs
 from core import phone as phone_utils
 from customers.models import Customer, CustomerAddress, CustomerType
 from finance.models import Expense
@@ -96,6 +96,20 @@ ATTRIBUTES = {
     "material": ("Material", AttributeKind.TEXT, ["Cotton", "Denim", "Leather", "Canvas", "Linen"]),
     "gender": ("Gender", AttributeKind.TEXT, ["Men", "Women", "Unisex", "Kids"]),
     "fit": ("Fit", AttributeKind.TEXT, ["Slim", "Regular", "Relaxed"]),
+    # Specifications rather than axes: a shop does not stock one SKU per sole
+    # type. They exist because this catalogue is not only clothing -- shoes,
+    # bags and cosmetics each need something the others do not.
+    "sole": ("Sole", AttributeKind.TEXT, ["Rubber", "EVA", "Leather"]),
+    "dimensions": (
+        "Dimensions",
+        AttributeKind.TEXT,
+        ["28 x 18 x 10 cm", "32 x 24 x 12 cm", "45 x 30 x 18 cm"],
+    ),
+    "skin-type": (
+        "Skin type",
+        AttributeKind.TEXT,
+        ["All skin types", "Dry", "Oily", "Combination", "Sensitive"],
+    ),
 }
 
 CATEGORY_TREE = {
@@ -118,14 +132,14 @@ CATEGORY_ATTRIBUTES = {
     "Scarves": ["color", "material"],
     "Boys": ["size", "color"],
     "Girls": ["size", "color"],
-    "Sneakers": ["shoe-size", "color", "material", "gender"],
-    "Sandals": ["shoe-size", "color", "gender"],
-    "Formal": ["shoe-size", "color", "material", "gender"],
-    "Backpacks": ["color", "capacity", "material"],
-    "Handbags": ["color", "material"],
-    "Travel": ["color", "capacity", "material"],
-    "Lipstick": ["shade"],
-    "Skincare": ["volume"],
+    "Sneakers": ["shoe-size", "color", "material", "gender", "sole"],
+    "Sandals": ["shoe-size", "color", "gender", "sole"],
+    "Formal": ["shoe-size", "color", "material", "gender", "sole"],
+    "Backpacks": ["color", "capacity", "material", "dimensions"],
+    "Handbags": ["color", "material", "dimensions"],
+    "Travel": ["color", "capacity", "material", "dimensions"],
+    "Lipstick": ["shade", "skin-type"],
+    "Skincare": ["volume", "skin-type"],
     "Fragrance": ["volume"],
 }
 
@@ -135,9 +149,12 @@ CATEGORY_ATTRIBUTES = {
 DEMO_DISCOUNTS = [Decimal("0.00"), Decimal("0.00"), Decimal("0.30"), Decimal("0.15")]
 
 PRODUCTS: list[dict[str, Any]] = [
-    # name, category, brand, price, cost, variant attributes
+    # name, category, brand, price, cost, variant axes (`attrs`) and
+    # specifications (`specs` — stated once on the product, never a SKU)
     {
         "name": "Classic Oxford Shirt",
+        "care": "Machine wash cold. Warm iron. Do not bleach.",
+        "specs": {"material": ["Cotton"], "gender": ["Men"], "fit": ["Regular"]},
         "category": "Shirts",
         "brand": "Rangon",
         "price": "2450",
@@ -146,6 +163,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Essential Cotton T-Shirt",
+        "care": "Machine wash cold. Tumble dry low. Do not bleach.",
+        "specs": {"material": ["Cotton"], "gender": ["Unisex"], "fit": ["Regular"]},
         "category": "T-Shirts",
         "brand": "Rangon",
         "price": "890",
@@ -154,6 +173,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Embroidered Panjabi",
+        "care": "Dry clean only. Do not wring the embroidery.",
+        "specs": {"material": ["Cotton"], "gender": ["Men"]},
         "category": "Panjabi",
         "brand": "Nokshi",
         "price": "3950",
@@ -162,6 +183,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Slim Fit Chinos",
+        "care": "Machine wash cold. Warm iron. Do not bleach.",
+        "specs": {"material": ["Cotton"], "gender": ["Men"], "fit": ["Slim"]},
         "category": "Trousers",
         "brand": "Rangon",
         "price": "2790",
@@ -170,6 +193,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Block Print Kurti",
+        "care": "Hand wash separately in cold water — the block print bleeds at first.",
+        "specs": {"material": ["Cotton"], "gender": ["Women"]},
         "category": "Kurti",
         "brand": "Nokshi",
         "price": "1890",
@@ -178,6 +203,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Linen Blend Top",
+        "care": "Hand wash cold. Dry flat in shade. Warm iron while damp.",
+        "specs": {"material": ["Linen"], "gender": ["Women"]},
         "category": "Tops",
         "brand": "Rangon",
         "price": "1450",
@@ -186,6 +213,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Street Runner Sneakers",
+        "care": "Wipe the upper with a damp cloth. Air dry away from direct sun.",
+        "specs": {"material": ["Canvas"], "gender": ["Unisex"], "sole": ["EVA"]},
         "category": "Sneakers",
         "brand": "Stride",
         "price": "4250",
@@ -194,6 +223,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Leather Formal Shoes",
+        "care": "Wipe clean and polish with a neutral cream. Keep away from water.",
+        "specs": {"material": ["Leather"], "gender": ["Men"], "sole": ["Leather"]},
         "category": "Formal",
         "brand": "Stride",
         "price": "5450",
@@ -202,6 +233,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Everyday Canvas Backpack",
+        "care": "Spot clean with mild soap and cold water. Do not machine wash.",
+        "specs": {"material": ["Canvas"], "dimensions": ["45 x 30 x 18 cm"]},
         "category": "Backpacks",
         "brand": "Carry",
         "price": "2950",
@@ -210,6 +243,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "City Handbag",
+        "care": "Wipe with a soft dry cloth. Condition the leather twice a year.",
+        "specs": {"material": ["Leather"], "dimensions": ["32 x 24 x 12 cm"]},
         "category": "Handbags",
         "brand": "Carry",
         "price": "3450",
@@ -218,6 +253,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Matte Lipstick",
+        "care": "Store below 25°C, away from direct sunlight.",
+        "specs": {"skin-type": ["All skin types"]},
         "category": "Lipstick",
         "brand": "Aurelia",
         "price": "1250",
@@ -227,6 +264,8 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Hydrating Face Serum",
+        "care": "Store below 25°C. Use within 6 months of opening.",
+        "specs": {"skin-type": ["Dry", "Combination"]},
         "category": "Skincare",
         "brand": "Aurelia",
         "price": "2150",
@@ -668,12 +707,31 @@ class Command(BaseCommand):
                     "status": PublishStatus.ACTIVE,
                     "published": True,
                     "featured": len(products) % 4 == 0,
-                    "material": "Cotton" if spec["category"] in {"Shirts", "T-Shirts"} else "",
-                    "care_instructions": "Machine wash cold. Do not bleach.",
+                    # `material` is not set here any more: it is a real
+                    # attribute now (`specs` below), and a free-text column
+                    # saying the same thing is the second place to keep right.
+                    # `care_instructions` has no attribute and stays prose --
+                    # but it is per product, because the flat "Machine wash
+                    # cold" this used to write appeared on a face serum and on
+                    # a pair of leather shoes. Found by reading the page.
+                    "care_instructions": spec.get("care", ""),
                     "seo_description": f"Buy {spec['name']} online at Rangon Fashion.",
                 },
             )
             products.append(product)
+
+            # Specifications, stated once on the product rather than
+            # multiplied into SKUs. Written on every pass, not only on create,
+            # so re-running the seed over an existing shop fills them in.
+            set_product_specs(
+                product=product,
+                value_ids=[
+                    value.pk
+                    for code, wanted in spec.get("specs", {}).items()
+                    for value in attributes[code].values.filter(value__in=wanted)
+                ],
+            )
+
             if not created and product.variants.exists():
                 continue
 
