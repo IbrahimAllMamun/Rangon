@@ -47,12 +47,25 @@ export function buildAxes(variants: ShopVariant[]): Axis[] {
  * Falls back to any variant carrying the value, which repairs the other axes
  * rather than leaving the shopper on a combination that does not exist.
  */
-export function findVariant(
+export interface VariantMatch {
+  variant: ShopVariant | undefined;
+  /**
+   * Did the variant keep every *other* axis the shopper had already chosen?
+   *
+   * `false` means the fallback fired: this value exists, but not alongside the
+   * current picks, so choosing it will move another axis. The buy panel needs
+   * to know, because "we do not make that combination" and "that combination
+   * is sold out" are different facts and only one of them is worth waiting for.
+   */
+  exact: boolean;
+}
+
+export function resolveVariant(
   variants: ShopVariant[],
   current: ShopVariant | null,
   code: string,
   value: string,
-): ShopVariant | undefined {
+): VariantMatch {
   const exact = variants.find((variant) => {
     if (variant.attributes[code]?.value !== value) return false;
     if (!current) return true;
@@ -61,12 +74,24 @@ export function findVariant(
         otherCode === code || variant.attributes[otherCode]?.value === attribute.value,
     );
   });
-  if (exact) return exact;
+  if (exact) return { variant: exact, exact: true };
 
   // Prefer a buyable fallback: landing on an in-stock combination beats landing
   // on the first row that happens to match.
   const carrying = variants.filter((variant) => variant.attributes[code]?.value === value);
-  return carrying.find((variant) => variant.in_stock) ?? carrying[0];
+  return {
+    variant: carrying.find((variant) => variant.in_stock) ?? carrying[0],
+    exact: false,
+  };
+}
+
+export function findVariant(
+  variants: ShopVariant[],
+  current: ShopVariant | null,
+  code: string,
+  value: string,
+): ShopVariant | undefined {
+  return resolveVariant(variants, current, code, value).variant;
 }
 
 /** The attribute code images are grouped by, or `null` if the product has no colour axis. */

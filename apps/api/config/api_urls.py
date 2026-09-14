@@ -45,7 +45,7 @@ from inventory.api.views import (
     StockCountViewSet,
     StockTransferViewSet,
 )
-from orders.api.views import OrderViewSet, ReturnRequestViewSet
+from orders.api.views import AbandonedCheckoutViewSet, OrderViewSet, ReturnRequestViewSet
 from promotions.api.views import CouponViewSet
 from purchasing.api.views import (
     PurchaseOrderViewSet,
@@ -103,6 +103,7 @@ router.register("customers", CustomerViewSet, basename="customer")
 # --- orders ----------------------------------------------------------------
 router.register("orders", OrderViewSet, basename="order")
 router.register("returns", ReturnRequestViewSet, basename="return")
+router.register("abandoned-checkouts", AbandonedCheckoutViewSet, basename="abandonedcheckout")
 
 # --- shipping / promotions / content --------------------------------------
 router.register("shipping-zones", ShippingZoneViewSet, basename="shippingzone")

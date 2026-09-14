@@ -63,6 +63,21 @@ export interface ShopCategoryRef {
   path: string;
 }
 
+/**
+ * One specification, grouped by attribute: "Material: Cotton", and equally
+ * "Skin type: Dry, Combination" — one attribute may hold several values, which
+ * is why the values are a list rather than a string.
+ *
+ * Detail only. No card renders a spec list, and the listing's query budget is
+ * asserted (docs/database/indexing.md).
+ */
+export interface ShopProductSpec {
+  attribute_code: string;
+  attribute_name: string;
+  kind: string;
+  values: { value: string; label: string; swatch: string }[];
+}
+
 export interface ShopProduct {
   id: string;
   name: string;
@@ -71,6 +86,8 @@ export interface ShopProduct {
   description: string;
   material: string;
   care_instructions: string;
+  /** Structured specifications. Present on detail, absent on a listing. */
+  specs?: ShopProductSpec[];
   category: ShopCategoryRef;
   brand: { name: string; slug: string } | null;
   images: ShopImage[];
@@ -78,6 +95,8 @@ export interface ShopProduct {
   price_min: string;
   price_max: string;
   in_stock: boolean;
+  /** Deepest reduction across the variants, as a whole percentage. 0 = none. */
+  drop_percent: number;
   featured: boolean;
   seo_title: string;
   seo_description: string;

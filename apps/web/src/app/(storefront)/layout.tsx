@@ -3,6 +3,7 @@ import { Suspense } from "react";
 
 import { LogoLink } from "@/components/brand/logo";
 import { AccountMenu } from "@/components/commerce/account-menu";
+import { WhatsAppButton } from "@/components/commerce/whatsapp-button";
 import { AnnouncementBar } from "@/components/commerce/announcement-bar";
 import { CartButton } from "@/components/commerce/cart-button";
 import { MobileNav } from "@/components/commerce/mobile-nav";
@@ -109,6 +110,9 @@ export default async function StorefrontLayout({ children }: { children: React.R
           </div>
         </div>
       </footer>
+
+      {/* Renders nothing unless NEXT_PUBLIC_WHATSAPP_NUMBER is set. */}
+      <WhatsAppButton />
     </div>
   );
 }

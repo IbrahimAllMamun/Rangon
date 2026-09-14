@@ -14,6 +14,7 @@ interface HomePayload {
   new_arrivals: ShopProduct[];
   featured: ShopProduct[];
   best_sellers: ShopProduct[];
+  price_drops: ShopProduct[];
   brands: { name: string; slug: string; logo: string }[];
 }
 
@@ -136,6 +137,14 @@ export default async function HomePage() {
         </Section>
       ) : null}
 
+      {/* Deepest reduction first, so the row leads with what a shopper would
+          call a bargain rather than the dearest thing that is marked down. */}
+      {data?.price_drops?.length ? (
+        <Section title="Price drops" href="/shop?sort=price-asc">
+          <ProductGrid products={data.price_drops} priorityCount={0} />
+        </Section>
+      ) : null}
+
       {data?.best_sellers?.length ? (
         <Section title="Best sellers" href="/shop">
           <ProductGrid products={data.best_sellers} priorityCount={0} />
@@ -145,6 +154,35 @@ export default async function HomePage() {
       {data?.featured?.length ? (
         <Section title="Featured" href="/shop">
           <ProductGrid products={data.featured} priorityCount={0} />
+        </Section>
+      ) : null}
+
+      {/* Featured brands have been in the home payload since this page was
+          built and were never rendered, so every brand logo the API served
+          pointed nowhere. They link to /brand/[slug] now. */}
+      {data?.brands?.length ? (
+        <Section title="Shop by brand" href="/brand">
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+            {data.brands.map((brand) => (
+              <li key={brand.slug}>
+                <Link
+                  href={`/brand/${brand.slug}`}
+                  className="flex h-24 flex-col items-center justify-center gap-2 rounded-xl border border-border bg-surface p-3 transition-colors duration-fast hover:border-brand-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
+                >
+                  {brand.logo ? (
+                    <Image
+                      src={brand.logo}
+                      alt=""
+                      width={56}
+                      height={32}
+                      className="h-8 w-auto object-contain"
+                    />
+                  ) : null}
+                  <span className="truncate text-caption font-medium">{brand.name}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
         </Section>
       ) : null}
 

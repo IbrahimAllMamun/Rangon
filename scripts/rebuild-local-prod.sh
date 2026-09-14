@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Rebuild, restart and reseed the local production stack.
+# Rebuild the local production stack from scratch.
 #
-# Usage: ./scripts/rebuild-local-prod.sh [options]
+# Usage: ./scripts/rebuild-local-prod.sh [-h]
 #
-#   --no-seed      keep the current data; skip `seed_demo --reset`
-#   --no-build     reuse the existing :prod images
-#   -y, --yes      do not prompt before the reseed (for automation)
 #   -h, --help     this text
+#
+# DESTRUCTIVE, and unconditionally so. It runs `compose down -v`, which removes
+# this project's volumes -- so the database goes with them and the reseed that
+# follows is not optional, it is how the stack gets a database at all. There is
+# deliberately no `--no-seed`: there would be nothing left to keep.
 #
 # ---------------------------------------------------------------------------
 # Why each step is here, because three of them look redundant and are not
@@ -42,15 +44,8 @@ cd "$(dirname "$0")/.."
 : "${PUBLIC_URL:=http://localhost:4100}"
 : "${SHOP_TIME_ZONE:=Asia/Dhaka}"
 
-SEED=1
-BUILD=1
-ASSUME_YES=0
-
 while [ $# -gt 0 ]; do
     case "$1" in
-    --no-seed) SEED=0 ;;
-    --no-build) BUILD=0 ;;
-    -y | --yes) ASSUME_YES=1 ;;
     -h | --help)
         # The usage block is everything between the shebang and the first
         # divider, so adding a line above does not silently truncate --help.
@@ -71,6 +66,8 @@ compose() {
         -f docker-compose.yml -f docker-compose.prodlocal.yml "$@"
 }
 
+
+
 # `exec -T`: there is no terminal when this runs from CI or a scheduler, and
 # without it Django's output is mangled rather than failing outright.
 api() { compose exec -T api "$@"; }
@@ -86,31 +83,28 @@ require_file() {
 
 require_file "$ENV_FILE"
 
+
 # --------------------------------------------------------------- 1. migrate --
 # Only if something is already running. On a cold start there is no container
 # to exec into, and `set -e` would abort the whole script on that.
-if [ -n "$(compose ps -q api 2>/dev/null)" ]; then
-    step "migrating the stack that is already running"
-    api python manage.py migrate --noinput
-else
-    step "no api container running -- skipping the pre-build migrate"
-fi
+
+step "tear down the stack that is already running"
+compose down -v
+
 
 # ---------------------------------------------------------------- 2. build ---
-if [ "$BUILD" = 1 ]; then
-    step "building rangon-api:prod"
-    docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
 
-    step "building rangon-web:prod"
-    # NEXT_PUBLIC_* are compiled into the bundle, so they are build args and
-    # not environment. Changing the origin means rebuilding, not restarting.
-    docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web \
-        --build-arg "NEXT_PUBLIC_API_URL=${PUBLIC_URL}/api/v1" \
-        --build-arg "NEXT_PUBLIC_SITE_URL=${PUBLIC_URL}" \
-        --build-arg "NEXT_PUBLIC_TIME_ZONE=${SHOP_TIME_ZONE}"
-else
-    step "skipping the image build (--no-build)"
-fi
+step "building rangon-api:prod"
+docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
+
+step "building rangon-web:prod"
+# NEXT_PUBLIC_* are compiled into the bundle, so they are build args and
+# not environment. Changing the origin means rebuilding, not restarting.
+docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web \
+   --build-arg "NEXT_PUBLIC_API_URL=${PUBLIC_URL}/api/v1" \
+   --build-arg "NEXT_PUBLIC_SITE_URL=${PUBLIC_URL}" \
+   --build-arg "NEXT_PUBLIC_TIME_ZONE=${SHOP_TIME_ZONE}"
+
 
 # ------------------------------------------------------------------- 3. up ---
 step "starting the stack"
@@ -135,26 +129,14 @@ echo "    healthy after ~$((attempt * 2))s"
 
 # -------------------------------------------------------------- 4. migrate ---
 step "migrating against the new image"
-api python manage.py migrate --noinput
+api python manage.py migrate
 
 # ----------------------------------------------------------------- 5. seed ---
-if [ "$SEED" = 1 ]; then
-    if [ "$ASSUME_YES" = 0 ]; then
-        echo
-        echo "    seed_demo --reset DELETES every product, order, payment and"
-        echo "    ledger row in ${COMPOSE_PROJECT}, then loads demo data."
-        printf '    Type "reset" to continue, anything else to skip: '
-        read -r reply
-        [ "$reply" = "reset" ] || SEED=0
-    fi
-fi
 
-if [ "$SEED" = 1 ]; then
-    step "reseeding demo data"
-    api python manage.py seed_demo --reset
-else
-    step "keeping the current data (reseed skipped)"
-fi
+
+step "reseeding demo data"
+api python manage.py seed_demo --reset
+
 
 # ---------------------------------------------------------------- 6. nginx ---
 # Last, and always: api and web have just been replaced, so nginx is holding

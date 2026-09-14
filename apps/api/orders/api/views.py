@@ -15,6 +15,7 @@ from accounts.permissions import RolePermission
 from accounts.services import branch_queryset
 from core import phone as phone_utils
 from orders.api.serializers import (
+    AbandonedCheckoutSerializer,
     CompleteReturnSerializer,
     CreateReturnSerializer,
     OrderDetailSerializer,
@@ -27,7 +28,8 @@ from orders.api.serializers import (
     ReturnRequestSerializer,
     StatusChangeSerializer,
 )
-from orders.models import Order, ReturnRequest
+from orders.models import AbandonedCheckout, Order, ReturnRequest
+from orders.services import leads
 from orders.services import lifecycle as lifecycle_services
 from orders.services import payments as payment_services
 from orders.services import returns as return_services
@@ -288,3 +290,43 @@ class ReturnRequestViewSet(
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(ReturnRequestSerializer(result).data)
+
+
+class AbandonedCheckoutViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """The call-back list: shoppers who typed a number and did not finish.
+
+    Read, annotate, and write off. There is no create — a lead is made by a
+    shopper abandoning, not by staff — and no delete, because the only figure
+    this list is judged by is how many leads turned into orders, and deleting
+    the ones that did not would make that number a lie.
+    """
+
+    serializer_class = AbandonedCheckoutSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["customers.view"],
+        "retrieve": ["customers.view"],
+        "update": ["customers.update"],
+        "partial_update": ["customers.update"],
+        "lost": ["customers.update"],
+    }
+    filterset_fields = ["status", "branch"]
+
+    def get_queryset(self) -> Any:
+        return branch_queryset(
+            self.request.user,
+            AbandonedCheckout.objects.select_related("branch", "recovered_order", "customer"),
+        )
+
+    @action(detail=True, methods=["post"])
+    def lost(self, request: Request, pk: str | None = None) -> Response:
+        """Write a lead off after it has been chased and gone nowhere."""
+        lead = leads.mark_lost(
+            lead=self.get_object(), note=str(request.data.get("note", "")).strip()
+        )
+        return Response(self.get_serializer(lead).data)

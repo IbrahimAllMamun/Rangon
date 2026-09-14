@@ -3,7 +3,17 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Count, IntegerField, Max, Min, OuterRef, Q, Subquery, Value
+from django.db.models import (
+    Count,
+    IntegerField,
+    Max,
+    Min,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+)
 from django.db.models.functions import Coalesce
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
@@ -21,6 +31,7 @@ from catalog.api.serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
     BrandSerializer,
+    CategoryAttributeSerializer,
     CategorySerializer,
     GenerateVariantsSerializer,
     ProductDetailSerializer,
@@ -36,12 +47,18 @@ from catalog.models import (
     Brand,
     Category,
     Product,
+    ProductAttributeValue,
     ProductImage,
     ProductVariant,
     PublishStatus,
     VariantAttributeValue,
 )
-from catalog.services import generate_barcode, generate_variants
+from catalog.services import (
+    category_attributes,
+    generate_barcode,
+    generate_variants,
+    set_product_specs,
+)
 from core import audit
 from core.exceptions import Conflict, ValidationError
 from inventory import services as inventory_services
@@ -76,6 +93,18 @@ class CategoryViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context["tree"] = self.request.query_params.get("tree") == "true"
         return context
+
+    @action(detail=True, methods=["get"])
+    def attributes(self, request: Request, pk: str | None = None) -> Response:
+        """Which attributes this category uses, inherited from its ancestors.
+
+        The product form asks this whenever the category changes, so a handbag
+        never offers a Shoe size and cosmetics offer Volume. The answer covers
+        both halves -- `is_variant_defining` splits it into the axes that build
+        SKUs and the specifications stated once on the product.
+        """
+        links = category_attributes(self.get_object())
+        return Response(CategoryAttributeSerializer(links, many=True).data)
 
 
 class BrandViewSet(viewsets.ModelViewSet):
@@ -129,6 +158,16 @@ class AttributeViewSet(viewsets.ModelViewSet):
                 "Those SKUs would lose the axis they were generated on.",
                 details={"variant_usage": used_by},
             )
+        stated_by = ProductAttributeValue.objects.filter(
+            attribute_value__attribute=instance
+        ).count()
+        if stated_by:
+            raise Conflict(
+                f"“{instance.name}” is stated as a specification on {stated_by} "
+                f"product{'' if stated_by == 1 else 's'} and cannot be deleted. "
+                "Clear it from those products first.",
+                details={"spec_usage": stated_by},
+            )
         super().perform_destroy(instance)
 
 
@@ -150,6 +189,18 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
                 "Rename it instead — orders froze their own label at sale time, "
                 "so history does not move.",
                 details={"variant_usage": used_by},
+            )
+        # `ProductAttributeValue.attribute_value` is PROTECT too, so without
+        # this the database answers a spec value's deletion with a bare 409 and
+        # the admin is left clicking Delete again -- the same reason the
+        # variant branch above exists.
+        stated_by = instance.product_links.count()
+        if stated_by:
+            raise Conflict(
+                f"“{instance.display}” is stated as a specification on {stated_by} "
+                f"product{'' if stated_by == 1 else 's'} and cannot be deleted. "
+                "Rename it instead, or clear it from those products first.",
+                details={"spec_usage": stated_by},
             )
         super().perform_destroy(instance)
 
@@ -209,7 +260,20 @@ class ProductViewSet(viewsets.ModelViewSet):
     def get_queryset(self) -> Any:
         queryset = (
             Product.objects.select_related("brand", "category")
-            .prefetch_related("images", "variants__attribute_values__attribute_value")
+            .prefetch_related(
+                "images",
+                "variants__attribute_values__attribute_value",
+                # One query for the whole page, whether a product states one
+                # specification or twenty. `select_related` rather than two
+                # more prefetch levels: Django issues a query per level, and
+                # `Meta.ordering` needs those joins anyway.
+                Prefetch(
+                    "spec_values",
+                    queryset=ProductAttributeValue.objects.select_related(
+                        "attribute_value__attribute"
+                    ),
+                ),
+            )
             .annotate(min_price=Min("variants__price"), max_price=Max("variants__price"))
         )
         search = self.request.query_params.get("search")
@@ -241,7 +305,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         return context
 
     def perform_create(self, serializer: Any) -> None:
+        # Popped before `save()`: `spec_values` is not a Product column, and
+        # the service -- not the serializer -- owns the rule about which
+        # attributes may be stated (CLAUDE.md §4).
+        specs = serializer.validated_data.pop("spec_values", None)
         product = serializer.save(created_by=self.request.user)
+        if specs is not None:
+            set_product_specs(product=product, value_ids=specs, actor=self.request.user)
         audit.record(
             action=audit.AuditAction.CREATE,
             entity=product,
@@ -254,7 +324,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             field: getattr(serializer.instance, field)
             for field in ("name", "status", "published", "featured")
         }
+        specs = serializer.validated_data.pop("spec_values", None)
         product = serializer.save()
+        if specs is not None:
+            set_product_specs(product=product, value_ids=specs, actor=self.request.user)
         after = {field: getattr(product, field) for field in before}
         old, new = audit.diff(before, after)
         if new:

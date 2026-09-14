@@ -256,6 +256,13 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
 
     _touch_customer(customer, order)
 
+    # A lead chased by phone is usually rung up at the counter, not online. If
+    # only checkout closed leads, every recovery the shop actually made would
+    # stay on the call-back list and be called again.
+    from orders.services import leads
+
+    leads.recover_for_order(order)
+
     log_event(
         order,
         OrderEventType.CREATED,

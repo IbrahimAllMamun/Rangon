@@ -9,22 +9,57 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-15**. The 09-15 pass made a purchase order payable, and it was not the item
-this file recommended. Auditing the backlog against the code rather than against this file found that
-**`supplier-payments/` was a complete, live, registered API that nothing called** — so `paid_total`
-was permanently `0.00`, the payables side of the party ledger could only grow, and the cash position
-permanently overstated cash, while phases 07, 35 and 37 were all marked green. Checking the endpoint
-before building over it found five defects, three of them money bugs ([D61–D65](#known-defects)): a
-payment could be recorded against another supplier's order, a supplier could be overpaid until the
-order vanished from payables, and a double-click paid twice. The fifth is why the screen had never
-been built — the endpoint returned 400 for every request, because the serializer required a
-timestamp the service had always defaulted.
+Last updated: **2026-09-15**. The 09-15 pass made a purchase order payable. Auditing the backlog
+against the code found that **`supplier-payments/` was a complete, live, registered API that nothing
+called** — so `paid_total` was permanently `0.00`, the payables side of the party ledger could only
+grow, and the cash position permanently overstated cash, while phases 07, 35 and 37 were all marked
+green. Checking the endpoint before building over it found five defects, three of them money bugs
+([D61–D65](#known-defects)): a payment could be recorded against another supplier's order, a supplier
+could be overpaid until the order vanished from payables, and a double-click paid twice. The fifth is
+why the screen had never been built — the endpoint returned 400 for every request, because the
+serializer required a timestamp the service had always defaulted.
 
-That audit also found this file's **"Still API-only (no UI): Nothing"** to be false in six places,
+That audit also found this file's **"Still API-only (no UI): Nothing"** to be false in five places,
 and two defects nobody had recorded: `/admin/products/import` has no permission check (D66) and the
-Track-your-order form 404s on every submission (D67). Both sections below are corrected.
+Track-your-order form 404s on every submission (D67).
 
-Before that, the 09-12 pass was four things the owner could see: the admin sidebar
+Before that, **2026-09-14**. The 09-14 pass built **product specification attributes** — the last
+item on Tier 1 that waited on nobody. The catalogue sells clothing, shoes, bags *and* cosmetics, and
+the only spec fields were the free-text `material` and `care_instructions` columns on `Product`,
+which is exactly what §10 of the build plan says not to do. `Attribute.is_variant_defining` had split
+the world in two since the first migration and the seed already marked Material, Gender and Fit as
+*not* variant-defining — but **nothing could attach one to a product**, so those attributes existed
+and were unreachable, and `CategoryAttribute` was read by the seed and by nothing else.
+`ProductAttributeValue` is the missing half. Specifications are now stated on the product, scoped by
+what the category declares, rendered on the product page and in its JSON-LD `additionalProperty`.
+Shoes state a Sole, bags state Dimensions, cosmetics state a Skin type. See
+[§ 5a of business-rules.md](business-rules.md#5a-product-attributes-axes-and-specifications).
+
+Reading the rendered page found one more thing, which is the habit this file keeps recommending:
+every seeded product carried **"Machine wash cold. Do not bleach."** — on a face serum and on a pair
+of leather shoes. Demo data rather than code, like [D54](#known-defects), and fixed the same way.
+
+**2026-09-13** shipped six of Tier 1 in four passes, and this file did not record them until now:
+
+* **Abandoned checkout capture (#1).** The phone is kept the moment it is typed, as one `OPEN` lead
+  per person rather than per attempt, canonicalised so `01712…` and `+8801712…` are one row; buying
+  closes it by either route, storefront or counter. Nothing can mark a lead recovered by hand and
+  nothing can delete one — the recovery rate is the figure the list is judged by.
+* **Brand landing pages (#3).** `ShopHomeView` had served eight featured brands with logos since the
+  home page was built, and the home page never rendered them; there was no route behind them either.
+  `/brand` and `/brand/[slug]` now exist and the slug is forced from the route.
+* **The fourth variant state (#5).** `findVariant` collapsed "no such combination" into its fallback
+  and threw away which case it was, so a Medium that exists only in Navy looked identical to a Medium
+  sold out everywhere. `stale` is now dashed rather than struck, because clicking it works.
+* **WhatsApp float button (#4).** Env-gated; renders nothing when unset.
+* **Price drops and real co-occurrence (#6).** "Customers also bought" had been same-category,
+  exclude-self — a reasonable fallback under a dishonest headline. It now ranks by shared orders.
+  Price drops rank by percentage, not cash.
+* **Quick View (#7).** A card with more than one variant says "Choose options" instead of guessing.
+  It also fixed a defect the pass before had shipped: `pk__in` answers unordered, so the merchandised
+  rows arrived unranked and the live home page led "Price drops" with 15% off above a 30%.
+
+Before that, **2026-09-12**, four things the owner could see: the admin sidebar
 scrolled away with the page instead of staying put (D56), the storefront header went translucent and
 lost its contrast over the black hero (D57), and up to three logo loaders drew on top of each other
 during a slow navigation (D58). The fourth was not a defect — the admin header was mostly empty
@@ -82,7 +117,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 02  | Architecture                          | ✅      | —       | `docs/architecture/*`, ERD, domain model                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 03  | Database                              | ✅      | —       | 12 apps, UUID PKs, Decimal money, constraints, migrations apply clean                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 04  | Auth + RBAC                           | ✅      | ✅       | JWT in httpOnly cookies, 7 roles, branch scoping, audit log, sign-in page. Admin settings can now**edit** the organization and create/edit branches                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 05  | Product catalog                       | ✅      | ✅       | Full CRUD API.**Admin create/edit shipped 2026-08-21** — `/admin/products/new` and `/admin/products/[id]`: details, attribute tick-lists, a variant matrix with per-row price/cost/SKU/barcode, opening stock, publish/unpublish, delete-or-archive, and per-colour photography                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 05  | Product catalog                       | ✅      | ✅       | Full CRUD API. **Specification attributes shipped 2026-09-14** — `ProductAttributeValue`, a Specifications card on the product form scoped by `GET /categories/{id}/attributes/`, and a spec list on the product page. **Admin create/edit shipped 2026-08-21** — `/admin/products/new` and `/admin/products/[id]`: details, attribute tick-lists, a variant matrix with per-row price/cost/SKU/barcode, opening stock, publish/unpublish, delete-or-archive, and per-colour photography                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 06  | Inventory engine                      | ✅      | ✅       | Ledger, reservations, transfers, WAC,`verify_inventory`. Complete 2026-09-09. `/admin/inventory` gained a per-row **Adjust** action — the row you are looking at is the row that is wrong — alongside the write-off panel, and stock counts and transfers have had screens since phase 39. Building it found the list had no total order, so a corrected row could reshuffle (D13's shape, one table over), and that the expiring filter's ordering was silently discarded                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 07  | Suppliers + purchasing                | ✅      | ✅       | PO → receive → ledger → cost recalculation.**Admin screens shipped 2026-08-22** — `/admin/purchases/new` (supplier picker with inline create, debounced variant search, line table, live totals), `/admin/purchases/[id]` (send, cancel, partial receive, delivery history) and `/admin/suppliers` (list + inline create/edit). Receiving is the only step that writes stock, and it goes through `inventory.services`                                                                                                                                                                                                                                                                                                                                                                                  |
 | 08  | POS                                   | ✅      | ✅      | Barcode-first register, split payment, hold/resume, receipt, F2/F3/F4/F8 shortcuts. **Customer attach shipped 2026-09-03** — F3 opens a phone lookup over `GET /customers/lookup/`, with inline create when the search finds nobody; an unattached sale still files against the branch's walk-in row |
@@ -883,6 +918,104 @@ that "fails in production and passes in dev" was, for one of its two causes, rea
 disprove; this one held for three days.
 
 
+### Product specifications verified, 2026-09-14
+
+Built and verified on `claude/roadmap-review-prioritize-6g79qz`, on a Linux container with
+PostgreSQL 16 and Redis run natively (`scripts/dev-stack-native.sh`'s topology, Python 3.12).
+
+```text
+baseline before any change ..................... 934 passed
+migration (catalog 0006) ....................... applied clean, unapplied and re-applied clean,
+                                                 `makemigrations --check` clean
+pytest ......................................... 959 passed (25 new: 24 in
+                                                 tests/api/test_product_specs.py, 1 query-growth
+                                                 guard in tests/test_performance.py; plus two
+                                                 assertions added to tests/test_seed_reset.py)
+ruff check + ruff format --check ............... clean (197 files)
+frontend typecheck (tsc --noEmit) .............. clean
+frontend eslint (npx eslint src) ............... clean
+vitest ......................................... 187 passed, 12 files
+seed_demo --reset .............................. 12 products, 72 variants, every product stating
+                                                 its category's specifications
+query budgets .................................. 20/20 pass. Product detail 13 -> 14 (budget 18);
+                                                 the listing, home and feed budgets are unchanged,
+                                                 because the spec prefetch is on detail only
+storefront read in a browser ................... /product/hydrating-face-serum shows
+                                                 "Skin type: Dry, Combination"; leather-formal-shoes
+                                                 shows "Sole: Leather"; city-handbag shows
+                                                 "Dimensions: 32 x 24 x 12 cm"; classic-oxford-shirt
+                                                 shows Material, Gender and Fit. JSON-LD carries
+                                                 `additionalProperty` on all four
+admin driven in a real Chromium ................ signed in as owner, /admin/products/<shoes>:
+                                                 the Specifications card offers exactly Material,
+                                                 Gender and Sole (the three non-variant-defining
+                                                 attributes the Formal category declares), each
+                                                 with its seeded value ticked. Ticked "Sole: Rubber",
+                                                 saved with no error summary, reloaded: Leather AND
+                                                 Rubber both ticked. Multi-value round-trips
+```
+
+**Every guard was seen red before it was seen green.** Each was sabotaged in turn and the matching
+test watched fail: the variant-axis refusal (serializer *and* service), the replace-not-append
+semantics, the missing-id check, both delete refusals, the `is_variant_defining` side-change guard,
+the storefront payload, and the N+1 growth test (`assert 22 == 16`).
+
+Three things the build found, none of them the feature:
+
+1. **The `is_variant_defining` guard was half a guard.** It refused to turn the flag *off* under
+   existing variants and let it be turned *on* freely — which now strands spec rows the same way.
+   Found by reading the validator before extending it, which is the habit this file keeps
+   recommending, not by a failure.
+2. **A three-level string prefetch is three queries, and a one-level one is an N+1.** See
+   [database/indexing.md](database/indexing.md#the-spec-list-three-ways-to-write-one-prefetch-two-of-them-wrong).
+3. **Every seeded product said "Machine wash cold. Do not bleach."** — on a face serum and on leather
+   shoes. Caught by reading the rendered page, after 958 tests, a clean `tsc` and a clean lint had all
+   passed. Demo data rather than code, like [D54](#known-defects); each product now carries care
+   advice that suits it.
+
+**The variant matrix was scoped too, later the same day.** It had been left out of the pass above and
+written down as Tier 2 #2, because it changes a screen that works today; it is now done, and the
+reasoning is below.
+
+### The variant matrix scoped by category, 2026-09-14
+
+The Specifications card asked the category what was relevant while the *variant matrix above it*
+still offered every axis in the shop — editing a pair of shoes showed Shade, Volume and Capacity.
+Half a form scoped is worse than none, because it reads as arbitrary.
+
+Two rules make it safe, and both are pinned by tests that were watched fail first
+(`lib/commerce/category-attributes.test.ts`, 11 cases):
+
+1. **A category that declares nothing offers everything.** The seed wires attributes to *leaf*
+   categories, so a product filed against "Men" — or any category somebody has just created —
+   would otherwise have no axis at all and could never be given a variant. That reads as a broken
+   form rather than as missing configuration.
+2. **An axis the product already uses is always offered**, declared or not. This is the one that
+   matters: `buildMatrix` appends every saved variant whatever is ticked, so hiding the fieldset for
+   an axis a product is built on would leave those rows visible, unlabelled and un-editable — rows
+   that may hold stock and that the ledger and order history still point at. Proven in the browser
+   by re-filing the shoes under Handbags, which declares no shoe size: the axis stayed, all four
+   matrix rows stayed, and all five ticked values stayed reachable.
+
+A failed lookup falls back to offering everything and says so, rather than blocking the form.
+
+The fetch moved into `ProductForm` and `ProductSpecPicker` became presentational, so **one request
+serves both halves** — two would let the axes and the specifications disagree about what the same
+category declares.
+
+```text
+seen in a browser, signed in as owner
+  Leather Formal Shoes (Formal) .. axes: Shoe size, Colour        specs: Material, Gender, Sole
+  City Handbag (Handbags) ........ axes: Colour                   specs: Material, Dimensions
+  Matte Lipstick (Lipstick) ...... axes: Shade                    specs: Skin type
+  re-filed shoes -> Handbags ..... axes: Shoe size, Colour (kept), 4 matrix rows intact
+vitest .......................... 198 passed, 13 files (11 new)
+tsc --noEmit / eslint src ....... clean
+```
+
+Before this, all three of those products offered Size, Shoe size, Colour, Shade, Volume and
+Capacity. No backend change: the endpoint added earlier in the day was already the right shape.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -993,7 +1126,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 
 **This section said "Nothing" from 2026-08-31 until 2026-09-15, and it was wrong.** An audit that
 compared every router registration in `config/api_urls.py` against what `apps/web/src` actually
-calls found six complete APIs with no frontend caller. The claim had been made by listing the
+calls found five complete APIs with no frontend caller. The claim had been made by listing the
 screens that *had* been built rather than by checking the ones that had not.
 
 | Endpoint | State |
@@ -1003,7 +1136,6 @@ screens that *had* been built rather than by checking the ones that had not.
 | `auth/register/` | No sign-up screen. Storefront checkout is guest-token based so this blocks no purchase, but an account can only be created from the admin |
 | `audit-logs/` | Everything writes audit rows and nothing reads them back. The trail exists and is unreadable without database access |
 | `inventory-transactions/` | The ledger itself. `/admin/inventory` shows the current figure, not the movements behind it |
-| `customers/{id}/addresses/` | Reachable on the storefront; the admin customer screen cannot edit an address |
 
 The rule this section has recommended for months is the one that would have caught it, applied to
 the section itself: **check each endpoint against what calls it, rather than listing what was
@@ -1013,10 +1145,18 @@ built.** "Exists" is not "reachable".
 that could only read — the UI was the gap, not the API. Create, edit, reorder and a colour picker
 shipped 2026-09-12; [D60](#known-defects) says why the screen had been left read-only.
 
+**`CategoryAttribute` was the reverse of that, and is no longer.** A full model since the first
+migration, seeded per category, and read by the seed and by nothing else — no serializer, no
+endpoint, no screen. `GET /categories/{id}/attributes/` and the Specifications card shipped
+2026-09-14. Worth keeping in mind as a shape: "API-only" is the gap this list was written to track,
+but a model with no API at all does not appear on any list, and this one sat there for four weeks
+holding the answer to a question the product form was not asking.
+
 The rule that got us here is worth keeping for whatever is built next: **check each endpoint against
-the documented behaviour before building over it.** It has now paid for itself seven times — a CSV
+the documented behaviour before building over it.** It has now paid for itself eight times — a CSV
 export that had never worked, a stock count that could not be counted, a restock decision in the
-wrong place, the four customer defects D24–D27, a coupon redeemable twice under a race, and eleven
+wrong place, the four customer defects D24–D27, a coupon redeemable twice under a race, an
+`is_variant_defining` guard that only guarded one direction, and eleven
 more in the two "safe" areas above. "Exists" is not "tested", and "rarely touched" is a reason
 nothing has ever exercised the edges, not a reason they are sound.
 
@@ -1090,11 +1230,17 @@ given, and no later setting change corrects it.
 
 ## What to build next
 
-Reviewed 2026-09-12, against the code rather than against this file.
+Reviewed 2026-09-14, against the code rather than against this file — which was the right way round
+to do it, because the file was six shipped items out of date.
 
 The question that orders everything below: **this shop has never traded.** Nothing is deployed, no
 real order has ever been placed. So the test for any piece of work is not "is it valuable" but "does
 the first real sale wait on it". Most of the backlog does not.
+
+**Tier 1 is now empty.** All seven items shipped on 09-13 and 09-14. That is worth saying plainly,
+because it changes what this section is for: there is no longer a queue of work that needs nobody's
+permission and no environment. What is left is Tier 0 — three items of which are not code — and the
+Tier 2 list below, which is now the real backlog rather than the overflow.
 
 ### Tier 0 — the first sale genuinely waits on these
 
@@ -1107,38 +1253,42 @@ the first real sale wait on it". Most of the backlog does not.
 
 Tier 0 is four items and **three of them are not code**. That is the honest position.
 
-### Tier 1 — build these, in this order
+### Tier 1 — done
 
-Re-ranked 2026-09-15 against the code. **Every item below was mis-described in the 09-12 list**, and
-three of the seven turned out to be defects rather than features. Ordered by value per day of work.
+All seven shipped. Kept here as the record of what was built and when, not as a queue.
+
+| # | Item | Shipped |
+|---|---|---|
+| 1 | **Abandoned checkout capture** | 2026-09-13 |
+| 2 | **Product spec attributes** | 2026-09-14 |
+| 3 | **Brand landing pages** | 2026-09-13 |
+| 4 | **WhatsApp float button** | 2026-09-13 |
+| 5 | **The fourth (`stale`) variant state** | 2026-09-13 |
+| 6 | **Price drops + real "customers also bought"** | 2026-09-13 |
+| 7 | **Quick View** | 2026-09-13 |
+| — | **Make a purchase order payable** | 2026-09-15 — not on this list; it outranked everything on it |
+
+### Tier 2 — the backlog now, in this order
+
+Nothing here waits on a decision, a provider or an environment, which is what Tier 1 used to mean.
+Ordered by value per day of work.
 
 | # | Item | Why now |
 |---|---|---|
-| ~~0~~ | ~~**Make a purchase order payable**~~ | **Done 2026-09-15.** Was not on the list at all, and outranked everything on it: a live API nothing called, four money bugs behind it, and three phases marked green that were not |
-| 1 | **Finish the four-state variant picker** | Promoted from #5, and it is a **live defect**, not a missing feature. `dead` has never rendered — `buildAxes` derives every axis value from the variants themselves, so `findVariant`'s fallback filters a list that always has a member and can never return `undefined`. Worse, the case the spec calls `stale` is currently labelled `fits`: pick Red, click Large, and `variants.ts:69` silently repairs the colour to Blue with no signal. In a COD market that is not a lost sale, it is a delivery refused at the door. No backend change — the payload already ships `in_stock` and `attributes` per variant — and `variants.ts` is a pure module, so it is provable with Vitest and no stack. Settle the `dead` predicate first: the spec means "nothing carries it **in stock** anywhere", the code means "nothing carries it at all", and picking the spec's reading makes `disabled` fire for the first time |
-| 2 | **Seed a discount, then show it on the card** | Was #6, "compare_at_price exists and nothing surfaces it". Too pessimistic: the chain is built end to end — admin edit, serializer, card `Sale` badge, PDP struck price. It is invisible because **`seed_demo` sets `compare_at_price` zero times**, so the card renders a Sale badge with nothing to anchor against. Seed the discount and add the card's struck line: hours, and it is the strongest conversion lever in this market |
-| 3 | **Make the homepage render the brands it already fetches** | Was #3, "eight featured brands with logos, and clicking one goes nowhere". The premise is false in both halves: `page.tsx:17` *declares* `brands` on the payload type and no line reads it, and no brand logo has ever existed (the seed sets none, `BrandManager` cannot upload one). So there is no live dead end. `/shop?brand=<slug>` already works with filters, sort and pagination. The honest hour is making the homepage render its own payload and link it to `/shop?brand=`; a `/brand/[slug]` route, a logo uploader and logo artwork are a separate day |
-| 4 | **Product spec attributes** | Unchanged in rank. The catalogue sells clothing, shoes, bags *and* cosmetics with only free-text `material` and `care_instructions`. `CategoryAttribute` exists to say which attributes a category uses. The best pure feature on the list, and the only one that is genuinely multi-day — it needs two schema decisions first |
-| 5 | **WhatsApp float button** | Right about the value, wrong about the mechanism. `NEXT_PUBLIC_*` is baked in at build time, so an env-gated button cannot be switched on or have its number changed without a rebuild. The number belongs on `Organization`, which already holds phone/email/address, is already admin-editable and is already served through the public `/shop/navigation/` payload. Gated on two real decisions: Lucide carries no WhatsApp glyph (CLAUDE.md §10 is Lucide-only), and `#25D366` is not a token while brand red is the only sanctioned CTA colour |
-| 6 | **Shipment creation and tracking events** | New, from the API-only audit. `ShipmentViewSet` and its `events` action are complete and tested with no caller, so `orders.fulfil` is unreachable through the product and `Courier.tracking_url_template` can never be filled. Same shape as the supplier-payment work — audit the endpoint first |
-| 7 | **"Customers also bought"** | Was half of #6. Honest work, but premature: the shop has never traded, and 40 seeded orders over 12 products yields noise, not co-occurrence. The same-category fallback it is meant to replace is load-bearing until there is real basket data |
-| — | **Quick View** | Demoted off the list. The brief assumed a card that guesses a variant; the storefront card has **no add-to-cart control at all**, so nothing guesses and there is no defect. Pure convenience, and gated behind Tier 0 #3 — a Quick View whose hero is the "No image" placeholder is worse than the product page |
+| 1 | **[D47](#known-defects) — concurrent pytest runs corrupt each other** | It bit again on 2026-09-14, during the spec-attribute work: a targeted `-k` run against the database the full suite was already using errored on collection. The workaround is one flag (`-p <unique>`) and the fix is a per-run test database name. It manufactures *plausible* failures in unrelated assertions, which is the expensive kind |
+| 2 | ~~**Scope the variant matrix by category**~~ | **Done 2026-09-14**, same day it was written down. See the verification log |
+| 3 | **[D40](#known-defects) — `router.refresh()` in a production build** | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out |
+| 4 | **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
+| 5 | **[D66](#known-defects) and [D67](#known-defects), one line each** | `/admin/products/import` is the only admin screen with no permission check — the API refuses correctly, so it is a confusing hole rather than a security one. D67 is customer-facing: the footer's Track-your-order form GETs `/order`, and the only route reads the number from a path segment, so **every submission 404s**. Minutes each |
+| 6 | **Shipment creation and tracking events** | From the API-only audit. `ShipmentViewSet` and its `events` action are complete and tested with no caller, so `orders.fulfil` is unreachable through the product and `Courier.tracking_url_template` can never be filled. Same shape as the supplier-payment work — audit the endpoint first |
+| 7 | **[D6](#known-defects) — mypy's 98 errors** | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
 
-Two one-line fixes worth doing first, because both are minutes and both are holes:
-**D66** (`/admin/products/import` has no permission check — copy the sibling) and **D67** (the
-Track-your-order form 404s on every submission, which is customer-facing).
-
-
-### Tier 2 — real, but wait
+### Tier 3 — real, but wait on somebody else
 
 | Item | Why it waits |
 |---|---|
 | **Payment gateway** | Only prepaid waits on it; **COD works today** and COD is how this market buys. The card option is visibly disabled rather than faked. Needs a provider account, so it is Tier 0-shaped work that cannot start — but it does not block trading |
 | **SMS account** | The layer shipped 2026-09-10. What is left is choosing an aggregator and getting a masked sender ID approved (days to weeks). Start the paperwork early; the provider class is an afternoon |
-| **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
-| **D47** — concurrent pytest runs corrupt each other | A live footgun for anyone running the suite in two terminals, and the workaround (a unique `-p` project) is one flag. Fix it when it next bites |
-| **D40** — `router.refresh()` in a production build | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out. Worth finishing, but it guards a gap in test coverage, not behaviour |
-| **D6** — mypy's 98 errors | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
 
 ### Skip — and the reason, so it is not re-litigated
 
