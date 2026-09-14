@@ -480,3 +480,65 @@ the one the symptom pointed at.
    on garbage, and documented why. `reports/services.py` kept a private copy that
    silently returned `None`, so an unreadable `date_from` showed thirty days and
    called it the answer. Reports now use `core.dates.parse_moment`.
+
+---
+
+## 2026-09-14 — product specification attributes, and a roadmap six items behind
+
+**What was asked:** read the docs and the roadmap, work out what is done and what
+is not, then decide what to build.
+
+**The finding that shaped the pass:** `docs/roadmap.md` said "last updated
+2026-09-12" and four feature commits had landed after it. Six of Tier 1's seven
+items had already shipped on 09-13 and the file still listed them as the queue.
+Reading the code rather than the file is the only reason the right item was
+picked — Tier 1 #2, **product spec attributes**, was the one left.
+
+**What it turned out to be.** Not a greenfield feature. `Attribute.is_variant_defining`
+has split the catalogue into axes and specs since the first migration; the seed
+already marked Material, Gender and Fit as *not* variant-defining, and
+`product-form-data.ts` already filtered them out of the variant matrix with a
+comment saying a spec "is stated once on the product". Nothing implemented the
+other side of that sentence. So three attributes existed, were correctly
+classified, were deliberately excluded from the only screen that used them, and
+had nowhere else to go. `CategoryAttribute` was the same: a full model, seeded
+per category, read by the seed and by nothing else.
+
+`ProductAttributeValue` is the missing half — deliberately storing only
+`(product, attribute_value)`, because the attribute is always
+`attribute_value.attribute` and a second column holding the same fact is a
+column that can drift. `VariantAttributeValue` carries one only because its
+`(variant, attribute)` uniqueness needs it.
+
+**Three things found by building it:**
+
+1. **The `is_variant_defining` guard was half a guard.** It already refused to
+   turn the flag *off* under existing variants. Turning it *on* was free — and
+   now strands spec rows the same way. Both directions are guarded.
+2. **`prefetch_related("spec_values__attribute_value__attribute")` is not one
+   query, and `prefetch_related("spec_values")` is an N+1.** The three-level
+   string form costs three queries; the bare form costs one *per stated value*
+   (22 queries for four specs against 16 for one). A `Prefetch` carrying
+   `select_related` is one query, flat. Product detail went 22 → 23 on the
+   seeded shop, and a growth test pins it.
+3. **Every seeded product said "Machine wash cold. Do not bleach."** — on a face
+   serum and on leather shoes. Found by reading the rendered page, not by any
+   test. Demo data rather than code, exactly like D54.
+
+**The lessons, again:**
+
+- *Read the running system.* The care-instructions nonsense survived 958 passing
+  tests, a clean `tsc` and a clean lint. It died on the first `curl` of the
+  product page. Fourth pass in a row.
+- *Prove the test fails first.* Every guard here was sabotaged and its test
+  watched go red before the fix was restored — the variant-axis refusal, the
+  replacement semantics, the missing-id check, both delete refusals, the
+  side-change guard, the storefront payload, and the N+1 growth test.
+- *Check the endpoint before building over it.* It paid for itself again: the
+  half-guard above was found by reading `validate_is_variant_defining` before
+  extending it, not by a failure.
+
+**[D47](../docs/roadmap.md#known-defects) bit again.** A targeted `pytest -k`
+run against the database the full suite was already using errored on collection.
+The workaround is still one flag; it is now Tier 2 #1 rather than "fix it when
+it next bites", because it next bit.

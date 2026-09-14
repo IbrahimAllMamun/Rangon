@@ -64,6 +64,7 @@ export default async function NewProductPage() {
         mode="create"
         initial={blankProduct()}
         initialVariants={[]}
+        initialSpecValues={[]}
         categories={data.categories}
         brands={data.brands}
         attributes={data.attributes}

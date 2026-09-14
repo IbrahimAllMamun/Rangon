@@ -4,6 +4,7 @@ import { Check, Eye, EyeOff, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { ProductSpecPicker } from "@/components/admin/product-spec-picker";
 import { VariantMatrixEditor, type RowDraft, draftFromRow } from "@/components/admin/variant-matrix-editor";
 import {
   Badge,
@@ -69,6 +70,7 @@ export function ProductForm({
   productId,
   initial,
   initialVariants,
+  initialSpecValues,
   categories,
   brands,
   attributes,
@@ -80,6 +82,8 @@ export function ProductForm({
   productId?: string;
   initial: ProductValues;
   initialVariants: ExistingVariant[];
+  /** Attribute-value ids this product already states as specifications. */
+  initialSpecValues: string[];
   categories: CategoryOption[];
   brands: BrandOption[];
   attributes: MatrixAttribute[];
@@ -94,6 +98,7 @@ export function ProductForm({
     selectionsFromVariants(initialVariants),
   );
   const [variants, setVariants] = useState<ExistingVariant[]>(initialVariants);
+  const [specValues, setSpecValues] = useState<string[]>(initialSpecValues);
   const [defaultPrice, setDefaultPrice] = useState("");
   const [defaultCost, setDefaultCost] = useState("");
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
@@ -182,6 +187,9 @@ export function ProductForm({
         ...values,
         brand: values.brand || null,
         slug: values.slug || undefined,
+        // The set as it now stands, not a diff — the API replaces it. Sending
+        // it on every save is what makes un-ticking the last one stick.
+        spec_values: specValues,
       };
 
       // 1. The product row itself.
@@ -475,6 +483,27 @@ export function ProductForm({
               Final sale (not returnable)
             </label>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Specifications</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <p className="text-body-sm text-muted">
+            Stated once on the product and shown on its page. These never create a SKU — the
+            category decides which are offered, so a handbag is not asked for a shoe size.
+          </p>
+          <ProductSpecPicker
+            categoryId={values.category}
+            selected={specValues}
+            error={errorFor("spec_values")}
+            onChange={(next) => {
+              setSpecValues(next);
+              setSaved(false);
+            }}
+          />
         </CardContent>
       </Card>
 

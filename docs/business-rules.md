@@ -465,6 +465,52 @@ holds `customers.view` without create or update.
 
 ---
 
+## 5a. Product attributes: axes and specifications
+
+Every attribute in the catalogue is one of exactly two things, and
+`Attribute.is_variant_defining` is the switch that says which.
+
+**A variant axis** (`is_variant_defining = True`) builds SKUs. Size, Colour, Shade, Volume and
+Capacity are axes: the matrix on the product form takes the ticked values and generates one
+`ProductVariant` per combination, each with its own price, barcode and stock. A shopper choosing one
+is choosing *which item to buy*.
+
+**A specification** (`is_variant_defining = False`) is a fact about the product, stated once.
+Material, Gender, Fit, Sole, Dimensions and Skin type are specifications: they are stored as
+`ProductAttributeValue` rows against the product, rendered as the Details list on the product page
+and as `additionalProperty` in its JSON-LD. A shopper reading one is *learning about* the item they
+have already chosen. Ticking three specifications adds three facts; it does not add eight SKUs.
+
+Three rules follow, and the API enforces all three rather than trusting the form:
+
+1. **An attribute cannot be both.** A value whose attribute is variant-defining is refused as a
+   specification — two places claiming the same fact, only one of them sellable. The refusal names
+   the attribute and lives in `catalog.services.set_product_specs`, so a shell or a management
+   command meets it too.
+2. **An attribute cannot change sides underneath a product.** It may stop defining variants only
+   while no variant relies on it, and may start defining variants only while no product states it as
+   a specification. Either move would otherwise strand rows the app can read but could never have
+   written.
+3. **The category decides what is offered.** `CategoryAttribute` links an attribute to a category and
+   `GET /categories/{id}/attributes/` answers with that list, inherited down the tree — so a handbag
+   is never asked for a shoe size. Where a category and an ancestor both declare the same attribute,
+   the **nearer** one wins the `is_required` flag: a specific category may tighten a general rule,
+   never the reverse. `is_required` is advisory today — the form marks it, the API does not refuse a
+   product without it, because refusing would make every existing product unsaveable the moment
+   somebody ticks the box.
+
+A product's specifications are **replaced, not merged**: `spec_values` on the product write endpoint
+is the set as it now stands. Omitting the key leaves them alone; sending `[]` clears them. A caller
+that had to diff before saving would eventually forget to, and the failure mode — a spec list that
+only ever grows — is invisible until a shopper reads it.
+
+`Product.material` and `Product.care_instructions` remain as free text and predate this. `material`
+is now also a real attribute, so the product page shows the free-text column only when no Material
+attribute is stated; nothing prints the term twice. `care_instructions` has no attribute and stays
+prose, because care advice is a sentence, not a value from a list.
+
+---
+
 ## 6a. Reviews
 
 A review is a **claim about a purchase**, so the API treats it as one rather than as free-form

@@ -17,8 +17,17 @@ from rest_framework.views import APIView
 from accounts.permissions import IsCustomer
 from accounts.services import default_branch
 from catalog import merchandising, search
+from catalog import services as catalog_services
 from catalog.api.serializers import colour_payload
-from catalog.models import Brand, Category, Product, ProductImage, ProductVariant, PublishStatus
+from catalog.models import (
+    Brand,
+    Category,
+    Product,
+    ProductAttributeValue,
+    ProductImage,
+    ProductVariant,
+    PublishStatus,
+)
 from catalog.search import facets, search_products, visible_products
 from content.api.serializers import serialise_banner
 from content.models import BannerPlacement, StorefrontBanner
@@ -225,7 +234,28 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         return self.get_paginated_response(payload) if page is not None else Response(payload)
 
     def retrieve(self, request: Request, slug: str | None = None) -> Response:
-        product = _payload_queryset(visible_products()).filter(slug=slug).first()
+        product = (
+            _payload_queryset(visible_products())
+            # Detail only. A listing renders no spec list, so adding this to
+            # `_PAYLOAD_PREFETCH_RELATED` would buy every card queries it never
+            # reads -- and the listing and home budgets are asserted.
+            #
+            # One query, not three: `spec_values__attribute_value__attribute`
+            # is three prefetch levels and Django issues one query per level,
+            # which cost detail three of its eighteen for a two-row spec list.
+            # A `Prefetch` carrying `select_related` joins the same two tables
+            # in the one query -- and `Meta.ordering` needs those joins anyway.
+            .prefetch_related(
+                Prefetch(
+                    "spec_values",
+                    queryset=ProductAttributeValue.objects.select_related(
+                        "attribute_value__attribute"
+                    ),
+                )
+            )
+            .filter(slug=slug)
+            .first()
+        )
         if product is None:
             raise NotFound("That product is not available.")
 
@@ -234,6 +264,10 @@ class ShopProductViewSet(viewsets.GenericViewSet):
             branch=branch, variants=list(product.variants.all())
         )
         payload = _product_payload(product, snapshots=snapshots)
+        # Structured specifications, grouped by attribute. The free-text
+        # `material` / `care_instructions` above stay as they are: they predate
+        # this and products already carry them.
+        payload["specs"] = catalog_services.spec_payload(product)
 
         reviews = product.reviews.filter(status=ReviewStatus.APPROVED).select_related("customer")
         payload["reviews"] = {

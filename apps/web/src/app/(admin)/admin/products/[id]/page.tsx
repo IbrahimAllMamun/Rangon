@@ -29,6 +29,8 @@ interface AdminProductDetail {
   is_final_sale: boolean;
   seo_title: string;
   seo_description: string;
+  /** Attribute-value ids stated as specifications — the flat set the form ticks. */
+  spec_value_ids: string[];
   variants: ExistingVariant[];
   images: ProductImageRow[];
 }
@@ -124,6 +126,7 @@ export default async function EditProductPage({ params }: { params: Params }) {
           productId={product.id}
           initial={initial}
           initialVariants={product.variants}
+          initialSpecValues={product.spec_value_ids ?? []}
           categories={data.categories}
           brands={data.brands}
           attributes={data.attributes}

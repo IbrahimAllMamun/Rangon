@@ -12,7 +12,10 @@ from django.utils.text import slugify
 from catalog.models import (
     Attribute,
     AttributeValue,
+    Category,
+    CategoryAttribute,
     Product,
+    ProductAttributeValue,
     ProductVariant,
     VariantAttributeValue,
 )
@@ -142,6 +145,137 @@ def generate_variants(
         reason="Variant matrix generated",
     )
     return created
+
+
+def category_attributes(category: Category) -> list[CategoryAttribute]:
+    """Which attributes a category uses, inherited from its ancestors.
+
+    The seed wires attributes to leaf categories ("Shirts"), so a product filed
+    against a parent ("Men") would otherwise offer nothing at all -- and the
+    tree is the reason those parents exist.  Walking down from the root means a
+    nearer category's link wins the `is_required` flag for the same attribute,
+    which is the direction that lets a specific category tighten a general rule
+    rather than a general one loosening a specific.
+    """
+    chain = [*category.ancestors(), category]
+    links = (
+        CategoryAttribute.objects.filter(category__in=chain)
+        .select_related("attribute")
+        .prefetch_related("attribute__values")
+    )
+    depth = {node.pk: index for index, node in enumerate(chain)}
+    nearest: dict[Any, CategoryAttribute] = {}
+    for link in links:
+        current = nearest.get(link.attribute_id)
+        if current is None or depth[link.category_id] >= depth[current.category_id]:
+            nearest[link.attribute_id] = link
+    return sorted(
+        nearest.values(),
+        key=lambda link: (link.attribute.position, link.attribute.name),
+    )
+
+
+@transaction.atomic
+def set_product_specs(
+    *, product: Product, value_ids: list[Any], actor: Any = None
+) -> list[ProductAttributeValue]:
+    """Replace a product's specification values with exactly `value_ids`.
+
+    Replace rather than append, because that is the shape the form has: it
+    sends the ticks as they now stand, and a caller that has to diff before
+    saving will eventually forget to.  Re-sending the same set is a no-op.
+
+    Two rules are enforced here rather than in the serializer, so a management
+    command or a shell cannot go round them:
+
+    1. **A variant-defining attribute is not a spec.**  Size and Colour build
+       SKUs; stating "Size: M" once on the product as well would leave two
+       places claiming the same fact, and only one of them sellable.
+    2. **Every id must exist.**  An unknown one is a caller bug, and silently
+       dropping it would store a spec list nobody asked for.
+
+    The attribute is derived from the value rather than accepted alongside it,
+    so the two can never disagree.
+    """
+    wanted = list(dict.fromkeys(str(value_id) for value_id in value_ids))
+    values = {
+        str(value.pk): value
+        for value in AttributeValue.objects.filter(pk__in=wanted).select_related("attribute")
+    }
+
+    missing = [value_id for value_id in wanted if value_id not in values]
+    if missing:
+        raise ValidationError(
+            "Those specification values no longer exist.",
+            details={"spec_values": missing},
+        )
+
+    axes = sorted(
+        {
+            values[value_id].attribute.name
+            for value_id in wanted
+            if values[value_id].attribute.is_variant_defining
+        }
+    )
+    if axes:
+        joined = ", ".join(axes)
+        raise ValidationError(
+            f"{joined} build separate SKUs, so {'they' if len(axes) > 1 else 'it'} "
+            "cannot also be stated as a specification. Pick the values in the "
+            "variant matrix instead.",
+            details={"spec_values": axes},
+        )
+
+    existing = {str(row.attribute_value_id): row for row in product.spec_values.all()}
+    removed = [row for value_id, row in existing.items() if value_id not in set(wanted)]
+    added = [value_id for value_id in wanted if value_id not in existing]
+
+    if removed:
+        ProductAttributeValue.objects.filter(pk__in=[row.pk for row in removed]).delete()
+    if added:
+        ProductAttributeValue.objects.bulk_create(
+            [ProductAttributeValue(product=product, attribute_value=values[v]) for v in added]
+        )
+
+    if added or removed:
+        audit.record(
+            action=audit.AuditAction.UPDATE,
+            entity=product,
+            actor=actor,
+            old_values={"specs": sorted(str(existing[v].attribute_value) for v in existing)},
+            new_values={"specs": sorted(str(values[v]) for v in wanted)},
+            reason="Specification attributes changed",
+        )
+
+    return list(product.spec_values.select_related("attribute_value__attribute").all())
+
+
+def spec_payload(product: Product) -> list[dict[str, Any]]:
+    """A product's specifications, grouped by attribute, ready to render.
+
+    Reads `product.spec_values.all()`, so a caller that prefetched it pays no
+    extra query and one that did not pays exactly one -- the same contract
+    `merchandising.price_drop_payload` keeps with the variants.
+
+    Grouped rather than flat because one attribute may hold several values
+    ("Features: Waterproof, Lightweight") and a spec list that repeated the
+    term once per value would read as several different facts.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    for link in product.spec_values.all():
+        value = link.attribute_value
+        attribute = value.attribute
+        row = grouped.setdefault(
+            attribute.code,
+            {
+                "attribute_code": attribute.code,
+                "attribute_name": attribute.name,
+                "kind": attribute.kind,
+                "values": [],
+            },
+        )
+        row["values"].append({"value": value.value, "label": value.display, "swatch": value.swatch})
+    return list(grouped.values())
 
 
 def unique_slug(model: Any, value: str, *, field: str = "slug") -> str:

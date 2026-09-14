@@ -14,12 +14,14 @@ from catalog.models import (
     AttributeValue,
     Brand,
     Category,
+    CategoryAttribute,
     Product,
+    ProductAttributeValue,
     ProductImage,
     ProductVariant,
     VariantAttributeValue,
 )
-from catalog.services import unique_slug
+from catalog.services import spec_payload, unique_slug
 from core.media import RelativeImageField, media_url
 
 #: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
@@ -108,8 +110,26 @@ class AttributeSerializer(serializers.ModelSerializer):
         not variant-defining, so the existing variants become rows the app can
         read but could never have created. Rename it or retire it instead.
         """
-        if value or self.instance is None or self.instance.is_variant_defining == value:
+        if self.instance is None or self.instance.is_variant_defining == value:
             return value
+
+        if value:
+            # The mirror image, and the reason it is no longer free: a
+            # variant-defining attribute cannot also be a product
+            # specification (`catalog.services.set_product_specs`), so turning
+            # it on underneath products that state it would leave rows the app
+            # can read but could never have written.
+            stated_by = ProductAttributeValue.objects.filter(
+                attribute_value__attribute=self.instance
+            ).count()
+            if stated_by:
+                raise serializers.ValidationError(
+                    f"{stated_by} product{'' if stated_by == 1 else 's'} state this "
+                    "attribute as a specification, so it cannot start defining variants. "
+                    "Clear it from those products first, or add a separate attribute."
+                )
+            return value
+
         used_by = VariantAttributeValue.objects.filter(attribute=self.instance).count()
         if used_by:
             raise serializers.ValidationError(
@@ -219,6 +239,42 @@ class BrandSerializer(serializers.ModelSerializer):
         if self.instance is None and not attrs.get("slug") and attrs.get("name"):
             attrs["slug"] = unique_slug(Brand, attrs["name"])
         return attrs
+
+
+class CategoryAttributeSerializer(serializers.ModelSerializer):
+    """One attribute a category uses, with the values it can take.
+
+    `GET /categories/{id}/attributes/` is what lets the product form ask a
+    category what it needs rather than showing every attribute in the shop:
+    a handbag never offers a Shoe size, and cosmetics offer Volume.
+    `is_variant_defining` is what splits the answer into the two halves the
+    form renders separately -- axes that build SKUs, and specs stated once.
+    """
+
+    id = serializers.UUIDField(source="attribute.id", read_only=True)
+    code = serializers.CharField(source="attribute.code", read_only=True)
+    name = serializers.CharField(source="attribute.name", read_only=True)
+    kind = serializers.CharField(source="attribute.kind", read_only=True)
+    is_variant_defining = serializers.BooleanField(
+        source="attribute.is_variant_defining", read_only=True
+    )
+    #: Which category in the chain declared it, so the admin can say where a
+    #: requirement came from rather than appearing to invent one.
+    declared_by = serializers.CharField(source="category.name", read_only=True)
+    values = AttributeValueSerializer(source="attribute.values", many=True, read_only=True)
+
+    class Meta:
+        model = CategoryAttribute
+        fields = [
+            "id",
+            "code",
+            "name",
+            "kind",
+            "is_variant_defining",
+            "is_required",
+            "declared_by",
+            "values",
+        ]
 
 
 #: Product photography, and nothing that merely looks like it. The admin form
@@ -412,6 +468,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 class ProductDetailSerializer(ProductListSerializer):
     variants = ProductVariantSerializer(many=True, read_only=True)
     images = ProductImageSerializer(many=True, read_only=True)
+    specs = serializers.SerializerMethodField()
+    spec_value_ids = serializers.SerializerMethodField()
 
     class Meta(ProductListSerializer.Meta):
         fields = [
@@ -422,12 +480,34 @@ class ProductDetailSerializer(ProductListSerializer):
             "is_final_sale",
             "seo_title",
             "seo_description",
+            "specs",
+            "spec_value_ids",
             "variants",
             "images",
         ]
 
+    def get_specs(self, product: Product) -> list[dict[str, Any]]:
+        """Grouped, because one attribute may hold several values. On detail
+        only -- a listing renders no spec list and should not pay for one."""
+        return spec_payload(product)
+
+    def get_spec_value_ids(self, product: Product) -> list[str]:
+        """The flat set the admin form ticks with, and the exact shape it
+        sends back as `spec_values`. `specs` above is for reading -- it groups
+        and drops the ids, because no shopper needs them."""
+        return [str(link.attribute_value_id) for link in product.spec_values.all()]
+
 
 class ProductWriteSerializer(serializers.ModelSerializer):
+    #: The specification values this product states, as attribute-value ids.
+    #: Write-only and **replacing**: the payload is the set as it now stands,
+    #: so omitting the key leaves the specs alone and sending `[]` clears them.
+    #: Only the ids travel -- the attribute is derived from the value in
+    #: `catalog.services.set_product_specs`, so the two cannot disagree.
+    spec_values = serializers.ListField(
+        child=serializers.UUIDField(), required=False, write_only=True
+    )
+
     class Meta:
         model = Product
         fields = [
@@ -446,9 +526,42 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "is_final_sale",
             "seo_title",
             "seo_description",
+            "spec_values",
         ]
         read_only_fields = ["id"]
         extra_kwargs = {"slug": {"required": False}}
+
+    def validate_spec_values(self, value: list[Any]) -> list[Any]:
+        """Refuse here as well as in the service, and say which field is wrong.
+
+        `catalog.services.set_product_specs` is the authority -- a shell or a
+        management command reaches it without passing through here. This runs
+        first so a bad payload is refused **before** anything is written, which
+        on create is the difference between a 400 and a 400 plus an orphaned
+        draft product; and it raises a field error, so the form can put the
+        message beside the tick-list rather than at the top of the page.
+        """
+        ids = [str(item) for item in value]
+        found = {
+            str(row.pk): row
+            for row in AttributeValue.objects.filter(pk__in=ids).select_related("attribute")
+        }
+        missing = [item for item in ids if item not in found]
+        if missing:
+            raise serializers.ValidationError(
+                "Those specification values no longer exist. Reload the form."
+            )
+        axes = sorted(
+            {row.attribute.name for row in found.values() if row.attribute.is_variant_defining}
+        )
+        if axes:
+            joined = ", ".join(axes)
+            raise serializers.ValidationError(
+                f"{joined} build separate SKUs, so {'they' if len(axes) > 1 else 'it'} "
+                "cannot also be stated as a specification. Pick the values in the "
+                "variant matrix instead."
+            )
+        return value
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         if not attrs.get("slug") and attrs.get("name"):

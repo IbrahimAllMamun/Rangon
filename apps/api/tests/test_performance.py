@@ -253,6 +253,38 @@ class TestProductDetailQueryBudget:
             f"variants: the detail payload has an N+1."
         )
 
+    def test_query_count_does_not_grow_with_the_spec_count(self, api, shop):
+        """The spec list is one prefetch, not one query per stated value.
+
+        `spec_values__attribute_value__attribute` would have been three levels
+        and therefore three queries -- flat, but three of detail's eighteen for
+        a two-row list. It is a `Prefetch` carrying `select_related` instead,
+        and this is what stops anyone quietly putting the string form back.
+        """
+        from catalog.services import set_product_specs
+
+        _, sizes = factories.attribute("size", values=["S", "M"])
+        product = self._product_with_variants(shop, sizes)
+
+        material, materials = factories.attribute(
+            "material", name="Material", values=["Cotton", "Linen", "Denim", "Canvas"]
+        )
+        material.is_variant_defining = False
+        material.save(update_fields=["is_variant_defining"])
+        url = f"/api/v1/shop/products/{product.slug}/"
+
+        set_product_specs(product=product, value_ids=[materials[0].pk])
+        _count_queries(api, url)  # warm
+        with_one = _count_queries(api, url)
+
+        set_product_specs(product=product, value_ids=[value.pk for value in materials])
+        with_many = _count_queries(api, url)
+
+        assert with_many == with_one, (
+            f"Queries grew from {with_one} to {with_many} as the product gained "
+            f"specifications: the spec list has an N+1."
+        )
+
     def test_detail_stays_within_its_documented_budget(self, api, shop):
         _, values = factories.attribute("size", values=["S", "M", "L"])
         product = self._product_with_variants(shop, values)
