@@ -354,6 +354,34 @@ request, around 50 s cold for an admin route. `--since` on `docker logs` is
 useful here, because the pre-restart error stays in the buffer and reads as
 current (see section 5).
 
+### The mirror image: a stale `.next` fails `tsc` on routes that do not exist
+
+Added 2026-09-15, after a clean change failed a typecheck three times over with
+errors naming files nobody had written.
+
+`apps/web/tsconfig.json` includes `".next/types/**/*.ts"` — Next generates a
+route validator there, and **it is not pruned when a route is deleted or when you
+change branch**. `apps/web/.next` is gitignored, so it survives every checkout
+and keeps validating routes that no longer exist:
+
+```text
+.next/types/validator.ts(53,39): error TS2307: Cannot find module
+  '../../src/app/(admin)/admin/abandoned/page.js'
+.next/types/validator.ts(422,39): error TS2307: Cannot find module
+  '../../src/app/(storefront)/brand/[slug]/page.js'
+```
+
+Neither route exists on `main`; both are leftovers from a branch that once had
+them. The errors point at `src/app/...` paths, so they read as *your* mistake
+until you notice the file raising them is generated.
+
+```bash
+rm -rf apps/web/.next/types     # gitignored, regenerates on the next build
+```
+
+Do this before believing any `tsc --noEmit` failure that names a route you did
+not touch. It costs nothing and rules out the whole class.
+
 ---
 
 ## 14. This machine is `Asia/Dhaka`; the containers are UTC
