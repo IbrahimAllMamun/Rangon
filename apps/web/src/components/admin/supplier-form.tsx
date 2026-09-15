@@ -87,7 +87,7 @@ function fromRow(row: SupplierRow): Draft {
  * A purchase order cannot name a supplier that does not exist, and until now
  * there was no screen to create one — so the purchasing form would have been a
  * dropdown with nothing in it and no way to fill it. That is the same dead end
- * the wishlist and reviews were (D1, D2).
+ * reviews were (D2).
  *
  * `code` is left blank by default: the API derives a unique one from the name
  * (`purchasing.services.unique_supplier_code`), so nobody has to invent an

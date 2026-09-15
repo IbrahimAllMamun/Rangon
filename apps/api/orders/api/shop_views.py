@@ -38,7 +38,7 @@ from core.pagination import StandardPagination
 from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
-from engagement.models import Review, ReviewStatus, Wishlist, WishlistItem
+from engagement.models import Review, ReviewStatus
 from inventory import services as inventory_services
 from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDetailSerializer
 from orders.models import Order
@@ -828,53 +828,6 @@ class AccountAddressView(APIView):
             CustomerAddress, pk=request.query_params.get("id"), customer=customer
         )
         customer_services.delete_address(address=address, actor=request.user)
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class WishlistView(APIView):
-    permission_classes = [IsAuthenticated, IsCustomer]
-
-    def get(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist, _ = Wishlist.objects.get_or_create(customer=customer)
-        branch = default_branch()
-        items = wishlist.items.select_related("product").prefetch_related(
-            "product__images", "product__variants"
-        )
-        snapshots = inventory_services.availability(
-            branch=branch,
-            variants=list(
-                ProductVariant.objects.filter(product__in=[item.product for item in items])
-            ),
-        )
-        return Response(
-            [
-                {
-                    "id": str(item.pk),
-                    "product": _product_payload(item.product, snapshots=snapshots),
-                }
-                for item in items
-            ]
-        )
-
-    def post(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist, _ = Wishlist.objects.get_or_create(customer=customer)
-        product = get_object_or_404(visible_products(), pk=request.data.get("product"))
-        item, created = WishlistItem.objects.get_or_create(wishlist=wishlist, product=product)
-        return Response(
-            {"id": str(item.pk), "created": created},
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
-
-    def delete(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist = Wishlist.objects.filter(customer=customer).first()
-        if wishlist:
-            wishlist.items.filter(
-                Q(pk=request.query_params.get("id"))
-                | Q(product_id=request.query_params.get("product"))
-            ).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

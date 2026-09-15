@@ -13,9 +13,11 @@ const MANAGER = { email: "manager@rangon.test", password: "rangon12345" };
 
 async function signIn(page: import("@playwright/test").Page, user: typeof CASHIER) {
   await page.goto("/login");
-  // Scoped to the form on purpose: the storefront header on this page carries
-  // its own "Sign in" entry in the account menu, so an unscoped role lookup
-  // matches two elements and fails Playwright's strict mode.
+  // Scoped to the form on purpose. `/login` sits inside the storefront route
+  // group, so it wears the storefront header -- which used to carry a second
+  // "Sign in" in its account menu and failed Playwright's strict mode on an
+  // unscoped lookup. That menu is gone, but the header is still there and can
+  // grow another control, so the scope stays.
   const form = page.locator("form");
   await form.getByLabel("Email address").fill(user.email);
   await form.getByLabel("Password").fill(user.password);

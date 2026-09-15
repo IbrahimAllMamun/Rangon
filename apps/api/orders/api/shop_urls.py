@@ -18,7 +18,6 @@ from orders.api.shop_views import (
     ShopHomeView,
     ShopProductViewSet,
     ShopSearchSuggestView,
-    WishlistView,
 )
 
 product_list = ShopProductViewSet.as_view({"get": "list"})
@@ -60,6 +59,5 @@ urlpatterns = [
         name="shop-account-order-detail",
     ),
     path("account/addresses/", AccountAddressView.as_view(), name="shop-account-addresses"),
-    path("wishlist/", WishlistView.as_view(), name="shop-wishlist"),
     path("payments/<str:provider>/webhook/", PaymentWebhookView.as_view(), name="shop-webhook"),
 ]

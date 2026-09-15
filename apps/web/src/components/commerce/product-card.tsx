@@ -4,15 +4,14 @@
  * Deliberately restrained (plan §68): image, optional badge, brand, name,
  * price, colour swatches. Not every piece of metadata belongs here.
  *
- * Stays a server component: only the wishlist heart needs the browser, so it
- * is the one part hydrated as a client island rather than the whole grid.
+ * Stays a server component: only the Quick View trigger needs the browser, so
+ * it is the one part hydrated as a client island rather than the whole grid.
  */
 import Image from "next/image";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/primitives";
 import { QuickViewTrigger } from "@/components/commerce/quick-view-trigger";
-import { WishlistHeart } from "@/components/commerce/wishlist-heart";
 import type { ShopProduct } from "@/lib/api/types";
 import { Reveal } from "@/components/ui/reveal";
 import { cn } from "@/lib/cn";
@@ -45,12 +44,6 @@ export function ProductCard({
         className,
       )}
     >
-      {/* A sibling of the link, not nested inside it — a button inside an
-          anchor is invalid HTML and confuses both the browser and a screen
-          reader. Absolutely positioned against `article`, which shares the
-          image's top-right corner exactly. */}
-      <WishlistHeart productId={product.id} name={product.name} />
-
       <Link
         href={`/product/${product.slug}`}
         className="block focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] rounded-lg"
@@ -99,9 +92,9 @@ export function ProductCard({
         </div>
       </Link>
 
-      {/* Sibling of the link, like the wishlist heart: a button inside an
-          anchor is invalid HTML. Positioned against the card, which shares the
-          image's box. */}
+      {/* A sibling of the link, not nested inside it: a button inside an
+          anchor is invalid HTML and confuses both the browser and a screen
+          reader. Positioned against the card, which shares the image's box. */}
       <QuickViewTrigger product={product} />
 
       {colours.length > 1 && (

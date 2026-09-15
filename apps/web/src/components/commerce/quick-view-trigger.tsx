@@ -3,9 +3,10 @@
 /**
  * The card action that opens Quick View, as its own client island.
  *
- * `ProductCard` is a server component on purpose — only the wishlist heart is
- * hydrated — so the open state and the dialog live here rather than turning
- * the whole grid into client JavaScript for a button most shoppers never press.
+ * `ProductCard` is a server component on purpose — this trigger is the only
+ * part hydrated — so the open state and the dialog live here rather than
+ * turning the whole grid into client JavaScript for a button most shoppers
+ * never press.
  *
  * What the button says is the decision, not the styling:
  *
