@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Avg, Count, Prefetch, Q
+from django.db.models import Avg, Count, Prefetch
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -44,6 +44,7 @@ from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDeta
 from orders.models import Order
 from orders.services import checkout as checkout_services
 from orders.services import leads
+from shipping.api.serializers import CustomerShipmentSerializer
 
 CART_HEADER = "HTTP_X_CART_TOKEN"
 
@@ -767,6 +768,11 @@ class OrderTrackingView(APIView):
 
         data = OrderDetailSerializer(order).data
         data["events"] = [event for event in data["events"] if event["is_customer_visible"]]
+        # The answer to "where is my parcel", which this endpoint could not give
+        # until something started creating shipments. Narrower than the admin
+        # payload on purpose -- see `CustomerShipmentSerializer`.
+        parcels = order.shipments.select_related("courier").prefetch_related("events")
+        data["shipments"] = CustomerShipmentSerializer(parcels, many=True).data
         return Response(data)
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -10,8 +9,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
-from orders.models import OrderEventType, OrderStatus
-from orders.services.lifecycle import log_event, transition
+from accounts.services import branch_queryset
+from orders.models import Order
+from shipping import services as shipping_services
 from shipping.api.serializers import (
     CourierSerializer,
     ShipmentEventSerializer,
@@ -22,8 +22,6 @@ from shipping.api.serializers import (
 from shipping.models import (
     Courier,
     Shipment,
-    ShipmentEvent,
-    ShipmentStatus,
     ShippingMethod,
     ShippingZone,
 )
@@ -64,6 +62,14 @@ class CourierViewSet(viewsets.ModelViewSet):
 
 
 class ShipmentViewSet(viewsets.ModelViewSet):
+    """Parcels, and what has happened to each of them.
+
+    Thin on purpose: every rule about *which* orders may be shipped, what a
+    shipment starts as, and what a tracking update may say lives in
+    `shipping.services`, because all three reach into the order's status
+    machine (CLAUDE.md §4).
+    """
+
     queryset = Shipment.objects.select_related("order", "courier").prefetch_related("events")
     serializer_class = ShipmentSerializer
     permission_classes = [IsAuthenticated, RolePermission]
@@ -78,60 +84,58 @@ class ShipmentViewSet(viewsets.ModelViewSet):
     }
     filterset_fields = ["order", "status", "courier"]
 
-    def perform_create(self, serializer: Any) -> None:
-        shipment = serializer.save(created_by=self.request.user)
-        log_event(
-            shipment.order,
-            OrderEventType.SHIPMENT_CREATED,
-            f"Shipment created{f' ({shipment.courier.name})' if shipment.courier else ''}",
-            data={"tracking_number": shipment.tracking_number},
-            actor=self.request.user,
+    def get_queryset(self) -> Any:
+        # This was the only write viewset in the codebase with no branch scope
+        # (D68), while orders, inventory, purchasing and finance all have one.
+        # A manager confined to one branch could list, read and ship another
+        # branch's orders.
+        return branch_queryset(self.request.user, super().get_queryset(), field="order__branch")
+
+    def get_serializer(self, *args: Any, **kwargs: Any) -> Any:
+        serializer = super().get_serializer(*args, **kwargs)
+        # Narrow the `order` field to the same set, so an order the user may not
+        # see reads as one that does not exist rather than one they may ship.
+        fields = getattr(serializer, "fields", None)
+        if fields and "order" in fields:
+            fields["order"].queryset = branch_queryset(self.request.user, Order.objects.all())
+        return serializer
+
+    def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        shipment = shipping_services.create_shipment(
+            order=data["order"],
+            courier=data.get("courier"),
+            shipping_method=data.get("shipping_method"),
+            tracking_number=data.get("tracking_number", ""),
+            cost=data.get("cost"),
+            notes=data.get("notes", ""),
+            actor=request.user,
         )
+        return Response(ShipmentSerializer(shipment).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def events(self, request: Request, pk: str | None = None) -> Response:
         """Record a tracking update and keep the order status in step.
 
-        The payload goes through `ShipmentEventSerializer` rather than being read
-        off `request.data`.  A `ShipmentEvent` is append-only and its status
-        drives `PACKED → SHIPPED → DELIVERED`, so an undefined status is not
-        cosmetic: it is permanent, and it stops the order progressing.
+        The payload goes through `ShipmentEventSerializer` rather than being
+        read off `request.data`: a `ShipmentEvent` is append-only and its status
+        drives `PACKED -> SHIPPED -> DELIVERED`, so an undefined status is not
+        cosmetic. It is permanent, and it stops the order progressing.
         """
         shipment = self.get_object()
 
         serializer = ShipmentEventSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        new_status = serializer.validated_data.get("status") or ShipmentStatus.IN_TRANSIT
 
-        event = ShipmentEvent.objects.create(
+        event = shipping_services.record_event(
             shipment=shipment,
-            status=new_status,
+            status=serializer.validated_data.get("status"),
             message=serializer.validated_data.get("message", ""),
             location=serializer.validated_data.get("location", ""),
-            occurred_at=serializer.validated_data.get("occurred_at") or timezone.now(),
-            created_by=request.user,
-        )
-        shipment.status = new_status
-        if new_status == ShipmentStatus.DISPATCHED and not shipment.dispatched_at:
-            shipment.dispatched_at = timezone.now()
-        if new_status == ShipmentStatus.DELIVERED and not shipment.delivered_at:
-            shipment.delivered_at = timezone.now()
-        shipment.save(update_fields=["status", "dispatched_at", "delivered_at", "updated_at"])
-
-        order = shipment.order
-        log_event(
-            order,
-            OrderEventType.SHIPMENT_EVENT,
-            f"{new_status}: {event.message}"[:255],
-            data={"shipment_id": str(shipment.pk), "status": new_status},
+            occurred_at=serializer.validated_data.get("occurred_at"),
             actor=request.user,
         )
-        if new_status == ShipmentStatus.DISPATCHED and order.status == OrderStatus.PACKED:
-            transition(order=order, to_status=OrderStatus.SHIPPED, actor=request.user)
-        elif new_status == ShipmentStatus.DELIVERED and order.status in {
-            OrderStatus.SHIPPED,
-            OrderStatus.PACKED,
-        }:
-            transition(order=order, to_status=OrderStatus.DELIVERED, actor=request.user)
-
         return Response(ShipmentEventSerializer(event).data, status=status.HTTP_201_CREATED)

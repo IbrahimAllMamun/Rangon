@@ -3,11 +3,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { OrderActions } from "@/components/admin/order-actions";
+import { OrderFulfilment } from "@/components/admin/order-fulfilment";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
-import type { Account, Order, SessionUser } from "@/lib/api/types";
+import type { Account, Order, SessionUser, Shipment } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 
 type Params = Promise<{ id: string }>;
@@ -44,6 +45,18 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
   } catch {
     accounts = [];
   }
+
+  // The parcels are their own request: the admin order payload does not carry
+  // them, and neither should fail because the other did.
+  const [shipments, couriers] = await Promise.all([
+    apiServer<Paginated<Shipment> | Shipment[]>(`/shipments/?order=${order.id}`)
+      .then((page) => (Array.isArray(page) ? page : page.results))
+      .catch(() => [] as Shipment[]),
+    apiServer<Paginated<{ id: string; name: string; is_active: boolean }>>("/couriers/")
+      .then((page) => (Array.isArray(page) ? page : page.results))
+      .then((rows) => rows.filter((row) => row.is_active))
+      .catch(() => [] as { id: string; name: string }[]),
+  ]);
 
   return (
     <>
@@ -239,6 +252,14 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
               ))}
             </CardContent>
           </Card>
+
+          <OrderFulfilment
+            orderId={order.id}
+            orderStatus={order.status}
+            shipments={shipments}
+            couriers={couriers}
+            canFulfil={permissions.includes("*") || permissions.includes("orders.fulfil")}
+          />
 
           <Card>
             <CardHeader>

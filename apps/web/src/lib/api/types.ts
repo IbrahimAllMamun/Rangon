@@ -291,6 +291,59 @@ export interface Order {
   stock_committed?: boolean;
   cancel_reason?: string;
   delivered_at?: string | null;
+  /** Only `GET /shop/orders/{number}/` fills this in — the admin order payload
+   *  does not carry parcels, `/shipments/?order=` does. */
+  shipments?: CustomerShipment[];
+}
+
+export type ShipmentStatus =
+  | "PENDING"
+  | "DISPATCHED"
+  | "IN_TRANSIT"
+  | "DELIVERED"
+  | "FAILED"
+  | "RETURNED";
+
+export interface ShipmentEvent {
+  status: ShipmentStatus;
+  message: string;
+  location: string;
+  occurred_at: string;
+}
+
+/** A parcel as the shop sees it. */
+export interface Shipment {
+  id: string;
+  order: string;
+  order_number: string;
+  courier: string | null;
+  courier_name: string;
+  shipping_method: string | null;
+  tracking_number: string;
+  tracking_url: string;
+  status: ShipmentStatus;
+  cost: string;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  notes: string;
+  events: ShipmentEvent[];
+  created_at: string;
+}
+
+/**
+ * A parcel as the customer sees it: no `cost` and no `notes`.
+ * The narrowing is the server's (`CustomerShipmentSerializer`), not this
+ * type's — what we paid the courier is our margin, not the shopper's business.
+ */
+export interface CustomerShipment {
+  id: string;
+  courier_name: string;
+  tracking_number: string;
+  tracking_url: string;
+  status: ShipmentStatus;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  events: ShipmentEvent[];
 }
 
 export interface InventoryRow {

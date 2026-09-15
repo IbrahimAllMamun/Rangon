@@ -141,6 +141,17 @@ class ShipmentSerializer(serializers.ModelSerializer):
     courier_name = serializers.CharField(source="courier.name", read_only=True, default="")
     tracking_url = serializers.CharField(read_only=True)
 
+    # Both declared explicitly, and both optional, because the model's
+    # (courier, tracking_number) UniqueConstraint would otherwise make them
+    # *required*: DRF derives a UniqueTogetherValidator from the constraint and
+    # every field in one is forced. A parcel is normally booked before the
+    # courier hands over a number, so requiring them would refuse the ordinary
+    # case to protect against the rare one.
+    courier = serializers.PrimaryKeyRelatedField(
+        queryset=Courier.objects.all(), required=False, allow_null=True
+    )
+    tracking_number = serializers.CharField(required=False, allow_blank=True, max_length=120)
+
     class Meta:
         model = Shipment
         fields = [
@@ -160,4 +171,56 @@ class ShipmentSerializer(serializers.ModelSerializer):
             "events",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        # `status`, `dispatched_at` and `delivered_at` are the tail of the
+        # event log, not input. Writable, they let a caller create a parcel
+        # already DELIVERED with no `ShipmentEvent` behind it and the order
+        # left at PACKED -- a delivery nobody recorded and no correction can
+        # unpick. They move through `services.record_event` or not at all.
+        read_only_fields = [
+            "id",
+            "status",
+            "dispatched_at",
+            "delivered_at",
+            "created_at",
+        ]
+        # The other half of the note above. The duplicate is caught by
+        # `shipping.services.create_shipment`, which answers 409 with the
+        # courier's name in the message -- not DRF's "must make a unique set",
+        # which names two opaque ids and reads as a form error.
+        validators: list = []
+
+
+class CustomerShipmentEventSerializer(serializers.ModelSerializer):
+    """One tracking update, as the person waiting for the parcel sees it."""
+
+    class Meta:
+        model = ShipmentEvent
+        fields = ["status", "message", "location", "occurred_at"]
+
+
+class CustomerShipmentSerializer(serializers.ModelSerializer):
+    """A parcel on the customer's own order page.
+
+    A deliberately narrower view than `ShipmentSerializer`, and the narrowing
+    is the point: `cost` is what we paid the courier, which is our margin and
+    not the shopper's business -- they already paid the shipping line on their
+    own order. `notes` is written for the packing bench. Neither belongs on a
+    page we hand to the customer, so neither is in `fields`.
+    """
+
+    courier_name = serializers.CharField(source="courier.name", read_only=True, default="")
+    tracking_url = serializers.CharField(read_only=True)
+    events = CustomerShipmentEventSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Shipment
+        fields = [
+            "id",
+            "courier_name",
+            "tracking_number",
+            "tracking_url",
+            "status",
+            "dispatched_at",
+            "delivered_at",
+            "events",
+        ]

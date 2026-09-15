@@ -198,7 +198,7 @@ applied *before* stock moves, so `DAMAGED` on inspection never reaches sellable 
 `complete/` accepts an `account`, so a refund can name the drawer the cash leaves from rather than
 falling back to the branch default for the method. It is idempotent on `Idempotency-Key` (and on the
 return itself), so a retried request cannot pay a customer twice.
-| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` |
+| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` (`orders.view` to read). Branch-scoped on `order__branch`. A parcel always starts `PENDING` — `status`, `dispatched_at` and `delivered_at` are read-only and move only through `events/`. See [business-rules §8a.3](../business-rules.md#8a3-shipments-and-tracking) |
 
 ## Shipping & promotions — `/api/v1/`
 

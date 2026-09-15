@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 
 import { Badge, Card } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
-import type { Order } from "@/lib/api/types";
+import type { Order, OrderStatus, ShipmentStatus } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 
 export const metadata: Metadata = {
@@ -17,6 +16,53 @@ type Search = Promise<{ token?: string }>;
 
 const STEPS = ["CONFIRMED", "PROCESSING", "PACKED", "SHIPPED", "DELIVERED"] as const;
 
+/**
+ * This page is reached two ways — straight off checkout, and from `/track`
+ * days later — so it cannot greet everybody with "Thank you". The heading
+ * follows the order.
+ */
+const GREETING: Partial<Record<OrderStatus, { eyebrow: string; heading: string; body: string }>> = {
+  PENDING: {
+    eyebrow: "Order placed",
+    heading: "Thank you",
+    body: "is being confirmed. We will call you before delivery.",
+  },
+  CONFIRMED: {
+    eyebrow: "Order placed",
+    heading: "Thank you",
+    body: "is confirmed. We will call you before delivery.",
+  },
+  PROCESSING: {
+    eyebrow: "Being prepared",
+    heading: "We are packing it",
+    body: "is being picked and packed now.",
+  },
+  PACKED: {
+    eyebrow: "Ready to go",
+    heading: "Packed and waiting for the courier",
+    body: "is packed and will be collected shortly.",
+  },
+  SHIPPED: {
+    eyebrow: "On the way",
+    heading: "Your order is on its way",
+    body: "has left our shop.",
+  },
+  DELIVERED: {
+    eyebrow: "Delivered",
+    heading: "Delivered",
+    body: "has been delivered.",
+  },
+};
+
+const PARCEL_TONE: Record<ShipmentStatus, "neutral" | "success" | "warning" | "error"> = {
+  PENDING: "neutral",
+  DISPATCHED: "warning",
+  IN_TRANSIT: "warning",
+  DELIVERED: "success",
+  FAILED: "error",
+  RETURNED: "error",
+};
+
 export default async function OrderPage({
   params,
   searchParams,
@@ -27,29 +73,36 @@ export default async function OrderPage({
   const { number } = await params;
   const { token } = await searchParams;
 
-  let order: Order;
+  let order: Order | null = null;
   try {
     order = await apiServer<Order>(
       `/shop/orders/${number}/${token ? `?token=${encodeURIComponent(token)}` : ""}`,
       { auth: true },
     );
   } catch {
-    notFound();
+    order = null;
   }
+
+  // A wrong tracking code and a number that does not exist answer identically,
+  // so numbers cannot be probed -- which also means this page cannot tell the
+  // shopper which of the two they got wrong. A bare 404 was the wrong shape for
+  // that: it reads as "your order is gone" rather than "check what you typed".
+  if (!order) return <NotFound number={number} />;
 
   const currentStep = STEPS.indexOf(order.status as (typeof STEPS)[number]);
   const cancelled = order.status === "CANCELLED";
+  const greeting = GREETING[order.status] ?? GREETING.CONFIRMED!;
+  const parcels = order.shipments ?? [];
 
   return (
     <div className="container-rangon max-w-4xl py-10">
       <div className="rounded-xl border border-border bg-surface p-6 sm:p-8">
         <p className="text-caption font-semibold uppercase tracking-wide text-[var(--success)]">
-          Order placed
+          {greeting.eyebrow}
         </p>
-        <h1 className="font-display mt-2 text-h1">Thank you</h1>
+        <h1 className="font-display mt-2 text-h1">{greeting.heading}</h1>
         <p className="mt-2 text-body text-neutral-700">
-          Your order <span className="font-semibold">{order.number}</span> is confirmed. We will
-          call {order.customer_phone || "you"} before delivery.
+          Your order <span className="font-semibold">{order.number}</span> {greeting.body}
         </p>
 
         <dl className="mt-6 grid gap-4 sm:grid-cols-3">
@@ -83,6 +136,65 @@ export default async function OrderPage({
             })}
           </ol>
           <p className="sr-only">Current status: {humanise(order.status)}</p>
+        </section>
+      )}
+
+      {parcels.length > 0 && (
+        <section aria-labelledby="parcels-heading" className="mt-8">
+          <h2 id="parcels-heading" className="text-h4">
+            {parcels.length > 1 ? `Your ${parcels.length} parcels` : "Your parcel"}
+          </h2>
+          <div className="mt-4 space-y-4">
+            {parcels.map((parcel) => (
+              <Card key={parcel.id} className="p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-body-sm font-medium">
+                      {parcel.courier_name || "Courier being arranged"}
+                    </p>
+                    {parcel.tracking_number && (
+                      <p className="text-caption text-muted">
+                        Tracking number{" "}
+                        <span className="font-medium text-neutral-900">
+                          {parcel.tracking_number}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                  <Badge tone={PARCEL_TONE[parcel.status]}>{humanise(parcel.status)}</Badge>
+                </div>
+
+                {parcel.tracking_url && (
+                  <a
+                    href={parcel.tracking_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-block rounded-md border border-neutral-300 px-4 py-2 text-body-sm font-semibold hover:bg-neutral-100"
+                  >
+                    Track on {parcel.courier_name || "the courier site"}
+                  </a>
+                )}
+
+                {parcel.events.length > 0 && (
+                  <ol className="mt-4 space-y-3 border-l border-border pl-5">
+                    {parcel.events.map((event, index) => (
+                      <li key={`${event.occurred_at}-${index}`} className="relative">
+                        <span
+                          className="absolute -left-[23px] top-1.5 size-2.5 rounded-full bg-brand-500"
+                          aria-hidden
+                        />
+                        <p className="text-body-sm">
+                          {event.message || humanise(event.status)}
+                          {event.location ? ` — ${event.location}` : ""}
+                        </p>
+                        <p className="text-caption text-muted">{dateTime(event.occurred_at)}</p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </Card>
+            ))}
+          </div>
         </section>
       )}
 
@@ -209,6 +321,33 @@ export default async function OrderPage({
           className="rounded-md border border-neutral-300 px-5 py-2.5 text-body-sm font-semibold hover:bg-neutral-100"
         >
           Need help with this order?
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function NotFound({ number }: { number: string }) {
+  return (
+    <div className="container-rangon max-w-lg py-16 text-center">
+      <h1 className="font-display text-h2">We could not find that order</h1>
+      <p className="mt-3 text-body text-muted">
+        Nothing matches <span className="font-semibold text-neutral-900">{number}</span> with the
+        tracking code given. Both have to match, and both are in the confirmation message we sent
+        you — the code is long, so it is worth copying rather than typing.
+      </p>
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <Link
+          href="/track"
+          className="rounded-md bg-brand-500 px-5 py-2.5 text-body-sm font-semibold text-white hover:bg-brand-600"
+        >
+          Try again
+        </Link>
+        <Link
+          href="/contact"
+          className="rounded-md border border-neutral-300 px-5 py-2.5 text-body-sm font-semibold hover:bg-neutral-100"
+        >
+          Ask us to look it up
         </Link>
       </div>
     </div>
