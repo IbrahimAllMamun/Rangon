@@ -842,6 +842,43 @@ checks. What follows was reconstructed from `shipping/` and is now asserted in
   editable from the admin screen, because naming a provider that does not exist
   would produce shipments nothing can dispatch.
 
+**Which orders may be shipped.** `CONFIRMED`, `PROCESSING`, `PACKED` and
+`SHIPPED` — the last because a split delivery is real, and the first parcel has
+already moved the order on. Everything else is refused: `PENDING` has not been
+confirmed, and `CANCELLED` / `REFUNDED` / `RETURNED` / `RETURN_REQUESTED` are
+orders that must not leave the shop. Recording a shipment against one of those
+is the kind of mistake that ends with goods gone and no money owed for them.
+
+**A parcel always starts `PENDING`.** Its status is the tail of its event log
+and nothing else; `status`, `dispatched_at` and `delivered_at` are read-only on
+the API and move only through a `ShipmentEvent`. Allowing them to be set at
+creation produced a parcel marked delivered with no event behind it and the
+order still sitting at `PACKED` — a delivery nobody recorded, which no later
+correction can unpick.
+
+**A finished parcel takes no more events.** Once a shipment is `DELIVERED` or
+`RETURNED` its history is closed. `FAILED` is deliberately not final: a failed
+delivery attempt is normally retried the next day, and that retry is another
+event on the same parcel.
+
+**A tracking number needs the courier that issued it**, and one courier cannot
+give one number to two parcels (`shipping_shipment_courier_tracking_uniq`,
+conditional on a non-blank number because the number usually arrives after the
+booking does). Without a courier the number identifies nothing, can be looked up
+nowhere, and cannot be turned into a link — `Courier.tracking_url_template` is
+what makes it one. The uniqueness rule is also what stops a double-clicked
+fulfilment form booking the same parcel twice.
+
+**Shipments are branch-scoped**, like orders, inventory, purchases and money. A
+manager confined to one branch cannot list, read or create a shipment against
+another branch's order.
+
+**What the customer sees.** `GET /shop/orders/{number}/` returns the order's
+parcels with courier, tracking number, tracking link, status and the visible
+events — but **not `cost` and not `notes`**. What we pay the courier is our
+margin, and the notes are written for the packing bench; the customer has
+already paid the shipping line on their own order.
+
 ---
 
 ## 9. Currency and formatting

@@ -2,8 +2,14 @@
 #   docker compose -f docker-compose.test.yml run --rm api-test
 # It shares nothing with the development stack: own project name, own volumes,
 # no published ports, tmpfs database for speed.
+#
+# Two runs started from two worktrees *do* share these containers, because the
+# project name is what identifies them. The test database name is unique per
+# run (see config/settings/test.py), so that is no longer corrupting -- but a
+# second run still waits on the first one's PostgreSQL. Set COMPOSE_PROJECT_NAME
+# or pass `-p` to get a stack of your own.
 
-name: rangon-test
+name: ${COMPOSE_PROJECT_NAME:-rangon-test}
 
 services:
   db-test:

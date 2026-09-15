@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronDown, Heart, LogIn, Menu, Package, User, X } from "lucide-react";
+import { ChevronDown, Menu, Package, X } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -21,13 +21,7 @@ import { cn } from "@/lib/cn";
  *
  * Radix Dialog supplies the focus trap, `Escape` and scroll locking.
  */
-export function MobileNav({
-  items,
-  signedIn,
-}: {
-  items: NavigationNode[];
-  signedIn: boolean;
-}) {
+export function MobileNav({ items }: { items: NavigationNode[] }) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -138,29 +132,19 @@ export function MobileNav({
             </ul>
           </nav>
 
+          {/* There are no customer accounts -- nothing calls `auth/register/`,
+              so no shopper can create one -- which leaves exactly one entry
+              here a visitor can actually use. Signing in belongs to staff, who
+              reach `/admin` and `/pos` by typing the address. */}
           <div className="border-t border-border p-2">
-            {(signedIn
-              ? [
-                  { href: "/account", label: "Your account", icon: User },
-                  { href: "/account/orders", label: "Orders", icon: Package },
-                  { href: "/wishlist", label: "Wishlist", icon: Heart },
-                ]
-              : [
-                  { href: "/login", label: "Sign in", icon: LogIn },
-                  { href: "/track", label: "Track an order", icon: Package },
-                  { href: "/wishlist", label: "Wishlist", icon: Heart },
-                ]
-            ).map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                onClick={close}
-                className="flex min-h-11 items-center gap-2 rounded-md px-3 py-2.5 text-body-sm transition-colors duration-fast hover:bg-neutral-100"
-              >
-                <link.icon className="size-4 text-neutral-500" aria-hidden />
-                {link.label}
-              </Link>
-            ))}
+            <Link
+              href="/track"
+              onClick={close}
+              className="flex min-h-11 items-center gap-2 rounded-md px-3 py-2.5 text-body-sm transition-colors duration-fast hover:bg-neutral-100"
+            >
+              <Package className="size-4 text-neutral-500" aria-hidden />
+              Track an order
+            </Link>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

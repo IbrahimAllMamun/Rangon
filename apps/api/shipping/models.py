@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django.db import models
+from django.db.models import Q
 
 from core.models import AppendOnlyModel, BaseModel, money_field
 
@@ -153,6 +154,18 @@ class Shipment(BaseModel):
     class Meta:
         db_table = "shipping_shipment"
         ordering = ("-created_at",)
+        constraints = [
+            # A courier issues each tracking number once, so two parcels
+            # carrying the same one is either a typo or -- far more often -- a
+            # double-clicked form. Conditional because the number arrives after
+            # the booking does: a parcel with no number yet is the normal case,
+            # and blanks must not collide with each other.
+            models.UniqueConstraint(
+                fields=["courier", "tracking_number"],
+                condition=~Q(tracking_number=""),
+                name="shipping_shipment_courier_tracking_uniq",
+            ),
+        ]
         indexes = [
             models.Index(fields=["order"]),
             models.Index(fields=["status", "-created_at"]),

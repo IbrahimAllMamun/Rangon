@@ -3,9 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ProductDetail } from "@/components/commerce/product-detail";
-import { ReviewForm } from "@/components/commerce/review-form";
 import { ProductGrid } from "@/components/commerce/product-card";
-import { apiServer, isAuthenticated } from "@/lib/api/server";
+import { apiServer } from "@/lib/api/server";
 import type { ShopProduct } from "@/lib/api/types";
 import { dateOnly } from "@/lib/format";
 import { pageTitle } from "@/lib/seo";
@@ -53,7 +52,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
 export default async function ProductPage({ params }: { params: Params }) {
   const { slug } = await params;
-  const [product, signedIn] = await Promise.all([getProduct(slug), isAuthenticated()]);
+  const product = await getProduct(slug);
   if (!product) notFound();
 
   const rating = product.reviews?.average ?? null;
@@ -194,9 +193,12 @@ export default async function ProductPage({ params }: { params: Params }) {
         </aside>
       </div>
 
-      {/* Always rendered: the form is the only way a review can ever be
-          written, so hiding the section until one exists made it unreachable
-          (D2). */}
+      {/* Read-only, and deliberately so. Writing a review needs a signed-in
+          customer, and a shopper cannot create an account -- `auth/register/`
+          has no screen in front of it. A form whose only state is "sign in to
+          review", behind a sign-in nobody can complete, is worse than no form.
+          `POST /shop/products/{slug}/reviews/` and the moderation queue are
+          untouched; restore the form the day accounts exist. */}
       <section aria-labelledby="reviews-heading" className="mt-14 grid gap-10 lg:grid-cols-[2fr_1fr]">
         <div>
           <h2 id="reviews-heading" className="font-display text-h3">
@@ -229,7 +231,18 @@ export default async function ProductPage({ params }: { params: Params }) {
           )}
         </div>
 
-        <ReviewForm slug={product.slug} signedIn={signedIn} />
+        <aside className="rounded-lg border border-border bg-neutral-50 p-6">
+          <h3 className="text-body font-semibold">Where these come from</h3>
+          <p className="mt-1 text-body-sm text-muted">
+            We only publish reviews from shoppers who have received the item, so
+            every one of them is a real delivery. Bought this and want to say
+            something?{" "}
+            <Link href="/contact" className="text-brand-600 underline">
+              Tell us
+            </Link>{" "}
+            and we will add it.
+          </p>
+        </aside>
       </section>
 
       {product.related && product.related.length > 0 && (

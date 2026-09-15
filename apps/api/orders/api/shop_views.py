@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import Avg, Count, Prefetch, Q
+from django.db.models import Avg, Count, Prefetch
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -38,12 +38,13 @@ from core.pagination import StandardPagination
 from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
-from engagement.models import Review, ReviewStatus, Wishlist, WishlistItem
+from engagement.models import Review, ReviewStatus
 from inventory import services as inventory_services
 from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDetailSerializer
 from orders.models import Order
 from orders.services import checkout as checkout_services
 from orders.services import leads
+from shipping.api.serializers import CustomerShipmentSerializer
 
 CART_HEADER = "HTTP_X_CART_TOKEN"
 
@@ -767,6 +768,11 @@ class OrderTrackingView(APIView):
 
         data = OrderDetailSerializer(order).data
         data["events"] = [event for event in data["events"] if event["is_customer_visible"]]
+        # The answer to "where is my parcel", which this endpoint could not give
+        # until something started creating shipments. Narrower than the admin
+        # payload on purpose -- see `CustomerShipmentSerializer`.
+        parcels = order.shipments.select_related("courier").prefetch_related("events")
+        data["shipments"] = CustomerShipmentSerializer(parcels, many=True).data
         return Response(data)
 
 
@@ -828,53 +834,6 @@ class AccountAddressView(APIView):
             CustomerAddress, pk=request.query_params.get("id"), customer=customer
         )
         customer_services.delete_address(address=address, actor=request.user)
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class WishlistView(APIView):
-    permission_classes = [IsAuthenticated, IsCustomer]
-
-    def get(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist, _ = Wishlist.objects.get_or_create(customer=customer)
-        branch = default_branch()
-        items = wishlist.items.select_related("product").prefetch_related(
-            "product__images", "product__variants"
-        )
-        snapshots = inventory_services.availability(
-            branch=branch,
-            variants=list(
-                ProductVariant.objects.filter(product__in=[item.product for item in items])
-            ),
-        )
-        return Response(
-            [
-                {
-                    "id": str(item.pk),
-                    "product": _product_payload(item.product, snapshots=snapshots),
-                }
-                for item in items
-            ]
-        )
-
-    def post(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist, _ = Wishlist.objects.get_or_create(customer=customer)
-        product = get_object_or_404(visible_products(), pk=request.data.get("product"))
-        item, created = WishlistItem.objects.get_or_create(wishlist=wishlist, product=product)
-        return Response(
-            {"id": str(item.pk), "created": created},
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
-
-    def delete(self, request: Request) -> Response:
-        customer = _customer_for(request)
-        wishlist = Wishlist.objects.filter(customer=customer).first()
-        if wishlist:
-            wishlist.items.filter(
-                Q(pk=request.query_params.get("id"))
-                | Q(product_id=request.query_params.get("product"))
-            ).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -198,7 +198,7 @@ applied *before* stock moves, so `DAMAGED` on inspection never reaches sellable 
 `complete/` accepts an `account`, so a refund can name the drawer the cash leaves from rather than
 falling back to the branch default for the method. It is idempotent on `Idempotency-Key` (and on the
 return itself), so a retried request cannot pay a customer twice.
-| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` |
+| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` (`orders.view` to read). Branch-scoped on `order__branch`. A parcel always starts `PENDING` — `status`, `dispatched_at` and `delivered_at` are read-only and move only through `events/`. See [business-rules §8a.3](../business-rules.md#8a3-shipments-and-tracking) |
 
 ## Shipping & promotions — `/api/v1/`
 
@@ -220,12 +220,29 @@ return itself), so a retried request cannot pay a customer twice.
 | GET | `shipping-options/` | zone-matched methods + prices for the cart |
 | POST | `checkout/` | **`Idempotency-Key` required** → order (+ payment intent) |
 | GET | `orders/{number}/?token=` | guest order tracking |
-| GET | `account/orders/` · `account/orders/{number}/` | authenticated customer |
-| GET/POST/PATCH/DELETE | `account/addresses/` | authenticated customer |
-| GET/POST/DELETE | `wishlist/` | authenticated customer |
-| POST | `products/{slug}/reviews/` | verified purchase required, enters moderation |
+| GET | `account/orders/` · `account/orders/{number}/` | authenticated customer. **No caller** — see below |
+| GET/POST/PATCH/DELETE | `account/addresses/` | authenticated customer. **No caller** — see below |
+| POST | `products/{slug}/reviews/` | verified purchase required, enters moderation. **No caller** since the storefront's account surface was withdrawn — see below |
 | POST | `payments/{provider}/webhook/` | signature-verified, deduplicated, no auth |
 | GET | `feed.xml` · `feed.csv` | product feed for Meta / Google. Public, cached 15 min, one row per sellable variant. 503 if `RANGON_PUBLIC_URL` is unset — see [marketing-feeds.md](../operations/marketing-feeds.md) |
+
+### The customer-account endpoints have no caller, deliberately
+
+`wishlist/` was **removed** on 2026-09-15; the three rows above marked *No caller*
+were **kept**. The difference is the owner's instruction and it is worth writing
+down, because the next audit will otherwise read them as rot.
+
+A shopper cannot create an account. `auth/register/` has never had a screen in
+front of it, so the only accounts that exist are staff ones made in `/admin`.
+Everything gated on a signed-in *customer* was therefore unreachable: the
+wishlist heart on every product card toggled optimistically and rolled back on
+the 401, and the review form could only ever render "Sign in to review".
+
+The wishlist went entirely — model rows aside, there is no view, no route and no
+UI. The account order history, address book and review submission stayed,
+because they are the parts a customer account would need on the day one exists;
+they are simply not advertised anywhere in the storefront. Checkout is
+guest-token based and does not touch them, so nothing is blocked.
 
 ## Reports — `/api/v1/reports/`
 

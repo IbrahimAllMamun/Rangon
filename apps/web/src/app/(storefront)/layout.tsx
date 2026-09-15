@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { LogoLink } from "@/components/brand/logo";
-import { AccountMenu } from "@/components/commerce/account-menu";
 import { WhatsAppButton } from "@/components/commerce/whatsapp-button";
 import { AnnouncementBar } from "@/components/commerce/announcement-bar";
 import { CartButton } from "@/components/commerce/cart-button";
@@ -11,10 +10,8 @@ import { NavFallback } from "@/components/commerce/nav-fallback";
 import { PrimaryNav } from "@/components/commerce/primary-nav";
 import { SearchBar } from "@/components/commerce/search-bar";
 import { SiteHeader } from "@/components/commerce/site-header";
-import { WishlistButton } from "@/components/commerce/wishlist-button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { RouteFade } from "@/components/ui/route-fade";
-import { isAuthenticated } from "@/lib/api/server";
 import type { NavigationNode } from "@/lib/api/types";
 import { getNavigation } from "@/lib/navigation/navigation";
 
@@ -22,9 +19,16 @@ import { getNavigation } from "@/lib/navigation/navigation";
  * The navbar is data, not code (ADR-0009): one fetch of `/shop/navigation/`
  * resolves overrides, then categories, then a static fallback. Nothing here
  * knows what "Women" is.
+ *
+ * There is deliberately no account control. A shopper cannot create an account
+ * -- `auth/register/` has no screen in front of it -- so an "account" menu
+ * offered a sign-in that only staff could complete and a wishlist that silently
+ * failed for everyone else. Staff reach `/admin` and `/pos` by typing the
+ * address; `/login` still exists and still works, it just is not advertised
+ * here. Dropping it also takes the layout's cookie read with it.
  */
 export default async function StorefrontLayout({ children }: { children: React.ReactNode }) {
-  const [navigation, signedIn] = await Promise.all([getNavigation(), isAuthenticated()]);
+  const navigation = await getNavigation();
   const footerLinks = navigation.footer.length ? navigation.footer : navigation.items.slice(0, 5);
 
   return (
@@ -35,7 +39,7 @@ export default async function StorefrontLayout({ children }: { children: React.R
       <SiteHeader>
         <div className="container-rangon">
           <div className="flex h-16 items-center gap-2 sm:gap-4">
-            <MobileNav items={navigation.items} signedIn={signedIn} />
+            <MobileNav items={navigation.items} />
 
             {/* Navbar sits on a white surface -> dark wordmark. The logo scales
                 on scroll; the header's own height never changes, so nothing
@@ -55,8 +59,6 @@ export default async function StorefrontLayout({ children }: { children: React.R
               <Suspense fallback={<div className="h-10 w-10" aria-hidden />}>
                 <SearchBar />
               </Suspense>
-              <WishlistButton />
-              <AccountMenu signedIn={signedIn} />
               <CartButton />
             </div>
           </div>

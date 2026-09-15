@@ -495,36 +495,47 @@ ships no musl browser.
 
 ---
 
-## 12. Two pytest runs on this machine will corrupt each other
+## 12. Two pytest runs on this machine used to corrupt each other
 
-`docker-compose.test.yml` pins `name: rangon-test`, and `config/settings/test.py` pins
-`TEST["NAME"] = "rangon_test_db"`. So every run of
+**Fixed 2026-09-15 (D47).** `config/settings/test.py` now derives the test
+database name per run — `rangon_test_<random>` — so two suites sharing one
+PostgreSQL can no longer drop each other's database. Kept here because the
+symptom is worth recognising if it ever comes back, and because the obvious fix
+is the wrong one.
+
+What it used to do: `docker-compose.test.yml` pinned `name: rangon-test` and
+the settings pinned `TEST["NAME"] = "rangon_test_db"`, so every run of
 
 ```bash
 docker compose -f docker-compose.test.yml run --rm -T api-test pytest -q
 ```
 
-shares one PostgreSQL **and** one test database, whichever worktree it is
+shared one PostgreSQL **and** one test database, whichever worktree it was
 started from. pytest-django drops and recreates that database at session start,
-so a second run pulls the database out from under a first one.
+so a second run pulled the database out from under the first.
 
-Observed 2026-09-01, with a second Claude session running in another worktree.
-It does not fail cleanly — it manufactures believable failures somewhere else:
+It never failed cleanly. It manufactured believable failures somewhere else:
 
 ```text
 django.db.utils.OperationalError: database "rangon_test_db" does not exist
 assert '2000.00' == '1000.00'   # the other session's committed rows, read straight through
 ```
 
-Both were first read as regressions from the change under test. Check for a
-stray runner before believing any test result:
+Both were first read as regressions from the change under test, which is the
+expensive kind of failure.
 
-```bash
-docker ps --format '{{.Names}}	{{.Command}}' | grep api-test
-```
+**`os.getpid()` does not work here, and looks like it should.** It was tried
+first and reproduced the original failure exactly: each `docker compose run`
+gets its own PID namespace, so two containers both start at 1 and collide. The
+name is random for that reason.
 
-Give each session its own compose project. The image build is cache-warm (~30 s)
-and everything else follows:
+Verified by running the pair that failed — `test_shipment_fulfilment.py` and
+`test_shipping_admin.py` at the same time against one PostgreSQL. Before:
+23 passed / 19 errors. After: 23 passed / 19 passed.
+
+The compose project name is still shared unless you change it, so a second run
+still *waits* on the first one's containers. `name:` now reads
+`${COMPOSE_PROJECT_NAME:-rangon-test}`, and `-p` still overrides it:
 
 ```bash
 docker compose -p rangon-<something-unique> -f docker-compose.test.yml build api-test
@@ -532,4 +543,4 @@ docker compose -p rangon-<something-unique> -f docker-compose.test.yml run --rm 
 docker compose -p rangon-<something-unique> -f docker-compose.test.yml down
 ```
 
-Recorded as D46's sibling defect, D47, in `../docs/roadmap.md`.
+`TEST_DB_NAME` pins the database name when something outside needs to know it.
