@@ -223,6 +223,11 @@ class SupplierPayment(BaseModel):
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    #: Paying a supplier twice is unrecoverable money, so a retried request must
+    #: return the payment already recorded.  Same shape as orders.Order and
+    #: orders.Refund; nullable because most payments are recorded from a screen
+    #: that supplies one, and history carries none.
+    idempotency_key = models.CharField(max_length=80, null=True, blank=True, unique=True)
 
     class Meta:
         db_table = "purchasing_supplierpayment"

@@ -106,6 +106,19 @@ class RefundExceedsCaptured(BusinessError):
     default_message = "A refund cannot exceed the amount actually paid."
 
 
+class PaymentExceedsOutstanding(BusinessError):
+    """The supplier-side mirror of RefundExceedsCaptured.
+
+    Overpaying a purchase order drives `outstanding` negative, and the payables
+    selector matches on `grand_total > paid_total` -- so an overpaid order
+    silently drops off the payable list instead of showing as a problem.
+    """
+
+    code = "PAYMENT_EXCEEDS_OUTSTANDING"
+    status_code = 422
+    default_message = "A payment cannot exceed what is outstanding on the purchase order."
+
+
 class IdempotencyConflict(Conflict):
     code = "IDEMPOTENCY_CONFLICT"
     default_message = "This request was already processed with different content."

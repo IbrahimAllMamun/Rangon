@@ -13,7 +13,7 @@ from decimal import Decimal
 import pytest
 from django.db import connections
 
-from core.exceptions import BusinessError, InsufficientFunds
+from core.exceptions import BusinessError, InsufficientFunds, PaymentExceedsOutstanding
 from customers.models import Customer
 from finance import services as finance_services
 from finance.models import AccountKind
@@ -26,6 +26,9 @@ from orders.services import pos
 from orders.services import returns as return_services
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
 from promotions.models import Coupon, CouponRedemption, DiscountType
+from purchasing import services as purchasing_services
+from purchasing.models import SupplierPayment
+from purchasing.services import PurchaseLine
 from tests import factories
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.slow, pytest.mark.concurrency]
@@ -488,3 +491,75 @@ def test_one_customer_cannot_spend_a_one_per_customer_coupon_twice():
     )
     coupon.refresh_from_db()
     assert coupon.used_count == 1
+
+
+def _payable_order(branch, variant, actor, total="1000.00"):
+    """A purchase order that has been sent, so money may be paid against it."""
+    order = purchasing_services.create_purchase_order(
+        supplier=factories.supplier(),
+        branch=branch,
+        lines=[PurchaseLine(variant_id=variant.pk, quantity=1, unit_cost=Decimal(total))],
+        actor=actor,
+    )
+    return purchasing_services.send_purchase_order(purchase_order=order, actor=actor)
+
+
+def test_two_payments_cannot_pay_one_purchase_order_twice(last_unit):
+    """A supplier is paid once, even when two clerks submit the full amount together.
+
+    The SELECT ... FOR UPDATE on the purchase order is taken before the
+    outstanding balance is read, so the second thread cannot decide against a
+    balance the first has already spent.
+    """
+    order = _payable_order(last_unit["branch"], last_unit["variant"], last_unit["cashier"])
+
+    def pay(index: int) -> str:
+        purchasing_services.record_supplier_payment(
+            supplier=order.supplier,
+            amount=Decimal("1000.00"),
+            method="CASH",
+            purchase_order=order,
+            actor=last_unit["cashier"],
+        )
+        return "paid"
+
+    results, errors = run_together(pay, 2)
+
+    assert len(results) == 1, f"expected exactly one payment to land, got {len(results)}"
+    assert len(errors) == 1
+    assert all(isinstance(error, PaymentExceedsOutstanding) for error in errors)
+
+    order.refresh_from_db()
+    assert order.paid_total == Decimal("1000.00"), "the supplier was paid twice"
+    assert order.outstanding == Decimal("0.00")
+    assert order.payments.count() == 1
+
+
+def test_a_replayed_supplier_payment_pays_once(last_unit):
+    """Two simultaneous submits carrying one Idempotency-Key write one payment.
+
+    Both threads can pass the existence check before either commits, so the
+    unique index is what actually decides it -- the loser must return the
+    winner's row rather than surfacing an IntegrityError.
+    """
+    order = _payable_order(last_unit["branch"], last_unit["variant"], last_unit["cashier"])
+
+    def pay(index: int) -> str:
+        payment = purchasing_services.record_supplier_payment(
+            supplier=order.supplier,
+            amount=Decimal("400.00"),
+            method="CASH",
+            purchase_order=order,
+            actor=last_unit["cashier"],
+            idempotency_key="double-click",
+        )
+        return str(payment.pk)
+
+    results, errors = run_together(pay, 2)
+
+    assert not errors, f"a retry should not raise: {errors}"
+    assert len(set(results)) == 1, "the two submits returned different payments"
+    assert SupplierPayment.objects.filter(idempotency_key="double-click").count() == 1
+
+    order.refresh_from_db()
+    assert order.paid_total == Decimal("400.00"), "a double click paid the supplier twice"

@@ -92,7 +92,15 @@ treated as a count of zero.
 | POST | `purchase-orders/{id}/send/` · `cancel/` | `purchases.create` |
 | POST | `purchase-orders/{id}/receive/` | `purchases.receive` — lines received → `PURCHASE` ledger + WAC |
 | GET | `purchase-orders/{id}/receipts/` | `purchases.view` |
-| POST | `supplier-payments/` | `purchases.pay` |
+| GET | `supplier-payments/?purchase_order={id}` | `purchases.view` — payment history |
+| POST | `supplier-payments/` | `purchases.pay` — `Idempotency-Key` honoured |
+
+`POST supplier-payments/` refuses more than is owed with **422 `PAYMENT_EXCEEDS_OUTSTANDING`**
+(`details` carries `requested`, `outstanding`, `grand_total`, `paid_total`), a `DRAFT` or `CANCELLED`
+order with **409 `CONFLICT`**, and a `supplier` that is not the purchase order's with
+**400 `VALIDATION_ERROR`**. `paid_at` is optional and defaults to now. Retrying with the same
+`Idempotency-Key` returns the payment already recorded rather than paying twice
+([business-rules.md §6b.1b](../business-rules.md)).
 
 ## Finance — `/api/v1/`
 

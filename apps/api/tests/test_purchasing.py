@@ -6,9 +6,10 @@ from decimal import Decimal
 
 import pytest
 
-from core.exceptions import Conflict, ValidationError
+from core.exceptions import Conflict, PaymentExceedsOutstanding, ValidationError
+from finance.models import AccountTransaction
 from inventory.models import Inventory, InventoryTransaction, TransactionType
-from purchasing.models import PurchaseOrderStatus
+from purchasing.models import PurchaseOrderStatus, SupplierPayment
 from purchasing.services import (
     PurchaseLine,
     cancel_purchase_order,
@@ -42,6 +43,17 @@ def _order(setup, quantity=50, cost="400.00"):
         ],
         actor=setup["actor"],
     )
+
+
+def _sent_order(setup, quantity=50, cost="400.00"):
+    """A purchase order the supplier has actually been sent.
+
+    Payment tests need this rather than `_order`: a DRAFT order has not been
+    committed to the supplier, so nothing is owed on it and paying one is
+    refused (business-rules.md §6b.1b).
+    """
+    purchase_order = _order(setup, quantity=quantity, cost=cost)
+    return send_purchase_order(purchase_order=purchase_order, actor=setup["actor"])
 
 
 class TestPurchaseOrder:
@@ -160,7 +172,7 @@ class TestReceiving:
 
 class TestSupplierPayments:
     def test_payment_updates_the_purchase_order_status(self, purchase_setup):
-        purchase_order = _order(purchase_setup, quantity=10, cost="100.00")  # 1000 total
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")  # 1000 total
 
         record_supplier_payment(
             supplier=purchase_setup["supplier"],
@@ -191,3 +203,168 @@ class TestSupplierPayments:
                 method="CASH",
                 actor=purchase_setup["actor"],
             )
+
+    # -- Invariants ------------------------------------------------------
+
+    def test_a_payment_cannot_exceed_the_outstanding_balance(self, purchase_setup):
+        """paid_total may never pass grand_total.
+
+        The mirror of the refund guard: `outstanding` going negative drops the
+        order out of the payables selector (finance.selectors), so an overpaid
+        order disappears from the payable list instead of showing as a problem.
+        """
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")  # 1000 total
+
+        record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            amount=Decimal("400.00"),
+            method="BANK",
+            purchase_order=purchase_order,
+            actor=purchase_setup["actor"],
+        )
+
+        with pytest.raises(PaymentExceedsOutstanding):
+            record_supplier_payment(
+                supplier=purchase_setup["supplier"],
+                amount=Decimal("700.00"),
+                method="BANK",
+                purchase_order=purchase_order,
+                actor=purchase_setup["actor"],
+            )
+
+        purchase_order.refresh_from_db()
+        assert purchase_order.paid_total == Decimal("400.00")
+        assert purchase_order.payment_status == "PARTIALLY_PAID"
+        assert purchase_order.outstanding == Decimal("600.00")
+        # The refused attempt left no document behind either.
+        assert purchase_order.payments.count() == 1
+
+    def test_paying_to_the_penny_is_allowed(self, purchase_setup):
+        """The guard refuses *more* than outstanding, never the exact figure."""
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")
+
+        record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            amount=Decimal("1000.00"),
+            method="BANK",
+            purchase_order=purchase_order,
+            actor=purchase_setup["actor"],
+        )
+
+        purchase_order.refresh_from_db()
+        assert purchase_order.payment_status == "PAID"
+        assert purchase_order.outstanding == Decimal("0.00")
+
+    def test_the_cash_book_and_the_purchase_order_agree(self, purchase_setup):
+        """Every taka the order says it paid left a named account."""
+        account = factories.account(
+            purchase_setup["branch"], kind="BANK", opening_balance=Decimal("5000.00")
+        )
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")
+
+        payment = record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            amount=Decimal("1000.00"),
+            method="BANK",
+            purchase_order=purchase_order,
+            actor=purchase_setup["actor"],
+            account=account,
+        )
+
+        purchase_order.refresh_from_db()
+        posted = AccountTransaction.objects.filter(
+            reference_type="supplier_payment", reference_id=payment.pk
+        )
+        assert posted.count() == 1
+        # Money leaving is negative in the cash book; the order counts it positive.
+        assert abs(posted.get().amount) == purchase_order.paid_total
+        assert purchase_order.outstanding == Decimal("0.00")
+
+    # -- Failure paths ---------------------------------------------------
+
+    def test_a_payment_for_another_supplier_is_refused(self, purchase_setup):
+        """Supplier and purchase order must agree.
+
+        Both reach the service as separate arguments, so without this guard a
+        payment to A credits A's ledger while reducing B's outstanding — two
+        wrong balances from one row.
+        """
+        other_supplier = factories.supplier()
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")
+
+        with pytest.raises(ValidationError):
+            record_supplier_payment(
+                supplier=other_supplier,
+                amount=Decimal("100.00"),
+                method="CASH",
+                purchase_order=purchase_order,
+                actor=purchase_setup["actor"],
+            )
+
+        purchase_order.refresh_from_db()
+        assert purchase_order.paid_total == Decimal("0.00")
+        assert SupplierPayment.objects.filter(supplier=other_supplier).count() == 0
+
+    def test_the_same_idempotency_key_pays_once(self, purchase_setup):
+        """A retried or double-clicked submit must not pay a supplier twice."""
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")
+
+        first = record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            amount=Decimal("400.00"),
+            method="BANK",
+            purchase_order=purchase_order,
+            actor=purchase_setup["actor"],
+            idempotency_key="retry-me",
+        )
+        second = record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            amount=Decimal("400.00"),
+            method="BANK",
+            purchase_order=purchase_order,
+            actor=purchase_setup["actor"],
+            idempotency_key="retry-me",
+        )
+
+        assert first.pk == second.pk
+        assert SupplierPayment.objects.filter(idempotency_key="retry-me").count() == 1
+        purchase_order.refresh_from_db()
+        assert purchase_order.paid_total == Decimal("400.00")
+
+    def test_a_draft_purchase_order_cannot_be_paid(self, purchase_setup):
+        """A draft has never been sent to the supplier; there is nothing owed."""
+        purchase_order = _order(purchase_setup, quantity=10, cost="100.00")
+        assert purchase_order.status == PurchaseOrderStatus.DRAFT
+
+        with pytest.raises(Conflict):
+            record_supplier_payment(
+                supplier=purchase_setup["supplier"],
+                amount=Decimal("100.00"),
+                method="CASH",
+                purchase_order=purchase_order,
+                actor=purchase_setup["actor"],
+            )
+
+        purchase_order.refresh_from_db()
+        assert purchase_order.paid_total == Decimal("0.00")
+
+    def test_a_cancelled_purchase_order_cannot_be_paid(self, purchase_setup):
+        """finance.selectors already excludes CANCELLED from payables, so paying
+        one writes cash out against a liability the ledger says does not exist.
+        """
+        purchase_order = _sent_order(purchase_setup, quantity=10, cost="100.00")
+        cancel_purchase_order(
+            purchase_order=purchase_order, actor=purchase_setup["actor"], reason="not needed"
+        )
+
+        with pytest.raises(Conflict):
+            record_supplier_payment(
+                supplier=purchase_setup["supplier"],
+                amount=Decimal("100.00"),
+                method="CASH",
+                purchase_order=purchase_order,
+                actor=purchase_setup["actor"],
+            )
+
+        purchase_order.refresh_from_db()
+        assert purchase_order.paid_total == Decimal("0.00")

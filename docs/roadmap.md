@@ -9,7 +9,21 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-14**. The 09-14 pass built **product specification attributes** — the last
+Last updated: **2026-09-15**. The 09-15 pass made a purchase order payable. Auditing the backlog
+against the code found that **`supplier-payments/` was a complete, live, registered API that nothing
+called** — so `paid_total` was permanently `0.00`, the payables side of the party ledger could only
+grow, and the cash position permanently overstated cash, while phases 07, 35 and 37 were all marked
+green. Checking the endpoint before building over it found five defects, three of them money bugs
+([D61–D65](#known-defects)): a payment could be recorded against another supplier's order, a supplier
+could be overpaid until the order vanished from payables, and a double-click paid twice. The fifth is
+why the screen had never been built — the endpoint returned 400 for every request, because the
+serializer required a timestamp the service had always defaulted.
+
+That audit also found this file's **"Still API-only (no UI): Nothing"** to be false in five places,
+and two defects nobody had recorded: `/admin/products/import` has no permission check (D66) and the
+Track-your-order form 404s on every submission (D67).
+
+Before that, **2026-09-14**. The 09-14 pass built **product specification attributes** — the last
 item on Tier 1 that waited on nobody. The catalogue sells clothing, shoes, bags *and* cosmetics, and
 the only spec fields were the free-text `material` and `care_instructions` columns on `Product`,
 which is exactly what §10 of the build plan says not to do. `Attribute.is_variant_defining` had split
@@ -161,6 +175,35 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Supplier payments made real, 2026-09-15
+
+The endpoint was audited before the screen was built over it, which is the habit this file keeps
+recommending. It found five defects — three of them money bugs — and one of those (D65) is why the
+screen had never existed: the API answered 400 to every request.
+
+Every guard was **seen to fail before it was written**. The five new service tests were run against
+the old code first and all five failed; the concurrency pair was run before the lock was moved and
+the idempotency race surfaced a raw `IntegrityError`, which is what the savepoint fallback now
+catches.
+
+```text
+pytest (full suite, container) ........ 907 passed in 408s
+  of which new ........................ 5 service guards, 5 API-level, 2 concurrency
+ruff check + ruff format --check ...... clean, 193 files
+makemigrations --check --dry-run ...... no changes detected
+migration ............................. purchasing/0003_supplierpayment_idempotency_key
+```
+
+One fixture was changed rather than the guard it broke: the original happy-path test paid a `DRAFT`
+purchase order, which D64 now refuses, so `_sent_order()` sends it first. The test had been encoding
+the bug.
+
+Not verified in a browser. The screen is written and typechecked; nobody has signed in and paid a
+supplier through it. Per this file's own rule, do not describe it as proven until someone has —
+and note that the two prior passes both found defects that survived a clean `tsc` and died the
+moment a browser loaded the page.
+
 
 Everything below was executed on 2026-08-18 against commit `423cdf4`.
 
@@ -1071,11 +1114,32 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D58~~  | ~~**Up to three logo loaders drew at once.**~~ **Fixed 2026-09-12.** Three things render the brand mark while the app is busy and nothing stopped them doing it together: a route's `loading.tsx`, `PendingRegion` (which fires on *any* navigation, not only same-segment ones), and the full-screen `LogoLoaderOverlay` after 480 ms. Cross a segment boundary slowly and all three conditions held — and because the overlay tints and blurs what is behind it, the extra marks showed through as washed-out ghosts rather than being hidden, which is exactly how it was reported. A loader now draws only if nothing **more specific** is already drawing: the route's own screen beats a region, a region beats the global overlay. The overlay keeps the job only it does — blocking clicks — and drops its mark, its tint and its blur when outranked | `apps/web/src/lib/navigation/logo-loader-slot.tsx`, `logo-loader-overlay.tsx`, `logo-loader-screen.tsx`, `ui/pending-region.tsx` | Nine tests pin the resolution; five of them fail if the suppression is removed. `LogoLoaderScreen` became a client component to claim its rank |
 | ~~D59~~  | ~~**A swatch that is not a colour was stored happily and rendered as nothing.**~~ **Fixed 2026-09-12.** `AttributeValue.swatch` is a plain `CharField(max_length=32)` whose help text says "hex colour" and whose value is written straight into `style={{ backgroundColor }}` on the product form and the media grouper. Nothing validated it, so `navy`, `rgb(0,0,128)` and `#12345` were all accepted and all invisible — the swatch simply vanished and the shopper was left choosing between two identical circles. The serializer now takes `#rgb`, `#rrggbb` or `#rrggbbaa` and lower-cases it, so two spellings of one colour compare equal. Found while building the colour picker, which would otherwise have been the first thing to write a value nothing checked | `apps/api/catalog/api/serializers.py` | Six tests; all six fail with the validator removed |
 | ~~D60~~  | ~~**The attributes screen was read-only for a reason the schema contradicts.**~~ **Fixed 2026-09-12.** The panel carried the note "variants reference these values, so editing one rewrites history". `OrderItem` snapshots `sku`, `product_name` and `variant_label` under the comment "history must not move when the catalogue changes" — so renaming a value cannot touch a single order, and the whole screen had been withheld on a premise that was never checked. What is genuinely unsafe is narrower and is now guarded where it lives: `code` is a live facet key (`search.py` matches on `attribute__code`) so it warns rather than forbids, an attribute cannot stop being variant-defining while variants rely on it, and deleting anything in use is refused in a sentence instead of a bare 409 | `apps/web/src/components/admin/attribute-manager.tsx`, `apps/api/catalog/api/views.py` | The read-only note had been there since the screen shipped on 2026-08-31 |
+| ~~D61~~ | ~~**A payment to one supplier could be recorded against another supplier's purchase order.**~~ **Fixed 2026-09-15.** `record_supplier_payment()` takes `supplier` and `purchase_order` as independent arguments and never compared them, and `SupplierPaymentSerializer` was a plain `ModelSerializer` with no `validate()`, so both arrived as separately writable client-supplied FKs. A payment to A credited A's ledger while decrementing B's outstanding — two wrong balances from one row. Refused now, under the order lock | `apps/api/purchasing/services.py` | Found by auditing the endpoint before building the screen over it — the eighth time that habit has paid |
+| ~~D62~~ | ~~**A supplier could be overpaid, and the order then vanished from payables.**~~ **Fixed 2026-09-15.** The only amount validation was `amount <= 0`, so `paid_total + amount` was uncapped and `outstanding` went negative. Because `finance.selectors` derives payables from `grand_total > paid_total`, an overpaid order silently dropped off the payable list instead of showing as a problem. The customer-money mirror image (`RefundExceedsCaptured`) was guarded all along, which is the tell. Now `PAYMENT_EXCEEDS_OUTSTANDING` (422), decided under `SELECT … FOR UPDATE` taken *before* the balance is read | `apps/api/purchasing/services.py`, `apps/api/core/exceptions.py` | The lock used to be taken after the check; moving it up front is what makes the guard race-free |
+| ~~D63~~ | ~~**A double-clicked supplier payment paid twice.**~~ **Fixed 2026-09-15.** `SupplierPayment` had no `idempotency_key`, though `Order` and `Refund` both carry one and CLAUDE.md §7 requires it wherever a retry could double-spend. Added with a unique index, honoured from the `Idempotency-Key` header. Two simultaneous submits are settled by the order lock, and the no-order case falls back to catching the unique violation in a savepoint and returning the winner's row rather than surfacing an `IntegrityError` | `apps/api/purchasing/models.py`, `apps/api/purchasing/services.py` | `refund_order` has the same latent `IntegrityError` shape; worth the same savepoint |
+| ~~D64~~ | ~~**A `DRAFT` or `CANCELLED` purchase order could be paid.**~~ **Fixed 2026-09-15.** The service applied a payment on any status, while `finance.selectors` deliberately excludes both from payables — so paying one wrote cash out against a liability the ledger says does not exist, and paying a draft committed money to an order never sent to the supplier. Both refused with `CONFLICT` | `apps/api/purchasing/services.py` | The existing happy-path test paid a `DRAFT` order, so the guard broke it. The fixture was wrong, not the guard — it now sends the order first |
+| ~~D65~~ | ~~**The supplier-payment endpoint could not be called at all.**~~ **Fixed 2026-09-15.** `SupplierPayment.paid_at` is non-null, so DRF inferred it as required — while the service had always defaulted it (`when = paid_at or timezone.now()`) and the viewset passed `data.get("paid_at")`. Every request without an explicit timestamp got a 400. Found only by writing the first API-level test the endpoint has ever had | `apps/api/purchasing/api/serializers.py` | A second reason the screen had never been built: the API it needed did not work |
+| D66 | **`/admin/products/import` has no permission check.** The page is 16 lines with no `currentUser()` and no `can()`, while its sibling `/admin/products/new` gates on `products.create` and renders an `ErrorState`. **Not a security hole** — the API refuses correctly (`import_csv` requires `products.create` *and* `inventory.adjust`), so a cashier who opens it can do nothing — but it is the only admin screen that lets an unauthorised user in far enough to be confused by it | `apps/web/src/app/(admin)/admin/products/import/page.tsx` | Found 2026-09-15. Minutes to fix; copy the sibling |
+| D67 | **The Track-your-order form 404s on every submission.** `/track` renders `<form action="/order" method="get">` with a `number` input, but the only route is `order/[number]`, which reads the number from the path segment. There is no `order/page.tsx`, so every shopper who uses the footer's tracking link gets a 404. The page's own comment says a signed token is required as well, so the fix is to build the target route rather than to re-point the form | `apps/web/src/app/(storefront)/track/page.tsx` | Found 2026-09-15, customer-facing. Phase 12 is marked "Browser journey verified end to end" |
 
 ## Still API-only (no UI)
 
-**Nothing.** The last two — categories/brands/attributes and users/roles — shipped 2026-08-31 as
-`/admin/taxonomy` and `/admin/staff`.
+**This section said "Nothing" from 2026-08-31 until 2026-09-15, and it was wrong.** An audit that
+compared every router registration in `config/api_urls.py` against what `apps/web/src` actually
+calls found five complete APIs with no frontend caller. The claim had been made by listing the
+screens that *had* been built rather than by checking the ones that had not.
+
+| Endpoint | State |
+|---|---|
+| ~~`supplier-payments/`~~ | **Closed 2026-09-15** — the payment form and history now live on `/admin/purchases/[id]`. It was the worst of the six: `paid_total` could never move, so the payables side of the party ledger only ever grew and the cash position permanently overstated cash. Auditing it first found four money bugs — [D61–D64](#known-defects) |
+| `shipments/` | `ShipmentViewSet` plus its `events` action are complete and tested; nothing creates a shipment or posts a tracking event, so `orders.fulfil` is unreachable through the product and `Courier.tracking_url_template` can never be populated. Grep for `shipments` in `apps/web/src` returns two comment matches in `couriers.tsx` and nothing else |
+| `auth/register/` | No sign-up screen. Storefront checkout is guest-token based so this blocks no purchase, but an account can only be created from the admin |
+| `audit-logs/` | Everything writes audit rows and nothing reads them back. The trail exists and is unreadable without database access |
+| `inventory-transactions/` | The ledger itself. `/admin/inventory` shows the current figure, not the movements behind it |
+
+The rule this section has recommended for months is the one that would have caught it, applied to
+the section itself: **check each endpoint against what calls it, rather than listing what was
+built.** "Exists" is not "reachable".
 
 **Attributes were the exception, and are no longer.** They had a full `ModelViewSet` behind a list
 that could only read — the UI was the gap, not the API. Create, edit, reorder and a colour picker
@@ -1202,6 +1266,7 @@ All seven shipped. Kept here as the record of what was built and when, not as a 
 | 5 | **The fourth (`stale`) variant state** | 2026-09-13 |
 | 6 | **Price drops + real "customers also bought"** | 2026-09-13 |
 | 7 | **Quick View** | 2026-09-13 |
+| — | **Make a purchase order payable** | 2026-09-15 — not on this list; it outranked everything on it |
 
 ### Tier 2 — the backlog now, in this order
 
@@ -1214,7 +1279,9 @@ Ordered by value per day of work.
 | 2 | ~~**Scope the variant matrix by category**~~ | **Done 2026-09-14**, same day it was written down. See the verification log |
 | 3 | **[D40](#known-defects) — `router.refresh()` in a production build** | The only thing keeping E2E off a production build in CI. Narrowed to one sentence with five hypotheses ruled out |
 | 4 | **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
-| 5 | **[D6](#known-defects) — mypy's 98 errors** | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
+| 5 | **[D66](#known-defects) and [D67](#known-defects), one line each** | `/admin/products/import` is the only admin screen with no permission check — the API refuses correctly, so it is a confusing hole rather than a security one. D67 is customer-facing: the footer's Track-your-order form GETs `/order`, and the only route reads the number from a path segment, so **every submission 404s**. Minutes each |
+| 6 | **Shipment creation and tracking events** | From the API-only audit. `ShipmentViewSet` and its `events` action are complete and tested with no caller, so `orders.fulfil` is unreachable through the product and `Courier.tracking_url_template` can never be filled. Same shape as the supplier-payment work — audit the endpoint first |
+| 7 | **[D6](#known-defects) — mypy's 98 errors** | Only matters if the gate is meant to mean something. It currently runs with `|| echo` |
 
 ### Tier 3 — real, but wait on somebody else
 

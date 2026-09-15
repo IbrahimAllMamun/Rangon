@@ -3,10 +3,11 @@ import { notFound, redirect } from "next/navigation";
 
 import { PurchaseActions, type OrderStatus } from "@/components/admin/purchase-actions";
 import { PageHeader } from "@/components/admin/shell";
+import { SupplierPaymentForm } from "@/components/admin/supplier-payment-form";
 import { Badge, Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
 import { ApiError } from "@/lib/api/client";
-import { apiServer, currentUser } from "@/lib/api/server";
-import type { SessionUser } from "@/lib/api/types";
+import { apiServer, currentUser, type Paginated } from "@/lib/api/server";
+import type { Account, SessionUser } from "@/lib/api/types";
 import type { OrderItem } from "@/lib/commerce/purchase-order";
 import { dateOnly, dateTime, humanise, money } from "@/lib/format";
 
@@ -18,6 +19,16 @@ interface Receipt {
   notes: string;
   is_posted: boolean;
   items: { id: string; sku: string; quantity: number; unit_cost: string }[];
+}
+
+interface SupplierPayment {
+  id: string;
+  amount: string;
+  method: string;
+  reference: string;
+  paid_at: string;
+  notes: string;
+  account_name: string;
 }
 
 interface PurchaseOrderDetail {
@@ -97,6 +108,30 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
 
   const orderedUnits = order.items.reduce((total, item) => total + item.quantity_ordered, 0);
   const receivedUnits = order.items.reduce((total, item) => total + item.quantity_received, 0);
+
+  // Both are allowed to fail on their own: a buyer without `finance.view` or
+  // `purchases.view` still gets the order, just without the payment history or
+  // the choice of which account the money leaves.
+  let payments: SupplierPayment[] = [];
+  try {
+    const page = await apiServer<Paginated<SupplierPayment>>(
+      `/supplier-payments/?purchase_order=${order.id}&page_size=50`,
+    );
+    payments = page.results;
+  } catch {
+    payments = [];
+  }
+
+  let accounts: Account[] = [];
+  try {
+    const page = await apiServer<Paginated<Account>>("/accounts/?is_active=true&page_size=50");
+    accounts = page.results;
+  } catch {
+    accounts = [];
+  }
+
+  const canPay =
+    can("purchases.pay") && !["DRAFT", "CANCELLED"].includes(order.status);
 
   return (
     <>
@@ -258,6 +293,60 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
             )}
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Payments</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {payments.length === 0 ? (
+              <p className="text-body-sm text-muted">
+                {order.status === "DRAFT"
+                  ? "This order has not been sent to the supplier yet, so nothing is owed on it."
+                  : order.status === "CANCELLED"
+                    ? "This order was cancelled, so nothing is owed on it."
+                    : "Nothing paid yet. Each payment is recorded here and in the cash book."}
+              </p>
+            ) : (
+              <ul className="space-y-3">
+                {payments.map((payment) => (
+                  <li
+                    key={payment.id}
+                    className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-lg border border-border p-3"
+                  >
+                    <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="tabular font-medium">{money(payment.amount)}</span>
+                      <Badge tone="neutral">{humanise(payment.method)}</Badge>
+                      {payment.account_name && (
+                        <span className="text-body-sm text-muted">
+                          from {payment.account_name}
+                        </span>
+                      )}
+                      {payment.reference && (
+                        <span className="font-mono text-caption text-muted">
+                          {payment.reference}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-body-sm text-muted">{dateTime(payment.paid_at)}</span>
+                    {payment.notes && (
+                      <p className="w-full text-caption text-muted">{payment.notes}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        {canPay && (
+          <SupplierPaymentForm
+            purchaseOrderId={order.id}
+            supplierId={order.supplier}
+            outstanding={order.outstanding}
+            accounts={accounts}
+          />
+        )}
       </div>
     </>
   );
