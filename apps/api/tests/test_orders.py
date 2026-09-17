@@ -531,3 +531,128 @@ class TestPayments:
         )
         order.refresh_from_db()
         assert order.payment_status == "PARTIALLY_PAID"
+
+
+class TestCostOfGoodsSold:
+    """What gets frozen onto a sale line as `unit_cost` (docs/business-rules.md §4).
+
+    Both of these were live bugs. D73: online checkout never passed a cost map,
+    so it fell back to `ProductVariant.cost` while the counter used the branch's
+    weighted average — the same variant sold twice in one minute booked two
+    different costs depending on the channel. D72: stock opened outside a
+    purchase receipt left `average_cost` at its `0.00` column default, so the
+    counter froze a zero and the sale reported 100% margin.
+    """
+
+    ADDRESS = {
+        "recipient_name": "A",
+        "phone": "01712345678",
+        "line1": "x",
+        "city": "Dhaka",
+    }
+
+    def _sell_online(self, shop, variant, *, key):
+        cart = checkout_services.get_or_create_cart(
+            customer=shop["customer"], branch=shop["branch"]
+        )
+        checkout_services.add_item(cart=cart, variant_id=variant.pk, quantity=1)
+        order = checkout_services.place_order(
+            cart=cart,
+            shipping_address=self.ADDRESS,
+            payment_method=PaymentMethod.COD,
+            customer=shop["customer"],
+            idempotency_key=key,
+        )
+        return order.items.get(variant=variant)
+
+    def _sell_at_the_counter(self, shop, variant):
+        order = pos.create_pos_sale(
+            branch=shop["branch"],
+            actor=shop["cashier"],
+            data=SaleInput(
+                lines=[SaleLineInput(variant_id=variant.pk, quantity=1)],
+                payments=[PaymentInput(method=PaymentMethod.CASH, amount=variant.price)],
+            ),
+        )
+        return order.items.get(variant=variant)
+
+    def test_both_channels_freeze_the_same_cost(self, shop):
+        """The invariant: channel must not change COGS.
+
+        Two receipts at different prices are what makes this test discriminate.
+        `receive_stock` keeps `ProductVariant.cost` in step with the *last* cost
+        paid, so after a single receipt both sources agree by coincidence and a
+        channel reading the wrong one still looks right. Blend 100 and 200 and
+        they part company: the weighted average is 150, `cost` is 200.
+        """
+        branch = shop["branch"]
+        variant = factories.variant(price="1000.00", cost="250.00")
+        inventory_services.receive_stock(
+            branch=branch, variant=variant, quantity=10, unit_cost=Decimal("100.00")
+        )
+        inventory_services.receive_stock(
+            branch=branch, variant=variant, quantity=10, unit_cost=Decimal("200.00")
+        )
+        variant.refresh_from_db()
+        assert variant.cost == Decimal("200.00")  # the trap the old code fell into
+
+        online = self._sell_online(shop, variant, key="cogs-parity")
+        counter = self._sell_at_the_counter(shop, variant)
+
+        assert online.unit_cost == Decimal("150.00")
+        assert counter.unit_cost == online.unit_cost
+
+    def test_an_online_sale_uses_the_branch_average_not_the_typed_cost(self, shop):
+        """Receiving is what makes a cost authoritative, not what an admin typed.
+
+        This is D73 on its own: online checkout had the availability snapshot in
+        hand the whole time and simply never passed it to `price_lines`.
+        """
+        branch = shop["branch"]
+        variant = factories.variant(price="1000.00", cost="250.00")
+        inventory_services.receive_stock(
+            branch=branch, variant=variant, quantity=10, unit_cost=Decimal("100.00")
+        )
+        inventory_services.receive_stock(
+            branch=branch, variant=variant, quantity=10, unit_cost=Decimal("200.00")
+        )
+
+        assert self._sell_online(shop, variant, key="cogs-wac").unit_cost == Decimal("150.00")
+
+    def test_a_never_received_variant_does_not_sell_at_zero_cost(self, shop):
+        """The failure path: no weighted average is 'unknown', never 'free'.
+
+        `average_cost` is `0.00` on a variant nothing has been received against —
+        a column default, not a measurement. Freezing it would report the whole
+        selling price as profit, so the variant's own cost stands in.
+        """
+        branch = shop["branch"]
+        variant = factories.variant(price="1000.00", cost="250.00")
+        # Stock without a receipt behind it, which is what an adjustment leaves.
+        inventory_services.adjust(
+            branch=branch,
+            variant=variant,
+            new_on_hand=5,
+            reason="Counted onto the shelf with no purchase behind it",
+        )
+        inventory = Inventory.objects.get(variant=variant, branch=branch)
+        assert inventory.on_hand == 5
+        assert inventory.average_cost == Decimal("0.00")
+
+        online = self._sell_online(shop, variant, key="cogs-no-receipt")
+        counter = self._sell_at_the_counter(shop, variant)
+
+        assert online.unit_cost == Decimal("250.00")
+        assert counter.unit_cost == Decimal("250.00")
+
+    def test_profit_is_not_the_whole_selling_price(self, shop):
+        """The bug as the owner would have seen it, on the report."""
+        variant = factories.variant(price="1000.00", cost="250.00")
+        inventory_services.adjust(
+            branch=shop["branch"],
+            variant=variant,
+            new_on_hand=5,
+            reason="Opening stock, no receipt",
+        )
+        order = self._sell_at_the_counter(shop, variant).order
+        assert order.gross_profit == Decimal("750.00")

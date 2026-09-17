@@ -9,7 +9,35 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-15**. The second 09-15 pass did two things.
+Last updated: **2026-09-17**. The 09-17 pass closed two money bugs that were hiding behind a
+redundancy the owner spotted from the outside.
+
+**The observation was that adding a product and raising a purchase order do the same job twice**, and
+that goods ought to enter through purchasing alone. Auditing the two paths before restructuring
+anything found that the product form was not merely a duplicate — it was the *worse* of the two
+doors, and the only one that put stock on the shelf without any money behind it.
+
+`ProductForm` took an opening stock figure per variant and posted it to `/inventory/adjust/`. An
+adjustment writes units in at the row's existing `average_cost` and never moves it, and that column
+is `0.00` on a variant nothing has been received against. So stock created that way was valued at ৳0
+by the valuation report and sold at 100% margin by the counter ([D72](#known-defects)) — while the
+CSV importer, doing the same job, had always called `receive_stock` with the row's real cost.
+
+Checking how the other half of that figure was read found a second one nobody had recorded: the POS
+freezes the branch weighted average onto a sale line, and **online checkout froze
+`ProductVariant.cost` instead**, because `price_cart` held the availability snapshots it needed and
+never passed them to `price_lines` ([D73](#known-defects)). The same variant, sold twice in one
+minute, booked two different costs depending on the channel — under a docstring promising that a
+receipt and a web invoice can never disagree.
+
+Both are fixed, with four regression tests that fail against the old code. Opening stock is gone
+from the product form and the rule is written down at last, in
+[§ 4.0a of business-rules.md](business-rules.md#40a-opening-stock) — it had never been stated
+anywhere, which is how the zero-cost path survived this long. The restructure the observation asked
+for (purchasing as the origin of goods, a `SupplierProduct` link, inline product creation on the
+purchase order) is still ahead; this pass only made the costing correct underneath it.
+
+Before that, **2026-09-15**. The second 09-15 pass did two things.
 
 **The storefront's account surface was withdrawn, on the owner's instruction.** A shopper cannot
 create an account — `auth/register/` has never had a screen in front of it — so everything gated on
@@ -1189,6 +1217,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D70~~ | ~~**A parcel could be created already delivered, with no event behind it.**~~ **Fixed 2026-09-15.** `status`, `dispatched_at` and `delivered_at` were writable on create, so a caller could post a `DELIVERED` shipment that wrote no `ShipmentEvent` and left the order sitting at `PACKED` — the append-only trail was optional. All three are now read-only on the API; a shipment always starts `PENDING` and moves only through `services.record_event`, which also refuses an update to a parcel already `DELIVERED` or `RETURNED` | `apps/api/shipping/api/serializers.py`, `apps/api/shipping/services.py` | A delivery nobody recorded, which no later correction can unpick |
 | ~~D71~~ | ~~**Two parcels could claim one courier's tracking number.**~~ **Fixed 2026-09-15** with `shipping_shipment_courier_tracking_uniq`, conditional on a non-blank number because the number usually arrives after the booking does. A tracking number now also requires the courier that issued it — without one it identifies nothing and cannot be turned into a link. The same constraint is what stops a double-clicked fulfilment form booking the same parcel twice | `apps/api/shipping/models.py`, `apps/api/shipping/migrations/0003_*` | Adding the constraint made DRF derive a `UniqueTogetherValidator`, which forces *every* field in it to be required — so both fields had to be re-declared optional and the validator dropped, or the ordinary case (book now, number later) would have been refused |
 | ~~D47~~ | ~~**Two pytest runs on one machine corrupt each other.**~~ **Fixed 2026-09-15.** The test database name is now `rangon_test_<random>` per run rather than the pinned `rangon_test_db`, so two suites sharing one PostgreSQL cannot drop each other's database. **`os.getpid()` does not work and looks like it should** — it was tried first and reproduced the original failure exactly, because each `docker compose run` has its own PID namespace and two containers both start at 1. Verified by running the pair that failed: before, 23 passed / 19 errors; after, 23 passed / 19 passed. `docker-compose.test.yml`'s project name is now `${COMPOSE_PROJECT_NAME:-rangon-test}`, so a second run still shares containers unless you pass `-p`, but sharing them is no longer corrupting | `apps/api/config/settings/test.py`, `docker-compose.test.yml` | It manufactured *plausible* failures in unrelated assertions, which is the expensive kind |
+| ~~D72~~ | ~~**Stock opened from the product form entered the books at zero cost.**~~ **Fixed 2026-09-17.** `ProductForm` collected an opening figure per matrix row and posted it to `/inventory/adjust/`. An adjustment writes the units in at the row's existing `average_cost`, and never moves it — and `average_cost` is `0.00` on a variant nothing has ever been received against. So the stock was valued at ৳0 in the valuation report, and the counter, which freezes the branch average onto the sale line, booked a COGS of zero and reported the whole selling price as profit. The CSV importer had done it correctly since the day it was written, through `receive_stock` with the row's `cost` — two doors into one column, disagreeing. The field is gone: goods enter by receiving a purchase order or by the import, both of which carry the cost paid. `ADJUSTMENT` goes back to meaning a correction to a counted figure | `apps/web/src/components/admin/product-form.tsx`, `apps/web/src/components/admin/variant-matrix-editor.tsx`, `docs/business-rules.md` | Found by auditing the two paths that create a product after the owner observed that adding a product and raising a purchase order were doing the same job twice. The redundancy was real and this was underneath it |
+| ~~D73~~ | ~~**The same variant sold at two different costs depending on the channel.**~~ **Fixed 2026-09-17.** `pos.create_pos_sale` builds a cost map from the branch's weighted average and passes it to `pricing.price_lines`; online checkout called the same function with no map at all, so every web order fell through to `ProductVariant.cost` — a free-text field on the product form, not a measurement. `price_cart` already held the availability snapshots it needed and simply never passed them. Two channels, one variant, one minute, two COGS figures, and `pricing.py`'s own docstring claiming a receipt and a web invoice can never disagree. Both now resolve cost through `resolve_unit_cost`, which also treats a `0.00` average as *unknown* rather than *free* and falls back to `variant.cost` — so the stock D72 had already mis-valued stopped selling at 100% margin too | `apps/api/orders/services/checkout.py`, `apps/api/orders/services/pricing.py` | The parity test passes against the buggy code if you receive stock only once: `receive_stock` also updates `ProductVariant.cost`, so both sources agree by coincidence. It takes two receipts at different prices to separate the weighted average from the last cost paid |
 
 ## Still API-only (no UI)
 

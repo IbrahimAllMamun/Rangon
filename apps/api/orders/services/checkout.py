@@ -149,7 +149,12 @@ def price_cart(*, cart: Cart, shipping_method: ShippingMethod | None = None) -> 
             )
         raw_lines.append((item.variant, quantity, ZERO))
 
-    priced_lines = pricing.price_lines(raw_lines)
+    # Cost comes from the branch's weighted average at this moment (ADR-0006),
+    # exactly as the counter does it. The snapshots are already in hand above;
+    # not passing them was why an online sale and a POS sale of the same variant
+    # froze two different costs onto their lines.
+    costs = {vid: snapshot.average_cost for vid, snapshot in snapshots.items()}
+    priced_lines = pricing.price_lines(raw_lines, costs=costs)
     subtotal = quantize(sum((line.line_total for line in priced_lines), ZERO))
 
     coupon_discount = ZERO

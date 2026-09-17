@@ -15,12 +15,10 @@ export interface RowDraft {
   cost: string;
   sku: string;
   barcode: string;
-  /** Only meaningful for rows that do not exist yet. */
-  openingStock: string;
 }
 
 export function blankDraft(price: string, cost: string): RowDraft {
-  return { price, compareAt: "", cost, sku: "", barcode: "", openingStock: "0" };
+  return { price, compareAt: "", cost, sku: "", barcode: "" };
 }
 
 export function draftFromRow(row: MatrixRow, price: string, cost: string): RowDraft {
@@ -31,7 +29,6 @@ export function draftFromRow(row: MatrixRow, price: string, cost: string): RowDr
     cost: row.existing.cost,
     sku: row.existing.sku,
     barcode: row.existing.barcode ?? "",
-    openingStock: "0",
   };
 }
 
@@ -39,12 +36,19 @@ export function draftFromRow(row: MatrixRow, price: string, cost: string): RowDr
  * One row per sellable combination.
  *
  * The stock column is the part worth reading twice. It **never writes stock
- * directly** (CLAUDE.md §3.2, §13): a row that does not exist yet takes an
- * opening figure, which the form posts as an inventory adjustment once the
- * variant has an id; a row that exists shows its counted stock read-only, with
- * an Adjust action that writes a reasoned `InventoryTransaction` through
- * `POST /inventory/adjust/`. There is no path from this table to
- * `on_hand = on_hand - 1`.
+ * directly** (CLAUDE.md §3.2, §13), and it no longer opens stock at all: a row
+ * that does not exist yet has no stock to show, because goods arrive by
+ * receiving a purchase order, which writes `PURCHASE` rows at the cost actually
+ * paid and moves the branch's weighted average with them. A row that exists
+ * shows its counted stock read-only, with an Adjust action that writes a
+ * reasoned `InventoryTransaction` through `POST /inventory/adjust/` — a
+ * correction to a counted figure, which is what an adjustment is for.
+ *
+ * It used to take an opening figure here and post it as an adjustment. That
+ * wrote the units in at `average_cost`, which is `0.00` for a variant nothing
+ * has ever been received against — so the stock was valued at nothing and sold
+ * at 100% margin (D72). There is no path from this table to
+ * `on_hand = on_hand - 1`, and now none to a zero-cost receipt either.
  */
 export function VariantMatrixEditor({
   rows,
@@ -138,6 +142,12 @@ export function VariantMatrixEditor({
         SKU and barcode are generated when a row is first saved; clear a SKU to keep the generated
         one. Rows marked <em>not selected</em> are kept, never silently deleted — they may hold stock
         or sales history.
+      </p>
+
+      <p className="text-caption text-muted">
+        Stock arrives by receiving a purchase order, never from this table — that is what puts the
+        cost actually paid into the ledger and into the branch&rsquo;s weighted average. Cost here is
+        the expected price, and seeds the first purchase order line.
       </p>
     </div>
   );
@@ -321,17 +331,9 @@ function MatrixRowView({
               </Button>
             </div>
           ) : (
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              inputMode="numeric"
-              value={draft.openingStock}
-              onChange={(event) => onDraftChange({ openingStock: event.target.value })}
-              aria-label={`Opening stock for ${describe(row)}`}
-              disabled={disabled}
-              className="tabular h-8 w-20 text-right text-body-sm"
-            />
+            /* Nothing has been received against a row that does not exist yet,
+               so there is no figure to show and nowhere here to invent one. */
+            <span className="text-caption text-muted">On receipt</span>
           )}
         </td>
 

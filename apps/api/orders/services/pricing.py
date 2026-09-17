@@ -121,6 +121,31 @@ def resolve_tax_rate(lines: list[PricedLine], default: Decimal | None = None) ->
     return max([*rates, default]) if rates else default
 
 
+def resolve_unit_cost(variant: ProductVariant, average_cost: Decimal | None) -> Decimal:
+    """The cost frozen onto a sale line (docs/business-rules.md §4).
+
+    The branch's weighted average is authoritative once the variant has actually
+    been received there. Before that it is `0.00` by column default rather than
+    by measurement, and freezing a zero books the sale at 100% margin — which is
+    what happened to every product whose stock was opened outside a purchase
+    receipt. A variant that has never been received falls back to its own
+    `cost`: the last price paid, or the buyer's estimate, which is exactly what
+    `ProductVariant.cost` is maintained for.
+
+    Both channels resolve cost here so a receipt and a web invoice can never
+    disagree about COGS the way they did before.
+
+    Genuinely free goods (a supplier's promotional units, received at `0.00`)
+    read as "never received" by this test and take the fallback — which is the
+    same `0.00`, because `receive_stock` writes the cost paid onto the variant
+    as well. They part company only if someone then types a cost on the product
+    form, and a stated cost is the better answer at that point anyway.
+    """
+    if average_cost is None or average_cost <= ZERO:
+        return quantize(variant.cost)
+    return quantize(average_cost)
+
+
 def price_lines(
     raw_lines: list[tuple[ProductVariant, int, Decimal | None]],
     *,
@@ -129,6 +154,10 @@ def price_lines(
     """Build priced lines from (variant, quantity, optional line discount).
 
     The unit price always comes from the database — never from the client.
+
+    `costs` maps variant id to the branch's weighted average cost. Callers that
+    have an availability snapshot to hand should always pass it; omitting it
+    falls back to each variant's own `cost` for every line.
     """
     costs = costs or {}
     priced: list[PricedLine] = []
@@ -147,7 +176,7 @@ def price_lines(
                 variant=variant,
                 quantity=quantity,
                 unit_price=quantize(variant.price),
-                unit_cost=quantize(costs.get(str(variant.pk), variant.cost)),
+                unit_cost=resolve_unit_cost(variant, costs.get(str(variant.pk))),
                 line_discount=discount,
             )
         )
