@@ -67,10 +67,18 @@ interface FieldError {
  *
  * Two rules shape it:
  *
- *  1. **Stock is never written here.** The matrix collects an opening figure
- *     for a row that does not exist yet and posts it as a reasoned adjustment
- *     through `inventory.services` once the variant has an id. Existing rows
- *     show stock read-only with an Adjust action (CLAUDE.md §3.2).
+ *  1. **Stock is never written here, and never opened here.** Goods enter by
+ *     receiving a purchase order, which writes `PURCHASE` ledger rows at the
+ *     cost actually paid and moves the branch’s weighted average with them.
+ *     Existing rows show stock read-only with an Adjust action, which corrects
+ *     a counted figure (CLAUDE.md §3.2).
+ *
+ *     This form used to take an opening figure per row and post it to
+ *     `/inventory/adjust/`. An adjustment writes units in at `average_cost`,
+ *     which is `0.00` for a variant nothing has ever been received against, so
+ *     the stock was valued at nothing and sold at 100% margin (D72). The CSV
+ *     importer had always done it correctly, through `receive_stock` with the
+ *     row’s cost — two doors into one column, disagreeing.
  *  2. **Un-ticking a value never destroys a row.** See `lib/commerce/variant-matrix.ts`.
  */
 export function ProductForm({
@@ -242,9 +250,7 @@ export function ProductForm({
         ]),
       );
 
-      // 3. Apply per-row edits, and open the stock for brand-new rows.
-      const openingStock: { variant: string; quantity: number }[] = [];
-
+      // 3. Apply per-row edits. No stock is opened — see rule 1 above.
       for (const row of rows) {
         const draft = rowDrafts[row.key];
         const target = row.existing ?? createdByKey.get(row.key) ?? null;
@@ -265,23 +271,6 @@ export function ProductForm({
         if (Object.keys(patch).length > 0) {
           await apiClient(`/variants/${target.id}/`, { method: "PATCH", body: patch });
         }
-
-        const opening = Number(draft.openingStock);
-        if (!row.existing && Number.isInteger(opening) && opening > 0) {
-          openingStock.push({ variant: target.id, quantity: opening });
-        }
-      }
-
-      // 4. Opening stock goes through the ledger, never straight onto a column.
-      for (const line of openingStock) {
-        await apiClient("/inventory/adjust/", {
-          method: "POST",
-          body: {
-            variant: line.variant,
-            new_on_hand: line.quantity,
-            reason: "Opening stock (product form)",
-          },
-        });
       }
 
       setSaved(true);
@@ -535,7 +524,7 @@ export function ProductForm({
         <CardContent className="space-y-5">
           <p className="text-body-sm text-muted">
             Tick the values this product comes in. Every combination becomes a sellable SKU with its
-            own price, barcode and stock.
+            own price, barcode and stock — stock arrives when a purchase order is received.
           </p>
 
           {/* A failed lookup falls back to offering every axis rather than

@@ -18,6 +18,36 @@ const spaceGrotesk = Space_Grotesk({
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
+/**
+ * Every page renders per request, because every page is served under a
+ * per-request CSP nonce (`src/middleware.ts`).
+ *
+ * This is not a preference — the two are mutually exclusive. Next stamps the
+ * nonce onto its script tags at *render* time, so a page prerendered at build
+ * time carries none, while the response it is served with still demands one.
+ * `script-src` then blocks all of it: the chunk `<script src>` tags, because
+ * `'strict-dynamic'` makes browsers ignore `'self'`, and the thirteen inline
+ * `self.__next_f.push(...)` tags carrying the RSC payload, which no host-source
+ * expression can ever allow. React never boots, and a page whose body is a
+ * client component behind `<Suspense>` renders literally nothing (D74).
+ *
+ * That is what shipped: `/`, `/login`, `/cart`, `/checkout`, `/about`,
+ * `/brand`, `/contact` and `/policies/*` were all statically prerendered and
+ * therefore inert in the browser. `/login` was the visible one — a white
+ * screen, no form, and no way into `/admin` at all — but `/checkout` was the
+ * expensive one.
+ *
+ * The alternative is `'unsafe-inline'`, which is the one thing the nonce exists
+ * to avoid. So: dynamic everywhere. The catalogue routes (`/shop`,
+ * `/product/[slug]`, `/category/[...slug]`) were already dynamic and lose
+ * nothing; the pages that change here are marketing copy and two that should
+ * never have been shared caches anyway, `/cart` and `/checkout`.
+ *
+ * Do not "optimise" this back to static without removing the nonce first, and
+ * read D16 before removing the nonce.
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {

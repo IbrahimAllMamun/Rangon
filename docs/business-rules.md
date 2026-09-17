@@ -285,9 +285,49 @@ gross_profit = revenue − Σ line_cogs
 Profit is never computed as "selling price − current product cost". Reports read the frozen
 `unit_cost`, so historical profit does not move when prices or costs change later.
 
+**The channel never changes COGS.** A POS sale and an online sale of the same variant in the same
+minute freeze the same figure. Both resolve it through `orders.services.pricing.resolve_unit_cost`,
+which is the single place the rule below is applied — online checkout used to skip it and read
+`ProductVariant.cost` instead ([D73](roadmap.md#known-defects)).
+
+**A variant nothing has been received against has no weighted average.** Its `average_cost` is
+`0.00` by column default, not by measurement, and freezing a zero would report the entire selling
+price as profit. In that one case the sale line falls back to `ProductVariant.cost` — the last price
+paid, or the buyer's estimate:
+
+```text
+unit_cost = average_cost   if the variant has been received at this branch
+          = variant.cost   otherwise
+```
+
+The two cost fields are not duplicates and are not interchangeable:
+
+| Field | Meaning | Written by |
+|---|---|---|
+| `Inventory.average_cost` | Authoritative WAC, per branch × variant | `inventory.services.receive_stock` only |
+| `ProductVariant.cost` | Latest or expected cost — display, PO defaulting, the fallback above | receiving, and the product form |
+
 Returned items credit COGS back at the same frozen `unit_cost` — but **only when the goods went back
 on the shelf**. `RESTOCK` recovers the cost; `DAMAGED` is a write-off and `QUARANTINE` is not sellable
 yet, so both keep the cost as a cost until that changes.
+
+### 4.0a Opening stock
+
+**Stock only ever enters through a purchase receipt or the CSV import.** Both call
+`inventory.services.receive_stock` with the cost actually paid, so the units and the money that
+bought them arrive together.
+
+There is deliberately **no "opening stock" field on the product form**. It used to have one, which
+posted an `ADJUSTMENT` through `/inventory/adjust/`; an adjustment writes units in at the existing
+`average_cost`, which is `0.00` for a variant nothing has been received against, so that stock was
+valued at nothing and sold at 100% margin ([D72](roadmap.md#known-defects)).
+
+`ADJUSTMENT` remains what it says: a correction to a counted figure — a stock count, breakage found,
+drift repaired. It is not a way to bring goods in, because it carries no cost with it.
+
+To put existing stock on the shelf when the business first goes live, use the CSV import
+(`/admin/products/import`), which carries a `cost` column per row. To bring in goods afterwards,
+raise and receive a purchase order.
 
 ### 4.1 Net profit (the business summary)
 
