@@ -17,6 +17,7 @@ from catalog.models import (
     Product,
     ProductAttributeValue,
     ProductVariant,
+    PublishStatus,
     VariantAttributeValue,
 )
 from core import audit
@@ -145,6 +146,53 @@ def generate_variants(
         reason="Variant matrix generated",
     )
     return created
+
+
+@transaction.atomic
+def publish_product(*, product: Product, actor: Any = None) -> Product:
+    """Put a product on the storefront.
+
+    Two gates, both asking the same question — is there anything here to sell?
+
+      1. **At least one active variant.** Without one the product page renders
+         with no buy panel at all.
+      2. **At least one active variant priced above zero.** Zero is a legitimate
+         price in the database and deliberately allowed by
+         `catalog_variant_price_gte_0` — a sample, a gift line, something bundled
+         — but nothing downstream refuses it: `orders.services.pricing` computes
+         `unit_price * quantity`, so a checkout for 0.00 is a perfectly valid
+         order and the goods leave for nothing (D75).
+
+    The second gate is per product, not per variant, because a free sample
+    alongside a priced row is a real arrangement. What it refuses is a product
+    with *nothing* a shopper can pay for.
+
+    Lives here rather than in the viewset because it is a business rule, and
+    `publish` is the one place it can be enforced: the price itself stays
+    editable, so a variant can always be set back to zero afterwards. Unpublish
+    it first, which is what `unpublish` is for.
+    """
+    sellable = product.variants.filter(status=PublishStatus.ACTIVE)
+    if not sellable.exists():
+        raise ValidationError("A product needs at least one active variant before publishing.")
+
+    if not sellable.filter(price__gt=0).exists():
+        raise ValidationError(
+            "Every variant of this product is priced at zero, so publishing it would "
+            "give the stock away. Set a retail price first.",
+            details={"product_id": str(product.pk)},
+        )
+
+    product.published = True
+    product.status = PublishStatus.ACTIVE
+    product.save(update_fields=["published", "status", "updated_at"])
+    audit.record(
+        action=audit.AuditAction.UPDATE,
+        entity=product,
+        actor=actor,
+        new_values={"published": True},
+    )
+    return product
 
 
 def category_attributes(category: Category) -> list[CategoryAttribute]:

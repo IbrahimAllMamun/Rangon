@@ -52,12 +52,20 @@ export function VariantPicker({
   exclude,
   label = "Add a product",
   autoFocus,
+  onCreateRequest,
 }: {
   onPick: (variant: PickableVariant) => void;
   /** Variant ids already on the order, so they can be shown as unavailable. */
   exclude?: Set<string>;
   label?: string;
   autoFocus?: boolean;
+  /**
+   * Offered when the search finds nothing, with whatever was typed.
+   *
+   * Without it the empty state is a dead end telling the buyer to go and create
+   * the product somewhere else, abandoning a half-filled order to do it.
+   */
+  onCreateRequest?: (searchTerm: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PickableVariant[] | null>(null);
@@ -177,7 +185,22 @@ export function VariantPicker({
           )}
           {!error && results?.length === 0 && (
             <li className="px-4 py-3 text-body-sm text-muted">
-              Nothing matches “{query}”. Check the SKU, or create the product first.
+              <p>Nothing matches “{query}”.</p>
+              {onCreateRequest ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCreateRequest(query.trim());
+                    setOpen(false);
+                  }}
+                  className="mt-1 inline-flex items-center gap-1.5 font-medium text-brand-600 hover:underline"
+                >
+                  <Plus className="size-4" aria-hidden />
+                  Create “{query.trim()}” as a new product
+                </button>
+              ) : (
+                <p className="mt-1">Check the SKU, or create the product first.</p>
+              )}
             </li>
           )}
           {results?.map((variant) => {

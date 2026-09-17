@@ -97,10 +97,26 @@ export function SupplierForm({
   editing,
   onDone,
   onCancel,
+  nested = false,
 }: {
   editing?: SupplierRow;
   onDone?: (supplier: SupplierRow) => void;
   onCancel?: () => void;
+  /**
+   * True when this is rendered inside another `<form>` — the purchase order
+   * screen does exactly that, to add a supplier without abandoning the order.
+   *
+   * Nested `<form>` elements are invalid HTML. React builds them anyway,
+   * because it writes the DOM through the API rather than the parser, so the
+   * markup *looks* right and the bug is invisible in review: the browser's form
+   * submission algorithm does not honour the nesting, the click never reaches
+   * React's `onSubmit`, and the page submits natively and reloads. The buyer
+   * loses the order they were halfway through and no supplier is created (D76).
+   *
+   * So when nested, this renders a plain element and the primary button calls
+   * `submit` on click. Enter-to-submit is the cost, and only in that context.
+   */
+  nested?: boolean;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<Draft>(editing ? fromRow(editing) : blank());
@@ -113,8 +129,8 @@ export function SupplierForm({
     setSaved(false);
   }
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
+  async function submit(event?: React.FormEvent) {
+    event?.preventDefault();
     const found: { field: string; message: string }[] = [];
     if (!draft.name.trim()) found.push({ field: "name", message: "A supplier name is required." });
     if (draft.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(draft.email)) {
@@ -153,13 +169,38 @@ export function SupplierForm({
 
   const errorFor = (field: string) => errors.find((error) => error.field === field)?.message;
 
+  /**
+   * A `<form>` when it can legally be one, a `<div>` when nested.
+   *
+   * `noValidate` and `onSubmit` are meaningless on a div, so they are dropped
+   * rather than spread onto it — React would warn about unknown DOM props.
+   */
+  const Shell = ({
+    children,
+    className,
+    onSubmit: onSubmitProp,
+    noValidate,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    onSubmit: (event: React.FormEvent) => void;
+    noValidate?: boolean;
+  }) =>
+    nested ? (
+      <div className={className}>{children}</div>
+    ) : (
+      <form onSubmit={onSubmitProp} noValidate={noValidate} className={className}>
+        {children}
+      </form>
+    );
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>{editing ? `Edit ${editing.name}` : "New supplier"}</CardTitle>
       </CardHeader>
       <CardContent>
-        <form onSubmit={submit} noValidate className="space-y-4">
+        <Shell onSubmit={submit} noValidate className="space-y-4">
           <ErrorSummary errors={errors} title="Could not save this supplier" />
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -288,7 +329,11 @@ export function SupplierForm({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" loading={saving}>
+            <Button
+              type={nested ? "button" : "submit"}
+              onClick={nested ? () => submit() : undefined}
+              loading={saving}
+            >
               {editing ? (
                 "Save changes"
               ) : (
@@ -313,7 +358,7 @@ export function SupplierForm({
               </span>
             )}
           </div>
-        </form>
+        </Shell>
       </CardContent>
     </Card>
   );
