@@ -3,10 +3,11 @@ import { notFound, redirect } from "next/navigation";
 
 import { ProductForm } from "@/components/admin/product-form";
 import { ProductImages, type ColourOption, type ProductImageRow } from "@/components/admin/product-images";
+import { ProductSuppliers, type SupplierOfferRow } from "@/components/admin/product-suppliers";
 import { PageHeader } from "@/components/admin/shell";
 import { Card, ErrorState } from "@/components/ui/primitives";
 import { ApiError } from "@/lib/api/client";
-import { apiServer, currentUser } from "@/lib/api/server";
+import { apiServer, currentUser, type Paginated } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import type { ExistingVariant } from "@/lib/commerce/variant-matrix";
 import { getProductFormData } from "@/lib/commerce/product-form-data";
@@ -78,6 +79,21 @@ export default async function EditProductPage({ params }: { params: Params }) {
     );
   }
 
+  // Allowed to fail on its own: a merchandiser without `purchases.view` still
+  // gets the product, just without the supplier panel. One request covers every
+  // variant, which is what `?product=` on the endpoint is for.
+  let offers: SupplierOfferRow[] = [];
+  if (can("purchases.view")) {
+    try {
+      const page = await apiServer<Paginated<SupplierOfferRow>>(
+        `/supplier-products/?product=${product.id}&page_size=200`,
+      );
+      offers = page.results;
+    } catch {
+      offers = [];
+    }
+  }
+
   const initial: ProductValues = {
     name: product.name,
     slug: product.slug,
@@ -142,6 +158,12 @@ export default async function EditProductPage({ params }: { params: Params }) {
           images={product.images}
           colours={colourOptions(product.variants, data)}
         />
+
+        {/* Who sells us this, and what each of them charges. Hidden entirely
+            from someone who cannot see purchasing at all. */}
+        {can("purchases.view") && (
+          <ProductSuppliers offers={offers} canManage={can("purchases.create")} />
+        )}
       </div>
     </>
   );

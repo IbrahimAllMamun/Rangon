@@ -9,7 +9,23 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-17**. Two passes on 09-17.
+Last updated: **2026-09-17**. Three passes on 09-17.
+
+**The third built `SupplierProduct`**, the piece that had no representation at all: nothing in the
+schema joined a supplier to a product. `PurchaseOrderItem` points at a variant and `PurchaseOrder`
+points at a supplier, and no row connected them — so the purchase order form defaulted every line to
+`ProductVariant.cost`, the last price paid to *anyone*, and ordering from the cheaper of two vendors
+pre-filled the dearer one's price. A variant now carries one offer per supplier, with their part
+number, their lead time, their minimum and what they last charged; the list builds itself, because
+receiving a delivery upserts the offer inside the same transaction as the ledger write. One supplier
+per variant is preferred, enforced by a partial unique index. Rules in
+[§ 7a of business-rules.md](business-rules.md#7a-supplier-pricing), which also sets out the three
+cost fields and why they are not interchangeable.
+
+The demo data had carried a second supplier since it was written and never bought anything from it,
+so none of this would have been visible in the product — `Chattogram Leather Co.` now second-sources
+every third line at 8% under. Same class of gap as [D54](#known-defects), fixed the same way.
+
 
 **The second found that nobody could sign in.** The owner reported a white screen at the admin
 login, and it was not the login page's fault: `middleware.ts` sends a per-request CSP nonce, Next

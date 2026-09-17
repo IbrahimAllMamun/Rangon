@@ -26,6 +26,12 @@ export interface DraftLine {
   quantity: string;
   unitCost: string;
   discount: string;
+  /**
+   * True once a buyer has typed in the cost box. Switching supplier re-prices
+   * the other lines from the new supplier's list; a figure somebody entered by
+   * hand is never overwritten (`purchase-order-form.tsx`).
+   */
+  costTouched?: boolean;
 }
 
 export interface LineTotals {

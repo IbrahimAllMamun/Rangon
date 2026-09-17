@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rest_framework import serializers
+from rest_framework.validators import UniqueTogetherValidator
 
 from core.fields import ContactPhoneField
 from purchasing.models import (
@@ -12,6 +13,7 @@ from purchasing.models import (
     PurchaseReceiptItem,
     Supplier,
     SupplierPayment,
+    SupplierProduct,
 )
 from purchasing.services import unique_supplier_code
 
@@ -216,3 +218,64 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "account_name", "created_at"]
+
+
+class SupplierProductSerializer(serializers.ModelSerializer):
+    """One supplier's offer for one variant.
+
+    `is_preferred` is deliberately read-only. Only one offer per variant may
+    carry it (`purchasing_supplierproduct_one_preferred`), so a PATCH setting it
+    directly would hit the index and surface as a 500 on what is an ordinary
+    business action. Promoting a supplier goes through `POST .../set-preferred/`,
+    which demotes the incumbent in the same transaction.
+    """
+
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    supplier_code = serializers.CharField(source="supplier.code", read_only=True)
+    supplier_status = serializers.CharField(source="supplier.status", read_only=True)
+    sku = serializers.CharField(source="variant.sku", read_only=True)
+    product_name = serializers.CharField(source="variant.product.name", read_only=True)
+    variant_label = serializers.CharField(source="variant.label", read_only=True)
+    effective_lead_time_days = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = SupplierProduct
+        fields = [
+            "id",
+            "supplier",
+            "supplier_name",
+            "supplier_code",
+            "supplier_status",
+            "variant",
+            "sku",
+            "product_name",
+            "variant_label",
+            "supplier_sku",
+            "last_cost",
+            "lead_time_days",
+            "effective_lead_time_days",
+            "minimum_order_quantity",
+            "is_preferred",
+            "is_active",
+            "last_purchased_at",
+            "notes",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "is_preferred",
+            "last_purchased_at",
+            "created_at",
+        ]
+        # Declared rather than left to DRF, which derives one from
+        # `purchasing_supplierproduct_uniq` and words it "The fields supplier,
+        # variant must make a unique set." — true, and no use to a buyer looking
+        # at the screen. An explicit `Meta.validators` replaces the derived list
+        # outright, so there is one check rather than two disagreeing.
+        validators = [
+            UniqueTogetherValidator(
+                queryset=SupplierProduct.objects.all(),
+                fields=["supplier", "variant"],
+                message="This supplier already has a price recorded for this product.",
+            )
+        ]

@@ -460,3 +460,152 @@ class TestPickerSearch:
         response = auth_client(owner).get("/api/v1/variants/?search=Unreleased")
 
         assert [row["id"] for row in response.data["results"]] == [str(variant.pk)]
+
+
+class TestSupplierProductEndpoint:
+    """`/api/v1/supplier-products/` — the supplier price list.
+
+    The endpoint the purchase order form asks "what does *this* supplier charge
+    for these variants", instead of defaulting every line to the last price paid
+    to anyone.
+    """
+
+    def _offer(self, supplier: Any, variant: Any, **kwargs: Any) -> Any:
+        from purchasing.models import SupplierProduct
+
+        return SupplierProduct.objects.create(
+            supplier=supplier, variant=variant, **{"last_cost": Decimal("400.00"), **kwargs}
+        )
+
+    def test_a_buyer_can_record_a_quote_before_ordering(self, owner: Any, auth_client: Any) -> None:
+        variant = factories.variant()
+        supplier = factories.supplier()
+
+        response = auth_client(owner).post(
+            "/api/v1/supplier-products/",
+            {
+                "supplier": str(supplier.pk),
+                "variant": str(variant.pk),
+                "last_cost": "375.00",
+                "supplier_sku": "MILL-88",
+                "minimum_order_quantity": 12,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        assert response.data["last_cost"] == "375.00"
+        assert response.data["supplier_sku"] == "MILL-88"
+        # Never promoted implicitly through the API — that is `set-preferred/`.
+        assert response.data["is_preferred"] is False
+
+    def test_the_same_supplier_cannot_be_priced_twice_for_one_variant(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        variant, supplier = factories.variant(), factories.supplier()
+        self._offer(supplier, variant)
+
+        response = auth_client(owner).post(
+            "/api/v1/supplier-products/",
+            {"supplier": str(supplier.pk), "variant": str(variant.pk), "last_cost": "1.00"},
+            format="json",
+        )
+
+        # A sentence, not an IntegrityError surfacing as a 500.
+        assert response.status_code == 400, response.data
+        assert "already" in str(response.data).lower()
+
+    def test_is_preferred_cannot_be_set_by_patching_it(self, owner: Any, auth_client: Any) -> None:
+        """Writable, it would hit the partial unique index as a 500."""
+        variant = factories.variant()
+        first = self._offer(factories.supplier(), variant, is_preferred=True)
+        second = self._offer(factories.supplier(), variant, last_cost=Decimal("250.00"))
+
+        response = auth_client(owner).patch(
+            f"/api/v1/supplier-products/{second.pk}/", {"is_preferred": True}, format="json"
+        )
+
+        assert response.status_code == 200, response.data
+        second.refresh_from_db()
+        first.refresh_from_db()
+        assert second.is_preferred is False
+        assert first.is_preferred is True
+
+    def test_set_preferred_moves_it_and_demotes_the_incumbent(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        variant = factories.variant()
+        first = self._offer(factories.supplier(), variant, is_preferred=True)
+        second = self._offer(factories.supplier(), variant, last_cost=Decimal("250.00"))
+
+        response = auth_client(owner).post(
+            f"/api/v1/supplier-products/{second.pk}/set-preferred/", {}, format="json"
+        )
+
+        assert response.status_code == 200, response.data
+        assert response.data["is_preferred"] is True
+        first.refresh_from_db()
+        assert first.is_preferred is False
+
+    def test_the_list_can_be_narrowed_to_one_supplier(self, owner: Any, auth_client: Any) -> None:
+        """How the purchase order form loads one supplier's prices in one request."""
+        variant_a, variant_b = factories.variant(), factories.variant()
+        mine, theirs = factories.supplier(), factories.supplier()
+        self._offer(mine, variant_a, last_cost=Decimal("100.00"))
+        self._offer(mine, variant_b, last_cost=Decimal("200.00"))
+        self._offer(theirs, variant_a, last_cost=Decimal("999.00"))
+
+        response = auth_client(owner).get(f"/api/v1/supplier-products/?supplier={mine.pk}")
+
+        assert response.status_code == 200
+        costs = sorted(row["last_cost"] for row in response.data["results"])
+        assert costs == ["100.00", "200.00"]
+
+    def test_the_list_shows_every_supplier_of_one_variant_preferred_first(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        """How the product screen answers "who sells us this"."""
+        variant = factories.variant()
+        self._offer(factories.supplier(), variant, last_cost=Decimal("250.00"))
+        self._offer(factories.supplier(), variant, last_cost=Decimal("400.00"), is_preferred=True)
+
+        response = auth_client(owner).get(f"/api/v1/supplier-products/?variant={variant.pk}")
+
+        assert response.status_code == 200
+        rows = response.data["results"]
+        assert len(rows) == 2
+        assert rows[0]["is_preferred"] is True
+
+    def test_one_request_covers_every_variant_of_a_product(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        """`?product=` — the product screen, without a request per variant."""
+        product = factories.product()
+        first = factories.variant(product)
+        second = factories.variant(product)
+        elsewhere = factories.variant()
+        supplier = factories.supplier()
+        self._offer(supplier, first)
+        self._offer(supplier, second, last_cost=Decimal("500.00"))
+        self._offer(supplier, elsewhere, last_cost=Decimal("999.00"))
+
+        response = auth_client(owner).get(f"/api/v1/supplier-products/?product={product.pk}")
+
+        assert response.status_code == 200
+        skus = {row["sku"] for row in response.data["results"]}
+        assert skus == {first.sku, second.sku}
+
+    def test_a_cashier_cannot_read_or_change_supplier_prices(
+        self, cashier: Any, auth_client: Any
+    ) -> None:
+        variant, supplier = factories.variant(), factories.supplier()
+        offer = self._offer(supplier, variant)
+        client = auth_client(cashier)
+
+        assert client.get("/api/v1/supplier-products/").status_code == 403
+        assert (
+            client.post(
+                f"/api/v1/supplier-products/{offer.pk}/set-preferred/", {}, format="json"
+            ).status_code
+            == 403
+        )

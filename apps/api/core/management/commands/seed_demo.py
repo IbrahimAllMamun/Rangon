@@ -37,6 +37,7 @@ from catalog.models import (
 )
 from catalog.services import create_variant, set_product_specs
 from core import phone as phone_utils
+from core.money import quantize
 from customers.models import Customer, CustomerAddress, CustomerType
 from finance.models import Expense
 from inventory.models import Inventory
@@ -846,6 +847,53 @@ class Command(BaseCommand):
             },
             actor=actor,
             notes="Partial delivery — remainder to follow",
+        )
+
+        self._second_source(branch, lines, actor)
+
+    def _second_source(self, branch: Branch, lines: list[PurchaseLine], actor: User) -> None:
+        """Buy some of the same lines from a second supplier, more cheaply.
+
+        Without this the demo has two suppliers and only ever buys from one, so
+        everything `SupplierProduct` exists for is invisible: a variant with two
+        prices, a preferred supplier that means something, and a purchase order
+        form that suggests a different cost depending on who you are ordering
+        from. `Chattogram Leather Co.` has been in the seed since it was written
+        and had never sold anything.
+
+        Deterministic rather than random — every third line — so the demo shows
+        the same comparison twice running, and 8% under the first supplier so
+        the two prices are obviously different on screen.
+        """
+        alternate = Supplier.objects.filter(code="SUP-002").first()
+        if alternate is None:
+            return
+
+        cheaper = [
+            PurchaseLine(
+                variant_id=line.variant_id,
+                quantity=max(line.quantity // 2, 4),
+                unit_cost=quantize(line.unit_cost * Decimal("0.92")),
+            )
+            for line in lines[::3]
+        ]
+        if not cheaper:
+            return
+
+        order = create_purchase_order(
+            supplier=alternate,
+            branch=branch,
+            lines=cheaper,
+            actor=actor,
+            invoice_number="CLC-2026-0118",
+            notes="Second source — same lines, keener price",
+        )
+        send_purchase_order(purchase_order=order, actor=actor)
+        receive_purchase(
+            purchase_order=order,
+            lines={str(item.pk): item.quantity_ordered for item in order.items.all()},
+            actor=actor,
+            notes="Full delivery",
         )
 
     def _shipping(self) -> None:

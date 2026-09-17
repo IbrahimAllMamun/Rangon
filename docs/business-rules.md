@@ -812,6 +812,74 @@ has to keep pointing at a real row. Customers never appear in the staff list.
 
 ---
 
+## 7a. Supplier pricing
+
+`SupplierProduct` is one supplier's offer for one variant: `unique(supplier, variant)`.
+
+Before it existed nothing joined a supplier to a product. `PurchaseOrderItem` points at a variant and
+`PurchaseOrder` points at a supplier, and no row connected the two — so "who sells us this", "what did
+*they* last charge" and "which of them should we buy from" had no answer, and the purchase order form
+defaulted every line to `ProductVariant.cost`, the last price paid to **anyone**.
+
+### 7a.1 Three cost fields, three different facts
+
+| Field | Means | Written by |
+|---|---|---|
+| `Inventory.average_cost` | Weighted average per branch — values stock, prices COGS (§4) | `inventory.services.receive_stock` only |
+| `ProductVariant.cost` | The last price paid to anybody — display, and the fallback in §4 | receiving, and the product form |
+| `SupplierProduct.last_cost` | What **this** supplier last charged | receiving, and a buyer recording a quote |
+
+They are not interchangeable. A purchase order quotes `SupplierProduct.last_cost` back at the
+supplier it is addressed to; a sale books `Inventory.average_cost`.
+
+### 7a.2 The list builds itself
+
+Receiving a delivery upserts the offer for the supplier it came from, inside the same transaction as
+the ledger write. A delivery can never be half-recorded — stock in, but nothing remembered about who
+supplied it or for how much.
+
+A buyer may also create one by hand to record a quote before ordering. Such a row has a `last_cost`
+and no `last_purchased_at`, which is how the screen tells "quoted" from "bought".
+
+Receiving from a supplier whose offer was marked discontinued reinstates it: a delivery is the
+strongest available evidence that they still supply it.
+
+### 7a.3 The preferred supplier
+
+At most one per variant, enforced by `purchasing_supplierproduct_one_preferred` — a partial unique
+index, so the many non-preferred offers do not collide.
+
+**The first supplier a variant is ever received from becomes the preferred one.** That is a default,
+not a judgement: with one supplier it is simply true, and it gives the purchase order form something
+to suggest from the very first reorder. After that it only changes by an explicit act, so a second
+delivery never silently moves it.
+
+Promoting a supplier demotes the incumbent in the same transaction, through
+`purchasing.services.set_preferred_supplier` (`POST /supplier-products/{id}/set-preferred/`). It is
+refused for a supplier that does not supply the variant, and for an offer marked discontinued.
+`is_preferred` is read-only on the serializer: writable, a PATCH would hit the index and surface as a
+500 on an ordinary business action.
+
+### 7a.4 Minimum order quantity
+
+`minimum_order_quantity` is **advisory**. The purchase order form warns when a line is below it and
+the order is still accepted.
+
+> **DECISION REQUIRED** — advisory is a documented default, not a stated rule. Suppliers in practice
+> flex on their own minimums, and refusing the order outright would be a rule nobody asked for. If
+> the business wants it enforced, it belongs in `purchasing.services.create_purchase_order` as a
+> `BusinessError`, not in the form.
+
+### 7a.5 Not a financial record
+
+A supplier price list is reference data: it may be edited and deleted, and both foreign keys cascade.
+That is the opposite of §3's rule for orders, payments, receipts and inventory transactions, which
+record what was actually agreed and paid and are never hard-deleted. Deleting an offer loses a price
+list entry; it cannot lose history, because the purchase orders and receipts hold that.
+
+Offers are not branch-scoped. A supplier's price is an agreement with the business, not with one
+shop; branch scoping lives on the purchase orders that spend against it.
+
 ## 8. Audit
 
 Recorded for: authentication events, permission elevation, price/discount overrides, stock adjustments
