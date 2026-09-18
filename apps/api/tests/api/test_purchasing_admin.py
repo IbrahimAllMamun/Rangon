@@ -288,6 +288,104 @@ class TestPurchaseOrderFlow:
         assert response.status_code == 403
 
 
+class TestInputVatOnAnOrder:
+    """`PurchaseOrderItem.tax_rate` existed from the first migration and nothing
+    could set it, so every purchase order ever raised carried `tax_total 0.00`
+    and the VAT return had no input VAT to offset.  The endpoint takes it now.
+    """
+
+    def test_a_line_rate_reaches_the_order_total(self, shop, owner, auth_client) -> None:
+        client = auth_client(owner)
+        supplier = factories.supplier()
+        variant = factories.variant()
+
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": str(supplier.pk),
+                "lines": [
+                    {
+                        "variant": str(variant.pk),
+                        "quantity": 10,
+                        "unit_cost": "450.00",
+                        "tax_rate": "0.1500",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        assert created.status_code == 201
+        assert Decimal(created.data["tax_total"]) == Decimal("675.00")
+        assert Decimal(created.data["grand_total"]) == Decimal("5175.00")
+
+    def test_leaving_it_out_still_means_no_vat(self, shop, owner, auth_client) -> None:
+        """Every caller that predates the field keeps working."""
+        client = auth_client(owner)
+
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": str(factories.supplier().pk),
+                "lines": [
+                    {"variant": str(factories.variant().pk), "quantity": 10, "unit_cost": "450.00"}
+                ],
+            },
+            format="json",
+        )
+
+        assert created.status_code == 201
+        assert Decimal(created.data["tax_total"]) == Decimal("0.00")
+
+    def test_a_rate_above_100_percent_is_a_field_error_not_a_500(
+        self, shop, owner, auth_client
+    ) -> None:
+        """A buyer typing 15 into a field that wants 0.15 must not record 1500%."""
+        client = auth_client(owner)
+
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": str(factories.supplier().pk),
+                "lines": [
+                    {
+                        "variant": str(factories.variant().pk),
+                        "quantity": 1,
+                        "unit_cost": "450.00",
+                        "tax_rate": "15",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        assert created.status_code == 400
+
+    def test_the_tax_is_on_the_net_so_a_discount_reduces_it(self, shop, owner, auth_client) -> None:
+        client = auth_client(owner)
+
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": str(factories.supplier().pk),
+                "lines": [
+                    {
+                        "variant": str(factories.variant().pk),
+                        "quantity": 10,
+                        "unit_cost": "450.00",
+                        "discount": "500.00",
+                        "tax_rate": "0.1500",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        assert created.status_code == 201
+        # 4,500 gross - 500 discount = 4,000 net; 15% of that is 600.
+        assert Decimal(created.data["tax_total"]) == Decimal("600.00")
+
+
 class TestSupplierPaymentApi:
     """Paying a supplier from the purchase-order screen (business-rules.md §6b.1b)."""
 

@@ -11,6 +11,7 @@ from reports.api.views import (
     PurchaseReportView,
     ReturnsReportView,
     SalesReportView,
+    VatReportView,
 )
 
 urlpatterns = [
@@ -24,4 +25,5 @@ urlpatterns = [
     path("profit/", ProfitReportView.as_view(), name="report-profit"),
     path("expenses/", ExpenseReportView.as_view(), name="report-expenses"),
     path("business-summary/", BusinessSummaryView.as_view(), name="report-business-summary"),
+    path("vat/", VatReportView.as_view(), name="report-vat"),
 ]

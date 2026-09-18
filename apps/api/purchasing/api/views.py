@@ -137,6 +137,7 @@ class PurchaseOrderViewSet(
                     quantity=line["quantity"],
                     unit_cost=line["unit_cost"],
                     discount=line.get("discount", 0),
+                    tax_rate=line.get("tax_rate", 0),
                 )
                 for line in data["lines"]
             ],

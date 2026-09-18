@@ -22,7 +22,7 @@ from django.db.models import (
     Value,
     When,
 )
-from django.db.models.functions import Coalesce, TruncDate
+from django.db.models.functions import Coalesce, TruncDate, TruncMonth
 from django.utils import timezone
 
 from accounts.models import TaxMode
@@ -41,7 +41,7 @@ from orders.models import (
     ReturnRequest,
     ReturnStatus,
 )
-from purchasing.models import PurchaseOrder
+from purchasing.models import PurchaseOrder, PurchaseOrderStatus
 
 MONEY = DecimalField(max_digits=18, decimal_places=2)
 
@@ -58,6 +58,35 @@ NET_LINE_REVENUE = Case(
         then=ExpressionWrapper(F("line_total") - F("tax_amount"), output_field=MONEY),
     ),
     default=F("line_total"),
+    output_field=MONEY,
+)
+
+#: The VAT frozen on one order line, prorated to the quantity a return brought
+#: back.  A return gives back the tax the customer paid on the goods that came
+#: with them, so a period's output VAT is what was charged less what was
+#: credited.  Prorating the line's own `tax_amount` is exact under both
+#: treatments; backing the tax out of the refund would not be, because a
+#: shop-fault return also refunds shipping and shipping is never taxed.
+RETURNED_LINE_VAT = ExpressionWrapper(
+    F("order_item__tax_amount") * F("quantity") / F("order_item__quantity"),
+    output_field=MONEY,
+)
+
+#: The same prorating for the line's VAT-exclusive value -- the taxable base a
+#: credit takes back off the return.
+RETURNED_LINE_BASE = ExpressionWrapper(
+    Case(
+        When(
+            order_item__order__tax_mode=TaxMode.INCLUSIVE,
+            then=ExpressionWrapper(
+                F("order_item__line_total") - F("order_item__tax_amount"), output_field=MONEY
+            ),
+        ),
+        default=F("order_item__line_total"),
+        output_field=MONEY,
+    )
+    * F("quantity")
+    / F("order_item__quantity"),
     output_field=MONEY,
 )
 
@@ -680,3 +709,180 @@ def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, 
             ),
         },
     }
+
+
+def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
+    """The VAT return: what was collected, what was credited back, what was paid.
+
+    A filing is one subtraction, and every figure in it has to come from the
+    same place as the figures the owner already reads:
+
+        output VAT      charged on sales in the period
+        less credits    the VAT element of returns completed in the period
+        less input VAT  paid to suppliers on purchases in the period
+        = net payable   what the business owes, or is owed when negative
+
+    The choices behind the arithmetic, because each is somewhere a
+    plausible-looking figure would be wrong:
+
+    * **Every figure reads a frozen value.**  `OrderItem.tax_amount` and
+      `Order.tax_mode` are what that sale was priced under, never today's
+      setting, so a period keeps its answer after the rate changes
+      (docs/business-rules.md §3.4).  `output.vat` is the same sum as
+      `business_summary`'s `vat_collected` for the same window.
+    * **A return credits its share of the tax, not its share of the refund.**
+      The VAT element is `tax_amount` prorated by the quantity that came back,
+      which is exact under both treatments.  Backing it out of the refund would
+      not be: a shop-fault return also refunds shipping, and shipping is never
+      taxed.
+    * **Each event lands in the period it happened** -- sales by `placed_at`,
+      returns by `completed_at`, purchases by `created_at` -- matching
+      `business_summary` so the two reports cannot disagree about a month.
+    * **Draft and cancelled purchases are not purchases.**  Nothing has been
+      invoiced, so there is no input VAT to reclaim.
+
+    Known limits, both recorded in docs/business-rules.md §3.4: an operator who
+    overrides the refund amount at `returns.complete()` moves the money without
+    moving this credit, and a purchase is dated by when it was raised rather
+    than by the supplier's invoice date, which the model does not carry.
+    """
+    orders = sold_orders(date_range, branch=branch)
+    lines = OrderItem.objects.filter(order__in=orders)
+
+    output = lines.aggregate(
+        vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
+        taxable=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        orders=Count("order", distinct=True),
+    )
+
+    completed_returns = ReturnRequest.objects.filter(
+        status=ReturnStatus.COMPLETED,
+        completed_at__gte=date_range.start,
+        completed_at__lte=date_range.end,
+    )
+    if branch is not None:
+        completed_returns = completed_returns.filter(order__branch=branch)
+
+    returned_lines = ReturnItem.objects.filter(return_request__in=completed_returns)
+    credits = returned_lines.aggregate(
+        vat=Coalesce(Sum(RETURNED_LINE_VAT), Value(ZERO), output_field=MONEY),
+        taxable=Coalesce(Sum(RETURNED_LINE_BASE), Value(ZERO), output_field=MONEY),
+    )
+
+    purchases = PurchaseOrder.objects.filter(
+        created_at__gte=date_range.start,
+        created_at__lte=date_range.end,
+    ).exclude(status__in=[PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED])
+    if branch is not None:
+        purchases = purchases.filter(branch=branch)
+
+    supplier_vat = purchases.aggregate(
+        vat=Coalesce(Sum("tax_total"), Value(ZERO), output_field=MONEY),
+        taxable=Coalesce(
+            Sum(
+                ExpressionWrapper(F("subtotal") - F("discount_total"), output_field=MONEY),
+            ),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
+        orders=Count("id"),
+    )
+
+    output_vat = quantize(output["vat"])
+    credit_vat = quantize(credits["vat"])
+    input_vat = quantize(supplier_vat["vat"])
+
+    return {
+        "period": {
+            "start": date_range.start,
+            "end": date_range.end,
+            "label": date_range.label,
+        },
+        "output": {
+            "taxable_sales": quantize(output["taxable"]),
+            "vat": output_vat,
+            "orders": output["orders"],
+        },
+        "credits": {
+            "taxable_returns": quantize(credits["taxable"]),
+            "vat": credit_vat,
+            "returns": completed_returns.count(),
+        },
+        "input": {
+            "taxable_purchases": quantize(supplier_vat["taxable"]),
+            "vat": input_vat,
+            "purchases": supplier_vat["orders"],
+        },
+        "net_payable": quantize(output_vat - credit_vat - input_vat),
+        "by_rate": _vat_by_rate(lines),
+        "monthly": _vat_by_month(lines, returned_lines, purchases),
+    }
+
+
+def _vat_by_rate(lines: Any) -> list[dict[str, Any]]:
+    """Output VAT split by the rate each order was priced at.
+
+    A category override means one period can contain several rates, and a
+    return is filed per rate rather than as one number.  Reading the rate from
+    the order rather than from the organisation keeps a historical period
+    split the way it was actually charged.
+    """
+    rows = (
+        lines.values("order__tax_rate", "order__tax_mode")
+        .annotate(
+            taxable=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
+            orders=Count("order", distinct=True),
+        )
+        .order_by("-order__tax_rate")
+    )
+    return [
+        {
+            "rate": row["order__tax_rate"],
+            "mode": row["order__tax_mode"],
+            "taxable": quantize(row["taxable"]),
+            "vat": quantize(row["vat"]),
+            "orders": row["orders"],
+        }
+        for row in rows
+    ]
+
+
+def _vat_by_month(lines: Any, returned_lines: Any, purchases: Any) -> list[dict[str, Any]]:
+    """The same subtraction, month by month, because a VAT return is monthly.
+
+    Whatever window the owner picks, the filing is per month, so the report has
+    to break the range down rather than leave them dividing a quarter by three.
+    """
+    buckets: dict[date, dict[str, Any]] = {}
+
+    def bucket(month: date) -> dict[str, Any]:
+        return buckets.setdefault(
+            month,
+            {"month": month, "output_vat": ZERO, "credit_vat": ZERO, "input_vat": ZERO},
+        )
+
+    for row in (
+        lines.annotate(month=TruncMonth("order__placed_at"))
+        .values("month")
+        .annotate(vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY))
+    ):
+        bucket(row["month"].date())["output_vat"] = quantize(row["vat"])
+
+    for row in (
+        returned_lines.annotate(month=TruncMonth("return_request__completed_at"))
+        .values("month")
+        .annotate(vat=Coalesce(Sum(RETURNED_LINE_VAT), Value(ZERO), output_field=MONEY))
+    ):
+        bucket(row["month"].date())["credit_vat"] = quantize(row["vat"])
+
+    for row in (
+        purchases.annotate(month=TruncMonth("created_at"))
+        .values("month")
+        .annotate(vat=Coalesce(Sum("tax_total"), Value(ZERO), output_field=MONEY))
+    ):
+        bucket(row["month"].date())["input_vat"] = quantize(row["vat"])
+
+    for row in buckets.values():
+        row["net_payable"] = quantize(row["output_vat"] - row["credit_vat"] - row["input_vat"])
+    return [buckets[month] for month in sorted(buckets)]

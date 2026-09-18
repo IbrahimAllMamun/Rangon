@@ -173,6 +173,24 @@ class PurchaseReportView(BaseReportView):
     filename = "purchases.csv"
 
 
+class VatReportView(BaseReportView):
+    """The VAT return.
+
+    `reports.financial`, like every other report that names a liability: this
+    one says what the business owes the government.  The CSV exports the
+    monthly rows rather than the default `daily` key, because a filing is per
+    month and the month rows are the only tabular part of the payload.
+    """
+
+    required_permissions = ["reports.financial"]
+    report = staticmethod(report_services.vat_report)
+    filename = "vat-return.csv"
+
+    @staticmethod
+    def csv_rows(data: Any) -> list[dict[str, Any]]:
+        return data.get("monthly", [])
+
+
 class ReturnsReportView(BaseReportView):
     report = staticmethod(report_services.returns_report)
     filename = "returns.csv"
