@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { ArrivedProducts, type UnpublishedProduct } from "@/components/admin/arrived-products";
 import { PurchaseActions, type OrderStatus } from "@/components/admin/purchase-actions";
 import { PageHeader } from "@/components/admin/shell";
 import { SupplierPaymentForm } from "@/components/admin/supplier-payment-form";
@@ -55,6 +56,8 @@ interface PurchaseOrderDetail {
   notes: string;
   items: OrderItem[];
   receipts: Receipt[];
+  /** Products on this order a shopper still cannot see. */
+  unpublished_products: UnpublishedProduct[];
   created_at: string;
 }
 
@@ -166,6 +169,15 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
           canReceive={can("purchases.receive")}
           canManage={can("purchases.create")}
         />
+
+        {/* Only once something has actually arrived. Before that, a product
+            being a draft is not a problem — it is the plan. */}
+        {order.receipts.length > 0 && (order.unpublished_products?.length ?? 0) > 0 && (
+          <ArrivedProducts
+            products={order.unpublished_products}
+            canPublish={can("products.update")}
+          />
+        )}
 
         <Card>
           <CardHeader>

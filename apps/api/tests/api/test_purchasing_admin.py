@@ -609,3 +609,106 @@ class TestSupplierProductEndpoint:
             ).status_code
             == 403
         )
+
+
+class TestUnpublishedProductsOnAnOrder:
+    """What the receipt screen reads to say "these arrived and nobody can buy them".
+
+    A buyer can create a product from the order that is buying it, and those are
+    `DRAFT` with the retail price deliberately deferred (business-rules.md
+    § 7a.6). Nothing used to say so afterwards: the goods arrived, the draft sat
+    there, and the only way to notice was to go looking.
+    """
+
+    def _order_with(self, owner: Any, auth_client: Any, variant: Any) -> Any:
+        client = auth_client(owner)
+        supplier = client.post("/api/v1/suppliers/", {"name": "Mills"}, format="json").data
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": supplier["id"],
+                "lines": [{"variant": str(variant.pk), "quantity": 5, "unit_cost": "100.00"}],
+            },
+            format="json",
+        )
+        assert created.status_code == 201, created.data
+        return client, created.data["id"]
+
+    def test_a_draft_product_on_the_order_is_reported(self, owner: Any, auth_client: Any) -> None:
+        product = factories.product(published=False, status="DRAFT")
+        variant = factories.variant(product, price="0.00")
+        client, order_id = self._order_with(owner, auth_client, variant)
+
+        response = client.get(f"/api/v1/purchase-orders/{order_id}/")
+
+        rows = response.data["unpublished_products"]
+        assert [row["name"] for row in rows] == [product.name]
+        # Priced at zero, so publishing it would give the stock away (D75).
+        assert rows[0]["can_publish"] is False
+        assert rows[0]["priced_variant_count"] == 0
+
+    def test_pricing_a_variant_makes_it_publishable(self, owner: Any, auth_client: Any) -> None:
+        """`can_publish` must agree with what the endpoint would actually do."""
+        product = factories.product(published=False, status="DRAFT")
+        variant = factories.variant(product, price="1290.00")
+        client, order_id = self._order_with(owner, auth_client, variant)
+
+        rows = client.get(f"/api/v1/purchase-orders/{order_id}/").data["unpublished_products"]
+        assert rows[0]["can_publish"] is True
+
+        # The screen offers it; the API must honour that.
+        published = client.post(f"/api/v1/products/{product.pk}/publish/", {}, format="json")
+        assert published.status_code == 200, published.data
+
+    def test_a_product_already_live_is_not_reported(self, owner: Any, auth_client: Any) -> None:
+        product = factories.product(published=True, status="ACTIVE")
+        variant = factories.variant(product, price="500.00")
+        client, order_id = self._order_with(owner, auth_client, variant)
+
+        response = client.get(f"/api/v1/purchase-orders/{order_id}/")
+
+        assert response.data["unpublished_products"] == []
+
+    def test_a_product_unpublished_long_ago_is_reported_too(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        """Not only the ones created from this order.
+
+        A product someone hid last month is equally invisible to a shopper, and
+        equally worth flagging when its stock lands.
+        """
+        product = factories.product(published=False, status="ACTIVE")
+        variant = factories.variant(product, price="500.00")
+        client, order_id = self._order_with(owner, auth_client, variant)
+
+        rows = client.get(f"/api/v1/purchase-orders/{order_id}/").data["unpublished_products"]
+        assert [row["name"] for row in rows] == [product.name]
+        assert rows[0]["can_publish"] is True
+
+    def test_a_product_is_listed_once_however_many_of_its_variants_are_ordered(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        """Twelve lines for a shirt in three colours and four sizes is one product."""
+        product = factories.product(published=False, status="DRAFT")
+        first = factories.variant(product, price="0.00")
+        second = factories.variant(product, price="0.00")
+
+        client = auth_client(owner)
+        supplier = client.post("/api/v1/suppliers/", {"name": "Mills"}, format="json").data
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": supplier["id"],
+                "lines": [
+                    {"variant": str(first.pk), "quantity": 5, "unit_cost": "100.00"},
+                    {"variant": str(second.pk), "quantity": 5, "unit_cost": "100.00"},
+                ],
+            },
+            format="json",
+        )
+        rows = client.get(f"/api/v1/purchase-orders/{created.data['id']}/").data[
+            "unpublished_products"
+        ]
+
+        assert len(rows) == 1
+        assert rows[0]["variant_count"] == 2

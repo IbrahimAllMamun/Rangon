@@ -898,6 +898,38 @@ a product with *nothing* a shopper can pay for.
 > likely ones — the fix is for the variant serializer to derive a SKU the way
 > `unique_supplier_code` derives a supplier code.
 
+### 7a.6a After receiving: what arrived that nobody can buy
+
+Once a delivery is posted, the purchase order lists every product on it a shopper still cannot see —
+`GET /purchase-orders/{id}/`, field `unpublished_products`.
+
+Everything unpublished on the order is listed, not only what was created from it: a product someone
+took offline last month is equally invisible, and its stock has equally just landed.
+
+`can_publish` on each row mirrors `publish_product` exactly, so the screen never offers a button the
+API would refuse, and never hides one it would allow. A product with nothing priced above zero shows
+why instead of a button, and links to where the price is set.
+
+The field is on the **detail** serializer only. It costs one query per order, which is nothing on one
+order and an N+1 on the list — measured at 15 queries for four orders against 12 for one, and
+enforced by `TestPurchaseOrderDetailQueryBudget`.
+
+### 7a.6b Where a product stands, in one badge
+
+`status` and `published` are independent, and the two surfaces read them differently:
+
+| `status` | `published` | Storefront | POS | Badge |
+|---|---|---|---|---|
+| `DRAFT` | either | no | no | Draft |
+| `ACTIVE` | `false` | no | **yes** | Counter only |
+| `ACTIVE` | `true` | yes | yes | Published |
+| `ARCHIVED` | either | no | no | Archived |
+
+The storefront requires both (`catalog/search.py`); the POS grid filters on `status` alone
+(`orders/api/pos_views.py`). An active, unpublished product is therefore **not hidden** — it sells at
+the counter and not online, which is a real arrangement and is why the admin list names it rather
+than calling everything unpublished "Hidden".
+
 ### 7a.5 Not a financial record
 
 A supplier price list is reference data: it may be edited and deleted, and both foreign keys cascade.

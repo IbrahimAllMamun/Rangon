@@ -17,6 +17,7 @@ from accounts.services import branch_queryset, resolve_branch
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (
     CreatePurchaseOrderSerializer,
+    PurchaseOrderDetailSerializer,
     PurchaseOrderSerializer,
     PurchaseReceiptSerializer,
     ReceivePurchaseSerializer,
@@ -104,7 +105,13 @@ class PurchaseOrderViewSet(
         ).order_by("-created_at")
 
     def get_serializer_class(self) -> Any:
-        return CreatePurchaseOrderSerializer if self.action == "create" else PurchaseOrderSerializer
+        if self.action == "create":
+            return CreatePurchaseOrderSerializer
+        # `unpublished_products` costs a query per order, so only the detail
+        # view carries it — on the list it was a measured N+1.
+        if self.action == "retrieve":
+            return PurchaseOrderDetailSerializer
+        return PurchaseOrderSerializer
 
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = CreatePurchaseOrderSerializer(data=request.data)
