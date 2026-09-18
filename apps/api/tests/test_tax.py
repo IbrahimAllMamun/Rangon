@@ -16,8 +16,8 @@ import pytest
 from accounts import services as account_services
 from accounts.models import Organization, TaxMode
 from core.exceptions import Conflict, ValidationError
-from orders.models import Order, PaymentMethod
-from orders.services import pos, pricing
+from orders.models import Order, PaymentMethod, ReturnReason
+from orders.services import pos, pricing, returns
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
 
 pytestmark = pytest.mark.django_db
@@ -252,6 +252,60 @@ class TestHistoryIsFrozen:
 
         expected = order.subtotal - order.discount_total - order.tax_total - order.cogs_total
         assert order.gross_profit == expected
+
+
+class TestRefundsCarryTheTax:
+    """A refund gives back what the customer actually handed over.
+
+    Under EXCLUSIVE the VAT sits on top of ``OrderItem.line_total``, so a refund
+    computed from ``line_total`` alone would quietly keep the tax.  Under
+    INCLUSIVE the tax is already inside that number and must not be added twice.
+    """
+
+    def _return(self, order, quantity: int = 1, actor=None):
+        item = order.items.first()
+        return returns.request_return(
+            order=order,
+            lines=[(item.pk, quantity)],
+            reason=ReturnReason.WRONG_SIZE,
+            actor=actor,
+        )
+
+    def test_exclusive_refunds_the_tax_the_customer_paid(self, shop):
+        _set_tax(shop["organization"], TaxMode.EXCLUSIVE, "0.1500")
+        order = _sale(shop, price="1000.00")
+
+        request = self._return(order, actor=shop["manager"])
+
+        assert order.paid_total == Decimal("1150.00")
+        assert request.refund_amount == Decimal("1150.00")
+
+    def test_inclusive_does_not_refund_the_tax_twice(self, shop):
+        _set_tax(shop["organization"], TaxMode.INCLUSIVE, "0.1500")
+        order = _sale(shop, price="1000.00")
+
+        request = self._return(order, actor=shop["manager"])
+
+        assert order.paid_total == Decimal("1000.00")
+        assert request.refund_amount == Decimal("1000.00")
+
+    def test_a_partial_quantity_refunds_its_share_of_the_tax(self, shop):
+        _set_tax(shop["organization"], TaxMode.EXCLUSIVE, "0.1500")
+        order = _sale(shop, quantity=3, price="1000.00")
+
+        request = self._return(order, quantity=1, actor=shop["manager"])
+
+        assert order.paid_total == Decimal("3450.00")
+        assert request.refund_amount == Decimal("1150.00")
+
+    def test_the_refund_follows_the_orders_own_mode_not_todays(self, shop):
+        _set_tax(shop["organization"], TaxMode.EXCLUSIVE, "0.1500")
+        order = _sale(shop, price="1000.00")
+        _set_tax(shop["organization"], TaxMode.INCLUSIVE, "0.1500")
+
+        request = self._return(order, actor=shop["manager"])
+
+        assert request.refund_amount == Decimal("1150.00")
 
 
 class TestTaxEndpoint:

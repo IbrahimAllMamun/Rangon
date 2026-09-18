@@ -1186,6 +1186,48 @@ tsc --noEmit / eslint src ....... clean
 Before this, all three of those products offered Size, Shoe size, Colour, Shade, Volume and
 Capacity. No backend change: the endpoint added earlier in the day was already the right shape.
 
+### What VAT still needed, and the refund it was hiding, 2026-09-18
+
+The question was narrow — the treatment and the rate have had an input field at `/admin/settings`
+since 2026-08-31, so what else does VAT need? Most of the answer is "nothing": the per-category
+override, the BIN, the tax line in cart, checkout and the POS receipt, and the per-order frozen
+treatment are all built. Checking the last of those found [D78](#known-defects) instead.
+
+A refund was computed from `OrderItem.line_total`, which under `EXCLUSIVE` does not include the
+tax — that sits in `tax_amount`, a column nothing was reading:
+
+```text
+EXCLUSIVE @ 15%, one item at 1,000
+  line_total 1000.00   tax_amount 150.00   customer paid 1150.00
+  refund offered                                        1000.00   <- 150 kept
+
+INCLUSIVE @ 15%, one item at 1,000
+  line_total 1000.00   tax_amount 130.43   customer paid 1000.00
+  refund offered                                        1000.00   <- correct
+```
+
+One expression served both treatments and was right in one of them, so no test failed and no
+number looked odd. It is latent at the shipped rate of `0.0000`, where the two treatments agree.
+
+```text
+pytest tests/test_tax.py ..................... 31 passed (4 new)
+pytest -k "return or refund or tax or pos or checkout"  268 passed
+pytest (whole suite) ......................... 1059 passed
+ruff 0.8.4 check + format --check ............ clean, 200 files
+```
+
+Three of the four new tests fail against the old arithmetic. The fourth is the `INCLUSIVE` case,
+which passed before and after — it is there because the obvious wrong fix is to add the tax
+unconditionally, and nothing else would catch that.
+
+**A note on the ruff version.** This container has ruff 0.15.8; `requirements/dev.txt` pins 0.8.4,
+which is what `ci.yml` installs. 0.15.8 reports 8 lint findings and 4 formatting differences across
+files nobody has touched. They are not real — under the pinned version the tree is clean. Run the
+pinned one before believing a lint result here.
+
+What is genuinely missing is now [gap 11](#gaps-to-close-before-go-live): no VAT return, and a
+storefront price with no "incl. VAT" wording beside it.
+
 ## Still unproven
 
 Do not describe any of these as working.
@@ -1302,6 +1344,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D75~~ | ~~**A product priced entirely at zero could be published and sold for nothing.**~~ **Fixed 2026-09-17.** `publish` checked only that variants *exist*. Zero is a legitimate price in the database and deliberately allowed by `catalog_variant_price_gte_0` — a sample, a gift line — but nothing downstream refuses it: `orders.services.pricing` computes `unit_price × quantity`, so a checkout for `0.00` is a perfectly valid order and the goods leave for nothing. Reachable before this branch, because the product form accepts a price of zero ("zero or more") and publishing is one click away. `catalog.services.publish_product` now refuses a product with nothing priced above zero, per product rather than per variant so a free sample beside a priced row still works. The guard had to exist before a purchase order could create products without a retail price | `apps/api/catalog/services.py`, `apps/api/catalog/api/views.py` | The viewset was hand-rolling the error envelope and the audit row too, which is what `BusinessError` and the service layer are for (CLAUDE.md §4). Moving it made the guard a two-line addition |
 | ~~D76~~ | ~~**"New supplier" on the purchase order screen created nothing and destroyed the order.**~~ **Fixed 2026-09-17.** `SupplierForm` renders its own `<form>`, and on `/admin/purchases/new` it is rendered *inside* the purchase order's `<form>`. Nested form elements are invalid HTML; React builds them anyway, because it writes the DOM through the API rather than the parser, so the markup reads correctly and the bug is invisible in review. The browser's submission algorithm does not honour the nesting: the click never reaches React's `onSubmit`, `preventDefault` never runs, the page submits natively to `/admin/purchases/new?` and reloads — no supplier created, and every line the buyer had entered gone. Shipped with the screen. `SupplierForm` takes a `nested` prop that renders a plain element with a click handler; the standalone use on `/admin/suppliers` keeps its form and its Enter-to-submit | `apps/web/src/components/admin/supplier-form.tsx`, `apps/web/src/components/admin/purchase-order-form.tsx` | Found only by driving the real browser: the new inline product form had the identical bug, and the navigation to `…/new?` in the trace is what gave both away. No unit test or type check can see it |
 | D77 | **Receiving stock left the screen showing the un-received state, about half the time.** **Worked around 2026-09-18, not root-caused.** `PurchaseActions.act()` called `router.refresh()` after send, cancel and receive. Measured over five runs of the real browser flow: the page still read "Receive goods" and omitted the arrivals panel in **3 of 5**, and it is bimodal — the refresh lands in ~220 ms or never at all, given 45 seconds. The server re-rendered correctly every time (the RSC response carried the new receipt and the new status); the browser discarded it. A manual reload always showed the truth, so the stock was always in the ledger — only the screen lied. **Two explanations were tested and both were wrong**, recorded so the time is not spent again: moving `router.refresh()` after the local state updates so nothing could interrupt its transition (still 2/5), and disabling the admin sidebar's link prefetching, which `force-dynamic` ([D74](#known-defects)) turns into a storm of full server renders (0/5, no better). The workaround is `window.location.reload()` on those three actions — 5/5 at ~915 ms. Two of them write to the inventory ledger, and a screen that says "not received" about stock on the shelf is worse than 300 ms | `apps/web/src/components/admin/purchase-actions.tsx` | Still unexplained: why the client drops a payload it fetched successfully. Anything else on the admin that relies on `router.refresh()` is suspect until someone finds it |
+| ~~D78~~ | ~~**A return refunded the price but kept the VAT.**~~ **Fixed 2026-09-18.** `orders.services.returns.request_return` computed the refund from `OrderItem.line_total` alone. `line_total` is `gross − line_discount`; under the `EXCLUSIVE` treatment the tax is *not* in it — it lives in the separate `tax_amount` column. So at 15% exclusive a customer who paid ৳1,150 for a ৳1,000 item was offered ৳1,000 back and the shop kept the ৳150 of tax it had collected on the shop's behalf. Under `INCLUSIVE` the tax is already inside `line_total` and the same line was correct, which is why it hid: one expression, two treatments, only one of them wrong. **Latent, not live** — `default_tax_rate` ships at `0.0000`, where both treatments agree; it would have gone live the moment a rate was entered at `/admin/settings`. Order *cancellation* was never affected (it refunds `paid_total` directly). The refund now adds the line's frozen `tax_amount` when the **order's own** `tax_mode` is `EXCLUSIVE`, so history refunds under the treatment it was priced with; prorating quantizes once at the end, so a full-line return refunds the line exactly | `apps/api/orders/services/returns.py` | Found by answering "what else does VAT need?" rather than by a failing test. Nothing in 1,058 passing tests touched a refund with a non-zero rate — the suite exercised VAT arithmetic and refund arithmetic, never the two together |
 
 ## Still API-only (no UI)
 
@@ -1392,6 +1435,15 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
     still exclusive at 0%, which is a placeholder rather than an answer, so it must still be decided
     before the first real sale. **D-A (credit sales) no longer blocks anything** — phase 37 is built
     in a way that works under either answer.
+
+11. **VAT beyond the setting.** The treatment, the rate, the per-category override, the BIN on the
+    organization, the tax line in cart, checkout and the POS receipt, and the frozen-per-order
+    history all exist. Two things do not. **(a) There is no VAT return.** `Order.tax_total` (output)
+    and `PurchaseOrder.tax_total` (input) are both recorded, but no report sums either over a
+    period, so filing means exporting `sales_report` and adding a column up by hand. **(b) The
+    storefront shows a bare price.** `ProductBuyPanel` renders `money(price)` with no "incl. VAT" or
+    "+ VAT", so under `EXCLUSIVE` the checkout total is larger than the number the shopper was
+    quoted. Both wait on the rate being decided; neither is hard once it is.
 
 ## Decisions owed for phases 35–39
 

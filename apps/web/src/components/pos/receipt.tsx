@@ -5,6 +5,7 @@ import { Check, Printer, ShoppingCart } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/primitives";
 import type { Order, PosSession } from "@/lib/api/types";
+import { memoShowsVat } from "@/lib/commerce/memo";
 import { dateTime, money } from "@/lib/format";
 
 /**
@@ -24,6 +25,9 @@ export function Receipt({
   onNewSale: () => void;
 }) {
   const cashPayment = order.payments?.find((payment) => payment.method === "CASH");
+  // The registration number and the tax line are one fact; neither prints on a
+  // memo that charged no VAT.
+  const showsVat = memoShowsVat(order);
 
   return (
     <div className="grid min-h-screen place-items-center p-4">
@@ -48,7 +52,7 @@ export function Receipt({
             <p className="mt-2 text-caption">{session.branch.name}</p>
             <p className="text-caption text-muted">{session.branch.address}</p>
             {session.branch.phone && <p className="text-caption text-muted">{session.branch.phone}</p>}
-            {session.organization.vat_registration && (
+            {showsVat && session.organization.vat_registration && (
               <p className="text-caption text-muted">
                 VAT: {session.organization.vat_registration}
               </p>
@@ -96,7 +100,7 @@ export function Receipt({
             {Number(order.discount_total) > 0 && (
               <Line term="Discount" value={`- ${money(order.discount_total, false)}`} />
             )}
-            {Number(order.tax_total) > 0 && <Line term="VAT" value={money(order.tax_total, false)} />}
+            {showsVat && <Line term="VAT" value={money(order.tax_total, false)} />}
             <div className="flex justify-between border-t border-neutral-300 pt-1 text-body font-bold">
               <dt>TOTAL</dt>
               <dd className="tabular">{money(order.grand_total)}</dd>

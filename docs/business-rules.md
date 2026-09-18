@@ -157,6 +157,12 @@ stock even if it was raised as `RESTOCK`.
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −
   `SUM(refunds)`), enforced in `orders.services.returns`.
+- **A refund carries the VAT the customer paid.** Under the `EXCLUSIVE` treatment the tax sits on
+  top of `OrderItem.line_total` in its own `tax_amount` column, so the refund is
+  `line_total + tax_amount`; under `INCLUSIVE` the tax is already inside `line_total` and is not
+  added again. The **order's own** frozen `tax_mode` decides (§3.4), so an order refunds under the
+  treatment it was priced with even after the setting changes. A partial quantity refunds its share
+  of both.
 - Refund method defaults to the original payment method. Cash sales refund cash from the register;
   gateway payments refund through the provider; COD orders refund by cash or mobile transfer recorded
   manually.
@@ -254,6 +260,19 @@ stamped with who settled it and when.
 Writes go through `PATCH /organization/tax/` (permission `settings.manage`) and
 `accounts.services.update_tax_settings()`. The VAT fields are deliberately **read-only** on the
 generic `PATCH /organization/`, so a change cannot slip through without the guard or the audit entry.
+
+**A memo that charged no VAT says nothing about VAT.** The customer's memo — the POS receipt and the
+A4 invoice — carries a VAT block in two parts: the shop's registration number in the header and the
+tax line above the total. They are one fact, so they appear together or not at all, decided by
+`lib/commerce/memo.ts`. The amount lines were always conditional; the registration number was not, so
+at the shipped rate of 0% every memo announced a VAT registration and then showed no tax, which reads
+like tax was collected and withheld. The test is the **order's own** `tax_total`, not today's
+setting, so reprinting an old memo shows what that sale actually charged. A packing slip carries no
+prices and never showed the number.
+
+*For a VAT-registered shop selling zero-rated or exempt goods, those memos will not carry the BIN
+either, because the rule looks at what was charged rather than at whether the shop is registered.
+Move it to the organisation's registration if that shop exists.*
 
 *`DECISION REQUIRED` — the default is still exclusive at 0%, which is a placeholder, not an answer.
 Bangladeshi retail commonly quotes VAT-inclusive prices. Settle it before the first real sale: the
