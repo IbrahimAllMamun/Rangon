@@ -36,10 +36,17 @@ interface MonthRow {
 
 interface VatReturn {
   period: { start: string; end: string; label: string };
-  output: { taxable_sales: string; vat: string; orders: number };
+  output: {
+    /** The base the tax was computed on, never the period's whole turnover. */
+    taxable_sales: string;
+    zero_rated_sales: string;
+    vat: string;
+    orders: number;
+  };
   credits: { taxable_returns: string; vat: string; returns: number };
   input: {
     taxable_purchases: string;
+    zero_rated_purchases: string;
     /** Already net of goods sent back to suppliers. */
     vat: string;
     vat_on_purchases: string;
@@ -241,7 +248,11 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
                 </div>
                 <p className="border-t border-border px-4 py-3 text-caption text-muted">
                   A category can override the organisation rate, so one period can hold several. The
-                  rate shown is the one frozen on the order, not today&rsquo;s setting.
+                  rate shown is the one frozen on the order, not today&rsquo;s setting. Zero-rated
+                  supply — {money(report.output.zero_rated_sales)} of sales and{" "}
+                  {money(report.input.zero_rated_purchases)} of purchases — is listed here but
+                  stays out of the taxable base above, so the base and the tax read at the rate
+                  they were charged at.
                 </p>
               </CardContent>
             </Card>

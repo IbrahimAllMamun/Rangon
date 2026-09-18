@@ -43,6 +43,7 @@ from orders.models import (
 )
 from purchasing.models import (
     PurchaseOrder,
+    PurchaseOrderItem,
     PurchaseOrderStatus,
     PurchaseReturn,
     PurchaseReturnItem,
@@ -753,6 +754,10 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
     * **Each event lands in the period it happened** -- sales by `placed_at`,
       returns by `completed_at`, purchases by `created_at` -- matching
       `business_summary` so the two reports cannot disagree about a month.
+    * **"Taxable" means the base the tax was computed on.**  A period that spans
+      a rate change holds orders priced at zero too; folding them in put 885.00
+      of VAT beside 149,790.00 of "taxable sales", a ratio nothing on the screen
+      explained.  Zero-rated supply is reported beside it, never inside it.
     * **Draft and cancelled purchases are not purchases.**  Nothing has been
       invoiced, so there is no input VAT to reclaim.
     * **Goods sent back to a supplier take their input VAT with them.**  A
@@ -770,9 +775,23 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
     orders = sold_orders(date_range, branch=branch)
     lines = OrderItem.objects.filter(order__in=orders)
 
+    # "Taxable" means the base the VAT was computed on, not every sale in the
+    # period.  Summing both together put 885.00 of VAT beside 149,790.00 of
+    # "taxable sales" on the screen -- a ratio of 0.6% where the rate was 15% --
+    # because the period also held 26 orders priced before the rate was set.
+    # Zero-rated supply is reported beside it rather than folded into it.
     output = lines.aggregate(
         vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
-        taxable=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        taxable=Coalesce(
+            Sum(NET_LINE_REVENUE, filter=Q(order__tax_rate__gt=0)),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
+        zero_rated=Coalesce(
+            Sum(NET_LINE_REVENUE, filter=Q(order__tax_rate=0)),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
         orders=Count("order", distinct=True),
     )
 
@@ -799,14 +818,18 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
 
     supplier_vat = purchases.aggregate(
         vat=Coalesce(Sum("tax_total"), Value(ZERO), output_field=MONEY),
-        taxable=Coalesce(
-            Sum(
-                ExpressionWrapper(F("subtotal") - F("discount_total"), output_field=MONEY),
-            ),
-            Value(ZERO),
-            output_field=MONEY,
-        ),
         orders=Count("id"),
+    )
+    # Same split as the sales side, and for the same reason: the base has to be
+    # the one the tax was computed on.  Per line rather than per order, because
+    # `tax_rate` lives on the line.
+    supplier_base = PurchaseOrderItem.objects.filter(purchase_order__in=purchases).aggregate(
+        taxable=Coalesce(
+            Sum("line_total", filter=Q(tax_rate__gt=0)), Value(ZERO), output_field=MONEY
+        ),
+        zero_rated=Coalesce(
+            Sum("line_total", filter=Q(tax_rate=0)), Value(ZERO), output_field=MONEY
+        ),
     )
 
     supplier_returns = PurchaseReturn.objects.filter(
@@ -839,6 +862,7 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         },
         "output": {
             "taxable_sales": quantize(output["taxable"]),
+            "zero_rated_sales": quantize(output["zero_rated"]),
             "vat": output_vat,
             "orders": output["orders"],
         },
@@ -848,10 +872,12 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
             "returns": completed_returns.count(),
         },
         "input": {
-            # `vat` and `taxable_purchases` are already net of goods sent back.
-            # The gross figures are reported beside them so the subtraction can
-            # be read on the screen rather than inferred from it.
-            "taxable_purchases": quantize(supplier_vat["taxable"] - reclaimed["goods"]),
+            # Gross of returns, like the sales side: `returned_to_suppliers` and
+            # `vat_given_back` are reported beside it so the subtraction can be
+            # read on the screen rather than inferred from it.  Only `vat` is
+            # netted, because that is the figure the filing turns on.
+            "taxable_purchases": quantize(supplier_base["taxable"]),
+            "zero_rated_purchases": quantize(supplier_base["zero_rated"]),
             "vat": input_vat,
             "vat_on_purchases": quantize(supplier_vat["vat"]),
             "purchases": supplier_vat["orders"],

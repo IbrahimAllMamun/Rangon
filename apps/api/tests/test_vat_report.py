@@ -19,6 +19,7 @@ import pytest
 from django.utils import timezone
 
 from accounts.models import TaxMode
+from core.money import quantize
 from orders.models import PaymentMethod, RestockDecision, ReturnStatus
 from orders.services import pos, pricing
 from orders.services import returns as return_services
@@ -133,6 +134,37 @@ class TestOutputVat:
 
         assert report["output"]["vat"] == summary["revenue"]["vat_collected"]
         assert report["output"]["taxable_sales"] == summary["revenue"]["goods"]
+
+    def test_taxable_means_the_base_the_tax_was_computed_on(self, shop, period):
+        """A period spanning a rate change holds zero-rated orders too.
+
+        Folding them into `taxable_sales` put 885.00 of VAT beside 149,790.00
+        on the screen -- a ratio of 0.6% where the rate was 15%, and nothing on
+        the page explained it.  Zero-rated supply is reported beside the taxable
+        base, never inside it.
+        """
+        _sell(shop, price="4000.00")  # priced at the shipped 0%
+        _set_tax(shop, TaxMode.EXCLUSIVE, "0.1500")
+        _sell(shop, price="1000.00")
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+
+        assert report["output"]["taxable_sales"] == Decimal("1000.00")
+        assert report["output"]["zero_rated_sales"] == Decimal("4000.00")
+        # The headline ratio now reads as the rate it was charged at.
+        assert report["output"]["vat"] == quantize(
+            report["output"]["taxable_sales"] * Decimal("0.15")
+        )
+
+    def test_a_zero_rated_purchase_is_reported_beside_the_taxable_one(self, shop, period):
+        _purchase(shop, unit_cost="500.00", quantity=10, tax_rate="0.1500")
+        _purchase(shop, unit_cost="800.00", quantity=10, tax_rate="0.0000")
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+
+        assert report["input"]["taxable_purchases"] == Decimal("5000.00")
+        assert report["input"]["zero_rated_purchases"] == Decimal("8000.00")
+        assert report["input"]["vat"] == Decimal("750.00")
 
     def test_nothing_is_owed_at_the_rate_the_platform_ships_with(self, shop, period):
         _sell(shop, price="1000.00")
@@ -264,7 +296,9 @@ class TestGoodsSentBackToASupplier:
         assert report["input"]["vat_given_back"] == Decimal("300.00")
         assert report["input"]["returned_to_suppliers"] == Decimal("2000.00")
         assert report["input"]["vat"] == Decimal("450.00")
-        assert report["input"]["taxable_purchases"] == Decimal("3000.00")
+        # The base stays gross of returns, like the sales side; only the VAT is
+        # netted, because that is the figure the filing turns on.
+        assert report["input"]["taxable_purchases"] == Decimal("5000.00")
 
     def test_returning_the_whole_delivery_reclaims_nothing(self, shop, period):
         order = self._received(shop, quantity=10, unit_cost="500.00")
@@ -279,7 +313,8 @@ class TestGoodsSentBackToASupplier:
 
         report = vat_report(date_range=period, branch=shop["branch"])
         assert report["input"]["vat"] == Decimal("0.00")
-        assert report["input"]["taxable_purchases"] == Decimal("0.00")
+        assert report["input"]["vat_given_back"] == report["input"]["vat_on_purchases"]
+        assert report["input"]["returned_to_suppliers"] == Decimal("5000.00")
 
     def test_a_return_at_a_zero_rated_purchase_moves_no_vat(self, shop, period):
         order = _purchase(shop, unit_cost="500.00", quantity=10, tax_rate="0.0000")
@@ -296,6 +331,10 @@ class TestGoodsSentBackToASupplier:
         report = vat_report(date_range=period, branch=shop["branch"])
         assert report["input"]["vat_given_back"] == Decimal("0.00")
         assert report["input"]["returned_to_suppliers"] == Decimal("2000.00")
+        # Nothing VAT-bearing was bought, so the taxable base stays empty and
+        # the whole purchase sits in the zero-rated figure beside it.
+        assert report["input"]["taxable_purchases"] == Decimal("0.00")
+        assert report["input"]["zero_rated_purchases"] == Decimal("5000.00")
 
     def test_the_months_still_add_up_after_a_return(self, shop, period):
         order = self._received(shop, quantity=10, unit_cost="500.00")

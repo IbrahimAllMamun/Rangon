@@ -1273,23 +1273,51 @@ EXCLUSIVE 0%    product (no note)      listing 0 cards
 CSP refusals: 0
 ```
 
-And the return, against a real sale placed at 15% and two purchases carrying the
-supplier's VAT:
+### The browser found a second thing: a figure that was right and read wrong
+
+The return, against a real sale placed at 15% and purchases carrying the supplier's
+VAT, first came back like this:
 
 ```text
 Taxable sales                          149,790.00
 Output VAT charged                         885.00
+...
+Input VAT paid to suppliers             (2,250.00)
+taxable_purchases                    2,632,881.60
+```
+
+Every number was correct and the pair was nonsense: 885 on 149,790 is 0.6% where
+the rate was 15%, and 2,250 on 2.6M is 0.09%. **"Taxable" had been made to mean
+every sale and every purchase in the period**, and the period spans the rate change
+— it holds 26 orders priced at zero before the rate was set, and the seeded
+purchase history.
+
+A filer dividing one by the other gets a rate the shop never charged. `taxable`
+now means the base the tax was actually computed on, and zero-rated supply is
+reported *beside* it on both sides rather than folded into it:
+
+```text
+Taxable sales                            5,900.00      <- 885.00 is exactly 15%
+Output VAT charged                         885.00
 VAT credited on completed returns           (0.00)
-Input VAT paid to suppliers             (1,500.00)
-Net VAT payable                           (615.00) reclaimable
+Input VAT paid to suppliers             (3,000.00)     <- 15% of 20,000.00
+VAT given back on goods returned           600.00      <- 15% of 4,000.00
+Net VAT payable                         (1,515.00) reclaimable
 
 by rate   15% exclusive   1 order    5,900.00    885.00
            0% exclusive  26 orders 143,890.00      0.00
+zero-rated supply: 143,890.00 of sales, 2,619,881.60 of purchases
 ```
 
-The 0% row is the seeded history, which is exactly what a rate split is for: the
-period holds both because the rate changed inside it, and each order kept the rate
-it was priced under.
+The by-rate table still carries every rate, so nothing is hidden — it is the split
+a return is filed by. The 0% row is the seeded history, which is exactly what that
+split is for: the period holds both because the rate changed inside it, and each
+order kept the rate it was priced under.
+
+**And a third, from #37 merging mid-flight.** Purchase returns landed on main while
+this branch was in progress, so the report was claiming input VAT on goods no longer
+held. A purchase return credits the *cost*; the tax has to be reclaimed back
+separately, dated by `returned_at`.
 
 Two smaller things the same pass caught, both in code written that morning: the
 monthly table printed `-615.00` where the statement above it printed `(615.00)` —

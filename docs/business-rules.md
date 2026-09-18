@@ -287,6 +287,11 @@ less input VAT  on purchases raised in the period
 - **Every figure reads a frozen value.** Output VAT sums `OrderItem.tax_amount`, the same column
   `business_summary` reports as `vat_collected`, so the two reports cannot disagree about a month.
   The taxable base is net of VAT under both treatments, and delivery is never in it.
+- **"Taxable" means the base the tax was computed on**, not the period's whole turnover. A period
+  spanning a rate change holds zero-rated orders too; folding them in put ৳885 of VAT beside
+  ৳149,790 of "taxable sales", a ratio nothing on the page explained. Zero-rated supply is reported
+  beside the taxable base on both sides — `zero_rated_sales` and `zero_rated_purchases` — never
+  inside it.
 - **A return credits its share of the tax, not its share of the refund.** The credit is the line's
   frozen `tax_amount` prorated by the quantity that came back — exact under both treatments.
   Backing it out of the refund would not be, because a shop-fault return also refunds shipping and
