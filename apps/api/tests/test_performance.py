@@ -577,3 +577,69 @@ class TestProductFeedQueryBudget:
             f"The product feed used {count} queries for a whole catalogue, over "
             f"its budget of {FEED_QUERY_BUDGET} (docs/database/indexing.md)."
         )
+
+
+class TestPurchaseOrderDetailQueryBudget:
+    """The detail view carries `unpublished_products`; the list must not.
+
+    That field answers "what did this order bring in that nobody can buy yet",
+    and it costs one query per order. On the list that was a measured N+1 — 15
+    queries for four orders against 12 for one, caught by
+    `TestPurchaseOrderQueryBudget` above. The fix was for the list never to have
+    the field rather than for the query to get cheaper, so there are two things
+    to hold: the list stays clean, and the one query on the detail path stays
+    *one* however many distinct products the order touches.
+    """
+
+    def _order_over(self, shop: dict[str, Any], products: int) -> str:
+        """A sent order spanning `products` distinct draft products."""
+        lines = []
+        for _ in range(products):
+            product = factories.product(published=False, status="DRAFT")
+            variant = factories.variant(product, price="0.00")
+            lines.append(
+                PurchaseLine(variant_id=variant.pk, quantity=5, unit_cost=Decimal("100.00"))
+            )
+        order = create_purchase_order(
+            supplier=factories.supplier(),
+            branch=shop["branch"],
+            lines=lines,
+            actor=shop["manager"],
+        )
+        send_purchase_order(purchase_order=order, actor=shop["manager"])
+        return str(order.pk)
+
+    def test_detail_query_count_does_not_grow_with_products_on_the_order(
+        self, auth_client, shop
+    ) -> None:
+        client = auth_client(shop["owner"])
+
+        small = f"/api/v1/purchase-orders/{self._order_over(shop, 1)}/"
+        _count_queries(client, small)  # warm
+        with_one = _count_queries(client, small)
+
+        large = f"/api/v1/purchase-orders/{self._order_over(shop, 6)}/"
+        with_six = _count_queries(client, large)
+
+        assert with_six == with_one, (
+            f"Queries grew from {with_one} to {with_six} as the order went from 1 to 6 "
+            f"distinct products: `unpublished_products` must stay one annotated "
+            f"queryset, not a lookup per product."
+        )
+
+    def test_the_list_does_not_carry_the_detail_only_field(self, auth_client, shop) -> None:
+        """Stated as a fact about the payload, not only as a query count.
+
+        A later refactor that merges the two serialisers again would put the
+        N+1 straight back; this fails the moment the field reappears on the list.
+        """
+        client = auth_client(shop["owner"])
+        order_id = self._order_over(shop, 2)
+
+        listing = client.get("/api/v1/purchase-orders/")
+        assert listing.status_code == 200
+        assert all("unpublished_products" not in row for row in listing.data["results"])
+
+        detail = client.get(f"/api/v1/purchase-orders/{order_id}/")
+        assert "unpublished_products" in detail.data
+        assert len(detail.data["unpublished_products"]) == 2

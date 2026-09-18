@@ -1,7 +1,6 @@
 "use client";
 
 import { Ban, PackageCheck, Send } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, Field, Input, Textarea } from "@/components/ui/primitives";
@@ -49,7 +48,6 @@ export function PurchaseActions({
   canReceive: boolean;
   canManage: boolean;
 }) {
-  const router = useRouter();
   const [receiving, setReceiving] = useState(false);
   const [drafts, setDrafts] = useState<ReceiveDraft[]>([]);
   const [notes, setNotes] = useState("");
@@ -76,12 +74,37 @@ export function PurchaseActions({
     );
   }
 
+  /**
+   * Call the endpoint, then reload the page outright.
+   *
+   * `router.refresh()` is unreliable on this screen and it was measured, not
+   * guessed: receive the goods, read the page without reloading, and it still
+   * showed the un-received state in **3 runs out of 5** — bimodal, landing in
+   * ~220 ms or never at all, even given 45 seconds. The server had re-rendered
+   * correctly every time (the RSC response carried the new receipt); the
+   * browser simply discarded it. A manual reload always showed the truth.
+   *
+   * Two explanations were tested and **both were wrong**, recorded so nobody
+   * spends the time again: moving `router.refresh()` after the local state
+   * updates so it could not be interrupted (still 2/5), and disabling the
+   * admin sidebar's link prefetching, which `force-dynamic` turns into a
+   * storm of full server renders (0/5, no better).
+   *
+   * So: a real reload. These three actions are deliberate, rare, and two of
+   * them write to the inventory ledger — a screen that says "not received"
+   * about stock now sitting on the shelf is far worse than ~300 ms. Elegance
+   * loses to being right. The underlying flake is D77 and is not fixed here.
+   */
+  /** A full reload, for the reason set out above. */
+  function reload() {
+    window.location.reload();
+  }
+
   async function act(path: string, body: Record<string, unknown> = {}) {
     setBusy(true);
     setError(null);
     try {
       await apiClient(`/purchase-orders/${orderId}/${path}/`, { method: "POST", body });
-      router.refresh();
       return true;
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "That did not work. Try again.");
@@ -92,7 +115,7 @@ export function PurchaseActions({
   }
 
   async function send() {
-    await act("send");
+    if (await act("send")) reload();
   }
 
   async function cancel() {
@@ -108,6 +131,7 @@ export function PurchaseActions({
     if (ok) {
       setCancelling(false);
       setCancelReason("");
+      reload();
     }
   }
 
@@ -121,7 +145,10 @@ export function PurchaseActions({
       lines: toReceivePayload(drafts, items),
       notes,
     });
-    if (ok) setReceiving(false);
+    if (ok) {
+      setReceiving(false);
+      reload();
+    }
   }
 
   const canSend = status === "DRAFT";

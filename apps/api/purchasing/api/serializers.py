@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.db.models import Count, Q
 from rest_framework import serializers
 from rest_framework.validators import UniqueTogetherValidator
 
+from catalog.models import Product, PublishStatus
 from core.fields import ContactPhoneField
 from purchasing.models import (
     PurchaseOrder,
@@ -106,6 +108,27 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
         ]
 
 
+class UnpublishedProductSerializer(serializers.Serializer):
+    """A product on this order that a shopper cannot see yet.
+
+    Shaped for the panel that appears once goods are received. `can_publish`
+    mirrors `catalog.services.publish_product` exactly, so the screen never
+    offers a button the API would refuse — and never hides one it would allow.
+    """
+
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    slug = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    published = serializers.BooleanField(read_only=True)
+    variant_count = serializers.IntegerField(read_only=True)
+    priced_variant_count = serializers.IntegerField(read_only=True)
+    can_publish = serializers.SerializerMethodField()
+
+    def get_can_publish(self, product: Any) -> bool:
+        return product.priced_variant_count > 0
+
+
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True, read_only=True)
     receipts = PurchaseReceiptSerializer(many=True, read_only=True)
@@ -174,6 +197,57 @@ class CreatePurchaseOrderSerializer(serializers.Serializer):
         max_digits=14, decimal_places=2, required=False, default=0
     )
     notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class PurchaseOrderDetailSerializer(PurchaseOrderSerializer):
+    """One purchase order, with what it brought in that nobody can buy yet.
+
+    Separate from `PurchaseOrderSerializer` for a measured reason:
+    `unpublished_products` costs one query per order, which is invisible on a
+    detail page and an N+1 on the list. `test_query_count_does_not_grow_with_receipts`
+    caught it at 15 queries for four orders against 12 for one. The list has no
+    use for the field, so the fix is for the list never to have it rather than
+    to make the query cheaper.
+    """
+
+    unpublished_products = serializers.SerializerMethodField()
+
+    def get_unpublished_products(self, order: PurchaseOrder) -> Any:
+        """Products this order brought in that are still invisible to shoppers.
+
+        A buyer can now create a product from the order that is buying it
+        (business-rules.md § 7a.6), and those are created `DRAFT` with the
+        retail price deliberately deferred. Nothing used to say so afterwards:
+        the goods arrived, the draft sat there, and the only way to notice was
+        to go looking. This is what the receipt screen reads to say it.
+
+        Everything on the order is considered, not only what was created from
+        it — a product someone unpublished last month is equally invisible, and
+        equally worth flagging when its stock lands.
+
+        One query. `priced_variant_count` counts active variants above zero,
+        which is the same test `publish_product` applies.
+        """
+        products = (
+            Product.objects.filter(variants__purchase_items__purchase_order=order)
+            .exclude(published=True, status=PublishStatus.ACTIVE)
+            .annotate(
+                variant_count=Count(
+                    "variants", filter=Q(variants__status=PublishStatus.ACTIVE), distinct=True
+                ),
+                priced_variant_count=Count(
+                    "variants",
+                    filter=Q(variants__status=PublishStatus.ACTIVE, variants__price__gt=0),
+                    distinct=True,
+                ),
+            )
+            .distinct()
+            .order_by("name")
+        )
+        return UnpublishedProductSerializer(products, many=True).data
+
+    class Meta(PurchaseOrderSerializer.Meta):
+        fields = [*PurchaseOrderSerializer.Meta.fields, "unpublished_products"]
 
 
 class ReceiveLineSerializer(serializers.Serializer):
