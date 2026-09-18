@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from django.db.models import Count, Q
@@ -257,6 +258,18 @@ class PurchaseLineSerializer(serializers.Serializer):
     unit_cost = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
     discount = serializers.DecimalField(
         max_digits=14, decimal_places=2, required=False, default=0, min_value=0
+    )
+    #: A fraction, not a percentage: 0.1500 is 15%, matching `Organization.
+    #: default_tax_rate` and the shape the model column has always had. Bounded
+    #: the same way the VAT setting is, so a buyer cannot type 15 and record
+    #: 1500% of tax.
+    tax_rate = serializers.DecimalField(
+        max_digits=6,
+        decimal_places=4,
+        required=False,
+        default=Decimal("0.0000"),
+        min_value=Decimal("0"),
+        max_value=Decimal("1"),
     )
 
 

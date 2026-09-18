@@ -75,6 +75,11 @@ export function PurchaseOrderForm({
   const [expectedAt, setExpectedAt] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [shipping, setShipping] = useState("");
+  // What the supplier charges as VAT, typed as a percentage. It is stored
+  // per line (the column lives there) but asked for once, because a supplier
+  // invoice quotes one VAT figure at the bottom. Blank means none, and the
+  // preview then says nothing about VAT at all.
+  const [vatPercent, setVatPercent] = useState("");
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [sendNow, setSendNow] = useState(false);
@@ -88,7 +93,10 @@ export function PurchaseOrderForm({
   // that found nothing, so the buyer does not retype the name.
   const [creatingNamed, setCreatingNamed] = useState<string | null>(null);
 
-  const totals = useMemo(() => orderTotals(lines, shipping), [lines, shipping]);
+  const totals = useMemo(
+    () => orderTotals(lines, shipping, vatPercent),
+    [lines, shipping, vatPercent],
+  );
   const lineProblems = useMemo(() => validateLines(lines), [lines]);
   const chosen = useMemo(() => new Set(lines.map((line) => line.variantId)), [lines]);
   const supplier = suppliers.find((row) => row.id === supplierId);
@@ -217,7 +225,7 @@ export function PurchaseOrderForm({
         method: "POST",
         body: {
           supplier: supplierId,
-          lines: toCreatePayload(lines),
+          lines: toCreatePayload(lines, vatPercent),
           expected_at: expectedAt || null,
           invoice_number: invoiceNumber,
           shipping_total: shipping || "0",
@@ -520,7 +528,24 @@ export function PurchaseOrderForm({
                 placeholder="0.00"
               />
             </Field>
-            <Field label="Notes" htmlFor="po-notes">
+            <Field
+              label="Supplier VAT %"
+              htmlFor="po-vat"
+              hint="What the supplier charges on this invoice. Leave blank if none."
+            >
+              <Input
+                id="po-vat"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                inputMode="decimal"
+                value={vatPercent}
+                onChange={(event) => setVatPercent(event.target.value)}
+                placeholder="0"
+              />
+            </Field>
+            <Field label="Notes" htmlFor="po-notes" className="sm:col-span-2">
               <Textarea
                 id="po-notes"
                 rows={2}
@@ -535,6 +560,7 @@ export function PurchaseOrderForm({
             {totals.discountTotal > 0 && (
               <Row term="Discount" value={`− ${money(totals.discountTotal)}`} />
             )}
+            {totals.taxTotal > 0 && <Row term="VAT" value={money(totals.taxTotal)} />}
             {totals.shipping > 0 && <Row term="Shipping" value={money(totals.shipping)} />}
             <div className="flex items-baseline justify-between border-t border-border pt-1.5 text-body font-semibold">
               <dt>Grand total</dt>

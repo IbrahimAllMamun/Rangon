@@ -274,6 +274,63 @@ prices and never showed the number.
 either, because the rule looks at what was charged rather than at whether the shop is registered.
 Move it to the organisation's registration if that shop exists.*
 
+**The VAT return.** `GET /reports/vat/` (permission `reports.financial`, screen
+`/admin/reports/vat`) is the filing, and it is one subtraction:
+
+```text
+output VAT      charged on sales placed in the period
+less credits    the VAT element of returns completed in the period
+less input VAT  on purchases raised in the period
+= net payable   negative means the government owes the business
+```
+
+- **Every figure reads a frozen value.** Output VAT sums `OrderItem.tax_amount`, the same column
+  `business_summary` reports as `vat_collected`, so the two reports cannot disagree about a month.
+  The taxable base is net of VAT under both treatments, and delivery is never in it.
+- **"Taxable" means the base the tax was computed on**, not the period's whole turnover. A period
+  spanning a rate change holds zero-rated orders too; folding them in put ৳885 of VAT beside
+  ৳149,790 of "taxable sales", a ratio nothing on the page explained. Zero-rated supply is reported
+  beside the taxable base on both sides — `zero_rated_sales` and `zero_rated_purchases` — never
+  inside it.
+- **A return credits its share of the tax, not its share of the refund.** The credit is the line's
+  frozen `tax_amount` prorated by the quantity that came back — exact under both treatments.
+  Backing it out of the refund would not be, because a shop-fault return also refunds shipping and
+  shipping is never taxed.
+- **Each event lands in the period it happened** — sales by `placed_at`, returns by `completed_at`,
+  purchases by `created_at`.
+- **Draft and cancelled purchases are not purchases**, so they carry no reclaimable input VAT.
+- **Goods sent back to a supplier take their input VAT with them.** A purchase return credits the
+  *cost* — `PurchaseReturnItem.unit_cost` is what the goods came in at — so the tax is reclaimed
+  back here, dated by `returned_at`. Without it a shop that returned a delivery would keep claiming
+  tax on goods it no longer holds. The report shows the gross input VAT and the give-back as
+  separate lines, so the subtraction can be read rather than inferred.
+- Output is split **by rate**, because a category override means one period can hold several and a
+  return is filed per rate. The rate shown is the order's own.
+- The range picker is for convenience; the filing is monthly, so the report always breaks the range
+  into calendar months and the CSV exports those.
+
+*Two known limits. An operator who overrides the refund amount at `returns.complete()` moves the
+money without moving the credit, which is computed from the returned lines. And a purchase is dated
+by when it was raised, because `PurchaseOrder` carries an `invoice_number` but no invoice date —
+`DECISION REQUIRED` if the two must differ for filing.*
+
+**A storefront price says which treatment it was quoted under.** Under `EXCLUSIVE` the catalogue
+price is not what the shopper pays — the tax goes on at checkout — so a bare `৳ 1,290` promises a
+total that never arrives. Every shop price (product page, listing card, quick view) carries a short
+note: `+ 15% VAT` under `EXCLUSIVE`, `incl. 15% VAT` under `INCLUSIVE`, and **nothing at all at a
+zero rate**, which is the same rule the memo follows. The rate is resolved **per product** by the
+API (`shop_views._tax_payload`) rather than read from the organisation in the browser, because a
+category override replaces the organisation rate and the note has to be true of the price it sits
+beside — `+ 15% VAT` on a zero-rated line would quote a checkout total that never arrives either.
+
+**Input VAT is entered on the purchase order.** `PurchaseOrderItem.tax_rate` has existed since the
+first migration and `recalculate_totals` has always read it, but nothing could set it: the
+`PurchaseLine` dataclass had no such field, so every purchase order ever raised carried
+`tax_total 0.00`. The buyer now enters **one VAT percentage per order** — a supplier invoice quotes
+one figure at the bottom — and it is stored on every line, which is where the column lives, so a
+mixed-rate order needs no migration later. The tax is quantised per line and summed, exactly as the
+server computes it; delivery is not taxed.
+
 *`DECISION REQUIRED` — the default is still exclusive at 0%, which is a placeholder, not an answer.
 Bangladeshi retail commonly quotes VAT-inclusive prices. Settle it before the first real sale: the
 arithmetic is now implemented for both treatments, but orders taken under the wrong one keep the

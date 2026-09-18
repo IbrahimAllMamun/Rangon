@@ -43,6 +43,8 @@ export interface LineTotals {
 export interface OrderTotals {
   subtotal: number;
   discountTotal: number;
+  /** VAT the supplier charges, summed per line the way the server sums it. */
+  taxTotal: number;
   shipping: number;
   grandTotal: number;
   lineCount: number;
@@ -69,21 +71,51 @@ export function lineTotals(line: DraftLine): LineTotals {
 }
 
 /**
- * Order totals.
+ * A VAT percentage as typed (15) to the fraction the API stores (0.1500).
  *
- * Tax is deliberately absent: `tax_rate` sits on the line and defaults to zero,
- * and the VAT decision is still open (business-rules.md §3.4). Showing a tax row
- * that is always zero would imply the question had been answered.
+ * The column, the organisation setting and the API all speak fractions; only
+ * the buyer speaks percentages. Four decimal places because `rate_field` has
+ * four, so 7.5% survives the trip.
  */
-export function orderTotals(lines: DraftLine[], shipping: string): OrderTotals {
+export function vatFraction(percent: string): number {
+  const value = num(percent);
+  if (value <= 0) return 0;
+  return Math.round((value / 100) * 10000) / 10000;
+}
+
+/**
+ * Order totals, VAT included.
+ *
+ * Tax used to be absent here on the grounds that `tax_rate` defaulted to zero
+ * and nothing could set it — true, and the reason every purchase order ever
+ * raised carried `tax_total 0.00` and the VAT return had no input VAT to
+ * offset. The buyer can now enter what the supplier charged.
+ *
+ * The rate is per order rather than per line because a supplier invoice quotes
+ * one VAT figure at the bottom; it is *stored* per line, which is where the
+ * column lives, so a future mixed-rate order needs no migration.
+ *
+ * Rounding mirrors `purchasing.services.recalculate_totals` exactly: the tax is
+ * quantised **per line** and the quantised values summed. Summing the net first
+ * and taxing once drifts by a paisa on some orders, and the server's answer is
+ * the one that gets stored.
+ */
+export function orderTotals(
+  lines: DraftLine[],
+  shipping: string,
+  vatPercent = "",
+): OrderTotals {
+  const rate = vatFraction(vatPercent);
   let subtotal = 0;
   let discountTotal = 0;
+  let taxTotal = 0;
   let unitCount = 0;
 
   for (const line of lines) {
     const totals = lineTotals(line);
     subtotal += totals.gross;
     discountTotal += totals.discount;
+    taxTotal += quantize(totals.net * rate);
     unitCount += num(line.quantity);
   }
 
@@ -91,8 +123,9 @@ export function orderTotals(lines: DraftLine[], shipping: string): OrderTotals {
   return {
     subtotal: quantize(subtotal),
     discountTotal: quantize(discountTotal),
+    taxTotal: quantize(taxTotal),
     shipping: shippingValue,
-    grandTotal: quantize(subtotal - discountTotal + shippingValue),
+    grandTotal: quantize(subtotal - discountTotal + quantize(taxTotal) + shippingValue),
     lineCount: lines.length,
     unitCount,
   };
@@ -141,13 +174,21 @@ export function validateLines(lines: DraftLine[]): LineProblem[] {
   return problems;
 }
 
-/** The payload `POST /purchase-orders/` expects. */
-export function toCreatePayload(lines: DraftLine[]) {
+/**
+ * The payload `POST /purchase-orders/` expects.
+ *
+ * `tax_rate` goes on every line because that is where the column is; the form
+ * asks for it once. The server re-derives `tax_total` from these rates, so the
+ * preview above is never what gets stored.
+ */
+export function toCreatePayload(lines: DraftLine[], vatPercent = "") {
+  const rate = vatFraction(vatPercent);
   return lines.map((line) => ({
     variant: line.variantId,
     quantity: Number(line.quantity),
     unit_cost: line.unitCost === "" ? "0" : line.unitCost,
     discount: line.discount === "" ? "0" : line.discount,
+    tax_rate: rate.toFixed(4),
   }));
 }
 

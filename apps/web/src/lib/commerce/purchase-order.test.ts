@@ -14,6 +14,7 @@ import {
   toReturnPayload,
   type DraftLine,
   type OrderItem,
+  vatFraction,
   validateLines,
   validateReceipt,
   validateReturn,
@@ -115,6 +116,62 @@ describe("orderTotals", () => {
   it("is zero for an empty order", () => {
     expect(orderTotals([], "")).toMatchObject({ subtotal: 0, grandTotal: 0, lineCount: 0 });
   });
+
+  it("charges no VAT when the buyer enters none", () => {
+    const totals = orderTotals([line()], "0");
+
+    expect(totals.taxTotal).toBe(0);
+    expect(totals.grandTotal).toBe(4500);
+  });
+
+  it("adds the supplier's VAT on top of the net", () => {
+    const totals = orderTotals([line()], "0", "15"); // 10 x 450 = 4,500
+
+    expect(totals.taxTotal).toBe(675);
+    expect(totals.grandTotal).toBe(5175);
+  });
+
+  it("taxes the net, so a discount reduces the VAT with it", () => {
+    const totals = orderTotals([line({ discount: "500" })], "0", "15"); // 4,000 net
+
+    expect(totals.taxTotal).toBe(600);
+    expect(totals.grandTotal).toBe(4600);
+  });
+
+  it("does not tax shipping, which the server does not either", () => {
+    const totals = orderTotals([line()], "1000", "15");
+
+    expect(totals.taxTotal).toBe(675);
+    expect(totals.grandTotal).toBe(4500 + 675 + 1000);
+  });
+
+  it("quantises the VAT per line, the way recalculate_totals does", () => {
+    // 3.30 at 15% is 0.495 a line. Rounded per line that is 0.50 twice -> 1.00;
+    // summing the net first (6.60) and taxing once gives 0.99. The server
+    // rounds per line, so this must too.
+    const odd = [
+      line({ quantity: "1", unitCost: "3.30", discount: "0" }),
+      line({ key: "k2", variantId: "v2", quantity: "1", unitCost: "3.30", discount: "0" }),
+    ];
+
+    expect(orderTotals(odd, "0", "15").taxTotal).toBe(1);
+  });
+});
+
+describe("vatFraction", () => {
+  it("turns the percentage a buyer types into the fraction the API stores", () => {
+    expect(vatFraction("15")).toBe(0.15);
+    expect(vatFraction("7.5")).toBe(0.075);
+  });
+
+  it("treats blank and zero as no VAT", () => {
+    expect(vatFraction("")).toBe(0);
+    expect(vatFraction("0")).toBe(0);
+  });
+
+  it("does not let a negative rate through", () => {
+    expect(vatFraction("-15")).toBe(0);
+  });
 });
 
 describe("validateLines", () => {
@@ -150,8 +207,14 @@ describe("validateLines", () => {
 describe("toCreatePayload", () => {
   it("maps to the API's line shape", () => {
     expect(toCreatePayload([line()])).toEqual([
-      { variant: "v1", quantity: 10, unit_cost: "450.00", discount: "0" },
+      { variant: "v1", quantity: 10, unit_cost: "450.00", discount: "0", tax_rate: "0.0000" },
     ]);
+  });
+
+  it("puts the order's rate on every line, because that is where the column is", () => {
+    const payload = toCreatePayload([line(), line({ key: "k2", variantId: "v2" })], "15");
+
+    expect(payload.map((row) => row.tax_rate)).toEqual(["0.1500", "0.1500"]);
   });
 
   it("sends zero rather than an empty string", () => {

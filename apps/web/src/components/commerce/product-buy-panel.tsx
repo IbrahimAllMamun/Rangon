@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button } from "@/components/ui/primitives";
 import type { ShopProduct, ShopVariant } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
+import { vatNote } from "@/lib/commerce/vat";
 import { buildAxes, resolveVariant, type VariantMatch } from "@/lib/commerce/variants";
 import { money } from "@/lib/format";
 import { useCart } from "@/lib/store/cart";
@@ -41,6 +42,7 @@ export function ProductBuyPanel({
   const compareAt = selected?.compare_at_price ? Number(selected.compare_at_price) : 0;
   const price = selected ? Number(selected.price) : Number(product.price_min);
   const onSale = compareAt > price;
+  const taxNote = vatNote(product.tax);
 
   async function handleAdd() {
     if (!selected) return;
@@ -63,7 +65,7 @@ export function ProductBuyPanel({
         </p>
       ) : null}
 
-      <div className="mt-4 flex items-baseline gap-3">
+      <div className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="tabular text-h2 font-bold">{money(price)}</p>
         {onSale && (
           <>
@@ -71,6 +73,9 @@ export function ProductBuyPanel({
             <Badge tone="brand">Save {money(compareAt - price)}</Badge>
           </>
         )}
+        {/* Under EXCLUSIVE this price is not what the shopper pays; the note
+            says so here rather than letting checkout be the first mention. */}
+        {taxNote && <p className="text-body-sm text-muted">{taxNote}</p>}
       </div>
 
       {product.short_description && (

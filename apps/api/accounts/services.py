@@ -352,4 +352,17 @@ def update_tax_settings(
         },
         reason=reason or "VAT treatment settled",
     )
+
+    # Every storefront price now carries a note saying which treatment it was
+    # quoted under, and those pages are cached against the `products` tag with
+    # a 60-second ISR window. Without this ping the shop keeps telling shoppers
+    # "+ 15% VAT" for a minute after the rate was taken off -- the same reason
+    # a menu edit busts `navigation` (content/tasks.py). Fire-and-forget: a lost
+    # ping costs a stale label until the window elapses, and no financial or
+    # stock invariant depends on it (CLAUDE.md §4).
+    if changing:
+        from content.tasks import request_revalidation
+
+        request_revalidation("products", "home", "categories")
+
     return organization

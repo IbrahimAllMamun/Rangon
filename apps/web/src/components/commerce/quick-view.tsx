@@ -29,6 +29,7 @@ import { Badge, Button } from "@/components/ui/primitives";
 import type { ShopProduct, ShopVariant } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { buildAxes, defaultVariant, resolveVariant } from "@/lib/commerce/variants";
+import { vatNote } from "@/lib/commerce/vat";
 import { money } from "@/lib/format";
 import { useCart } from "@/lib/store/cart";
 
@@ -56,6 +57,7 @@ export function QuickView({
   }, [open, product]);
 
   const axes = buildAxes(product.variants);
+  const taxNote = vatNote(product.tax);
   const image =
     product.images.find(
       (candidate) =>
@@ -116,6 +118,11 @@ export function QuickView({
             <div className="min-w-0">
               <p className="tabular text-h3 font-bold">
                 {money(selected?.price ?? product.price_min)}
+                {/* Same note as the card and the product page: under EXCLUSIVE
+                    this is not the checkout price. Nothing at a zero rate. */}
+                {taxNote && (
+                  <span className="ml-2 text-body-sm font-normal text-muted">{taxNote}</span>
+                )}
               </p>
               {selected?.compare_at_price &&
                 Number(selected.compare_at_price) > Number(selected.price) && (

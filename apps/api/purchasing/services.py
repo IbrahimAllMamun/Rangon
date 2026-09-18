@@ -66,6 +66,11 @@ class PurchaseLine:
     quantity: int
     unit_cost: Decimal
     discount: Decimal = Decimal("0.00")
+    #: VAT the supplier charges on this line, as a fraction (0.1500 for 15%).
+    #: The column has existed since the first migration and `recalculate_totals`
+    #: has always read it; nothing could ever set it, so every purchase order
+    #: carried tax_total 0.00 and the VAT return had no input VAT to offset.
+    tax_rate: Decimal = Decimal("0.0000")
 
 
 def recalculate_totals(purchase_order: PurchaseOrder) -> PurchaseOrder:
@@ -137,6 +142,7 @@ def create_purchase_order(
             quantity_ordered=line.quantity,
             unit_cost=quantize(line.unit_cost),
             discount=quantize(line.discount),
+            tax_rate=line.tax_rate,
         )
 
     return recalculate_totals(purchase_order)

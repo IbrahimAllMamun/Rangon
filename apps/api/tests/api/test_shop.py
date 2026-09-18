@@ -72,6 +72,58 @@ class TestBrowsing:
         assert response.data["error"]["code"] == "NOT_FOUND"
 
 
+class TestPriceCarriesItsTaxTreatment:
+    """The storefront quotes one number and the checkout charges another under
+    EXCLUSIVE, so the price needs a word beside it -- and that word has to be
+    true of *this* price, not of the organisation's default rate.
+    """
+
+    def _set_tax(self, shop, mode: str, rate: str) -> None:
+        org = shop["organization"]
+        org.tax_mode = mode
+        org.default_tax_rate = Decimal(rate)
+        org.save(update_fields=["tax_mode", "default_tax_rate"])
+
+    def test_the_detail_payload_says_the_rate_and_the_treatment(self, api, shop):
+        self._set_tax(shop, "EXCLUSIVE", "0.1500")
+        product = shop["product"]
+
+        response = api.get(f"/api/v1/shop/products/{product.slug}/")
+
+        assert response.status_code == 200
+        assert response.data["tax"] == {"mode": "EXCLUSIVE", "rate": "0.1500"}
+
+    def test_a_listing_card_carries_it_too(self, api, shop):
+        self._set_tax(shop, "INCLUSIVE", "0.1500")
+
+        response = api.get("/api/v1/shop/products/")
+
+        assert response.data["results"][0]["tax"]["mode"] == "INCLUSIVE"
+
+    def test_a_category_override_wins_over_the_organisation_rate(self, api, shop):
+        """Otherwise a zero-rated line would be labelled "+ VAT" and quote a
+        checkout total that never arrives.
+        """
+        self._set_tax(shop, "EXCLUSIVE", "0.1500")
+        product = shop["product"]
+        product.category.tax_rate = Decimal("0.0000")
+        product.category.save(update_fields=["tax_rate"])
+
+        response = api.get(f"/api/v1/shop/products/{product.slug}/")
+
+        assert response.data["tax"]["rate"] == "0.0000"
+
+    def test_no_override_falls_back_to_the_organisation_rate(self, api, shop):
+        self._set_tax(shop, "EXCLUSIVE", "0.1500")
+        product = shop["product"]
+        product.category.tax_rate = None
+        product.category.save(update_fields=["tax_rate"])
+
+        response = api.get(f"/api/v1/shop/products/{product.slug}/")
+
+        assert response.data["tax"]["rate"] == "0.1500"
+
+
 class TestCart:
     def test_adding_an_item_returns_server_computed_totals(self, api, shop):
         response = _add_to_cart(api, shop["variants"][0], 2)
