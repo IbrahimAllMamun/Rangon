@@ -940,6 +940,87 @@ list entry; it cannot lose history, because the purchase orders and receipts hol
 Offers are not branch-scoped. A supplier's price is an agreement with the business, not with one
 shop; branch scoping lives on the purchase orders that spend against it.
 
+## 7b. Returning goods to a supplier
+
+`TransactionType.PURCHASE_RETURN` existed from the first migration — scored in the sign table,
+accepted by the ledger — with **no service and no caller**. Faulty goods could not go back at all,
+while § 4 claimed all along that a purchase return moves the weighted average cost. Both halves now
+exist.
+
+### 7b.1 What a return is
+
+`PurchaseReturn` is to `PurchaseReceipt` what a customer return is to a sale: the mirror of the event
+that moved the stock, never an edit of it. It is posted in one transaction — there is no draft state,
+because a return that has taken stock off the shelf without recording the credit is exactly the
+half-written record the ledger exists to prevent.
+
+Three things happen together or not at all:
+
+1. the ledger loses the units (`PURCHASE_RETURN`, through `inventory.services`, never a column write);
+2. the order gains the credit;
+3. the line remembers how many went back.
+
+### 7b.2 Only what arrived, and only once
+
+`quantity_returnable` is received minus already returned. More than that is refused in a sentence,
+and `purchasing_poi_returned_lte_received` is the database saying the same thing when two returns
+race. Nothing can be returned against a `DRAFT` or `CANCELLED` order — nothing arrived.
+
+Stock that is not on the shelf cannot be put in a box. This is deliberately **stricter** than the
+generic reducer: `ALLOW_OVERSELL` lets a *sale* go negative because the goods are in transit and will
+follow, and there is no equivalent for a physical return. Driving stock negative here would claim a
+box was sent back containing units that never existed.
+
+The endpoint honours `Idempotency-Key`, because a replay would take the stock off the shelf twice and
+credit the order twice (CLAUDE.md §7).
+
+### 7b.3 The money is a credit, not a refund
+
+A supplier is rarely paid back in cash; the value is set against what is owed.
+
+```text
+outstanding = grand_total − paid_total − credited_total
+```
+
+`grand_total` is what was agreed and never moves, exactly as `paid_total` never rewrites it. The
+credit accumulates alongside in `credited_total` (CLAUDE.md §3.3). `finance.selectors.payables`
+subtracts it, and `record_supplier_payment` caps payments at the same figure — without that, goods
+could be sent back and the original total still paid, handing the supplier money for stock now
+sitting in their own warehouse.
+
+The credit is valued at **what the supplier charged** — the cost on the order line, not today's price
+and not the branch's blended average. The client never names it; sending a `unit_cost` in the request
+is ignored (CLAUDE.md §13).
+
+### 7b.4 What the payment badge means
+
+A credit is not a payment, and a partial one must not read as though money changed hands:
+
+| Paid | Credited | Badge |
+|---|---|---|
+| nothing | part of the total | **Unpaid** — no money has been paid |
+| part | — | Partially paid |
+| any | enough that together they cover the total | **Paid** — nothing further is owed |
+
+### 7b.5 Effect on cost
+
+Returning removes units at what they cost, leaving the remainder valued at what *it* cost:
+
+```text
+new_average_cost = ((on_hand × average_cost) − (qty × unit_cost)) / (on_hand − qty)
+```
+
+Sending back the dear half of a blended shelf therefore **lowers** the average — the cheap stock is
+what is left. An emptied shelf keeps its last average (nothing to value, and the next receipt sets
+it). A return priced above the blended average is clamped at zero rather than valuing stock below
+nothing: that means the figures disagree, not that the goods are worth less than free.
+
+> **DECISION REQUIRED** — a return after the order was paid makes `outstanding` negative: the supplier
+> owes the business. `payables` drops those rather than showing a negative liability, so the credit is
+> visible on the order and nowhere else. Carrying supplier credit balances as an asset, drawable
+> against the next order, is a larger piece of work and is not built. The documented default is that
+> such a credit is settled with the supplier off-system.
+
 ## 8. Audit
 
 Recorded for: authentication events, permission elevation, price/discount overrides, stock adjustments

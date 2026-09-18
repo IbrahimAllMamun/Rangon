@@ -13,6 +13,9 @@ from purchasing.models import (
     PurchaseOrderItem,
     PurchaseReceipt,
     PurchaseReceiptItem,
+    PurchaseReturn,
+    PurchaseReturnItem,
+    PurchaseReturnReason,
     Supplier,
     SupplierPayment,
     SupplierProduct,
@@ -70,6 +73,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
             "variant_label",
             "quantity_ordered",
             "quantity_received",
+            "quantity_returned",
             "quantity_outstanding",
             "unit_cost",
             "discount",
@@ -108,6 +112,72 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
         ]
 
 
+class PurchaseReturnItemSerializer(serializers.ModelSerializer):
+    sku = serializers.CharField(source="purchase_order_item.variant.sku", read_only=True)
+    product_name = serializers.CharField(
+        source="purchase_order_item.variant.product.name", read_only=True
+    )
+    variant_label = serializers.CharField(
+        source="purchase_order_item.variant.label", read_only=True
+    )
+
+    class Meta:
+        model = PurchaseReturnItem
+        fields = [
+            "id",
+            "purchase_order_item",
+            "sku",
+            "product_name",
+            "variant_label",
+            "quantity",
+            "unit_cost",
+        ]
+        read_only_fields = fields
+
+
+class PurchaseReturnSerializer(serializers.ModelSerializer):
+    items = PurchaseReturnItemSerializer(many=True, read_only=True)
+    returned_by_email = serializers.CharField(
+        source="returned_by.email", read_only=True, default=""
+    )
+    reason_label = serializers.CharField(source="get_reason_display", read_only=True)
+
+    class Meta:
+        model = PurchaseReturn
+        fields = [
+            "id",
+            "number",
+            "purchase_order",
+            "reason",
+            "reason_label",
+            "notes",
+            "returned_at",
+            "returned_by_email",
+            "credit_total",
+            "items",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ReturnLineSerializer(serializers.Serializer):
+    item = serializers.UUIDField()
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class CreatePurchaseReturnSerializer(serializers.Serializer):
+    """The body of `POST /purchase-orders/{id}/return/`.
+
+    No unit cost: the credit is what the supplier charged, read from the order
+    line. Letting a client name it would be trusting the browser with money
+    (CLAUDE.md §13).
+    """
+
+    lines = ReturnLineSerializer(many=True)
+    reason = serializers.ChoiceField(choices=PurchaseReturnReason.choices)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
 class UnpublishedProductSerializer(serializers.Serializer):
     """A product on this order that a shopper cannot see yet.
 
@@ -132,6 +202,7 @@ class UnpublishedProductSerializer(serializers.Serializer):
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True, read_only=True)
     receipts = PurchaseReceiptSerializer(many=True, read_only=True)
+    returns = PurchaseReturnSerializer(many=True, read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
     branch_code = serializers.CharField(source="branch.code", read_only=True)
     outstanding = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
@@ -157,11 +228,13 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "shipping_total",
             "grand_total",
             "paid_total",
+            "credited_total",
             "outstanding",
             "currency",
             "notes",
             "items",
             "receipts",
+            "returns",
             "created_at",
         ]
         read_only_fields = [

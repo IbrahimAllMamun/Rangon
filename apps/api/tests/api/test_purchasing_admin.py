@@ -712,3 +712,137 @@ class TestUnpublishedProductsOnAnOrder:
 
         assert len(rows) == 1
         assert rows[0]["variant_count"] == 2
+
+
+class TestPurchaseReturnEndpoint:
+    """`POST /purchase-orders/{id}/return/` — the door out.
+
+    Receiving had an endpoint from the start; returning had none, because
+    `PURCHASE_RETURN` had no service behind it.
+    """
+
+    def _received_order(self, owner: Any, auth_client: Any, quantity: int = 10) -> Any:
+        client = auth_client(owner)
+        supplier = client.post("/api/v1/suppliers/", {"name": "Mills"}, format="json").data
+        variant = factories.variant(price="1000.00", cost="0.00")
+        created = client.post(
+            "/api/v1/purchase-orders/",
+            {
+                "supplier": supplier["id"],
+                "lines": [
+                    {"variant": str(variant.pk), "quantity": quantity, "unit_cost": "400.00"}
+                ],
+            },
+            format="json",
+        )
+        order_id = created.data["id"]
+        client.post(f"/api/v1/purchase-orders/{order_id}/send/", {}, format="json")
+        detail = client.get(f"/api/v1/purchase-orders/{order_id}/").data
+        item_id = detail["items"][0]["id"]
+        client.post(
+            f"/api/v1/purchase-orders/{order_id}/receive/",
+            {"lines": [{"item": item_id, "quantity": quantity}]},
+            format="json",
+        )
+        return client, order_id, item_id, variant
+
+    def test_returning_credits_the_order_and_moves_the_stock(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        client, order_id, item_id, variant = self._received_order(owner, auth_client)
+
+        response = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            {"lines": [{"item": item_id, "quantity": 4}], "reason": "DEFECTIVE"},
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        assert response.data["purchase_return"]["credit_total"] == "1600.00"
+        assert response.data["purchase_order"]["credited_total"] == "1600.00"
+        assert response.data["purchase_order"]["outstanding"] == "2400.00"
+        assert response.data["purchase_return"]["number"].startswith("PRN-")
+
+    def test_the_client_does_not_get_to_name_the_credit(self, owner: Any, auth_client: Any) -> None:
+        """The cost comes from the order line, never from the browser (§13)."""
+        client, order_id, item_id, _ = self._received_order(owner, auth_client)
+
+        response = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            {
+                "lines": [{"item": item_id, "quantity": 4, "unit_cost": "99999.00"}],
+                "reason": "DEFECTIVE",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        assert response.data["purchase_return"]["credit_total"] == "1600.00"
+
+    def test_more_than_arrived_is_refused_in_a_sentence(self, owner: Any, auth_client: Any) -> None:
+        client, order_id, item_id, _ = self._received_order(owner, auth_client, quantity=10)
+
+        response = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            {"lines": [{"item": item_id, "quantity": 11}], "reason": "DEFECTIVE"},
+            format="json",
+        )
+
+        assert response.status_code == 400, response.data
+        assert "only" in str(response.data).lower()
+
+    def test_a_replayed_request_returns_the_goods_once(self, owner: Any, auth_client: Any) -> None:
+        client, order_id, item_id, _ = self._received_order(owner, auth_client)
+        body = {"lines": [{"item": item_id, "quantity": 3}], "reason": "DAMAGED"}
+
+        first = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            body,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="prn-once",
+        )
+        second = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            body,
+            format="json",
+            HTTP_IDEMPOTENCY_KEY="prn-once",
+        )
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.data["purchase_return"]["id"] == second.data["purchase_return"]["id"]
+        assert second.data["purchase_order"]["credited_total"] == "1200.00"
+
+    def test_a_reason_outside_the_list_is_refused(self, owner: Any, auth_client: Any) -> None:
+        client, order_id, item_id, _ = self._received_order(owner, auth_client)
+
+        response = client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            {"lines": [{"item": item_id, "quantity": 1}], "reason": "BECAUSE"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+
+    def test_the_order_carries_its_returns(self, owner: Any, auth_client: Any) -> None:
+        client, order_id, item_id, _ = self._received_order(owner, auth_client)
+        client.post(
+            f"/api/v1/purchase-orders/{order_id}/return/",
+            {"lines": [{"item": item_id, "quantity": 2}], "reason": "EXPIRED"},
+            format="json",
+        )
+
+        detail = client.get(f"/api/v1/purchase-orders/{order_id}/").data
+
+        assert len(detail["returns"]) == 1
+        assert detail["returns"][0]["reason_label"] == "Expired or short-dated"
+        assert detail["items"][0]["quantity_returned"] == 2
+
+    def test_a_cashier_cannot_send_goods_back(self, cashier: Any, auth_client: Any) -> None:
+        response = auth_client(cashier).post(
+            "/api/v1/purchase-orders/00000000-0000-0000-0000-000000000000/return/",
+            {"lines": [], "reason": "DEFECTIVE"},
+            format="json",
+        )
+
+        assert response.status_code == 403

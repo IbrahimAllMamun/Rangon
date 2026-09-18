@@ -1,16 +1,32 @@
 "use client";
 
-import { Ban, PackageCheck, Send } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Ban, PackageCheck, Send, Undo2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle, Field, Input, Textarea } from "@/components/ui/primitives";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Field,
+  Input,
+  Select,
+  Textarea,
+} from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import {
   type OrderItem,
   type ReceiveDraft,
+  type ReturnDraft,
   defaultReceipt,
   receiptValue,
+  blankReturn,
+  returnCredit,
+  returnableOf,
   toReceivePayload,
+  toReturnPayload,
+  validateReturn,
   validateReceipt,
 } from "@/lib/commerce/purchase-order";
 import { cn } from "@/lib/cn";
@@ -51,12 +67,26 @@ export function PurchaseActions({
   const [receiving, setReceiving] = useState(false);
   const [drafts, setDrafts] = useState<ReceiveDraft[]>([]);
   const [notes, setNotes] = useState("");
+  const [returning, setReturning] = useState(false);
+  // Minted when the panel opens, so a retried submit of the *same* return is
+  // recognised as a replay while a fresh return gets its own key.
+  const returnKey = useRef("");
+  const [returnDrafts, setReturnDrafts] = useState<ReturnDraft[]>([]);
+  const [returnReason, setReturnReason] = useState("DEFECTIVE");
+  const [returnNotes, setReturnNotes] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const outstanding = items.filter((item) => item.quantity_outstanding > 0);
+  const returnable = items.filter((item) => returnableOf(item) > 0);
+  const returnProblems = useMemo(
+    () => validateReturn(returnDrafts, items),
+    [returnDrafts, items],
+  );
+  const credit = useMemo(() => returnCredit(returnDrafts, items), [returnDrafts, items]);
+  const returningNothing = returnDrafts.every((draft) => Number(draft.quantity || 0) === 0);
   const problems = useMemo(() => validateReceipt(drafts, items), [drafts, items]);
   const value = useMemo(() => receiptValue(drafts), [drafts]);
   const receivingNothing = drafts.every((draft) => Number(draft.quantity || 0) === 0);
@@ -66,6 +96,55 @@ export function PurchaseActions({
     setNotes("");
     setError(null);
     setReceiving(true);
+  }
+
+  function openReturn() {
+    returnKey.current = crypto.randomUUID();
+    setReturnDrafts(blankReturn(items));
+    setReturnReason("DEFECTIVE");
+    setReturnNotes("");
+    setError(null);
+    setReturning(true);
+  }
+
+  function setReturnDraft(itemId: string, quantity: string) {
+    setReturnDrafts((current) =>
+      current.map((draft) => (draft.itemId === itemId ? { ...draft, quantity } : draft)),
+    );
+  }
+
+  /**
+   * Send goods back. An `Idempotency-Key` because a replay would take the stock
+   * off the shelf twice and credit the order twice — the endpoint honours it,
+   * and this is the click that would produce one.
+   */
+  async function sendBack() {
+    if (returnProblems.length > 0) return;
+    if (returningNothing) {
+      setError("Enter a quantity for at least one line.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiClient(`/purchase-orders/${orderId}/return/`, {
+        method: "POST",
+        body: {
+          lines: toReturnPayload(returnDrafts),
+          reason: returnReason,
+          notes: returnNotes,
+        },
+        idempotencyKey: returnKey.current,
+      });
+      setReturning(false);
+      reload();
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError ? caught.message : "Could not record the return. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   function setDraft(itemId: string, patch: Partial<ReceiveDraft>) {
@@ -155,6 +234,9 @@ export function PurchaseActions({
   const canCancelNow = status === "DRAFT" || status === "SENT";
   const canReceiveNow =
     (status === "SENT" || status === "PARTIALLY_RECEIVED") && outstanding.length > 0;
+  // Only what has actually arrived can go back, so a cancelled order has
+  // nothing to offer here however many lines it carries.
+  const canReturnNow = status !== "CANCELLED" && returnable.length > 0;
 
   return (
     <div className="space-y-4">
@@ -176,6 +258,13 @@ export function PurchaseActions({
           <Button variant={canSend ? "secondary" : "primary"} onClick={openReceive} disabled={busy}>
             <PackageCheck className="size-4" aria-hidden />
             Receive goods
+          </Button>
+        )}
+
+        {canReceive && canReturnNow && (
+          <Button variant="secondary" onClick={openReturn} disabled={busy}>
+            <Undo2 className="size-4" aria-hidden />
+            Return to supplier
           </Button>
         )}
 
@@ -236,6 +325,123 @@ export function PurchaseActions({
                 disabled={busy}
               >
                 Keep it
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {returning && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Return goods to the supplier</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-body-sm text-muted">
+              The stock leaves {branchLabel} through the ledger, and the order is credited at what
+              the supplier charged — not at today&rsquo;s price. The order total itself never
+              changes; the credit is set against what is owed.
+            </p>
+
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-body-sm">
+                <caption className="sr-only">Lines that can be sent back</caption>
+                <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">
+                  <tr>
+                    <th scope="col" className="px-3 py-2.5 font-medium">Product</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">Can go back</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">Returning</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">Credit</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {returnDrafts.map((draft) => {
+                    const item = items.find((row) => row.id === draft.itemId);
+                    if (!item) return null;
+                    const problem = returnProblems.find((p) => p.itemId === draft.itemId);
+                    const describe = `${item.product_name}${item.variant_label ? ` ${item.variant_label}` : ""}`;
+                    return (
+                      <tr key={draft.itemId} className={cn(problem && "bg-[var(--error-bg)]")}>
+                        <td className="px-3 py-2">
+                          <span className="block font-medium">{item.product_name}</span>
+                          <span className="font-mono block text-caption text-muted">
+                            {item.sku}
+                            {item.variant_label ? ` · ${item.variant_label}` : ""}
+                          </span>
+                          {problem && (
+                            <span role="alert" className="block text-caption text-[var(--error)]">
+                              {problem.message}
+                            </span>
+                          )}
+                        </td>
+                        <td className="tabular px-3 py-2 text-right text-muted">
+                          {returnableOf(item)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <Input
+                            type="number"
+                            min="0"
+                            max={returnableOf(item)}
+                            step="1"
+                            inputMode="numeric"
+                            value={draft.quantity}
+                            onChange={(event) => setReturnDraft(draft.itemId, event.target.value)}
+                            aria-label={`Quantity of ${describe} to return`}
+                            className="tabular h-8 w-24 text-right text-body-sm"
+                          />
+                        </td>
+                        <td className="tabular px-3 py-2 text-right">
+                          {money(String(Number(draft.quantity || 0) * Number(item.unit_cost)))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                label="Why are they going back?"
+                htmlFor="return-reason"
+                required
+                hint="Recorded on the audit log against this order."
+              >
+                <Select
+                  id="return-reason"
+                  value={returnReason}
+                  onChange={(event) => setReturnReason(event.target.value)}
+                >
+                  <option value="DEFECTIVE">Faulty goods</option>
+                  <option value="DAMAGED">Damaged in transit</option>
+                  <option value="WRONG_ITEM">Wrong item delivered</option>
+                  <option value="OVER_DELIVERED">More than was ordered</option>
+                  <option value="EXPIRED">Expired or short-dated</option>
+                  <option value="OTHER">Other</option>
+                </Select>
+              </Field>
+
+              <Field label="Notes" htmlFor="return-notes">
+                <Input
+                  id="return-notes"
+                  value={returnNotes}
+                  onChange={(event) => setReturnNotes(event.target.value)}
+                  placeholder="Their reference, who collected it…"
+                />
+              </Field>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                onClick={sendBack}
+                loading={busy}
+                disabled={returnProblems.length > 0 || returningNothing}
+              >
+                <Undo2 className="size-4" aria-hidden />
+                Return {money(String(credit))} of stock
+              </Button>
+              <Button variant="ghost" onClick={() => setReturning(false)} disabled={busy}>
+                Cancel
               </Button>
             </div>
           </CardContent>

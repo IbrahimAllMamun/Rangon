@@ -431,9 +431,22 @@ def purchase_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
         queryset = queryset.filter(branch=branch)
     return list(
         queryset.values(
-            "number", "status", "payment_status", "created_at", "grand_total", "paid_total"
+            "number",
+            "status",
+            "payment_status",
+            "created_at",
+            "grand_total",
+            "paid_total",
+            "credited_total",
         )
-        .annotate(supplier=F("supplier__name"), outstanding=F("grand_total") - F("paid_total"))
+        .annotate(
+            supplier=F("supplier__name"),
+            # Goods sent back are no longer owed for.  The same arithmetic as
+            # PurchaseOrder.outstanding and finance.selectors.payables -- a
+            # report that disagrees with them sends someone chasing a balance
+            # the supplier has already credited.
+            outstanding=F("grand_total") - F("paid_total") - F("credited_total"),
+        )
         .order_by("-created_at")
     )
 

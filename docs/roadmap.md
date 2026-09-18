@@ -9,7 +9,23 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-18**. The 09-18 pass closed the loop the owner described at the start:
+Last updated: **2026-09-18**. Two passes on 09-18.
+
+**The second built the door out.** `TransactionType.PURCHASE_RETURN` had existed since the first
+migration — scored in the sign table, accepted by the ledger — with **no service and no caller**, so
+faulty goods could not be sent back at all. Meanwhile [§ 4](business-rules.md#4-costing-and-profit)
+had always claimed a purchase return moves the weighted average cost: a documented rule with nothing
+behind it. Both halves exist now, and the money side is a **credit, not a refund** — `grand_total`
+never moves, `credited_total` accumulates beside `paid_total`, and payables subtract it. Rules in
+[§ 7b](business-rules.md#7b-returning-goods-to-a-supplier).
+
+Two defects fell out of writing the tests first. The overpayment guard ([D62](#known-defects)) read
+`grand_total − paid_total` and knew nothing of credits, so goods could be sent back and the original
+total still paid — handing the supplier money for stock sitting in their own warehouse. And the
+payment badge, seen on real seeded data, read **partially paid** on a 925,030 order where nothing had
+been paid and 3,600 had been credited.
+
+Before that, the 09-18 pass closed the loop the owner described at the start:
 purchase, receive, and the product is in the catalogue ready to go live.
 
 Receiving now says what arrived that nobody can buy yet. A buyer creating a product from the order

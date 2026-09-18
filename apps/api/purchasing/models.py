@@ -80,6 +80,10 @@ class PurchaseOrder(BaseModel):
     shipping_total = money_field()
     grand_total = money_field()
     paid_total = money_field()
+    #: Value of goods sent back, set against what is owed. Mirrors `paid_total`:
+    #: `grand_total` is what was agreed and never moves, so a credit accumulates
+    #: alongside rather than rewriting the order (CLAUDE.md §3.3).
+    credited_total = money_field()
 
     currency = models.CharField(max_length=8, default="BDT")
     notes = models.TextField(blank=True)
@@ -107,7 +111,14 @@ class PurchaseOrder(BaseModel):
 
     @property
     def outstanding(self) -> Decimal:
-        return self.grand_total - self.paid_total
+        """What is still owed: the agreed total, less cash paid and credit taken.
+
+        Can go negative when goods are returned after the order was paid — the
+        supplier then owes the business. `finance.selectors.payables` drops
+        those rather than showing a negative liability; see the DECISION
+        REQUIRED note in business-rules.md § 7b.
+        """
+        return self.grand_total - self.paid_total - self.credited_total
 
     @property
     def is_editable(self) -> bool:
@@ -123,6 +134,7 @@ class PurchaseOrderItem(BaseModel):
     )
     quantity_ordered = models.PositiveIntegerField()
     quantity_received = models.PositiveIntegerField(default=0)
+    quantity_returned = models.PositiveIntegerField(default=0)
     unit_cost = money_field()
     discount = money_field()
     tax_rate = rate_field()
@@ -141,6 +153,11 @@ class PurchaseOrderItem(BaseModel):
                 condition=models.Q(quantity_received__lte=models.F("quantity_ordered")),
                 name="purchasing_poi_received_lte_ordered",
             ),
+            # You cannot send back more than turned up.
+            models.CheckConstraint(
+                condition=models.Q(quantity_returned__lte=models.F("quantity_received")),
+                name="purchasing_poi_returned_lte_received",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -149,6 +166,11 @@ class PurchaseOrderItem(BaseModel):
     @property
     def quantity_outstanding(self) -> int:
         return self.quantity_ordered - self.quantity_received
+
+    @property
+    def quantity_returnable(self) -> int:
+        """Received and not yet sent back."""
+        return self.quantity_received - self.quantity_returned
 
 
 class PurchaseReceipt(BaseModel):
@@ -347,3 +369,90 @@ class SupplierProduct(BaseModel):
         if self.lead_time_days is not None:
             return self.lead_time_days
         return self.supplier.lead_time_days
+
+
+class PurchaseReturnReason(models.TextChoices):
+    DAMAGED = "DAMAGED", "Damaged in transit"
+    DEFECTIVE = "DEFECTIVE", "Faulty goods"
+    WRONG_ITEM = "WRONG_ITEM", "Wrong item delivered"
+    OVER_DELIVERED = "OVER_DELIVERED", "More than was ordered"
+    EXPIRED = "EXPIRED", "Expired or short-dated"
+    OTHER = "OTHER", "Other"
+
+
+class PurchaseReturn(BaseModel):
+    """Goods sent back to the supplier, and the credit they are worth.
+
+    `PurchaseReturn` is to `PurchaseReceipt` what a customer return is to a
+    sale: the mirror of the event that moved the stock, never an edit of it.
+    `TransactionType.PURCHASE_RETURN` has existed since the first migration —
+    scored in the sign table, accepted by the ledger — with no service and no
+    caller, so faulty goods could not go back at all.
+
+    The money is a **credit, not a refund**. A supplier is rarely paid back in
+    cash; the value is set against what is owed them. `PurchaseOrder.grand_total`
+    is what was agreed and never moves, exactly as `paid_total` never rewrites
+    it — the credit accumulates alongside in `credited_total`, and the payable
+    is what is left (CLAUDE.md §3.3, docs/business-rules.md § 7b).
+
+    Posted in one transaction: there is no draft state, because a return that
+    has taken stock off the shelf without recording the credit is the exact
+    half-written record the ledger exists to prevent.
+    """
+
+    number = models.CharField(max_length=32, unique=True)
+    purchase_order = models.ForeignKey(
+        PurchaseOrder, on_delete=models.PROTECT, related_name="returns"
+    )
+    reason = models.CharField(max_length=24, choices=PurchaseReturnReason.choices)
+    notes = models.TextField(blank=True)
+    returned_at = models.DateTimeField()
+    returned_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    #: What the supplier owes back for these goods, at the cost they were
+    #: received at. Sums the lines; stored so the payable is one column read.
+    credit_total = money_field()
+
+    #: Sending goods back twice is stock that never left and money never owed.
+    #: Same shape as `SupplierPayment`, and for the same reason (CLAUDE.md §7).
+    idempotency_key = models.CharField(max_length=80, null=True, blank=True, unique=True)
+
+    class Meta:
+        db_table = "purchasing_purchasereturn"
+        ordering = ("-returned_at",)
+        indexes = [models.Index(fields=["purchase_order", "-returned_at"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(credit_total__gte=Decimal("0.00")),
+                name="purchasing_purchasereturn_credit_gte_0",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return self.number
+
+
+class PurchaseReturnItem(BaseModel):
+    purchase_return = models.ForeignKey(
+        PurchaseReturn, on_delete=models.CASCADE, related_name="items"
+    )
+    purchase_order_item = models.ForeignKey(
+        PurchaseOrderItem, on_delete=models.PROTECT, related_name="return_items"
+    )
+    quantity = models.PositiveIntegerField()
+    #: The cost the goods came in at, which is what the credit is worth — not
+    #: today's price and not the branch's blended average.
+    unit_cost = money_field()
+
+    class Meta:
+        db_table = "purchasing_purchasereturnitem"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0), name="purchasing_pri_return_qty_gt_0"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.purchase_order_item_id} x{self.quantity}"
