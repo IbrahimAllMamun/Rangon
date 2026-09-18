@@ -41,7 +41,12 @@ from orders.models import (
     ReturnRequest,
     ReturnStatus,
 )
-from purchasing.models import PurchaseOrder, PurchaseOrderStatus
+from purchasing.models import (
+    PurchaseOrder,
+    PurchaseOrderStatus,
+    PurchaseReturn,
+    PurchaseReturnItem,
+)
 
 MONEY = DecimalField(max_digits=18, decimal_places=2)
 
@@ -87,6 +92,16 @@ RETURNED_LINE_BASE = ExpressionWrapper(
     )
     * F("quantity")
     / F("order_item__quantity"),
+    output_field=MONEY,
+)
+
+#: The VAT on goods sent back to a supplier, at the rate that order was
+#: invoiced at.  A purchase return credits the cost, not the tax
+#: (`PurchaseReturnItem.unit_cost` is what the goods came in at), so the input
+#: VAT has to be reclaimed back separately or a shop that returned a delivery
+#: keeps claiming tax on goods it no longer holds.
+RETURNED_PURCHASE_VAT = ExpressionWrapper(
+    F("unit_cost") * F("quantity") * F("purchase_order_item__tax_rate"),
     output_field=MONEY,
 )
 
@@ -719,7 +734,7 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
 
         output VAT      charged on sales in the period
         less credits    the VAT element of returns completed in the period
-        less input VAT  paid to suppliers on purchases in the period
+        less input VAT  paid to suppliers, net of goods sent back to them
         = net payable   what the business owes, or is owed when negative
 
     The choices behind the arithmetic, because each is somewhere a
@@ -740,6 +755,12 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
       `business_summary` so the two reports cannot disagree about a month.
     * **Draft and cancelled purchases are not purchases.**  Nothing has been
       invoiced, so there is no input VAT to reclaim.
+    * **Goods sent back to a supplier take their input VAT with them.**  A
+      purchase return credits the *cost* -- `PurchaseReturnItem.unit_cost` is
+      what the goods came in at -- so the tax has to be reclaimed back here or
+      a shop that returned a delivery keeps claiming tax on goods it no longer
+      holds.  Dated by `returned_at`, so a return lands in the period it
+      happened rather than the one the order was raised in.
 
     Known limits, both recorded in docs/business-rules.md §3.4: an operator who
     overrides the refund amount at `returns.complete()` moves the money without
@@ -788,9 +809,27 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         orders=Count("id"),
     )
 
+    supplier_returns = PurchaseReturn.objects.filter(
+        returned_at__gte=date_range.start,
+        returned_at__lte=date_range.end,
+    )
+    if branch is not None:
+        supplier_returns = supplier_returns.filter(purchase_order__branch=branch)
+    returned_purchases = PurchaseReturnItem.objects.filter(purchase_return__in=supplier_returns)
+    reclaimed = returned_purchases.aggregate(
+        vat=Coalesce(Sum(RETURNED_PURCHASE_VAT), Value(ZERO), output_field=MONEY),
+        goods=Coalesce(
+            Sum(
+                ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY),
+            ),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
+    )
+
     output_vat = quantize(output["vat"])
     credit_vat = quantize(credits["vat"])
-    input_vat = quantize(supplier_vat["vat"])
+    input_vat = quantize(supplier_vat["vat"] - reclaimed["vat"])
 
     return {
         "period": {
@@ -809,13 +848,20 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
             "returns": completed_returns.count(),
         },
         "input": {
-            "taxable_purchases": quantize(supplier_vat["taxable"]),
+            # `vat` and `taxable_purchases` are already net of goods sent back.
+            # The gross figures are reported beside them so the subtraction can
+            # be read on the screen rather than inferred from it.
+            "taxable_purchases": quantize(supplier_vat["taxable"] - reclaimed["goods"]),
             "vat": input_vat,
+            "vat_on_purchases": quantize(supplier_vat["vat"]),
             "purchases": supplier_vat["orders"],
+            "returned_to_suppliers": quantize(reclaimed["goods"]),
+            "vat_given_back": quantize(reclaimed["vat"]),
+            "returns": supplier_returns.count(),
         },
         "net_payable": quantize(output_vat - credit_vat - input_vat),
         "by_rate": _vat_by_rate(lines),
-        "monthly": _vat_by_month(lines, returned_lines, purchases),
+        "monthly": _vat_by_month(lines, returned_lines, purchases, returned_purchases),
     }
 
 
@@ -848,7 +894,9 @@ def _vat_by_rate(lines: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _vat_by_month(lines: Any, returned_lines: Any, purchases: Any) -> list[dict[str, Any]]:
+def _vat_by_month(
+    lines: Any, returned_lines: Any, purchases: Any, returned_purchases: Any
+) -> list[dict[str, Any]]:
     """The same subtraction, month by month, because a VAT return is monthly.
 
     Whatever window the owner picks, the filing is per month, so the report has
@@ -882,6 +930,14 @@ def _vat_by_month(lines: Any, returned_lines: Any, purchases: Any) -> list[dict[
         .annotate(vat=Coalesce(Sum("tax_total"), Value(ZERO), output_field=MONEY))
     ):
         bucket(row["month"].date())["input_vat"] = quantize(row["vat"])
+
+    for row in (
+        returned_purchases.annotate(month=TruncMonth("purchase_return__returned_at"))
+        .values("month")
+        .annotate(vat=Coalesce(Sum(RETURNED_PURCHASE_VAT), Value(ZERO), output_field=MONEY))
+    ):
+        month = bucket(row["month"].date())
+        month["input_vat"] = quantize(month["input_vat"] - quantize(row["vat"]))
 
     for row in buckets.values():
         row["net_payable"] = quantize(row["output_vat"] - row["credit_vat"] - row["input_vat"])

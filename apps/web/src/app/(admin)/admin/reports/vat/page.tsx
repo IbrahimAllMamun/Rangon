@@ -38,7 +38,16 @@ interface VatReturn {
   period: { start: string; end: string; label: string };
   output: { taxable_sales: string; vat: string; orders: number };
   credits: { taxable_returns: string; vat: string; returns: number };
-  input: { taxable_purchases: string; vat: string; purchases: number };
+  input: {
+    taxable_purchases: string;
+    /** Already net of goods sent back to suppliers. */
+    vat: string;
+    vat_on_purchases: string;
+    purchases: number;
+    returned_to_suppliers: string;
+    vat_given_back: string;
+    returns: number;
+  };
   net_payable: string;
   by_rate: RateRow[];
   monthly: MonthRow[];
@@ -137,7 +146,11 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
             <StatCard
               label="Input VAT"
               value={money(report.input.vat)}
-              context={`${report.input.purchases} purchases`}
+              context={
+                Number(report.input.vat_given_back) > 0
+                  ? `${report.input.purchases} purchases, ${report.input.returns} returned`
+                  : `${report.input.purchases} purchases`
+              }
             />
           </div>
 
@@ -323,10 +336,21 @@ function statementLines(report: VatReturn): Line[] {
     },
     {
       label: "Input VAT paid to suppliers",
-      amount: report.input.vat,
+      amount: report.input.vat_on_purchases,
       negative: true,
       note: "draft and cancelled purchases excluded",
     },
+    // Only when there is one. A shop that sent nothing back should not read a
+    // line about goods it never returned.
+    ...(Number(report.input.vat_given_back) > 0
+      ? [
+          {
+            label: "VAT given back on goods returned to suppliers",
+            amount: report.input.vat_given_back,
+            note: "no longer reclaimable",
+          } satisfies Line,
+        ]
+      : []),
     { label: "Net VAT payable", amount: report.net_payable, emphasis: "total" },
   ];
 }

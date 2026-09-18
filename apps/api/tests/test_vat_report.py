@@ -23,7 +23,14 @@ from orders.models import PaymentMethod, RestockDecision, ReturnStatus
 from orders.services import pos, pricing
 from orders.services import returns as return_services
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
-from purchasing.services import PurchaseLine, create_purchase_order, send_purchase_order
+from purchasing.services import (
+    PurchaseLine,
+    ReturnLine,
+    create_purchase_order,
+    create_purchase_return,
+    receive_purchase,
+    send_purchase_order,
+)
 from reports.services import DateRange, business_summary, vat_report
 from tests import factories
 
@@ -222,6 +229,88 @@ class TestInputVat:
 
         assert order.tax_total == Decimal("750.00")
         assert order.grand_total == Decimal("5750.00")
+
+
+class TestGoodsSentBackToASupplier:
+    """A purchase return credits the cost, not the tax.  The input VAT has to be
+    reclaimed back here or a shop that sent a delivery back keeps claiming tax
+    on goods it no longer holds.
+    """
+
+    def _received(self, shop, *, quantity: int = 10, unit_cost: str = "500.00"):
+        order = _purchase(shop, unit_cost=unit_cost, quantity=quantity)
+        item = order.items.first()
+        receive_purchase(
+            purchase_order=order,
+            lines={item.pk: quantity},
+            actor=shop["manager"],
+        )
+        order.refresh_from_db()
+        return order
+
+    def test_returning_stock_gives_back_its_share_of_the_input_vat(self, shop, period):
+        order = self._received(shop, quantity=10, unit_cost="500.00")  # 750 input VAT
+        item = order.items.first()
+
+        create_purchase_return(
+            purchase_order=order,
+            lines=[ReturnLine(purchase_order_item_id=item.pk, quantity=4)],
+            reason="DAMAGED",
+            actor=shop["manager"],
+        )
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+        # 4 of 10 at 500 is 2,000 of goods; 15% of that is 300.
+        assert report["input"]["vat_given_back"] == Decimal("300.00")
+        assert report["input"]["returned_to_suppliers"] == Decimal("2000.00")
+        assert report["input"]["vat"] == Decimal("450.00")
+        assert report["input"]["taxable_purchases"] == Decimal("3000.00")
+
+    def test_returning_the_whole_delivery_reclaims_nothing(self, shop, period):
+        order = self._received(shop, quantity=10, unit_cost="500.00")
+        item = order.items.first()
+
+        create_purchase_return(
+            purchase_order=order,
+            lines=[ReturnLine(purchase_order_item_id=item.pk, quantity=10)],
+            reason="WRONG_ITEM",
+            actor=shop["manager"],
+        )
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+        assert report["input"]["vat"] == Decimal("0.00")
+        assert report["input"]["taxable_purchases"] == Decimal("0.00")
+
+    def test_a_return_at_a_zero_rated_purchase_moves_no_vat(self, shop, period):
+        order = _purchase(shop, unit_cost="500.00", quantity=10, tax_rate="0.0000")
+        item = order.items.first()
+        receive_purchase(purchase_order=order, lines={item.pk: 10}, actor=shop["manager"])
+
+        create_purchase_return(
+            purchase_order=order,
+            lines=[ReturnLine(purchase_order_item_id=item.pk, quantity=4)],
+            reason="DAMAGED",
+            actor=shop["manager"],
+        )
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+        assert report["input"]["vat_given_back"] == Decimal("0.00")
+        assert report["input"]["returned_to_suppliers"] == Decimal("2000.00")
+
+    def test_the_months_still_add_up_after_a_return(self, shop, period):
+        order = self._received(shop, quantity=10, unit_cost="500.00")
+        item = order.items.first()
+        create_purchase_return(
+            purchase_order=order,
+            lines=[ReturnLine(purchase_order_item_id=item.pk, quantity=4)],
+            reason="DAMAGED",
+            actor=shop["manager"],
+        )
+
+        report = vat_report(date_range=period, branch=shop["branch"])
+
+        assert sum(row["input_vat"] for row in report["monthly"]) == report["input"]["vat"]
+        assert sum(row["net_payable"] for row in report["monthly"]) == report["net_payable"]
 
 
 class TestByRate:

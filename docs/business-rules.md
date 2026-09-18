@@ -294,6 +294,11 @@ less input VAT  on purchases raised in the period
 - **Each event lands in the period it happened** — sales by `placed_at`, returns by `completed_at`,
   purchases by `created_at`.
 - **Draft and cancelled purchases are not purchases**, so they carry no reclaimable input VAT.
+- **Goods sent back to a supplier take their input VAT with them.** A purchase return credits the
+  *cost* — `PurchaseReturnItem.unit_cost` is what the goods came in at — so the tax is reclaimed
+  back here, dated by `returned_at`. Without it a shop that returned a delivery would keep claiming
+  tax on goods it no longer holds. The report shows the gross input VAT and the give-back as
+  separate lines, so the subtraction can be read rather than inferred.
 - Output is split **by rate**, because a category override means one period can hold several and a
   return is filed per rate. The rate shown is the order's own.
 - The range picker is for convenience; the filing is monthly, so the report always breaks the range

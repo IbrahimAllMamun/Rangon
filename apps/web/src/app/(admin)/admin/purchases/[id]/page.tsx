@@ -251,6 +251,13 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
               {Number(order.discount_total) > 0 && (
                 <Row term="Discount" value={`− ${money(order.discount_total)}`} />
               )}
+              {/* Shown only when the supplier charged it, the same rule the
+                  memo and the storefront follow. Without this row an order
+                  carrying VAT reads as a subtotal and a grand total with an
+                  unexplained gap between them. */}
+              {Number(order.tax_total) > 0 && (
+                <Row term="VAT" value={money(order.tax_total)} />
+              )}
               {Number(order.shipping_total) > 0 && (
                 <Row term="Shipping" value={money(order.shipping_total)} />
               )}
