@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from django.db import IntegrityError
+from django.utils import timezone
 
 from core.exceptions import Conflict, PaymentExceedsOutstanding, ValidationError
 from finance.models import AccountTransaction
@@ -29,6 +31,7 @@ from purchasing.services import (
     set_preferred_supplier,
     supplier_cost_for,
 )
+from reports.services import DateRange, purchase_report
 from tests import factories
 
 pytestmark = pytest.mark.django_db
@@ -626,6 +629,29 @@ class TestPurchaseReturn:
 
         after = payables(branch=purchase_setup["branch"])["total"]
         assert after == before - Decimal("4000.00")
+
+    def test_the_purchase_report_owes_the_same_as_everything_else(self, purchase_setup):
+        """Three places compute what a supplier is owed; they must agree.
+
+        `PurchaseOrder.outstanding`, `finance.selectors.payables` and the
+        purchase report each subtract from `grand_total`.  A report that still
+        counted a credited line would send someone chasing a balance the
+        supplier has already settled in goods.
+        """
+        order = self._received(purchase_setup, quantity=50, cost="400.00")
+        self._return(purchase_setup, order, 10)  # 4,000 credit
+        order.refresh_from_db()
+
+        now = timezone.now()
+        rows = purchase_report(
+            date_range=DateRange(start=now - timedelta(days=1), end=now + timedelta(days=1)),
+            branch=purchase_setup["branch"],
+        )
+
+        row = next(row for row in rows if row["number"] == order.number)
+        assert row["outstanding"] == order.outstanding
+        assert row["outstanding"] == row["grand_total"] - Decimal("4000.00")
+        assert row["credited_total"] == Decimal("4000.00")
 
     def test_paying_the_rest_after_a_credit_settles_the_order(self, purchase_setup):
         """Cash plus credit is what "settled" means."""
