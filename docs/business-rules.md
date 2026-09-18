@@ -261,6 +261,19 @@ Writes go through `PATCH /organization/tax/` (permission `settings.manage`) and
 `accounts.services.update_tax_settings()`. The VAT fields are deliberately **read-only** on the
 generic `PATCH /organization/`, so a change cannot slip through without the guard or the audit entry.
 
+**A memo that charged no VAT says nothing about VAT.** The customer's memo — the POS receipt and the
+A4 invoice — carries a VAT block in two parts: the shop's registration number in the header and the
+tax line above the total. They are one fact, so they appear together or not at all, decided by
+`lib/commerce/memo.ts`. The amount lines were always conditional; the registration number was not, so
+at the shipped rate of 0% every memo announced a VAT registration and then showed no tax, which reads
+like tax was collected and withheld. The test is the **order's own** `tax_total`, not today's
+setting, so reprinting an old memo shows what that sale actually charged. A packing slip carries no
+prices and never showed the number.
+
+*For a VAT-registered shop selling zero-rated or exempt goods, those memos will not carry the BIN
+either, because the rule looks at what was charged rather than at whether the shop is registered.
+Move it to the organisation's registration if that shop exists.*
+
 *`DECISION REQUIRED` — the default is still exclusive at 0%, which is a placeholder, not an answer.
 Bangladeshi retail commonly quotes VAT-inclusive prices. Settle it before the first real sale: the
 arithmetic is now implemented for both treatments, but orders taken under the wrong one keep the

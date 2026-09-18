@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/primitives";
 import type { Order } from "@/lib/api/types";
+import { memoShowsVat } from "@/lib/commerce/memo";
 import { dateTime, humanise, money } from "@/lib/format";
 
 /**
@@ -35,6 +36,9 @@ export function PrintDocument({
   documentType: "INVOICE" | "PACKING_SLIP";
 }) {
   const isInvoice = documentType === "INVOICE";
+  // The registration number and the tax line are one fact; neither prints on a
+  // memo that charged no VAT.
+  const showsVat = memoShowsVat(order);
 
   return (
     <>
@@ -68,7 +72,7 @@ export function PrintDocument({
             <p className="mt-1 font-medium">{organization.name}</p>
             <p className="whitespace-pre-line text-neutral-700">{organization.address}</p>
             {organization.phone && <p className="text-neutral-700">{organization.phone}</p>}
-            {isInvoice && organization.vat_registration && (
+            {isInvoice && showsVat && organization.vat_registration && (
               <p className="text-neutral-700">VAT: {organization.vat_registration}</p>
             )}
           </div>
@@ -142,7 +146,7 @@ export function PrintDocument({
               {Number(order.discount_total) > 0 && (
                 <Row term="Discount" value={`− ${money(order.discount_total)}`} />
               )}
-              {Number(order.tax_total) > 0 && <Row term="VAT" value={money(order.tax_total)} />}
+              {showsVat && <Row term="VAT" value={money(order.tax_total)} />}
               {Number(order.shipping_total) > 0 && (
                 <Row term="Delivery" value={money(order.shipping_total)} />
               )}
