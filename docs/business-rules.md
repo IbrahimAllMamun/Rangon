@@ -157,6 +157,12 @@ stock even if it was raised as `RESTOCK`.
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −
   `SUM(refunds)`), enforced in `orders.services.returns`.
+- **A refund carries the VAT the customer paid.** Under the `EXCLUSIVE` treatment the tax sits on
+  top of `OrderItem.line_total` in its own `tax_amount` column, so the refund is
+  `line_total + tax_amount`; under `INCLUSIVE` the tax is already inside `line_total` and is not
+  added again. The **order's own** frozen `tax_mode` decides (§3.4), so an order refunds under the
+  treatment it was priced with even after the setting changes. A partial quantity refunds its share
+  of both.
 - Refund method defaults to the original payment method. Cash sales refund cash from the register;
   gateway payments refund through the provider; COD orders refund by cash or mobile transfer recorded
   manually.
