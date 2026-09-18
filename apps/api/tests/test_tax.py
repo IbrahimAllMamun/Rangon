@@ -10,6 +10,7 @@ it was priced under, so history never moves.
 from __future__ import annotations
 
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 
@@ -225,6 +226,45 @@ class TestTaxSettingsService:
         # Confirming the existing default is how an owner says "yes, 0% is
         # right" -- it must not be blocked by the guard meant for changes.
         assert settled.tax_is_settled
+
+
+class TestChangingItBustsTheStorefrontCache:
+    """Every shop price now carries a note saying which treatment it was quoted
+    under, and those pages are cached against the `products` tag with a
+    60-second ISR window.  Measured in a real browser: without this ping the
+    product page kept saying "+ 15% VAT" after the rate was taken off, the same
+    way a menu edit used to sit invisible until the window elapsed.
+    """
+
+    def test_a_change_asks_the_storefront_to_drop_its_product_pages(self, shop, owner):
+        with mock.patch("content.tasks.request_revalidation") as ping:
+            account_services.update_tax_settings(
+                tax_mode=TaxMode.EXCLUSIVE,
+                default_tax_rate=Decimal("0.1500"),
+                actor=owner,
+                confirm_historical=True,
+            )
+
+        assert ping.called
+        assert "products" in ping.call_args.args
+
+    def test_re_saving_the_same_values_pings_nothing(self, shop, owner):
+        """No change, no stale page -- and no needless rebuild of every page."""
+        account_services.update_tax_settings(
+            tax_mode=TaxMode.EXCLUSIVE,
+            default_tax_rate=Decimal("0.1500"),
+            actor=owner,
+            confirm_historical=True,
+        )
+
+        with mock.patch("content.tasks.request_revalidation") as ping:
+            account_services.update_tax_settings(
+                tax_mode=TaxMode.EXCLUSIVE,
+                default_tax_rate=Decimal("0.1500"),
+                actor=owner,
+            )
+
+        assert not ping.called
 
 
 class TestHistoryIsFrozen:

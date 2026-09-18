@@ -1228,6 +1228,81 @@ pinned one before believing a lint result here.
 What is genuinely missing is now [gap 11](#gaps-to-close-before-go-live): no VAT return, and a
 storefront price with no "incl. VAT" wording beside it.
 
+### VAT made usable: a return to file, a price that says so, 2026-09-18
+
+Go-live gap 11, both halves, plus the thing that had to exist underneath.
+
+**The filing.** `GET /reports/vat/` and `/admin/reports/vat`: output VAT, less
+credits on returns, less input VAT, split by rate and broken into calendar months.
+Output VAT is the same sum `business_summary` already reported as `vat_collected`,
+and a test holds the two to the same answer so they cannot drift.
+
+**The thing underneath.** `PurchaseOrderItem.tax_rate` has existed since the first
+migration and `recalculate_totals` has always read it — but `PurchaseLine` had no
+such field, so **nothing at any layer could set it**. Every purchase order ever
+raised carried `tax_total 0.00`. A VAT return shipped on that would have told the
+owner they owed the full output VAT with nothing to reclaim, which is a worse
+answer than no report at all. The chain is wired and the purchase order form asks
+for one VAT percentage per order.
+
+**The price.** `+ 15% VAT` / `incl. 15% VAT` beside every shop price, and nothing
+at a zero rate. Resolved per product server-side, because a category override
+replaces the organisation rate and the note has to be true of the price beside it.
+
+### The browser found the one thing the tests could not
+
+Three iterations through the treatments, eleven seconds apart, and the product page
+showed the *previous* setting every time:
+
+```text
+EXCLUSIVE 15%  ->  (no VAT note)      <- still the 0% it started at
+INCLUSIVE 15%  ->  + 15% VAT          <- still EXCLUSIVE
+EXCLUSIVE  0%  ->  + 15% VAT          <- still 15%
+```
+
+The product page caches against the `products` tag with a 60-second ISR window, and
+nothing busted it: before this change the VAT setting touched no storefront page, so
+nothing had to. `update_tax_settings` now pings the storefront the same way a menu
+edit does. With the ping in place, all eight checks pass:
+
+```text
+EXCLUSIVE 15%   product + 15% VAT      listing 12 cards, + 15% VAT
+INCLUSIVE 15%   product incl. 15% VAT  listing 12 cards, incl. 15% VAT
+EXCLUSIVE 7.5%  product + 7.5% VAT     listing 12 cards, + 7.5% VAT
+EXCLUSIVE 0%    product (no note)      listing 0 cards
+CSP refusals: 0
+```
+
+And the return, against a real sale placed at 15% and two purchases carrying the
+supplier's VAT:
+
+```text
+Taxable sales                          149,790.00
+Output VAT charged                         885.00
+VAT credited on completed returns           (0.00)
+Input VAT paid to suppliers             (1,500.00)
+Net VAT payable                           (615.00) reclaimable
+
+by rate   15% exclusive   1 order    5,900.00    885.00
+           0% exclusive  26 orders 143,890.00      0.00
+```
+
+The 0% row is the seeded history, which is exactly what a rate split is for: the
+period holds both because the rate changed inside it, and each order kept the rate
+it was priced under.
+
+Two smaller things the same pass caught, both in code written that morning: the
+monthly table printed `-615.00` where the statement above it printed `(615.00)` —
+two notations for one idea in one screen — and the rate column read `15.0%` where
+the storefront reads `15%`. Both now use one helper.
+
+```text
+pytest ....................................... 1057 passed
+ruff 0.8.4 check + format --check ............ clean, 201 files
+tsc --noEmit / next lint ..................... clean
+vitest ....................................... 254 passed
+```
+
 ## Still unproven
 
 Do not describe any of these as working.

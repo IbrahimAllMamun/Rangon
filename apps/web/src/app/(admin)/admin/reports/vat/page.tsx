@@ -13,7 +13,8 @@ import {
   ErrorState,
 } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
-import { calendarDate, dateOnly, money, percent } from "@/lib/format";
+import { vatRatePercent } from "@/lib/commerce/vat";
+import { calendarDate, dateOnly, money } from "@/lib/format";
 
 export const metadata = { title: "VAT return" };
 
@@ -210,7 +211,7 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
                       {report.by_rate.map((row) => (
                         <tr key={`${row.rate}-${row.mode}`}>
                           <th scope="row" className="px-4 py-2.5 text-left font-medium">
-                            {percent(Number(row.rate) * 100)}
+                            {vatRatePercent(row.rate)}%
                             <span className="ml-1.5 text-caption font-normal text-muted">
                               {row.mode === "INCLUSIVE" ? "inclusive" : "exclusive"}
                             </span>
@@ -277,7 +278,10 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
                             {money(row.input_vat)}
                           </td>
                           <td className="tabular px-4 py-2.5 text-right font-semibold">
-                            {money(row.net_payable)}
+                            {/* Parentheses, like the statement above: one
+                                convention per screen, and a raw "-750.00"
+                                beside "(750.00)" reads as two different ideas. */}
+                            {monthPayable(row.net_payable)}
                           </td>
                         </tr>
                       ))}
@@ -295,6 +299,12 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
       )}
     </>
   );
+}
+
+/** A month's net, in the statement's notation: reclaimable reads as a deduction. */
+function monthPayable(amount: string): string {
+  const value = Number.parseFloat(amount);
+  return value < 0 ? `(${money(amount.replace("-", ""))})` : money(amount);
 }
 
 function statementLines(report: VatReturn): Line[] {

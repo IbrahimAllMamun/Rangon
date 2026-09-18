@@ -566,6 +566,9 @@ class ShopHomeView(APIView):
 
     def get(self, request: Request) -> Response:
         branch = default_branch()
+        # Hoisted out of `serialise`, which the home page calls once a row: the
+        # organisation's VAT treatment is the same for all of them.
+        tax = tax_settings()
 
         def serialise(queryset: Any) -> list[dict[str, Any]]:
             products = list(queryset)
@@ -573,7 +576,6 @@ class ShopHomeView(APIView):
                 branch=branch,
                 variants=list(ProductVariant.objects.filter(product__in=products)),
             )
-            tax = tax_settings()
             return [_product_payload(product, snapshots=snapshots, tax=tax) for product in products]
 
         base = _payload_queryset(visible_products())
