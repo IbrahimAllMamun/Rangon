@@ -332,7 +332,10 @@ def payables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, An
 
     now = as_of or timezone.now()
     queryset = (
-        PurchaseOrder.objects.filter(grand_total__gt=F("paid_total"))
+        # Settled is cash paid **plus credit taken**: goods sent back discharge
+        # the liability as surely as money does, and an order covered by a
+        # credit note is not owed (docs/business-rules.md § 7b).
+        PurchaseOrder.objects.filter(grand_total__gt=F("paid_total") + F("credited_total"))
         .exclude(status__in=[PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED])
         .select_related("supplier", "branch")
     )
@@ -344,7 +347,7 @@ def payables(*, branch: Branch | None = None, as_of: Any = None) -> dict[str, An
     ageing = _empty_ageing()
 
     for purchase in queryset.order_by("ordered_at"):
-        outstanding = quantize(purchase.grand_total - purchase.paid_total)
+        outstanding = quantize(purchase.grand_total - purchase.paid_total - purchase.credited_total)
         if outstanding <= ZERO:
             continue
         supplier = purchase.supplier

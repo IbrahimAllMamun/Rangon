@@ -17,9 +17,11 @@ from accounts.services import branch_queryset, resolve_branch
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (
     CreatePurchaseOrderSerializer,
+    CreatePurchaseReturnSerializer,
     PurchaseOrderDetailSerializer,
     PurchaseOrderSerializer,
     PurchaseReceiptSerializer,
+    PurchaseReturnSerializer,
     ReceivePurchaseSerializer,
     SupplierPaymentSerializer,
     SupplierProductSerializer,
@@ -32,7 +34,7 @@ from purchasing.models import (
     SupplierPayment,
     SupplierProduct,
 )
-from purchasing.services import PurchaseLine
+from purchasing.services import PurchaseLine, ReturnLine
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -81,6 +83,12 @@ class PurchaseOrderViewSet(
         "send": ["purchases.create"],
         "cancel": ["purchases.create"],
         "receive": ["purchases.receive"],
+        # Returning is the mirror of receiving and the same physical authority
+        # does it — the storeman with the goods in front of him. It is worth
+        # noting that a return also creates a credit, which receiving does not,
+        # so a distinct `purchases.return` code is arguable; that would mean
+        # editing the role matrix, which is a wider change than this.
+        "purchase_return": ["purchases.receive"],
         "receipts": ["purchases.view"],
     }
     filterset_fields = ["status", "supplier", "branch", "payment_status"]
@@ -101,6 +109,8 @@ class PurchaseOrderViewSet(
                 # cost 156 queries for two purchase orders.
                 "receipts__received_by",
                 "receipts__items__purchase_order_item__variant",
+                "returns__returned_by",
+                "returns__items__purchase_order_item__variant",
             ),
         ).order_by("-created_at")
 
@@ -179,6 +189,39 @@ class PurchaseOrderViewSet(
                 "receipt": PurchaseReceiptSerializer(receipt).data,
                 "purchase_order": PurchaseOrderSerializer(
                     PurchaseOrder.objects.get(pk=receipt.purchase_order_id)
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="return")
+    def purchase_return(self, request: Request, pk: str | None = None) -> Response:
+        """Send goods back: writes PURCHASE_RETURN ledger rows and credits the order.
+
+        `Idempotency-Key` is honoured because a replay would take the stock off
+        the shelf twice and credit the order twice (CLAUDE.md §7) — the same
+        reason `SupplierPayment` carries one.
+        """
+        serializer = CreatePurchaseReturnSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        purchase_return = purchasing_services.create_purchase_return(
+            purchase_order=self.get_object(),
+            lines=[
+                ReturnLine(purchase_order_item_id=line["item"], quantity=line["quantity"])
+                for line in data["lines"]
+            ],
+            reason=data["reason"],
+            actor=request.user,
+            notes=data.get("notes", ""),
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
+        return Response(
+            {
+                "purchase_return": PurchaseReturnSerializer(purchase_return).data,
+                "purchase_order": PurchaseOrderSerializer(
+                    PurchaseOrder.objects.get(pk=purchase_return.purchase_order_id)
                 ).data,
             },
             status=status.HTTP_201_CREATED,

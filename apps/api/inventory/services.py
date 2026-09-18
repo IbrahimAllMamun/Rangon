@@ -540,6 +540,107 @@ def receive_stock(
 
 
 @transaction.atomic
+def return_to_supplier(
+    *,
+    branch: Branch,
+    variant: Any,
+    quantity: int,
+    unit_cost: Decimal,
+    actor: User | None = None,
+    reference_type: str = "purchase_return",
+    reference_id: Any = None,
+    notes: str = "",
+) -> InventoryTransaction:
+    """Send purchased stock back to the supplier, unwinding what it cost.
+
+    The mirror of `receive_stock`, and the other half of a rule
+    docs/business-rules.md § 4 has stated all along: `average_cost` changes on
+    receiving, on an explicit revaluation, **and on a purchase return**. Until
+    now `PURCHASE_RETURN` was a declared transaction type with no service and no
+    caller, so faulty goods could not go back at all and the documented rule had
+    nothing behind it.
+
+        new_avg = ((on_hand * avg) - (qty * unit_cost)) / (on_hand - qty)
+
+    Removing units at what they actually cost leaves the remainder valued at
+    what *it* cost. Sending back the dear half of a blended shelf therefore
+    lowers the average, which is the point — the cheap stock is what is left.
+    """
+    if quantity <= 0:
+        raise ValidationError("Returned quantity must be positive.")
+    unit_cost = quantize(unit_cost)
+    if unit_cost < 0:
+        raise ValidationError("Unit cost cannot be negative.")
+
+    variant_id = _variant_id(variant)
+    inventory = _lock_inventories(branch, [variant_id])[str(variant_id)]
+
+    # Stock that is not on the shelf cannot be put in a box.
+    #
+    # Deliberately **not** `_check_can_reduce`: that helper lets the global
+    # `ALLOW_OVERSELL` through whatever `allow_negative` says, which is right
+    # for a sale — the shop is promising goods that are in transit, and they
+    # follow. A return is a physical act in the other direction. Driving stock
+    # negative here would be claiming a box was sent back containing units that
+    # never existed, and nothing later compensates for it.
+    if inventory.on_hand < quantity:
+        raise InsufficientStock(
+            f"Only {inventory.on_hand} unit(s) of {inventory.variant.sku} are in stock at "
+            f"{branch.code}, so {quantity} cannot be returned.",
+            details={
+                "variant_id": str(variant_id),
+                "sku": inventory.variant.sku,
+                "branch": branch.code,
+                "requested": quantity,
+                "on_hand": inventory.on_hand,
+            },
+        )
+
+    before = {"on_hand": inventory.on_hand, "average_cost": str(inventory.average_cost)}
+
+    remaining = inventory.on_hand - quantity
+    if remaining > 0:
+        value = (Decimal(inventory.on_hand) * inventory.average_cost) - (
+            Decimal(quantity) * unit_cost
+        )
+        # Clamped at zero: returning at more than the blended average would
+        # otherwise value the remainder below nothing. That means the figures
+        # disagree, not that stock is worth less than free.
+        inventory.average_cost = quantize(max(value, Decimal("0.00")) / Decimal(remaining))
+    # An emptied shelf keeps its last average rather than resetting to zero:
+    # there is nothing left to value, and the next receipt sets it anyway.
+
+    entry = _write_ledger(
+        inventory=inventory,
+        transaction_type=TransactionType.PURCHASE_RETURN,
+        # Signed — `_write_ledger` applies the delta exactly as given, so a
+        # positive number here would put the goods back on the shelf.
+        delta=-quantity,
+        actor=actor,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        reason="",
+        notes=notes,
+        unit_cost=unit_cost,
+    )
+    audit.record(
+        action=audit.AuditAction.STOCK_ADJUSTMENT,
+        entity=inventory,
+        actor=actor,
+        old_values=before,
+        new_values={
+            "on_hand": inventory.on_hand,
+            "average_cost": str(inventory.average_cost),
+            "returned": quantity,
+        },
+        reason="Returned to supplier",
+        branch=branch,
+    )
+    _schedule_low_stock_check(inventory)
+    return entry
+
+
+@transaction.atomic
 def adjust(
     *,
     branch: Branch,

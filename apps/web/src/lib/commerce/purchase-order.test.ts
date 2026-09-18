@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  type DraftLine,
-  type OrderItem,
+  blankReturn,
   defaultReceipt,
   lineTotals,
   orderTotals,
   quantize,
   receiptValue,
+  returnCredit,
+  returnableOf,
   toCreatePayload,
   toReceivePayload,
+  toReturnPayload,
+  type DraftLine,
+  type OrderItem,
   validateLines,
   validateReceipt,
+  validateReturn,
 } from "./purchase-order";
 
 function line(over: Partial<DraftLine> = {}): DraftLine {
@@ -37,6 +42,7 @@ function item(over: Partial<OrderItem> = {}): OrderItem {
     variant_label: "Black / M",
     quantity_ordered: 10,
     quantity_received: 0,
+    quantity_returned: 0,
     quantity_outstanding: 10,
     unit_cost: "450.00",
     discount: "0.00",
@@ -240,5 +246,54 @@ describe("receiptValue", () => {
 
   it("is zero when nothing is being received", () => {
     expect(receiptValue([{ itemId: "i1", quantity: "0", unitCost: "450.00" }])).toBe(0);
+  });
+});
+
+describe("returns", () => {
+  const items: OrderItem[] = [
+    {
+      id: "a",
+      variant: "v1",
+      sku: "RGN-A",
+      product_name: "Shirt",
+      variant_label: "M",
+      quantity_ordered: 10,
+      quantity_received: 10,
+      quantity_returned: 4,
+      quantity_outstanding: 0,
+      unit_cost: "400.00",
+      discount: "0.00",
+      line_total: "4000.00",
+    },
+  ];
+
+  it("counts what arrived and has not already gone back", () => {
+    expect(returnableOf(items[0])).toBe(6);
+  });
+
+  it("offers a blank form, never a pre-filled one", () => {
+    // Receiving the whole delivery is the ordinary case; returning it is not,
+    // and a pre-filled form invites a mis-click that moves real stock.
+    expect(blankReturn(items)).toEqual([{ itemId: "a", quantity: "0" }]);
+  });
+
+  it("refuses more than can still go back", () => {
+    expect(validateReturn([{ itemId: "a", quantity: "7" }], items)).toHaveLength(1);
+    expect(validateReturn([{ itemId: "a", quantity: "6" }], items)).toEqual([]);
+    expect(validateReturn([{ itemId: "a", quantity: "0" }], items)).toEqual([]);
+  });
+
+  it("refuses fractional units", () => {
+    expect(validateReturn([{ itemId: "a", quantity: "1.5" }], items)).toHaveLength(1);
+  });
+
+  it("values the credit at what the supplier charged", () => {
+    expect(returnCredit([{ itemId: "a", quantity: "3" }], items)).toBe(1200);
+  });
+
+  it("sends lines only, never a price", () => {
+    expect(toReturnPayload([{ itemId: "a", quantity: "3" }, { itemId: "b", quantity: "0" }])).toEqual(
+      [{ item: "a", quantity: 3 }],
+    );
   });
 });

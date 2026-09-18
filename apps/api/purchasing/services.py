@@ -29,6 +29,8 @@ from purchasing.models import (
     PurchaseOrderStatus,
     PurchaseReceipt,
     PurchaseReceiptItem,
+    PurchaseReturn,
+    PurchaseReturnItem,
     Supplier,
     SupplierPayment,
     SupplierProduct,
@@ -407,6 +409,165 @@ def _refresh_receipt_status(purchase_order: PurchaseOrder) -> None:
     purchase_order.save(update_fields=["status", "completed_at", "updated_at"])
 
 
+def _refresh_payment_status(purchase_order: PurchaseOrder) -> None:
+    """Set the badge from cash paid, with credit counted only for full settlement.
+
+    A credit is not a payment, and a partial one must not read as though money
+    changed hands: an order with nothing paid and a small credit note against it
+    is **unpaid**, and saying "partially paid" sends someone hunting for a
+    payment that was never made. Seen on real data before it was noticed — a
+    925,030 order with a 3,600 credit was badged partially paid.
+
+    Full settlement is different. An order of 1,000 paid 700 with 300 of goods
+    sent back owes nothing, and leaving it unpaid would send someone chasing a
+    balance that does not exist. `finance.selectors.payables` drops it for the
+    same reason, so the badge and the ledger agree.
+    """
+    if purchase_order.paid_total + purchase_order.credited_total >= purchase_order.grand_total:
+        # Nothing further is owed, however the balance was discharged.
+        purchase_order.payment_status = PaymentStatus.PAID
+    elif purchase_order.paid_total > 0:
+        purchase_order.payment_status = PaymentStatus.PARTIALLY_PAID
+    else:
+        purchase_order.payment_status = PaymentStatus.UNPAID
+    purchase_order.save(update_fields=["payment_status", "updated_at"])
+
+
+@dataclass(frozen=True)
+class ReturnLine:
+    """One line of a return: how many of a received line go back."""
+
+    purchase_order_item_id: Any
+    quantity: int
+
+
+@transaction.atomic
+def create_purchase_return(
+    *,
+    purchase_order: PurchaseOrder,
+    lines: Iterable[ReturnLine],
+    reason: str,
+    actor: User | None = None,
+    notes: str = "",
+    idempotency_key: str | None = None,
+) -> PurchaseReturn:
+    """Send received goods back, take the stock off the shelf, credit the order.
+
+    Three things have to happen together or not at all: the ledger loses the
+    units, the order gains the credit, and the line remembers how many went
+    back. Any one alone is a lie — stock gone with nothing owed back, or a
+    credit against goods still sitting on the shelf.
+
+    The credit is valued at **what the goods were received at**, not at today's
+    price and not at the branch's blended average. That is what the supplier
+    charged, so that is what they owe back.
+
+    Refuses more than turned up, per line: `quantity_returnable` is received
+    minus already returned, and `purchasing_poi_returned_lte_received` is the
+    database saying the same thing when two returns race.
+    """
+    purchase_order = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)
+
+    if idempotency_key:
+        existing = PurchaseReturn.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
+    if purchase_order.status in {PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED}:
+        raise Conflict(
+            f"A {purchase_order.status} purchase order has received nothing, so nothing "
+            f"can be sent back."
+        )
+
+    materialised = [line for line in lines if int(line.quantity) > 0]
+    if not materialised:
+        raise ValidationError("Nothing to return.")
+    if not str(reason or "").strip():
+        raise ValidationError("Say why the goods are going back — it goes on the audit record.")
+
+    items = {
+        str(item.pk): item
+        for item in PurchaseOrderItem.objects.select_for_update()
+        .select_related("variant")
+        .filter(purchase_order=purchase_order)
+    }
+
+    purchase_return = PurchaseReturn.objects.create(
+        number=next_number("purchase_return", prefix="PRN"),
+        purchase_order=purchase_order,
+        reason=reason,
+        notes=notes,
+        returned_at=timezone.now(),
+        returned_by=actor,
+        idempotency_key=idempotency_key or None,
+    )
+
+    credit = Decimal("0.00")
+    for line in materialised:
+        quantity = int(line.quantity)
+        item = items.get(str(line.purchase_order_item_id))
+        if item is None:
+            raise ValidationError(
+                f"Line {line.purchase_order_item_id} does not belong to {purchase_order.number}."
+            )
+        if quantity > item.quantity_returnable:
+            raise ValidationError(
+                f"Cannot return {quantity} of {item.variant.sku}: only "
+                f"{item.quantity_returnable} received and not already sent back.",
+                details={
+                    "item_id": str(item.pk),
+                    "requested": quantity,
+                    "returnable": item.quantity_returnable,
+                },
+            )
+
+        unit_cost = quantize(item.unit_cost)
+        PurchaseReturnItem.objects.create(
+            purchase_return=purchase_return,
+            purchase_order_item=item,
+            quantity=quantity,
+            unit_cost=unit_cost,
+        )
+        # Stock leaves through the ledger, which also unwinds what it did to the
+        # branch's weighted average cost (ADR-0006). Never a column write.
+        inventory_services.return_to_supplier(
+            branch=purchase_order.branch,
+            variant=item.variant_id,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            actor=actor,
+            reference_type="purchase_return",
+            reference_id=purchase_return.pk,
+            notes=f"{purchase_order.number} / {purchase_return.number}",
+        )
+
+        item.quantity_returned += quantity
+        item.save(update_fields=["quantity_returned", "updated_at"])
+        credit += quantize(unit_cost * quantity)
+
+    purchase_return.credit_total = quantize(credit)
+    purchase_return.save(update_fields=["credit_total", "updated_at"])
+
+    purchase_order.credited_total = quantize(purchase_order.credited_total + credit)
+    purchase_order.save(update_fields=["credited_total", "updated_at"])
+    _refresh_payment_status(purchase_order)
+
+    audit.record(
+        action=audit.AuditAction.PURCHASE_RECEIVED,
+        entity=purchase_order,
+        actor=actor,
+        old_values={"credited_total": str(purchase_order.credited_total - credit)},
+        new_values={
+            "return": purchase_return.number,
+            "credit": str(purchase_return.credit_total),
+            "credited_total": str(purchase_order.credited_total),
+        },
+        reason=notes or f"Returned to supplier: {reason}",
+        branch=purchase_order.branch,
+    )
+    return purchase_return
+
+
 @transaction.atomic
 def cancel_purchase_order(
     *, purchase_order: PurchaseOrder, actor: User | None = None, reason: str = ""
@@ -500,7 +661,11 @@ def record_supplier_payment(
                 details={"status": locked_order.status},
             )
 
-        outstanding = quantize(locked_order.grand_total - locked_order.paid_total)
+        # The model property, not a second copy of the formula: it subtracts
+        # `credited_total` too. Without that, goods could be sent back and the
+        # original total still paid — handing the supplier money for stock now
+        # sitting in their own warehouse, with D62's guard none the wiser.
+        outstanding = quantize(locked_order.outstanding)
         if amount > outstanding:
             raise PaymentExceedsOutstanding(
                 f"Only {outstanding} is outstanding on {locked_order.number}.",
@@ -563,11 +728,8 @@ def record_supplier_payment(
 
     if locked_order is not None:
         locked_order.paid_total = quantize(locked_order.paid_total + amount)
-        if locked_order.paid_total >= locked_order.grand_total:
-            locked_order.payment_status = PaymentStatus.PAID
-        elif locked_order.paid_total > 0:
-            locked_order.payment_status = PaymentStatus.PARTIALLY_PAID
-        locked_order.save(update_fields=["paid_total", "payment_status", "updated_at"])
+        locked_order.save(update_fields=["paid_total", "updated_at"])
+        _refresh_payment_status(locked_order)
 
     audit.record(
         action=audit.AuditAction.PAYMENT_RECORDED,

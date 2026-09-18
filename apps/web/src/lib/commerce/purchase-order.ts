@@ -162,6 +162,8 @@ export interface OrderItem {
   quantity_ordered: number;
   quantity_received: number;
   quantity_outstanding: number;
+  /** Arrived and already sent back. */
+  quantity_returned: number;
   unit_cost: Money;
   discount: Money;
   line_total: Money;
@@ -252,4 +254,73 @@ export function receiptValue(drafts: ReceiveDraft[]): number {
   return quantize(
     drafts.reduce((total, draft) => total + quantize(num(draft.quantity) * num(draft.unitCost)), 0),
   );
+}
+
+
+/* ------------------------------------------------------------------ returns */
+
+export interface ReturnDraft {
+  itemId: string;
+  quantity: string;
+}
+
+/** Arrived and not yet sent back — the most a line can return. */
+export function returnableOf(item: OrderItem): number {
+  return Math.max(item.quantity_received - (item.quantity_returned ?? 0), 0);
+}
+
+/**
+ * A blank return: every line that has something to send back, at zero.
+ *
+ * Unlike `defaultReceipt`, nothing is pre-filled. Receiving the whole delivery
+ * is the ordinary case and a sensible default; returning the whole delivery is
+ * not, and a form that offers it invites a mis-click that takes real stock off
+ * a real shelf.
+ */
+export function blankReturn(items: OrderItem[]): ReturnDraft[] {
+  return items
+    .filter((item) => returnableOf(item) > 0)
+    .map((item) => ({ itemId: item.id, quantity: "0" }));
+}
+
+export function validateReturn(drafts: ReturnDraft[], items: OrderItem[]): ReceiveProblem[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const problems: ReceiveProblem[] = [];
+
+  for (const draft of drafts) {
+    const quantity = num(draft.quantity);
+    if (quantity === 0) continue; // returning nothing on a line is allowed
+    const item = byId.get(draft.itemId);
+    if (!item) continue;
+
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      problems.push({ itemId: draft.itemId, message: "Whole units only." });
+      continue;
+    }
+    const returnable = returnableOf(item);
+    if (quantity > returnable) {
+      problems.push({
+        itemId: draft.itemId,
+        message: `Only ${returnable} of ${item.sku} arrived and can still go back.`,
+      });
+    }
+  }
+  return problems;
+}
+
+/** What the supplier will owe back: the cost they charged, times the units. */
+export function returnCredit(drafts: ReturnDraft[], items: OrderItem[]): number {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return drafts.reduce((total, draft) => {
+    const item = byId.get(draft.itemId);
+    if (!item) return total;
+    return total + num(draft.quantity) * num(item.unit_cost);
+  }, 0);
+}
+
+/** Lines only; the credit is the server's to compute from the order (§13). */
+export function toReturnPayload(drafts: ReturnDraft[]) {
+  return drafts
+    .filter((draft) => num(draft.quantity) > 0)
+    .map((draft) => ({ item: draft.itemId, quantity: Number(draft.quantity) }));
 }

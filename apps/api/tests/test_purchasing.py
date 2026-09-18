@@ -9,12 +9,20 @@ from django.db import IntegrityError
 
 from core.exceptions import Conflict, PaymentExceedsOutstanding, ValidationError
 from finance.models import AccountTransaction
+from finance.selectors import payables
 from inventory.models import Inventory, InventoryTransaction, TransactionType
-from purchasing.models import PurchaseOrderStatus, SupplierPayment, SupplierProduct
+from purchasing.models import (
+    PurchaseOrderStatus,
+    PurchaseReturn,
+    SupplierPayment,
+    SupplierProduct,
+)
 from purchasing.services import (
     PurchaseLine,
+    ReturnLine,
     cancel_purchase_order,
     create_purchase_order,
+    create_purchase_return,
     receive_purchase,
     record_supplier_payment,
     send_purchase_order,
@@ -541,3 +549,218 @@ class TestSupplierProduct:
         offer.lead_time_days = 3  # this one item they keep in stock
         offer.save(update_fields=["lead_time_days"])
         assert offer.effective_lead_time_days == 3
+
+
+class TestPurchaseReturn:
+    """Sending goods back: stock off the shelf, credit against the order.
+
+    `TransactionType.PURCHASE_RETURN` existed from the first migration with no
+    service and no caller, so faulty goods could not go back at all — while
+    business-rules.md § 4 claimed all along that a purchase return moves the
+    weighted average cost.
+    """
+
+    def _received(self, setup, quantity=50, cost="400.00"):
+        """An order that has fully arrived, ready to send some of it back."""
+        order = _sent_order(setup, quantity=quantity, cost=cost)
+        receive_purchase(
+            purchase_order=order,
+            lines={str(item.pk): item.quantity_ordered for item in order.items.all()},
+            actor=setup["actor"],
+        )
+        order.refresh_from_db()
+        return order
+
+    def _return(self, setup, order, quantity, **kwargs):
+        item = order.items.first()
+        return create_purchase_return(
+            purchase_order=order,
+            lines=[ReturnLine(purchase_order_item_id=item.pk, quantity=quantity)],
+            reason="DEFECTIVE",
+            actor=setup["actor"],
+            **kwargs,
+        )
+
+    def test_returning_goods_takes_them_off_the_shelf_through_the_ledger(self, purchase_setup):
+        order = self._received(purchase_setup, quantity=50)
+        inventory = Inventory.objects.get(
+            variant=purchase_setup["variant"], branch=purchase_setup["branch"]
+        )
+        assert inventory.on_hand == 50
+
+        self._return(purchase_setup, order, 12)
+
+        inventory.refresh_from_db()
+        assert inventory.on_hand == 38
+        entry = InventoryTransaction.objects.get(transaction_type=TransactionType.PURCHASE_RETURN)
+        assert entry.quantity == -12
+        assert entry.reference_type == "purchase_return"
+
+    def test_the_credit_is_what_the_supplier_charged(self, purchase_setup):
+        """Not today's price, and not the branch's blended average."""
+        order = self._received(purchase_setup, quantity=50, cost="400.00")
+
+        purchase_return = self._return(purchase_setup, order, 10)
+
+        assert purchase_return.credit_total == Decimal("4000.00")
+        order.refresh_from_db()
+        assert order.credited_total == Decimal("4000.00")
+
+    def test_the_order_total_never_moves(self, purchase_setup):
+        """The agreed figure is history; the credit accumulates beside it."""
+        order = self._received(purchase_setup, quantity=50, cost="400.00")
+        agreed = order.grand_total
+
+        self._return(purchase_setup, order, 10)
+
+        order.refresh_from_db()
+        assert order.grand_total == agreed
+        assert order.outstanding == agreed - Decimal("4000.00")
+
+    def test_a_return_reduces_what_is_owed(self, purchase_setup):
+        """The invariant the payables list rests on."""
+        order = self._received(purchase_setup, quantity=50, cost="400.00")
+        before = payables(branch=purchase_setup["branch"])["total"]
+
+        self._return(purchase_setup, order, 10)
+
+        after = payables(branch=purchase_setup["branch"])["total"]
+        assert after == before - Decimal("4000.00")
+
+    def test_paying_the_rest_after_a_credit_settles_the_order(self, purchase_setup):
+        """Cash plus credit is what "settled" means."""
+        order = self._received(purchase_setup, quantity=10, cost="400.00")  # 4,000
+        self._return(purchase_setup, order, 5)  # 2,000 credit
+        order.refresh_from_db()
+        # A credit is not a payment: nothing has been paid, so it stays unpaid.
+        assert order.payment_status == "UNPAID"
+
+        record_supplier_payment(
+            supplier=purchase_setup["supplier"],
+            purchase_order=order,
+            amount=Decimal("2000.00"),
+            method="CASH",
+            actor=purchase_setup["actor"],
+        )
+
+        order.refresh_from_db()
+        assert order.outstanding == Decimal("0.00")
+        assert order.payment_status == "PAID"
+        assert payables(branch=purchase_setup["branch"])["total"] == Decimal("0.00")
+
+    def test_a_credit_cannot_be_overpaid_around(self, purchase_setup):
+        """The overpayment guard (D62) has to count the credit too.
+
+        Otherwise returning goods and then paying the original total hands the
+        supplier money for stock now sitting back in their warehouse.
+        """
+        order = self._received(purchase_setup, quantity=10, cost="400.00")  # 4,000
+        self._return(purchase_setup, order, 5)  # 2,000 credit
+
+        with pytest.raises(PaymentExceedsOutstanding):
+            record_supplier_payment(
+                supplier=purchase_setup["supplier"],
+                purchase_order=order,
+                amount=Decimal("4000.00"),
+                method="CASH",
+                actor=purchase_setup["actor"],
+            )
+
+    def test_more_than_arrived_cannot_go_back(self, purchase_setup):
+        order = self._received(purchase_setup, quantity=10)
+
+        with pytest.raises(ValidationError):
+            self._return(purchase_setup, order, 11)
+
+    def test_the_same_goods_cannot_go_back_twice(self, purchase_setup):
+        """Two returns of six against ten received: the second is refused."""
+        order = self._received(purchase_setup, quantity=10)
+        self._return(purchase_setup, order, 6)
+
+        with pytest.raises(ValidationError):
+            self._return(purchase_setup, order, 6)
+
+        order.refresh_from_db()
+        assert order.items.first().quantity_returned == 6
+
+    def test_a_replayed_return_sends_the_goods_back_once(self, purchase_setup):
+        """A double-clicked form is stock that never left and money never owed."""
+        order = self._received(purchase_setup, quantity=10)
+
+        first = self._return(purchase_setup, order, 4, idempotency_key="prn-1")
+        second = self._return(purchase_setup, order, 4, idempotency_key="prn-1")
+
+        assert first.pk == second.pk
+        assert PurchaseReturn.objects.count() == 1
+        inventory = Inventory.objects.get(
+            variant=purchase_setup["variant"], branch=purchase_setup["branch"]
+        )
+        assert inventory.on_hand == 6
+
+    def test_nothing_can_go_back_from_an_order_that_never_arrived(self, purchase_setup):
+        draft = _order(purchase_setup)
+
+        with pytest.raises(Conflict):
+            create_purchase_return(
+                purchase_order=draft,
+                lines=[ReturnLine(purchase_order_item_id=draft.items.first().pk, quantity=1)],
+                reason="DEFECTIVE",
+                actor=purchase_setup["actor"],
+            )
+
+    def test_a_reason_is_required(self, purchase_setup):
+        order = self._received(purchase_setup, quantity=10)
+
+        with pytest.raises(ValidationError):
+            create_purchase_return(
+                purchase_order=order,
+                lines=[ReturnLine(purchase_order_item_id=order.items.first().pk, quantity=1)],
+                reason="  ",
+                actor=purchase_setup["actor"],
+            )
+
+    def test_returning_moves_the_weighted_average(self, purchase_setup):
+        """The rule § 4 always stated, now with something behind it."""
+        branch, variant = purchase_setup["branch"], purchase_setup["variant"]
+        cheap = self._received(purchase_setup, quantity=10, cost="100.00")
+        dear = self._received(purchase_setup, quantity=10, cost="200.00")
+        inventory = Inventory.objects.get(variant=variant, branch=branch)
+        assert inventory.average_cost == Decimal("150.00")
+
+        # Send back the dear ten; the cheap ten are what remain.
+        create_purchase_return(
+            purchase_order=dear,
+            lines=[ReturnLine(purchase_order_item_id=dear.items.first().pk, quantity=10)],
+            reason="DEFECTIVE",
+            actor=purchase_setup["actor"],
+        )
+
+        inventory.refresh_from_db()
+        assert inventory.on_hand == 10
+        assert inventory.average_cost == Decimal("100.00")
+        assert cheap.items.first().quantity_returned == 0
+
+    def test_a_credit_alone_does_not_read_as_a_payment(self, purchase_setup):
+        """An order with nothing paid and a credit against it is *unpaid*.
+
+        Badging it "partially paid" sends someone hunting for a payment that was
+        never made. Noticed on real data: a 925,030 order carrying a 3,600
+        credit read as partially paid.
+        """
+        order = self._received(purchase_setup, quantity=10, cost="400.00")
+        self._return(purchase_setup, order, 1)
+
+        order.refresh_from_db()
+        assert order.paid_total == Decimal("0.00")
+        assert order.credited_total == Decimal("400.00")
+        assert order.payment_status == "UNPAID"
+
+    def test_a_credit_that_covers_everything_settles_the_order(self, purchase_setup):
+        """Nothing further is owed, however the balance was discharged."""
+        order = self._received(purchase_setup, quantity=10, cost="400.00")
+        self._return(purchase_setup, order, 10)
+
+        order.refresh_from_db()
+        assert order.outstanding == Decimal("0.00")
+        assert order.payment_status == "PAID"
+        assert payables(branch=purchase_setup["branch"])["total"] == Decimal("0.00")
