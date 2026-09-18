@@ -17,6 +17,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from accounts.models import TaxMode
 from core import audit
 from core.exceptions import Conflict, PermissionDenied, ValidationError
 from core.money import ZERO, quantize
@@ -110,9 +111,14 @@ def request_return(
                 f"{item.product_name} is a final-sale item and cannot be returned."
             )
 
-        # Refund the price actually paid for that line, discount included.
-        unit_net = quantize(item.line_total / item.quantity)
-        line_refund = quantize(unit_net * quantity)
+        # Refund the price actually paid for that line, discount included.  Under
+        # EXCLUSIVE the VAT sat on top of line_total, so refunding line_total alone
+        # would keep the customer's tax; under INCLUSIVE the tax is already inside
+        # it.  The order's own frozen tax_mode decides, so history never moves.
+        line_paid = item.line_total
+        if order.tax_mode == TaxMode.EXCLUSIVE:
+            line_paid += item.tax_amount
+        line_refund = quantize(line_paid * quantity / item.quantity)
         refund_total += line_refund
 
         ReturnItem.objects.create(
