@@ -241,3 +241,109 @@ class SupplierPayment(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.supplier.name}: {self.amount}"
+
+
+class SupplierProduct(BaseModel):
+    """What one supplier charges for one variant.
+
+    The catalogue had no link to a supplier at all. `PurchaseOrderItem` points at
+    a variant and `PurchaseOrder` points at a supplier, but nothing joined the
+    two, so three ordinary questions had no answer: who sells us this, what did
+    *they* last charge, and which of them should we buy it from.
+
+    The practical cost of that was on the purchase order form, which defaulted a
+    line's unit cost to `ProductVariant.cost` — the last price paid to *any*
+    supplier. Ordering from the cheaper of two vendors silently pre-filled the
+    dearer one's price, and a buyer who accepted the default overpaid on paper
+    while the receipt corrected it later (D72/D73 are the same family of bug:
+    one cost column standing in for several distinct facts).
+
+    This is reference data, not a financial record: a price list may be edited
+    and deleted, unlike the purchase orders and receipts that record what was
+    actually agreed and paid. That is why both foreign keys cascade.
+
+    Rows appear on their own. Receiving a delivery upserts the offer for the
+    supplier it came from (`purchasing.services.record_supplier_product`), so
+    the list builds itself out of real purchase history rather than needing to
+    be maintained by hand; a buyer may also add one ahead of ordering to record
+    a quote.
+    """
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name="offers")
+    variant = models.ForeignKey(
+        "catalog.ProductVariant", on_delete=models.CASCADE, related_name="supplier_offers"
+    )
+
+    #: The supplier's own code for this item, off their invoice or price list.
+    #: Ours is `ProductVariant.sku`; theirs is what you quote back at them.
+    supplier_sku = models.CharField(max_length=64, blank=True)
+
+    #: What this supplier charged on the most recent receipt, or the quote a
+    #: buyer recorded. Distinct from `ProductVariant.cost` (the last price paid
+    #: to anyone) and from `Inventory.average_cost` (the weighted average that
+    #: values stock and prices COGS) — see docs/business-rules.md § 4.
+    last_cost = money_field()
+
+    #: Overrides `Supplier.lead_time_days` for this item only; null means "use
+    #: the supplier's". A vendor can be quick in general and slow on one line.
+    lead_time_days = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    #: What this supplier will not sell fewer of. Advisory: the purchase order
+    #: service surfaces it rather than refusing, because suppliers flex and a
+    #: refusal would be a business rule nobody stated.
+    minimum_order_quantity = models.PositiveIntegerField(default=1)
+
+    #: At most one per variant, enforced below. The first supplier a variant is
+    #: ever received from becomes preferred; after that it is an explicit act.
+    is_preferred = models.BooleanField(default=False)
+
+    #: A supplier who has discontinued the line. Kept rather than deleted, so
+    #: the purchase history still explains itself.
+    is_active = models.BooleanField(default=True)
+
+    last_purchased_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "purchasing_supplierproduct"
+        ordering = ("-is_preferred", "last_cost")
+        indexes = [
+            # "Who supplies this, cheapest offer first" — the product screen and
+            # the purchase order form's cost lookup.
+            models.Index(fields=["variant", "-is_preferred", "last_cost"]),
+            # "What do we buy from this supplier, most recently bought first."
+            models.Index(fields=["supplier", "-last_purchased_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["supplier", "variant"], name="purchasing_supplierproduct_uniq"
+            ),
+            # One preferred supplier per variant, or "preferred" means nothing.
+            # Partial, so the many non-preferred offers do not collide.
+            models.UniqueConstraint(
+                fields=["variant"],
+                condition=models.Q(is_preferred=True),
+                name="purchasing_supplierproduct_one_preferred",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(last_cost__gte=Decimal("0.00")),
+                name="purchasing_supplierproduct_cost_gte_0",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(minimum_order_quantity__gte=1),
+                name="purchasing_supplierproduct_moq_gte_1",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.supplier.name} → {self.variant.sku}"
+
+    @property
+    def effective_lead_time_days(self) -> int:
+        """This item's lead time, falling back to the supplier's."""
+        if self.lead_time_days is not None:
+            return self.lead_time_days
+        return self.supplier.lead_time_days

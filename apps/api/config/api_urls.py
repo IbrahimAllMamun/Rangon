@@ -50,6 +50,7 @@ from promotions.api.views import CouponViewSet
 from purchasing.api.views import (
     PurchaseOrderViewSet,
     SupplierPaymentViewSet,
+    SupplierProductViewSet,
     SupplierViewSet,
 )
 from shipping.api.views import (
@@ -89,6 +90,7 @@ router.register("stock-counts", StockCountViewSet, basename="stockcount")
 router.register("suppliers", SupplierViewSet, basename="supplier")
 router.register("purchase-orders", PurchaseOrderViewSet, basename="purchaseorder")
 router.register("supplier-payments", SupplierPaymentViewSet, basename="supplierpayment")
+router.register("supplier-products", SupplierProductViewSet, basename="supplierproduct")
 
 # --- finance ---------------------------------------------------------------
 router.register("accounts", AccountViewSet, basename="account")

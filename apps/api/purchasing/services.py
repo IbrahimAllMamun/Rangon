@@ -31,6 +31,7 @@ from purchasing.models import (
     PurchaseReceiptItem,
     Supplier,
     SupplierPayment,
+    SupplierProduct,
 )
 
 #: Statuses that owe the supplier nothing, so no money may be paid against them.
@@ -236,6 +237,18 @@ def receive_purchase(
         item.quantity_received += quantity
         item.save(update_fields=["quantity_received", "updated_at"])
 
+        # The supplier price list is a by-product of receiving, never a chore.
+        # Inside the same transaction as the ledger write, so a delivery cannot
+        # be half-recorded: stock in but nothing remembered about who supplied
+        # it and for how much.
+        record_supplier_product(
+            supplier=purchase_order.supplier,
+            variant_id=item.variant_id,
+            unit_cost=unit_cost,
+            purchased_at=receipt.received_at,
+            actor=actor,
+        )
+
     receipt.is_posted = True
     receipt.save(update_fields=["is_posted", "updated_at"])
 
@@ -254,6 +267,134 @@ def receive_purchase(
         branch=purchase_order.branch,
     )
     return receipt
+
+
+def record_supplier_product(
+    *,
+    supplier: Supplier,
+    variant_id: Any,
+    unit_cost: Decimal,
+    purchased_at: Any = None,
+    actor: User | None = None,
+    supplier_sku: str | None = None,
+) -> SupplierProduct:
+    """Remember that this supplier sells this variant, and at what.
+
+    Called for every line of every receipt, so the supplier price list builds
+    itself out of what was actually bought rather than out of data entry that
+    nobody would keep up.
+
+    The first supplier a variant is received from becomes its preferred one.
+    That is a default, not a judgement: with one supplier "preferred" is simply
+    true, and it means the purchase order form has something to suggest from the
+    very first reorder. Changing it afterwards is an explicit act
+    (`set_preferred_supplier`), so a second delivery never silently moves it.
+    """
+    offer, created = SupplierProduct.objects.get_or_create(
+        supplier=supplier,
+        variant_id=variant_id,
+        defaults={
+            "last_cost": quantize(unit_cost),
+            "last_purchased_at": purchased_at,
+            "supplier_sku": supplier_sku or "",
+            "created_by": actor,
+        },
+    )
+
+    if created:
+        # Only claim `is_preferred` when the variant has no preferred supplier:
+        # the partial unique constraint would refuse a second one, and quietly
+        # losing that race is better than a 500 on a delivery that did arrive.
+        already = (
+            SupplierProduct.objects.filter(variant_id=variant_id, is_preferred=True)
+            .exclude(pk=offer.pk)
+            .exists()
+        )
+        if not already:
+            offer.is_preferred = True
+            offer.save(update_fields=["is_preferred", "updated_at"])
+        return offer
+
+    changed = ["last_cost", "updated_at"]
+    offer.last_cost = quantize(unit_cost)
+    if purchased_at is not None:
+        offer.last_purchased_at = purchased_at
+        changed.append("last_purchased_at")
+    if supplier_sku and supplier_sku != offer.supplier_sku:
+        offer.supplier_sku = supplier_sku
+        changed.append("supplier_sku")
+    # A delivery from a supplier marked discontinued means they are not.
+    if not offer.is_active:
+        offer.is_active = True
+        changed.append("is_active")
+    offer.save(update_fields=changed)
+    return offer
+
+
+@transaction.atomic
+def set_preferred_supplier(
+    *, variant_id: Any, supplier: Supplier, actor: User | None = None
+) -> SupplierProduct:
+    """Make this supplier the one the purchase order form suggests.
+
+    Demoting the incumbent and promoting the replacement has to happen in one
+    transaction: `purchasing_supplierproduct_one_preferred` refuses two, so
+    doing it in the other order would fail on the constraint rather than on
+    anything the buyer did wrong.
+    """
+    try:
+        offer = SupplierProduct.objects.select_for_update().get(
+            variant_id=variant_id, supplier=supplier
+        )
+    except SupplierProduct.DoesNotExist:
+        raise ValidationError(
+            f"{supplier.name} is not recorded as a supplier of this product.",
+            details={"variant_id": str(variant_id), "supplier_id": str(supplier.pk)},
+        ) from None
+
+    if not offer.is_active:
+        raise ValidationError(
+            f"{supplier.name} no longer supplies this product, so it cannot be the preferred one."
+        )
+
+    previous = (
+        SupplierProduct.objects.select_for_update()
+        .filter(variant_id=variant_id, is_preferred=True)
+        .exclude(pk=offer.pk)
+        .first()
+    )
+    if previous is not None:
+        previous.is_preferred = False
+        previous.save(update_fields=["is_preferred", "updated_at"])
+
+    if not offer.is_preferred:
+        offer.is_preferred = True
+        offer.save(update_fields=["is_preferred", "updated_at"])
+
+    audit.record(
+        action=audit.AuditAction.UPDATE,
+        entity=offer,
+        actor=actor,
+        old_values={"preferred_supplier": previous.supplier.name if previous else None},
+        new_values={"preferred_supplier": supplier.name},
+        reason="Preferred supplier changed",
+    )
+    return offer
+
+
+def supplier_cost_for(*, supplier: Supplier, variant_id: Any) -> Decimal | None:
+    """What this supplier last charged, or None if they have never sold it.
+
+    The purchase order form's default. Returning None rather than falling back
+    to `ProductVariant.cost` here on purpose: the caller decides what to do with
+    "this supplier has no history", and conflating the two is the bug this whole
+    model exists to fix.
+    """
+    return (
+        SupplierProduct.objects.filter(supplier=supplier, variant_id=variant_id)
+        .values_list("last_cost", flat=True)
+        .first()
+    )
 
 
 def _refresh_receipt_status(purchase_order: PurchaseOrder) -> None:

@@ -5,11 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from django.db import IntegrityError
 
 from core.exceptions import Conflict, PaymentExceedsOutstanding, ValidationError
 from finance.models import AccountTransaction
 from inventory.models import Inventory, InventoryTransaction, TransactionType
-from purchasing.models import PurchaseOrderStatus, SupplierPayment
+from purchasing.models import PurchaseOrderStatus, SupplierPayment, SupplierProduct
 from purchasing.services import (
     PurchaseLine,
     cancel_purchase_order,
@@ -17,6 +18,8 @@ from purchasing.services import (
     receive_purchase,
     record_supplier_payment,
     send_purchase_order,
+    set_preferred_supplier,
+    supplier_cost_for,
 )
 from tests import factories
 
@@ -368,3 +371,173 @@ class TestSupplierPayments:
 
         purchase_order.refresh_from_db()
         assert purchase_order.paid_total == Decimal("0.00")
+
+
+class TestSupplierProduct:
+    """Which supplier sells what, and at whose price (docs/business-rules.md § 7a).
+
+    The catalogue had no link to a supplier at all, so the purchase order form
+    defaulted a line to `ProductVariant.cost` — the last price paid to *anyone*.
+    Ordering from the cheaper of two vendors pre-filled the dearer one's price.
+    These tests are mostly about keeping two suppliers' prices apart.
+    """
+
+    def _receive_all(self, setup, *, cost, supplier=None):
+        """Raise, send and fully receive one order, optionally from another supplier."""
+        if supplier is not None:
+            setup = {**setup, "supplier": supplier}
+        order = _sent_order(setup, quantity=10, cost=cost)
+        return receive_purchase(
+            purchase_order=order,
+            lines={str(item.pk): item.quantity_ordered for item in order.items.all()},
+            actor=setup["actor"],
+        )
+
+    def test_receiving_records_who_supplied_it_and_for_how_much(self, purchase_setup):
+        """The price list is a by-product of receiving, never a chore."""
+        assert SupplierProduct.objects.count() == 0
+
+        self._receive_all(purchase_setup, cost="400.00")
+
+        offer = SupplierProduct.objects.get()
+        assert offer.supplier == purchase_setup["supplier"]
+        assert offer.variant == purchase_setup["variant"]
+        assert offer.last_cost == Decimal("400.00")
+        assert offer.last_purchased_at is not None
+
+    def test_two_suppliers_keep_their_own_prices(self, purchase_setup):
+        """The invariant the model exists for.
+
+        `ProductVariant.cost` cannot hold this: `receive_stock` overwrites it
+        with whichever supplier delivered last, so after the cheap delivery it
+        reads 250 for both.
+        """
+        dear, cheap = purchase_setup["supplier"], factories.supplier(name="Cheaper Mills")
+
+        self._receive_all(purchase_setup, cost="400.00", supplier=dear)
+        self._receive_all(purchase_setup, cost="250.00", supplier=cheap)
+
+        variant = purchase_setup["variant"]
+        assert supplier_cost_for(supplier=dear, variant_id=variant.pk) == Decimal("400.00")
+        assert supplier_cost_for(supplier=cheap, variant_id=variant.pk) == Decimal("250.00")
+
+        variant.refresh_from_db()
+        assert variant.cost == Decimal("250.00")  # the single column, now ambiguous
+
+    def test_the_first_supplier_is_preferred_and_the_second_does_not_steal_it(self, purchase_setup):
+        first, second = purchase_setup["supplier"], factories.supplier()
+
+        self._receive_all(purchase_setup, cost="400.00", supplier=first)
+        self._receive_all(purchase_setup, cost="250.00", supplier=second)
+
+        preferred = SupplierProduct.objects.get(
+            variant=purchase_setup["variant"], is_preferred=True
+        )
+        assert preferred.supplier == first
+
+    def test_receiving_again_moves_only_that_suppliers_price(self, purchase_setup):
+        dear, cheap = purchase_setup["supplier"], factories.supplier()
+        self._receive_all(purchase_setup, cost="400.00", supplier=dear)
+        self._receive_all(purchase_setup, cost="250.00", supplier=cheap)
+
+        # The dear supplier puts their price up; the cheap one is unaffected.
+        self._receive_all(purchase_setup, cost="450.00", supplier=dear)
+
+        variant = purchase_setup["variant"]
+        assert supplier_cost_for(supplier=dear, variant_id=variant.pk) == Decimal("450.00")
+        assert supplier_cost_for(supplier=cheap, variant_id=variant.pk) == Decimal("250.00")
+        assert SupplierProduct.objects.filter(variant=variant).count() == 2
+
+    def test_a_supplier_with_no_history_reports_none_rather_than_a_price(self, purchase_setup):
+        """None means "ask the buyer", not "charge what the last one charged"."""
+        stranger = factories.supplier()
+        self._receive_all(purchase_setup, cost="400.00")
+
+        assert supplier_cost_for(supplier=stranger, variant_id=purchase_setup["variant"].pk) is None
+
+    def test_promoting_a_supplier_demotes_the_incumbent(self, purchase_setup):
+        first, second = purchase_setup["supplier"], factories.supplier()
+        self._receive_all(purchase_setup, cost="400.00", supplier=first)
+        self._receive_all(purchase_setup, cost="250.00", supplier=second)
+
+        set_preferred_supplier(
+            variant_id=purchase_setup["variant"].pk,
+            supplier=second,
+            actor=purchase_setup["actor"],
+        )
+
+        preferred = SupplierProduct.objects.filter(
+            variant=purchase_setup["variant"], is_preferred=True
+        )
+        assert preferred.count() == 1
+        assert preferred.get().supplier == second
+
+    def test_promoting_a_supplier_that_does_not_supply_it_is_refused(self, purchase_setup):
+        self._receive_all(purchase_setup, cost="400.00")
+        with pytest.raises(ValidationError):
+            set_preferred_supplier(
+                variant_id=purchase_setup["variant"].pk,
+                supplier=factories.supplier(),
+                actor=purchase_setup["actor"],
+            )
+
+    def test_promoting_a_discontinued_offer_is_refused(self, purchase_setup):
+        first, second = purchase_setup["supplier"], factories.supplier()
+        self._receive_all(purchase_setup, cost="400.00", supplier=first)
+        self._receive_all(purchase_setup, cost="250.00", supplier=second)
+
+        offer = SupplierProduct.objects.get(supplier=second)
+        offer.is_active = False
+        offer.save(update_fields=["is_active"])
+
+        with pytest.raises(ValidationError):
+            set_preferred_supplier(
+                variant_id=purchase_setup["variant"].pk,
+                supplier=second,
+                actor=purchase_setup["actor"],
+            )
+
+    def test_receiving_from_a_discontinued_supplier_reinstates_them(self, purchase_setup):
+        """A delivery is the strongest possible evidence they still supply it."""
+        self._receive_all(purchase_setup, cost="400.00")
+        offer = SupplierProduct.objects.get()
+        offer.is_active = False
+        offer.save(update_fields=["is_active"])
+
+        self._receive_all(purchase_setup, cost="410.00")
+
+        offer.refresh_from_db()
+        assert offer.is_active is True
+
+    def test_one_supplier_cannot_have_two_prices_for_one_variant(self, purchase_setup):
+        self._receive_all(purchase_setup, cost="400.00")
+        with pytest.raises(IntegrityError):
+            SupplierProduct.objects.create(
+                supplier=purchase_setup["supplier"],
+                variant=purchase_setup["variant"],
+                last_cost=Decimal("1.00"),
+            )
+
+    def test_a_variant_cannot_have_two_preferred_suppliers(self, purchase_setup):
+        """The database refuses it, not just the service."""
+        self._receive_all(purchase_setup, cost="400.00")
+        other = factories.supplier()
+        with pytest.raises(IntegrityError):
+            SupplierProduct.objects.create(
+                supplier=other,
+                variant=purchase_setup["variant"],
+                last_cost=Decimal("250.00"),
+                is_preferred=True,
+            )
+
+    def test_lead_time_falls_back_to_the_supplier(self, purchase_setup):
+        slow = factories.supplier(lead_time_days=30)
+        self._receive_all(purchase_setup, cost="400.00", supplier=slow)
+        offer = SupplierProduct.objects.get(supplier=slow)
+
+        assert offer.lead_time_days is None
+        assert offer.effective_lead_time_days == 30
+
+        offer.lead_time_days = 3  # this one item they keep in stock
+        offer.save(update_fields=["lead_time_days"])
+        assert offer.effective_lead_time_days == 3

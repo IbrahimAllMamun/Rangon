@@ -3,7 +3,7 @@
 import { Send, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { SupplierForm, type SupplierRow } from "@/components/admin/supplier-form";
 import { VariantPicker, type PickableVariant } from "@/components/admin/variant-picker";
@@ -28,6 +28,13 @@ import {
   toCreatePayload,
   validateLines,
 } from "@/lib/commerce/purchase-order";
+import {
+  EMPTY_OFFERS,
+  type OfferMap,
+  fetchSupplierOffers,
+  minimumOrderWarning,
+  resolveCost,
+} from "@/lib/commerce/supplier-prices";
 import { cn } from "@/lib/cn";
 import { money } from "@/lib/format";
 
@@ -63,6 +70,10 @@ export function PurchaseOrderForm({
   const [sendNow, setSendNow] = useState(false);
   const [errors, setErrors] = useState<{ field: string; message: string }[]>([]);
   const [saving, setSaving] = useState(false);
+  // This supplier's own price list, keyed by variant. Null until a supplier is
+  // chosen; empty once fetched for a supplier we have never bought from.
+  const [offers, setOffers] = useState<OfferMap>(EMPTY_OFFERS);
+  const [offersLoading, setOffersLoading] = useState(false);
 
   const totals = useMemo(() => orderTotals(lines, shipping), [lines, shipping]);
   const lineProblems = useMemo(() => validateLines(lines), [lines]);
@@ -70,6 +81,10 @@ export function PurchaseOrderForm({
   const supplier = suppliers.find((row) => row.id === supplierId);
 
   function addLine(variant: PickableVariant) {
+    // What *this* supplier last charged, falling back to the catalogue's cost
+    // when we have never bought this from them. The fallback is labelled on the
+    // row rather than passed off as a quote.
+    const resolved = resolveCost(offers, variant.id, variant.cost);
     setLines((current) => [
       ...current,
       {
@@ -79,8 +94,7 @@ export function PurchaseOrderForm({
         productName: variant.product_name,
         variantLabel: variant.label,
         quantity: "1",
-        // The last cost paid is the best first guess at what it will cost again.
-        unitCost: variant.cost,
+        unitCost: resolved.cost,
         discount: "0",
       },
     ]);
@@ -92,9 +106,56 @@ export function PurchaseOrderForm({
     );
   }
 
+  /** A cost the buyer typed is theirs; switching supplier must not discard it. */
+  function setUnitCost(key: string, unitCost: string) {
+    setLine(key, { unitCost, costTouched: true });
+  }
+
   function removeLine(key: string) {
     setLines((current) => current.filter((line) => line.key !== key));
   }
+
+  /**
+   * Load the chosen supplier's price list, and re-price with it.
+   *
+   * Switching supplier mid-order is the case worth getting right: the lines
+   * already on screen were priced for somebody else, and leaving them would
+   * send the new supplier the old one's figures. Lines the buyer typed into are
+   * left exactly as typed — see `costTouched`.
+   */
+  useEffect(() => {
+    if (!supplierId) {
+      setOffers(EMPTY_OFFERS);
+      return;
+    }
+
+    let current = true;
+    setOffersLoading(true);
+    fetchSupplierOffers(supplierId)
+      .then((loaded) => {
+        if (!current) return;
+        setOffers(loaded);
+        setLines((existing) =>
+          existing.map((line) =>
+            line.costTouched
+              ? line
+              : { ...line, unitCost: resolveCost(loaded, line.variantId, line.unitCost).cost },
+          ),
+        );
+      })
+      .catch(() => {
+        // A price list that will not load must not block raising the order: the
+        // catalogue cost is still a workable default and every line is editable.
+        if (current) setOffers(EMPTY_OFFERS);
+      })
+      .finally(() => {
+        if (current) setOffersLoading(false);
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [supplierId]);
 
   /** Choosing a supplier suggests a delivery date from their lead time. */
   function chooseSupplier(id: string) {
@@ -299,6 +360,8 @@ export function PurchaseOrderForm({
                     const totals = lineTotals(line);
                     const problem = problemFor(line.key);
                     const describe = `${line.productName}${line.variantLabel ? ` ${line.variantLabel}` : ""}`;
+                    const offer = offers.get(line.variantId) ?? null;
+                    const belowMinimum = minimumOrderWarning(offer, line.quantity);
                     return (
                       <tr key={line.key} className={cn(problem && "bg-[var(--error-bg)]")}>
                         <td className="px-3 py-2">
@@ -310,6 +373,27 @@ export function PurchaseOrderForm({
                           {problem && (
                             <span role="alert" className="block text-caption text-[var(--error)]">
                               {problem}
+                            </span>
+                          )}
+                          {/* Where the price came from. A buyer quoting a figure
+                              back at a supplier should know whether that
+                              supplier ever charged it. */}
+                          {supplierId && !offersLoading && (
+                            offer ? (
+                              <span className="block text-caption text-muted">
+                                {offer.supplier_sku ? `Their code ${offer.supplier_sku} · ` : ""}
+                                last paid {money(offer.last_cost)}
+                              </span>
+                            ) : (
+                              <span className="block text-caption text-muted">
+                                First order from this supplier — cost is the catalogue&rsquo;s, not
+                                theirs.
+                              </span>
+                            )
+                          )}
+                          {belowMinimum && (
+                            <span className="block text-caption text-[var(--warning)]">
+                              {belowMinimum}
                             </span>
                           )}
                         </td>
@@ -332,7 +416,7 @@ export function PurchaseOrderForm({
                             step="0.01"
                             inputMode="decimal"
                             value={line.unitCost}
-                            onChange={(event) => setLine(line.key, { unitCost: event.target.value })}
+                            onChange={(event) => setUnitCost(line.key, event.target.value)}
                             aria-label={`Unit cost for ${describe}`}
                             className="tabular h-8 w-28 text-right text-body-sm"
                           />

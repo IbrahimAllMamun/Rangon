@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.db.models import Count, Q
+from django_filters import rest_framework as filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -20,9 +21,16 @@ from purchasing.api.serializers import (
     PurchaseReceiptSerializer,
     ReceivePurchaseSerializer,
     SupplierPaymentSerializer,
+    SupplierProductSerializer,
     SupplierSerializer,
 )
-from purchasing.models import PurchaseOrder, PurchaseOrderStatus, Supplier, SupplierPayment
+from purchasing.models import (
+    PurchaseOrder,
+    PurchaseOrderStatus,
+    Supplier,
+    SupplierPayment,
+    SupplierProduct,
+)
 from purchasing.services import PurchaseLine
 
 
@@ -203,3 +211,65 @@ class SupplierPaymentViewSet(
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(SupplierPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+
+
+class SupplierProductFilter(filters.FilterSet):
+    """`?product=` as well as `?variant=`.
+
+    The product screen wants every supplier of every variant of one product.
+    Without this it would have to issue one request per variant — twelve for a
+    shirt in three colours and four sizes.
+    """
+
+    product = filters.UUIDFilter(field_name="variant__product")
+
+    class Meta:
+        model = SupplierProduct
+        fields = ["supplier", "variant", "product", "is_preferred", "is_active"]
+
+
+class SupplierProductViewSet(viewsets.ModelViewSet):
+    """Which suppliers sell which variants, and what they charge.
+
+    Reference data rather than financial record, so unlike orders and receipts
+    these rows may be edited and deleted (docs/business-rules.md § 7a).
+
+    Not branch-scoped, deliberately: a supplier's price list is an agreement
+    with the business, not with one shop. Branch scoping lives on the purchase
+    orders that spend against it.
+    """
+
+    serializer_class = SupplierProductSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["purchases.view"],
+        "retrieve": ["purchases.view"],
+        "create": ["purchases.create"],
+        "update": ["purchases.create"],
+        "partial_update": ["purchases.create"],
+        "destroy": ["purchases.create"],
+        "set_preferred": ["purchases.create"],
+    }
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = SupplierProductFilter
+    search_fields = ["supplier_sku", "variant__sku", "variant__product__name", "supplier__name"]
+    ordering_fields = ["last_cost", "last_purchased_at", "created_at"]
+
+    def get_queryset(self) -> Any:
+        return SupplierProduct.objects.select_related(
+            "supplier", "variant", "variant__product"
+        ).order_by("-is_preferred", "last_cost")
+
+    def perform_create(self, serializer: Any) -> None:
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="set-preferred")
+    def set_preferred(self, request: Request, pk: str | None = None) -> Response:
+        """Promote this supplier, demoting whoever held it, in one transaction."""
+        offer = self.get_object()
+        updated = purchasing_services.set_preferred_supplier(
+            variant_id=offer.variant_id,
+            supplier=offer.supplier,
+            actor=request.user,
+        )
+        return Response(self.get_serializer(updated).data)
