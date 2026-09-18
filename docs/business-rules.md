@@ -304,6 +304,15 @@ money without moving the credit, which is computed from the returned lines. And 
 by when it was raised, because `PurchaseOrder` carries an `invoice_number` but no invoice date —
 `DECISION REQUIRED` if the two must differ for filing.*
 
+**A storefront price says which treatment it was quoted under.** Under `EXCLUSIVE` the catalogue
+price is not what the shopper pays — the tax goes on at checkout — so a bare `৳ 1,290` promises a
+total that never arrives. Every shop price (product page, listing card, quick view) carries a short
+note: `+ 15% VAT` under `EXCLUSIVE`, `incl. 15% VAT` under `INCLUSIVE`, and **nothing at all at a
+zero rate**, which is the same rule the memo follows. The rate is resolved **per product** by the
+API (`shop_views._tax_payload`) rather than read from the organisation in the browser, because a
+category override replaces the organisation rate and the note has to be true of the price it sits
+beside — `+ 15% VAT` on a zero-rated line would quote a checkout total that never arrives either.
+
 **Input VAT is entered on the purchase order.** `PurchaseOrderItem.tax_rate` has existed since the
 first migration and `recalculate_totals` has always read it, but nothing could set it: the
 `PurchaseLine` dataclass had no such field, so every purchase order ever raised carried

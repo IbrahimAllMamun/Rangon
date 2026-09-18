@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsCustomer
-from accounts.services import default_branch
+from accounts.services import default_branch, tax_settings
 from catalog import merchandising, search
 from catalog import services as catalog_services
 from catalog.api.serializers import colour_payload
@@ -120,7 +120,28 @@ def _ranked(products: Any) -> list[Product]:
     return rows
 
 
-def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
+def _tax_payload(product: Product, tax: tuple[str, Decimal]) -> dict[str, Any]:
+    """What this product's price says about VAT.
+
+    The storefront quotes one number and the checkout charges another whenever
+    the treatment is EXCLUSIVE, so the price needs a word beside it. That word
+    has to be true of *this* price: a category override replaces the
+    organisation rate for everything inside it (docs/business-rules.md §3.4),
+    and `Category.tax_rate` is null when there is no override. "+ VAT" on a
+    zero-rated line would promise a checkout total that never arrives.
+
+    `product.category` is in `_PAYLOAD_SELECT_RELATED`, so this costs no query;
+    the organisation's settings are resolved once per request by the caller
+    rather than once per product.
+    """
+    mode, default_rate = tax
+    override = product.category.tax_rate
+    return {"mode": mode, "rate": str(default_rate if override is None else override)}
+
+
+def _product_payload(
+    product: Product, *, snapshots: dict, tax: tuple[str, Decimal] | None = None
+) -> dict[str, Any]:
     images = [
         {
             "url": media_url(image.image),
@@ -160,6 +181,9 @@ def _product_payload(product: Product, *, snapshots: dict) -> dict[str, Any]:
 
     prices = [Decimal(v["price"]) for v in variants] or [Decimal("0.00")]
     return {
+        # Resolved by the caller when it has several products to serialise, so
+        # the organisation row is read once rather than once a card.
+        "tax": _tax_payload(product, tax if tax is not None else tax_settings()),
         "id": str(product.pk),
         "name": product.name,
         "slug": product.slug,
@@ -220,7 +244,8 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         variants = ProductVariant.objects.filter(product__in=products)
         snapshots = inventory_services.availability(branch=branch, variants=list(variants))
 
-        payload = [_product_payload(product, snapshots=snapshots) for product in products]
+        tax = tax_settings()
+        payload = [_product_payload(product, snapshots=snapshots, tax=tax) for product in products]
 
         # Merchandising signal, logged once per search rather than per page.
         query = request.query_params.get("q", "")
@@ -264,7 +289,8 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         snapshots = inventory_services.availability(
             branch=branch, variants=list(product.variants.all())
         )
-        payload = _product_payload(product, snapshots=snapshots)
+        tax = tax_settings()
+        payload = _product_payload(product, snapshots=snapshots, tax=tax)
         # Structured specifications, grouped by attribute. The free-text
         # `material` / `care_instructions` above stay as they are: they predate
         # this and products already carry them.
@@ -297,7 +323,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
             variants=list(ProductVariant.objects.filter(product__in=related)),
         )
         payload["related"] = [
-            _product_payload(item, snapshots=related_snapshots) for item in related
+            _product_payload(item, snapshots=related_snapshots, tax=tax) for item in related
         ]
         return Response(payload)
 
@@ -547,7 +573,8 @@ class ShopHomeView(APIView):
                 branch=branch,
                 variants=list(ProductVariant.objects.filter(product__in=products)),
             )
-            return [_product_payload(product, snapshots=snapshots) for product in products]
+            tax = tax_settings()
+            return [_product_payload(product, snapshots=snapshots, tax=tax) for product in products]
 
         base = _payload_queryset(visible_products())
 

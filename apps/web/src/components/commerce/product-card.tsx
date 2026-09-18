@@ -15,6 +15,7 @@ import { QuickViewTrigger } from "@/components/commerce/quick-view-trigger";
 import type { ShopProduct } from "@/lib/api/types";
 import { Reveal } from "@/components/ui/reveal";
 import { cn } from "@/lib/cn";
+import { vatNote } from "@/lib/commerce/vat";
 import { money } from "@/lib/format";
 
 export function ProductCard({
@@ -28,6 +29,7 @@ export function ProductCard({
 }) {
   const image = product.images[0];
   const hasRange = product.price_min !== product.price_max;
+  const taxNote = vatNote(product.tax);
   const onSale = product.variants.some(
     (variant) => variant.compare_at_price && Number(variant.compare_at_price) > Number(variant.price),
   );
@@ -88,6 +90,12 @@ export function ProductCard({
             {hasRange
               ? `${money(product.price_min)} – ${money(product.price_max, false)}`
               : money(product.price_min)}
+            {/* Under EXCLUSIVE the card's price is not the checkout price, so
+                the card has to say so too — the note cannot wait for the
+                product page. Nothing renders at a zero rate. */}
+            {taxNote && (
+              <span className="ml-1.5 text-caption font-normal text-muted">{taxNote}</span>
+            )}
           </p>
         </div>
       </Link>

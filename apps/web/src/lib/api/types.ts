@@ -78,6 +78,13 @@ export interface ShopProductSpec {
   values: { value: string; label: string; swatch: string }[];
 }
 
+export interface TaxTreatment {
+  /** "EXCLUSIVE" — added at checkout — or "INCLUSIVE" — already in the price. */
+  mode: string;
+  /** A fraction, as the API stores it: "0.1500" is 15%. */
+  rate: string;
+}
+
 export interface ShopProduct {
   id: string;
   name: string;
@@ -90,6 +97,12 @@ export interface ShopProduct {
   specs?: ShopProductSpec[];
   category: ShopCategoryRef;
   brand: { name: string; slug: string } | null;
+  /**
+   * The VAT treatment and rate this product's price was quoted under. Resolved
+   * per product server-side, because a category can override the organisation
+   * rate. Optional so a cached payload from before the field still renders.
+   */
+  tax?: TaxTreatment;
   images: ShopImage[];
   variants: ShopVariant[];
   price_min: string;

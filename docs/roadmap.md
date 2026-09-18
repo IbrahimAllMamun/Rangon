@@ -1436,14 +1436,16 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
     before the first real sale. **D-A (credit sales) no longer blocks anything** — phase 37 is built
     in a way that works under either answer.
 
-11. **VAT beyond the setting.** The treatment, the rate, the per-category override, the BIN on the
-    organization, the tax line in cart, checkout and the POS receipt, and the frozen-per-order
-    history all exist. Two things do not. **(a) There is no VAT return.** `Order.tax_total` (output)
-    and `PurchaseOrder.tax_total` (input) are both recorded, but no report sums either over a
-    period, so filing means exporting `sales_report` and adding a column up by hand. **(b) The
-    storefront shows a bare price.** `ProductBuyPanel` renders `money(price)` with no "incl. VAT" or
-    "+ VAT", so under `EXCLUSIVE` the checkout total is larger than the number the shopper was
-    quoted. Both wait on the rate being decided; neither is hard once it is.
+11. ~~**VAT beyond the setting.**~~ **Done 2026-09-18.** Both halves shipped. **(a) The VAT
+    return** is `GET /reports/vat/` and `/admin/reports/vat` — output VAT, less credits on returns,
+    less input VAT, split by rate and broken into calendar months. Building it found the third
+    thing: `PurchaseOrderItem.tax_rate` had existed since the first migration and *nothing at any
+    layer could set it*, because `PurchaseLine` had no such field. Every purchase order ever raised
+    carried `tax_total 0.00`, so a VAT return built on it would have told the owner they owed the
+    full output VAT with nothing to reclaim. The chain is wired and the purchase order form asks
+    for the supplier's VAT. **(b) Storefront prices** now carry `+ 15% VAT` or `incl. 15% VAT`
+    beside them — product page, listing card and quick view — resolved per product so a category
+    override is respected, and nothing at all at a zero rate.
 
 ## Decisions owed for phases 35–39
 
