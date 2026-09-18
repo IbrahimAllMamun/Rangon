@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { NewProductForm } from "@/components/admin/new-product-form";
+import type { BrandOption, CategoryOption } from "@/components/admin/product-form";
 import { SupplierForm, type SupplierRow } from "@/components/admin/supplier-form";
 import { VariantPicker, type PickableVariant } from "@/components/admin/variant-picker";
 import {
@@ -35,6 +37,7 @@ import {
   minimumOrderWarning,
   resolveCost,
 } from "@/lib/commerce/supplier-prices";
+import type { MatrixAttribute } from "@/lib/commerce/variant-matrix";
 import { cn } from "@/lib/cn";
 import { money } from "@/lib/format";
 
@@ -53,9 +56,16 @@ import { money } from "@/lib/format";
 export function PurchaseOrderForm({
   suppliers: initialSuppliers,
   defaultBranchLabel,
+  categories,
+  brands,
+  attributes,
 }: {
   suppliers: SupplierRow[];
   defaultBranchLabel: string;
+  /** Reference data for creating a product inline; empty disables the option. */
+  categories: CategoryOption[];
+  brands: BrandOption[];
+  attributes: MatrixAttribute[];
 }) {
   const router = useRouter();
 
@@ -74,6 +84,9 @@ export function PurchaseOrderForm({
   // chosen; empty once fetched for a supplier we have never bought from.
   const [offers, setOffers] = useState<OfferMap>(EMPTY_OFFERS);
   const [offersLoading, setOffersLoading] = useState(false);
+  // Non-null while the inline product form is open; holds the search term
+  // that found nothing, so the buyer does not retype the name.
+  const [creatingNamed, setCreatingNamed] = useState<string | null>(null);
 
   const totals = useMemo(() => orderTotals(lines, shipping), [lines, shipping]);
   const lineProblems = useMemo(() => validateLines(lines), [lines]);
@@ -98,6 +111,19 @@ export function PurchaseOrderForm({
         discount: "0",
       },
     ]);
+  }
+
+  /**
+   * Put freshly created variants onto the order.
+   *
+   * They go through the same `addLine` as a picked one, so they pick up this
+   * supplier's price if there somehow is one and the catalogue cost otherwise —
+   * which for a product created seconds ago is the cost just typed into the
+   * form, carried on the variant.
+   */
+  function addCreated(created: PickableVariant[]) {
+    for (const variant of created) addLine(variant);
+    setCreatingNamed(null);
   }
 
   function setLine(key: string, patch: Partial<DraftLine>) {
@@ -238,6 +264,7 @@ export function PurchaseOrderForm({
         <CardContent className="space-y-4">
           {addingSupplier ? (
             <SupplierForm
+              nested
               onDone={(created) => {
                 setSuppliers((current) =>
                   [...current, created].sort((a, b) => a.name.localeCompare(b.name)),
@@ -327,7 +354,25 @@ export function PurchaseOrderForm({
           <CardTitle>Lines</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <VariantPicker onPick={addLine} exclude={chosen} label="Add a product to this order" />
+          {creatingNamed !== null ? (
+            <NewProductForm
+              initialName={creatingNamed}
+              categories={categories}
+              brands={brands}
+              attributes={attributes}
+              onCreated={addCreated}
+              onCancel={() => setCreatingNamed(null)}
+            />
+          ) : (
+            <VariantPicker
+              onPick={addLine}
+              exclude={chosen}
+              label="Add a product to this order"
+              // Only offered when the page could hand us the reference data;
+              // without categories there is nothing to build a product from.
+              onCreateRequest={categories.length ? setCreatingNamed : undefined}
+            />
+          )}
 
           {errorFor("lines") && (
             <p role="alert" className="text-body-sm text-[var(--error)]">

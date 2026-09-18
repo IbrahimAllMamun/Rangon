@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/admin/shell";
 import { Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
+import { getProductFormData, type ProductFormData } from "@/lib/commerce/product-form-data";
 import type { SessionUser } from "@/lib/api/types";
 
 export const metadata = { title: "New purchase order" };
@@ -39,6 +40,21 @@ export default async function NewPurchaseOrderPage() {
     error = caught instanceof Error ? caught.message : "Could not load suppliers.";
   }
 
+  // Categories, brands and variant axes, so a product the catalogue has never
+  // carried can be created without leaving this order.
+  //
+  // Allowed to fail on its own: a buyer without `products.create` — or a
+  // reference list that will not load — still gets a working order form, minus
+  // the option to invent a product. The API refuses the write either way.
+  let reference: ProductFormData | null = null;
+  if (user.permissions.includes("*") || user.permissions.includes("products.create")) {
+    try {
+      reference = await getProductFormData();
+    } catch {
+      reference = null;
+    }
+  }
+
   if (error) {
     return (
       <>
@@ -69,6 +85,9 @@ export default async function NewPurchaseOrderPage() {
       <PurchaseOrderForm
         suppliers={suppliers}
         defaultBranchLabel={user.branch ? `${user.branch.name} (${user.branch.code})` : "Default branch"}
+        categories={reference?.categories ?? []}
+        brands={reference?.brands ?? []}
+        attributes={reference?.attributes ?? []}
       />
     </>
   );

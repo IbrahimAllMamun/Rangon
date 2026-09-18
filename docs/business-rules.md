@@ -870,6 +870,34 @@ the order is still accepted.
 > the business wants it enforced, it belongs in `purchasing.services.create_purchase_order` as a
 > `BusinessError`, not in the form.
 
+### 7a.6 Creating a product from a purchase order
+
+A buyer ordering something the catalogue has never carried creates it on the order itself. The
+product is created **`DRAFT` and unpublished**, and its variants are added to the order as lines.
+
+Two things it does not collect:
+
+* **Stock.** Goods arrive by receiving the order being raised, which is what carries the cost paid
+  into the ledger (§ 4.0a). A figure typed at order time would be the zero-cost door that closed.
+* **A retail price, necessarily.** At the moment of ordering, a buyer knows what they are paying and
+  frequently not yet what they will charge. Demanding a retail price here produces a made-up one.
+  Blank is recorded as `0.00`, which is safe because of the rule below.
+
+**A product with nothing priced above zero cannot be published.** `catalog.services.publish_product`
+refuses it: zero is a legitimate price in the database — a sample, a gift line, something bundled —
+and deliberately allowed by `catalog_variant_price_gte_0`, but nothing downstream refuses it.
+`orders.services.pricing` computes `unit_price × quantity`, so a checkout for `0.00` is a valid
+order and the goods leave for nothing ([D75](roadmap.md#known-defects)). The gate is per product,
+not per variant: a free sample alongside a priced row is a real arrangement, and what is refused is
+a product with *nothing* a shopper can pay for.
+
+> **DECISION REQUIRED** — a product with one SKU and no variant axes cannot be created this way,
+> because `generate_variants` requires at least one attribute value and `POST /variants/` requires a
+> SKU the client would have to invent. The documented default is to send the buyer to the full
+> product form for that case. If single-SKU products are common enough to matter — cosmetics are the
+> likely ones — the fix is for the variant serializer to derive a SKU the way
+> `unique_supplier_code` derives a supplier code.
+
 ### 7a.5 Not a financial record
 
 A supplier price list is reference data: it may be edited and deleted, and both foreign keys cascade.

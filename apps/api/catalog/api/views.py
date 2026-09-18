@@ -57,6 +57,7 @@ from catalog.services import (
     category_attributes,
     generate_barcode,
     generate_variants,
+    publish_product,
     set_product_specs,
 )
 from core import audit
@@ -390,27 +391,10 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def publish(self, request: Request, pk: str | None = None) -> Response:
-        product = self.get_object()
-        if not product.variants.exists():
-            return Response(
-                {
-                    "error": {
-                        "code": "VALIDATION_ERROR",
-                        "message": "A product needs at least one variant before publishing.",
-                        "details": {},
-                    }
-                },
-                status=400,
-            )
-        product.published = True
-        product.status = "ACTIVE"
-        product.save(update_fields=["published", "status", "updated_at"])
-        audit.record(
-            action=audit.AuditAction.UPDATE,
-            entity=product,
-            actor=request.user,
-            new_values={"published": True},
-        )
+        # Thin: the gates and the audit row belong to the service (CLAUDE.md §4).
+        # It used to hand-roll the error envelope here too, which is what
+        # `core.exceptions.BusinessError` and the DRF handler exist to do.
+        product = publish_product(product=self.get_object(), actor=request.user)
         return Response(ProductDetailSerializer(product, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])

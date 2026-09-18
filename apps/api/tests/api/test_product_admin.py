@@ -201,6 +201,46 @@ class TestProductFormFlow:
         assert response.status_code == 400
         assert response.data["error"]["code"] == "VALIDATION_ERROR"
 
+    def test_publishing_a_free_product_is_refused(self, owner: Any, auth_client: Any) -> None:
+        """A variant at 0.00 is sellable for nothing, so it must not go live (D75).
+
+        `publish` only ever checked that variants *exist*. Zero is a legitimate
+        price in the database — a sample, a gift line — and deliberately allowed
+        by `catalog_variant_price_gte_0`. What must not happen is that price
+        reaching the storefront, where nothing downstream refuses it:
+        `price_lines` computes `unit_price * quantity` and a checkout for 0.00
+        is a perfectly valid order.
+        """
+        client = auth_client(owner)
+        product = factories.product(published=False)
+        factories.variant(product, price="0.00")
+
+        response = client.post(f"/api/v1/products/{product.pk}/publish/", {}, format="json")
+
+        assert response.status_code == 400, response.data
+        assert response.data["error"]["code"] == "VALIDATION_ERROR"
+        product.refresh_from_db()
+        assert product.published is False
+
+    def test_publishing_is_allowed_when_one_priced_variant_exists(
+        self, owner: Any, auth_client: Any
+    ) -> None:
+        """The guard is about having something to sell, not about every row.
+
+        A free sample alongside a priced variant is a real arrangement, and the
+        storefront hides nothing: the priced row is what a shopper buys.
+        """
+        client = auth_client(owner)
+        product = factories.product(published=False)
+        factories.variant(product, price="0.00")
+        factories.variant(product, price="1200.00")
+
+        response = client.post(f"/api/v1/products/{product.pk}/publish/", {}, format="json")
+
+        assert response.status_code == 200, response.data
+        product.refresh_from_db()
+        assert product.published is True
+
     def test_generate_variants_is_idempotent(self, owner: Any, auth_client: Any) -> None:
         """Re-saving the form must not duplicate rows the product already has."""
         client = auth_client(owner)
