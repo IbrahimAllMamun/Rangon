@@ -1297,7 +1297,7 @@ two notations for one idea in one screen — and the rate column read `15.0%` wh
 the storefront reads `15%`. Both now use one helper.
 
 ```text
-pytest ....................................... 1057 passed
+pytest ....................................... 1061 passed
 ruff 0.8.4 check + format --check ............ clean, 201 files
 tsc --noEmit / next lint ..................... clean
 vitest ....................................... 254 passed
