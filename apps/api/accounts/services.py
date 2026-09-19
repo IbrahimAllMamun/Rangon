@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
 from accounts.models import (
     Branch,
@@ -182,6 +183,48 @@ def check_can_lose_access(*, user: User, actor: User | None, what: str) -> None:
         )
 
 
+def end_sessions(user: User) -> int:
+    """Sign an account out everywhere: blacklist every refresh token it holds.
+
+    A refresh token lives fourteen days and rotates, so without this a session
+    opened with a leaked password outlives the password by two weeks -- which
+    is exactly what a password change is meant to stop (D86). Access tokens are
+    refused separately and at once: each carries a hash of the password it was
+    issued under (`SIMPLE_JWT["CHECK_REVOKE_TOKEN"]`), which a new password no
+    longer matches. The blacklist is what covers tokens issued before that
+    claim existed.
+
+    Returns how many sessions were still open.
+    """
+    open_tokens = OutstandingToken.objects.filter(user=user, blacklistedtoken__isnull=True)
+    ended = BlacklistedToken.objects.bulk_create(
+        [BlacklistedToken(token=token) for token in open_tokens], ignore_conflicts=True
+    )
+    return len(ended)
+
+
+@transaction.atomic
+def change_own_password(*, user: User, new_password: str) -> User:
+    """A signed-in person replacing their own password.
+
+    The caller has already checked the current password and the validators
+    (`PasswordChangeSerializer`). Every session the account had is ended,
+    including the one making the change: the view issues that one fresh
+    tokens, so the person who changed it stays signed in and nobody else does.
+    """
+    user.set_password(new_password)
+    user.save(update_fields=["password", "updated_at"])
+    ended = end_sessions(user)
+    audit.record(
+        action=audit.AuditAction.USER_CHANGED,
+        entity=user,
+        actor=user,
+        new_values={"password_changed": True, "sessions_ended": ended},
+        reason="Changed their own password; every other session signed out",
+    )
+    return user
+
+
 @transaction.atomic
 def update_staff_user(
     *,
@@ -221,6 +264,9 @@ def update_staff_user(
     if password:
         user.set_password(password)
     user.save()
+    # A reset is what an owner does when an account may be in the wrong hands,
+    # so it signs that account out everywhere, not only at the next sign-in.
+    sessions_ended = end_sessions(user) if password else 0
 
     after = {
         "role": user.role.code if user.role_id else None,
@@ -232,6 +278,7 @@ def update_staff_user(
     if password:
         # The value never goes near the log -- only the fact of the reset.
         changed_after["password_reset"] = True
+        changed_after["sessions_ended"] = sessions_ended
     if changed_before or changed_after:
         audit.record(
             action=audit.AuditAction.USER_CHANGED,

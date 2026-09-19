@@ -872,6 +872,34 @@ serializer, because two guards and one audit entry hang off it:
 Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
 has to keep pointing at a real row. Customers never appear in the staff list.
 
+### 7.1a Your own password, and your sessions
+
+Every staff role can change its own password at `/admin/account`, reached from the name in the admin
+header. An owner can still reset anyone's from `/admin/staff`.
+
+- **A password change ends every session the account has, at once** — every browser, the counter,
+  a phone. So does an owner's reset. Changing a password is what a person does when they think it is
+  known to someone else, and until 2026-09-19 it left that someone signed in for up to fourteen days
+  ([D86](roadmap.md#known-defects)). Two mechanisms, because either alone leaves a gap: every refresh
+  token the account holds is blacklisted (`accounts.services.end_sessions`), and every token carries
+  a hash of the password it was issued under, which the API checks on each request — so an access
+  token dies now rather than at the end of its half hour.
+- **The session that made the change stays signed in.** It is handed a fresh pair of tokens with the
+  new password's claim; nobody else is.
+- **The current password is required, and guessing it is limited** to ten attempts a minute per
+  account, the sign-in form's rate. A wrong guess is audited as `LOGIN_FAILED`
+  ([D87](roadmap.md#known-defects)). A stolen session is exactly the situation in which someone would
+  try to learn the real password this way.
+- **The new password must pass the same validators as everywhere else** — ten characters, not a
+  common password, not only numbers, not close to the name or email — **and must not be the current
+  one**: choosing it again fixes nothing.
+- Neither password ever reaches the audit log; the entry records that it changed and how many
+  sessions were ended.
+
+Tokens issued before 2026-09-19 carry no password claim. The API refuses such an access token, and
+honours such a refresh token once, exchanging it for a pair that does carry the claim — so the
+change signs nobody out except, at most once, a page loaded between the two.
+
 ### 7.2 Categories, brands and attributes
 
 - A category may not be its own parent, or be moved underneath its own descendant. `Category.path`,

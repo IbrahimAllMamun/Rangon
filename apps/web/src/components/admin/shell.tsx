@@ -424,7 +424,7 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
                 </>
               )}
               <li className="truncate text-body-sm font-semibold" aria-current="page">
-                {activeItem?.label ?? "Admin"}
+                {activeItem?.label ?? (pathname === "/admin/account" ? "Your account" : "Admin")}
               </li>
             </ol>
           </nav>
@@ -435,8 +435,17 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
             <span aria-hidden className="mx-1 h-6 w-px bg-border" />
             {/* One identity block rather than three loose elements: the initials
                 give the bar a fixed anchor at every width, and the name and role
-                fall away on small screens without the avatar moving. */}
-            <div className="flex items-center gap-2.5">
+                fall away on small screens without the avatar moving. It opens
+                your own account -- the one screen every staff role can reach,
+                and where a password is changed. */}
+            <Link
+              href="/admin/account"
+              aria-label={`Your account: ${user.full_name || user.email}`}
+              className={cn(
+                "-mx-1.5 flex items-center gap-2.5 rounded-md px-1.5 py-1 hover:bg-neutral-100",
+                "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]",
+              )}
+            >
               <span
                 aria-hidden
                 className="grid size-9 shrink-0 place-items-center rounded-full bg-neutral-900 text-caption font-semibold text-white"
@@ -450,7 +459,7 @@ export function AdminShell({ user, children }: { user: SessionUser; children: Re
                   {user.branch ? ` · ${user.branch.code}` : ""}
                 </p>
               </div>
-            </div>
+            </Link>
             <Button variant="ghost" size="icon" onClick={signOut} aria-label="Sign out">
               <LogOut aria-hidden />
             </Button>

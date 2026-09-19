@@ -233,6 +233,11 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
+    # Every token carries a hash of the password it was issued under, and is
+    # refused once that password changes -- so a password change ends every
+    # session at once, access tokens included, rather than half an hour later
+    # when they would have expired anyway (D86, accounts.services.end_sessions).
+    "CHECK_REVOKE_TOKEN": True,
 }
 
 SPECTACULAR_SETTINGS = {

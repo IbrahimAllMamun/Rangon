@@ -6,13 +6,17 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.utils import get_md5_hash_password
 
 from accounts.api.serializers import (
     AuditLogSerializer,
@@ -30,7 +34,12 @@ from accounts.api.serializers import (
 )
 from accounts.models import Branch, Permission, Role, RoleCode, User
 from accounts.permissions import RolePermission
-from accounts.services import get_organization, priced_order_count, update_tax_settings
+from accounts.services import (
+    change_own_password,
+    get_organization,
+    priced_order_count,
+    update_tax_settings,
+)
 from core import audit
 from core.middleware import get_audit_context
 from core.models import AuditLog
@@ -92,9 +101,22 @@ class RefreshView(APIView):
             )
         try:
             refresh = RefreshToken(token)
-            access = str(refresh.access_token)
+            user = User.objects.get(pk=refresh["user_id"])
+            # A deactivated account, or a token issued under a password that
+            # has since changed, is signed out -- not handed a fresh pair.
+            # A token with no password claim at all predates the claim
+            # (2026-09-19); it is honoured, because a password change
+            # blacklists it like any other (`accounts.services.end_sessions`).
+            claim = refresh.get(jwt_settings.REVOKE_TOKEN_CLAIM)
+            if not user.is_active or (
+                claim is not None and claim != get_md5_hash_password(user.password)
+            ):
+                raise TokenError("This session has been signed out.")
             refresh.blacklist()  # rotation: the old refresh token dies here
-            new_refresh = str(RefreshToken.for_user(User.objects.get(pk=refresh["user_id"])))
+            # Both tokens are minted afresh rather than the access token being
+            # derived from the old refresh, so both carry the current claim.
+            fresh = RefreshToken.for_user(user)
+            access, new_refresh = str(fresh.access_token), str(fresh)
         except (TokenError, User.DoesNotExist):
             return Response(
                 {
@@ -172,22 +194,40 @@ class RegisterView(GenericAPIView):
 
 
 class PasswordChangeView(GenericAPIView):
+    """Change your own password, and sign every other session out.
+
+    Answers with a fresh token pair for the session that made the change --
+    every token the account held, this session's included, has just been
+    revoked. The web app's `/api/auth/password` route stores them in the
+    httpOnly cookies and never hands them to the browser (ADR-0005).
+    """
+
     permission_classes = [IsAuthenticated]
     serializer_class = PasswordChangeSerializer
+    # Named here rather than left to the defaults: this is a password check,
+    # and a stolen session could otherwise guess the real password at the
+    # general 600-a-minute rate (D87). Same scope as the sign-in form.
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth"
 
     def post(self, request: Request) -> Response:
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         user = request.user
-        user.set_password(serializer.validated_data["new_password"])
-        user.save(update_fields=["password"])
-        audit.record(
-            action=audit.AuditAction.USER_CHANGED,
-            entity=user,
-            actor=user,
-            reason="Password changed",
-        )
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        if not serializer.is_valid():
+            # A wrong guess, not a blank field: `validate_current_password`
+            # raises with the default "invalid" code, `required`/`blank` do not.
+            guesses = serializer.errors.get("current_password", [])
+            if any(getattr(error, "code", "") == "invalid" for error in guesses):
+                audit.record(
+                    action=audit.AuditAction.LOGIN_FAILED,
+                    entity=user,
+                    actor=user,
+                    reason="Wrong current password when changing the password",
+                )
+            raise ValidationError(serializer.errors)
+
+        change_own_password(user=user, new_password=serializer.validated_data["new_password"])
+        return Response(LoginSerializer.tokens_for(user))
 
 
 class OrganizationView(APIView):

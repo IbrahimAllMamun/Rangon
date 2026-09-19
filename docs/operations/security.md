@@ -8,9 +8,9 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Area | Control |
 |---|---|
 | Password storage | Argon2id (Django `ARGON2` hasher first), minimum length 10, common-password and numeric validators |
-| Session | JWT access 30 min + rotating refresh 14 days, blacklist on logout, tokens only in `httpOnly` `SameSite=Lax` cookies ([ADR-0005](../architecture/decisions/0005-jwt-cookie-auth.md)) |
+| Session | JWT access 30 min + rotating refresh 14 days, blacklist on logout, tokens only in `httpOnly` `SameSite=Lax` cookies ([ADR-0005](../architecture/decisions/0005-jwt-cookie-auth.md)). Every token carries a hash of the password it was issued under (`CHECK_REVOKE_TOKEN`) and every refresh token is blacklisted on a password change or reset, so either ends every session at once ([D86](../roadmap.md#known-defects)) |
 | Authorization | Role → permission codes enforced by DRF permission classes on **every** endpoint; branch scoping on every branch-bearing queryset; `OWNER` bypass is explicit and audited |
-| Brute force | Throttle 10/min per IP on login/register/password-reset; failed logins audit-logged |
+| Brute force | Throttle 10/min on login and register (per IP) and on password change (per account, since 2026-09-19 — [D87](../roadmap.md#known-defects)); failed logins and wrong current passwords audit-logged as `LOGIN_FAILED` |
 | Input | DRF serializers validate and coerce everything; the ORM parameterises all SQL; no raw string SQL anywhere |
 | XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP sent by the web app itself (`apps/web/src/middleware.ts`) with a per-request nonce — **not** by Nginx, which would append a second policy and block the nonced scripts |
 | CSRF | Cookie-borne auth on same-origin Next routes uses `SameSite=Lax` + a double-submit token on state-changing routes; the API itself is token-authenticated and CSRF-exempt by construction |
@@ -36,7 +36,7 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Insider theft via stock edits | Stock can only move through the ledger; every adjustment needs a reason and is audit-logged; cashiers cannot adjust stock at all |
 | Cashier self-refund | `sales.refund` withheld from `CASHIER`; manager elevation is a separate credential check, logged with both user ids |
 | Enumeration of orders/customers | UUID primary keys; guest order tracking requires a signed token as well as the order number |
-| Account takeover | Argon2, throttling, refresh rotation + blacklist, logout everywhere on password change |
+| Account takeover | Argon2, throttling, refresh rotation + blacklist, logout everywhere on password change or an owner's reset. The last was listed here before it existed: until 2026-09-19 a changed password left every session open for up to 14 days ([D86](../roadmap.md#known-defects)) |
 | PII exposure in logs | Structured logging with an explicit field allow-list; no request bodies logged on auth endpoints |
 
 ## Not done

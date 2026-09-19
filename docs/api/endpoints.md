@@ -8,10 +8,10 @@ Authoritative machine-readable version: `/api/schema/` (drf-spectacular). This i
 | Method | Path | Notes |
 |---|---|---|
 | POST | `login/` | email + password → access/refresh + user payload |
-| POST | `refresh/` | rotating refresh |
+| POST | `refresh/` | rotating refresh: both tokens are minted afresh. Refuses a deactivated account and a token issued under a password that has since changed; a token with no password claim (issued before 2026-09-19) is honoured |
 | POST | `logout/` | blacklists the refresh token |
 | GET | `me/` | current user, role, branch, permission codes |
-| POST | `password/change/` | requires current password |
+| POST | `password/change/` | `{current_password, new_password}`. The new one must pass the validators and differ from the current one. **Ends every session the account has** and answers `200` with a fresh `{access, refresh}` for the caller — the web app's `/api/auth/password` stores them in the cookies. 10/min per account (`auth` scope); a wrong current password is audited as `LOGIN_FAILED` ([business-rules §7.1a](../business-rules.md#71a-your-own-password-and-your-sessions)) |
 | POST | `register/` | **customer** self-registration only |
 
 ## Organisation — `/api/v1/`
