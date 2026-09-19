@@ -159,8 +159,8 @@ export function validateLines(lines: DraftLine[]): LineProblem[] {
     if (totals.discount > totals.gross) {
       problems.push({ key: line.key, message: "Discount cannot exceed the line total." });
     }
-    // `purchasing_poi_uniq` is a database constraint on (purchase_order,
-    // variant), so a duplicate variant fails with an opaque 409. Catch it here.
+    // The API refuses a variant named twice as a field error (D82); catching it
+    // here saves the round trip and points at the line.
     const duplicate = seen.get(line.variantId);
     if (duplicate) {
       problems.push({

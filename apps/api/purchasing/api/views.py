@@ -129,7 +129,7 @@ class PurchaseOrderViewSet(
         data = serializer.validated_data
 
         purchase_order = purchasing_services.create_purchase_order(
-            supplier=Supplier.objects.get(pk=data["supplier"]),
+            supplier=data["supplier"],
             branch=resolve_branch(request.user, data.get("branch")),
             lines=[
                 PurchaseLine(
