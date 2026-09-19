@@ -254,9 +254,15 @@ Then:
 alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
 prodlocal up -d
 prodlocal exec api python manage.py migrate
-prodlocal exec api python manage.py seed_demo --reset
+prodlocal exec -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
+  api python manage.py seed_demo --reset
 ./scripts/smoke-test.sh http://localhost:4100
 ```
+
+`seed_demo` refuses to run under `config.settings.prod` without that opt-in, and
+refuses `rangon12345` even with it. **Check `Get-Service Cloudflared` before
+starting Docker** — the prod containers are `restart: unless-stopped`, and if the
+tunnel is up they are public the moment Docker starts.
 
 Its database is a **separate volume** (`rangon-prod_postgres_data`) from the dev
 stack's, so it always starts empty and always needs migrate + seed.

@@ -243,8 +243,11 @@ with a per-request nonce from Next middleware.
 ### 5.4 The seed passwords are published in your public GitHub README
 
 `owner@rangon.test / rangon12345` grants full owner access. They were rotated on this machine on
-2026-08-19, but **`seed_demo --reset` puts them straight back**. Never run that against an internet-facing
-instance. To rotate:
+2026-08-19, and until 2026-09-19 **`seed_demo --reset` put them straight back**. Since then production
+settings refuse the seed unless `DJANGO_ALLOW_DEMO_SEED=1` is set for that one command, and refuse the
+README password even then — the accounts get your `DJANGO_DEMO_SEED_PASSWORD`
+([local-production.md §6](local-production.md#6-migrate-and-seed)). A database seeded before that
+date still holds the public password until it is reseeded with one of your own or rotated. To rotate:
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local \

@@ -19,6 +19,11 @@ if not BUILD_MODE:
     if "*" in ALLOWED_HOSTS:
         raise RuntimeError("DJANGO_ALLOWED_HOSTS must not contain '*' in production.")
 
+# Demo data on a production database is opt-in, and never with the README's
+# password. This stack was once published through a tunnel while the database
+# held `owner@rangon.test / rangon12345` -- see base.py and seed_demo.
+DEMO_SEED = "production" if env_bool("DJANGO_ALLOW_DEMO_SEED") else "off"
+
 # No browsable API: it renders user data into HTML and invites poking.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,

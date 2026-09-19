@@ -9,6 +9,10 @@ and bags (colour/capacity) — then purchases stock, and generates POS and onlin
 orders so every screen and report has something to show.
 
 Tests do NOT depend on this command; they use tests/factories.py.
+
+Refused under production settings unless DJANGO_ALLOW_DEMO_SEED=1, and then
+only with a DJANGO_DEMO_SEED_PASSWORD of the operator's own -- see
+`demo_password()` and the DEMO_SEED setting.
 """
 
 from __future__ import annotations
@@ -18,13 +22,16 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
 from accounts.models import Branch, Organization, Role, RoleCode, Status, User
-from accounts.services import create_staff_user, sync_permissions
+from accounts.services import create_staff_user, sync_permissions, update_staff_user
 from catalog.models import (
     Attribute,
     AttributeKind,
@@ -56,7 +63,44 @@ from purchasing.services import (
 )
 from shipping.models import Courier, ShippingMethod, ShippingZone
 
-PASSWORD = "rangon12345"  # development seed only — never reaches production
+# Printed in the public README. `demo_password()` is what keeps it off a
+# production database; this comment used to be the only thing that did.
+PASSWORD = "rangon12345"
+
+
+def demo_password() -> str:
+    """The password the seeded accounts get, or `CommandError` if seeding is refused.
+
+    Called before anything is read or deleted, so a refusal leaves the database
+    exactly as it was -- `--reset` included.
+    """
+    mode = settings.DEMO_SEED
+    supplied = settings.DEMO_SEED_PASSWORD
+    if mode == "development":
+        return supplied or PASSWORD
+    if mode != "production":  # "off", or anything unrecognised: fail closed
+        raise CommandError(
+            "seed_demo is disabled under these settings: --reset deletes every order, and "
+            "the accounts it creates share a password printed in the README. To seed a "
+            "production-settings stack deliberately, set DJANGO_ALLOW_DEMO_SEED=1 and a "
+            "DJANGO_DEMO_SEED_PASSWORD of your own."
+        )
+    if not supplied:
+        raise CommandError(
+            "DJANGO_DEMO_SEED_PASSWORD must be set to seed a production-settings database."
+        )
+    if supplied == PASSWORD:
+        raise CommandError(
+            "DJANGO_DEMO_SEED_PASSWORD is the password printed in the README. Choose another."
+        )
+    try:
+        validate_password(supplied)
+    except ValidationError as exc:
+        raise CommandError(
+            "DJANGO_DEMO_SEED_PASSWORD is too weak: " + " ".join(exc.messages)
+        ) from exc
+    return supplied
+
 
 STAFF = [
     ("owner@rangon.test", RoleCode.OWNER, "Rafiq", "Ahmed"),
@@ -294,6 +338,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args: Any, **options: Any) -> None:
+        password = demo_password()  # first: a refusal must precede --reset
         random.seed(20260817)  # deterministic demo data
 
         if options["reset"]:
@@ -303,7 +348,7 @@ class Command(BaseCommand):
         sync_permissions()
 
         organization, branch = self._organization()
-        users = self._users(branch)
+        users = self._users(branch, password)
         accounts = self._accounts(branch, users["owner@rangon.test"])
         brands = self._brands()
         categories = self._categories()
@@ -336,7 +381,9 @@ class Command(BaseCommand):
         self.stdout.write(
             "  Accounts     : " + ", ".join(f"{a.name} {a.balance}" for a in accounts.values())
         )
-        self.stdout.write("\n  Logins (password: rangon12345)")
+        # Never echo a supplied password: this output lands in CI and script logs.
+        shown = PASSWORD if password == PASSWORD else "the value of DJANGO_DEMO_SEED_PASSWORD"
+        self.stdout.write(f"\n  Logins (password: {shown})")
         for email, role, *_ in STAFF:
             self.stdout.write(f"    {role:<20} {email}")
         self.stdout.write(f"    {'CUSTOMER':<20} customer@rangon.test")
@@ -448,16 +495,16 @@ class Command(BaseCommand):
         )
         return organization, branch
 
-    def _users(self, branch: Branch) -> dict[str, User]:
+    def _users(self, branch: Branch, password: str) -> dict[str, User]:
         users: dict[str, User] = {}
         for email, role_code, first, last in STAFF:
             existing = User.objects.filter(email=email).first()
             if existing is not None:
-                users[email] = existing
+                users[email] = self._retire_public_password(existing, password)
                 continue
             users[email] = create_staff_user(
                 email=email,
-                password=PASSWORD,
+                password=password,
                 role_code=role_code,
                 branch=branch,
                 first_name=first,
@@ -468,10 +515,13 @@ class Command(BaseCommand):
             owner.is_staff = owner.is_superuser = True
             owner.save(update_fields=["is_staff", "is_superuser"])
 
-        if not User.objects.filter(email="customer@rangon.test").exists():
+        existing_customer = User.objects.filter(email="customer@rangon.test").first()
+        if existing_customer is not None:
+            self._retire_public_password(existing_customer, password)
+        else:
             customer_user = User.objects.create_user(
                 email="customer@rangon.test",
-                password=PASSWORD,
+                password=password,
                 first_name="Ayesha",
                 last_name="Rahman",
                 phone="01711000000",
@@ -485,6 +535,20 @@ class Command(BaseCommand):
                 customer_type=CustomerType.REGISTERED,
             )
         return users
+
+    def _retire_public_password(self, user: User, password: str) -> User:
+        """Take the README password off an account an earlier seed created.
+
+        Skipping existing accounts is what makes the seed re-runnable, and it
+        also meant a re-run could never take that password back: seeding a
+        database again with a password of its own left every account still
+        opening with `rangon12345`. When this run has its own, the README one
+        does not survive it. A password someone has already rotated is left alone.
+        """
+        if password != PASSWORD and user.check_password(PASSWORD):
+            update_staff_user(user=user, password=password)
+            self.stdout.write(f"  {user.email}: README password replaced")
+        return user
 
     def _accounts(self, branch: Branch, owner: User) -> dict[str, Any]:
         """Open the accounts the demo's sales and purchases post into.
