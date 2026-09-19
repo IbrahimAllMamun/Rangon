@@ -277,8 +277,12 @@ prodlocal up -d
 
 ```bash
 prodlocal exec api python manage.py migrate
-prodlocal exec api python manage.py seed_demo --reset
+prodlocal exec -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
+  api python manage.py seed_demo --reset
 ```
+
+Production settings refuse `seed_demo` without that opt-in, and refuse the demo password below even
+with it — see [local-production.md §6](docs/operations/local-production.md#6-migrate-and-seed).
 
 **5. Restart Nginx**, which resolves `api` and `web` once at startup and caches the addresses. Any
 container recreated after it gets an address Nginx does not know, and `/api/` answers 502 while the

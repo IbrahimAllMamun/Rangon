@@ -10,6 +10,11 @@
 # follows is not optional, it is how the stack gets a database at all. There is
 # deliberately no `--no-seed`: there would be nothing left to keep.
 #
+# The seeded accounts get DJANGO_DEMO_SEED_PASSWORD, taken from the environment
+# or from the env file, and never the README's `rangon12345`: this stack runs
+# production settings and has been published through a tunnel. Without one the
+# script stops before anything is torn down.
+#
 # ---------------------------------------------------------------------------
 # Why each step is here, because three of them look redundant and are not
 # (docs/operations/local-production.md, .claude/environment.md §11):
@@ -83,6 +88,28 @@ require_file() {
 
 require_file "$ENV_FILE"
 
+# ------------------------------------------------------ 0. demo password ------
+# Checked before `down -v`, not at the seed step: seed_demo refuses a missing or
+# README password (config.settings.prod), and refusing *after* the teardown
+# would leave a stack with no database at all.
+if [ -z "${DJANGO_DEMO_SEED_PASSWORD:-}" ]; then
+    DJANGO_DEMO_SEED_PASSWORD="$(sed -n 's/^DJANGO_DEMO_SEED_PASSWORD=//p' "$ENV_FILE" |
+        tail -n 1 | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
+fi
+case "${DJANGO_DEMO_SEED_PASSWORD:-}" in
+"")
+    echo "!! DJANGO_DEMO_SEED_PASSWORD is not set, in the environment or in ${ENV_FILE}." >&2
+    echo "!! The seeded owner, manager and cashier accounts need a password of your own;" >&2
+    echo "!! the README's is public. Nothing has been torn down." >&2
+    exit 1
+    ;;
+rangon12345)
+    echo "!! DJANGO_DEMO_SEED_PASSWORD is the README's password, which anyone can read." >&2
+    echo "!! Choose another. Nothing has been torn down." >&2
+    exit 1
+    ;;
+esac
+
 
 # --------------------------------------------------------------- 1. migrate --
 # Only if something is already running. On a cold start there is no container
@@ -135,7 +162,12 @@ api python manage.py migrate
 
 
 step "reseeding demo data"
-api python manage.py seed_demo --reset
+# Opted in for this one command only: the running containers never carry
+# DJANGO_ALLOW_DEMO_SEED, so a later `seed_demo` inside them is still refused.
+compose exec -T \
+    -e DJANGO_ALLOW_DEMO_SEED=1 \
+    -e "DJANGO_DEMO_SEED_PASSWORD=${DJANGO_DEMO_SEED_PASSWORD}" \
+    api python manage.py seed_demo --reset
 
 
 # ---------------------------------------------------------------- 6. nginx ---

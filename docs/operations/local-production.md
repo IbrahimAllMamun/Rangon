@@ -137,9 +137,20 @@ recreated.
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py migrate
 ```
 
+This stack runs `config.settings.prod`, where `seed_demo` is **refused** unless you opt in for the one
+command and bring a password of your own. The README's `rangon12345` is refused too — this stack has
+been published through a tunnel before, and that password is public:
+
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py seed_demo --reset
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec \
+  -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' \
+  api python manage.py seed_demo --reset
 ```
+
+The password must pass Django's validators (10+ characters, not common, not all digits). Re-running
+the seed with a new password also replaces the README one on any account an older seed left with it.
+`scripts/rebuild-local-prod.sh` reads `DJANGO_DEMO_SEED_PASSWORD` from the environment or from
+`.env.prod.local`, and stops before its teardown if it is missing.
 
 ---
 
@@ -190,7 +201,7 @@ curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4100/
 | `http://localhost:8100` | Django directly, for poking the API without going through nginx |
 | `http://localhost:${MAILPIT_PORT:-8125}` | Mailpit — where order confirmation emails land |
 
-Seeded logins are printed by `seed_demo`; all use the password `rangon12345`.
+Seeded logins are printed by `seed_demo`; all use the `DJANGO_DEMO_SEED_PASSWORD` you gave it.
 
 | Role | Email |
 | --- | --- |
