@@ -40,8 +40,9 @@ on the same origin or the cart and checkout break on CORS.
 ## 3. What was actually executed, not just written
 
 The most recent result of each check that the
-[roadmap's verification log](roadmap.md#verification-log) records, with the date it was produced. Nothing here is newer than the log; the list of things
-still unproven is in [roadmap.md](roadmap.md#still-unproven).
+[roadmap's verification log](roadmap.md#verification-log) records, with the date it was produced.
+Nothing here is newer than the log; the list of things still unproven is in
+[roadmap.md](roadmap.md#still-unproven).
 
 ```text
 pytest ................................ 1097 passed                        2026-09-18
