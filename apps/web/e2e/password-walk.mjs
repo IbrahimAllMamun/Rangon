@@ -5,7 +5,8 @@
  * can still do after the first changes the password.
  *
  * Runs against a dev server with the demo seed, as the stock cashier account,
- * and puts the README password back at the end so the seed stays usable:
+ * and puts the README password back at the end, through an owner's reset, so
+ * the seed stays usable:
  *
  *   BASE=http://localhost:4000 node e2e/password-walk.mjs
  */
@@ -83,9 +84,24 @@ ok("the other session is signed out at once", other.status !== 200, `status ${ot
 ok("the old password no longer signs in", (await signIn(PASSWORD)) === null);
 ok("the new one does", Boolean(await signIn(NEW)));
 
-// Put the seed back the way it was.
-const back = await change(done.cookie, NEW, PASSWORD);
-ok("the README password is restored for the next person", back.status === 200, `status ${back.status}`);
+// Put the seed back the way it was -- through an owner's reset, which is the
+// other path D86 covers. (Not through the form: the validators, rightly, find
+// "rangon12345" too close to "cashier@rangon.test".)
+const me = await (await fetch(`${BASE}/api/proxy/auth/me/`, { headers: { cookie: done.cookie } })).json();
+const owner = await fetch(`${BASE}/api/auth/login`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "owner@rangon.test", password: PASSWORD }),
+});
+const reset = await fetch(`${BASE}/api/proxy/users/${me.id}/`, {
+  method: "PATCH",
+  headers: { "Content-Type": "application/json", cookie: cookiesOf(owner) },
+  body: JSON.stringify({ password: PASSWORD }),
+});
+ok("an owner's reset restores the README password", reset.status === 200, `status ${reset.status}`);
+const afterReset = await staffPage(done.cookie);
+ok("and signs the cashier out where they were signed in", afterReset.status !== 200, `status ${afterReset.status}`);
+ok("the README password signs in again", Boolean(await signIn(PASSWORD)));
 
 console.log(failures.length ? `\n${failures.length} FAILED` : "\nall passed");
 process.exit(failures.length ? 1 : 0);
