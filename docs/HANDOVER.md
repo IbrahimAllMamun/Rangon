@@ -8,12 +8,13 @@ Status per phase: [roadmap.md](roadmap.md). Business behaviour: [business-rules.
 ## 1. What this is
 
 An omnichannel retail platform. One Django API owns the catalog, the inventory ledger, customers,
-orders and payments. Three surfaces sit on top of it — a public storefront, a POS register, and a
-back office — and they share **one** stock figure. A sale at the counter reduces what the website can
-sell, within the same database transaction.
+orders and payments — and, since phases 35–38, the money side: which account cash landed in,
+expenses, what is owed each way, and net profit. Three surfaces sit on top of it — a public
+storefront, a POS register, and a back office — and they share **one** stock figure. A sale at the
+counter reduces what the website can sell, within the same database transaction.
 
 ```text
-apps/api   Django 5 + DRF, 12 apps, PostgreSQL 16, Redis, Celery
+apps/api   Django 5 + DRF, 14 apps, PostgreSQL 16, Redis, Celery
 apps/web   Next.js 15, route groups (storefront) (admin) (pos)
 docs/      constitution, architecture, ADRs, business rules, operations runbooks
 ```
@@ -38,42 +39,56 @@ on the same origin or the cart and checkout break on CORS.
 
 ## 3. What was actually executed, not just written
 
-Re-verified on **2026-08-18** against commit `423cdf4`. The full log, and the list of things still
-unproven, is in [roadmap.md](roadmap.md).
+The most recent result of each check that the
+[roadmap's verification log](roadmap.md#verification-log) records, with the date it was produced.
+Nothing here is newer than the log; the list of things still unproven is in
+[roadmap.md](roadmap.md#still-unproven).
 
 ```text
-migrations from an empty database ..... OK, all 12 apps
-seed_demo --reset ..................... 12 products, 72 variants, 2 purchase orders, 40 orders
-                                        (24 POS + 16 online, spread across every order status)
-inventory integrity ................... 0 drift between the ledger and the cached columns,
-                                        re-checked after a live browser order
-pytest ................................ 167 passed
-  · 160 unit / service / API tests
-  · 7 threaded concurrency tests against real PostgreSQL
-ruff check + ruff format .............. clean
-frontend tsc --noEmit ................. clean
-vitest (npm run test) ................. 17 passed, 2 files
-production Next build ................. succeeds (CI on every push, and `docker compose build web`)
-CI (GitHub Actions) ................... green on all four jobs at HEAD (14 runs, latest #15)
-API smoke test (live container) ....... health 200, ready 200, shop endpoints 200,
-                                        staff endpoint correctly 401 for anonymous
-browser purchase journey .............. add to cart -> checkout -> COD order RGN-WEB-000018
+pytest ................................ 1097 passed                        2026-09-18
+ruff 0.8.4 check + format --check ..... clean, 201 files                   2026-09-18
+frontend tsc --noEmit / next lint ..... clean                              2026-09-18
+vitest ................................ 260 passed                         2026-09-18
+storefront VAT notes, in a browser .... 8 of 8 checks, 0 CSP refusals      2026-09-18
+query budgets ......................... 20/20 pass                         2026-09-14
+seed_demo --reset ..................... 12 products, 72 variants           2026-09-14
+playwright ............................ 22 passed                          2026-09-09
+playwright, production build .......... not green — D40 and D41            2026-08-31
+                                        (D41 fixed 2026-09-09; no production run recorded since)
+admin write screens, signed in ........ 13 writes, all landing             2026-08-28
+verify_inventory / verify_accounts .... consistent                         2026-08-28
+backup restore ........................ proven after a real data loss      2026-08-22
+browser purchase journey .............. add to cart -> checkout -> COD     2026-08-18
+                                        order RGN-WEB-000018
+migrations from an empty database ..... OK                                 2026-08-18
 ```
 
-Three of those lines were "never run" until this diagnosis: the Vitest suite, the production Next
-build, and the browser click-through. CI itself had never been observed either — a remote now exists
-and the workflow is green.
+The E2E suite runs in CI against `next dev`, not against a production build. D41 was a race in the
+spec rather than the build; D40 is the one reason left.
 
-Two real bugs were found earlier by the backend tests and fixed:
+Two real bugs were found early by the backend tests and fixed:
 
 1. Services returned a **stale in-memory order** after a locked copy had been updated, so a fully paid
    POS sale reported `UNPAID` to the caller and would have printed a wrong receipt.
 2. A checked-out cart token **collided with its unique index** when the same browser started a second
    cart.
 
-Nine further defects were found by the 2026-08-18 diagnosis. None touches money or stock; they are
-dead-end UI, one SEO duplication, one dialog accessibility warning, 98 non-blocking mypy errors, and
-two build/tooling traps. They are listed as D1–D9 in [roadmap.md](roadmap.md#known-defects).
+The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D78. **Five are open, and
+none of them is a money or data-integrity bug:**
+
+| # | Defect |
+|---|---|
+| D6 | mypy reports 98 errors and CI runs it non-blocking, so it proves nothing |
+| D7 | Playwright cannot run in the Alpine *dev container*. The defect is that image alone — a glibc Chromium runs the suite |
+| D9 | The seed has no product images, so every card shows a placeholder |
+| D40 | `router.refresh()` does not apply on the expenses screen in a production build — the expense is written; only the screen is stale |
+| D77 | After receiving stock the purchase order screen showed the un-received state in 3 runs out of 5. Worked around with a full reload, **not explained** |
+
+The money bugs the register records are all fixed — among them a coupon redeemable twice under a
+race (D28), supplier payments that could land on another supplier's order, exceed what was owed or
+go through twice (D61–D63), stock entering at zero cost (D72), one variant costed two ways depending
+on the channel (D73), a product publishable at a price of zero (D75), and a return that refunded the
+price but kept the VAT (D78).
 
 ## 4. The parts that carry the risk
 
@@ -85,6 +100,15 @@ two build/tooling traps. They are listed as D1–D9 in [roadmap.md](roadmap.md#k
 transaction, and `verify_integrity()` replays the ledger to prove they still agree. If they ever
 drift, `manage.py verify_inventory --fix` reconciles by **appending explaining rows** — it never edits
 history.
+
+### Money is a ledger too
+
+The cash book is the same shape. An account's balance is a cache over an append-only
+`AccountTransaction` table, and `manage.py verify_accounts` replays it. Sales, refunds, expenses and
+supplier payments post inside their own service's transaction — on capture, never on record — and a
+mistake is corrected by a compensating row, never an edit. What customers and suppliers owe is derived
+from orders and purchase orders; there is no balance column on either to drift. See
+[architecture/finance.md](architecture/finance.md).
 
 ### Nothing oversells
 
@@ -108,52 +132,72 @@ claims, not amounts. Registration always creates a `CUSTOMER` regardless of what
 
 ### Profit is honest
 
-Weighted average cost per branch, recalculated only on receipt, and **frozen onto the order line** at
-sale time. Receiving more expensive stock tomorrow does not change yesterday's margin.
+Weighted average cost per branch, moved only by receiving stock, a return to the supplier or an
+explicit revaluation, and **frozen onto the order line** at sale time. Receiving more expensive stock
+tomorrow does not change yesterday's margin. Both channels freeze the same figure — until 2026-09-17
+online checkout froze `ProductVariant.cost` instead (D73) — and goods enter only by receiving a
+purchase order or by the import, both of which carry the cost paid.
 
 ## 5. What is deliberately not built
 
-Backend APIs are complete and tested for all of these; what is missing is the admin **screens**.
+Each row either waits on someone outside the codebase, was declined on the owner's decision, or is an
+API with no screen yet.
 
-| Missing | Why it is safe to be missing | Where the API is |
+| Missing | Why it is safe to be missing | Where to look |
 |---|---|---|
-| Live payment gateway | COD works; the card option is visibly **disabled**, not faked | `orders/payments/providers/base.py` |
-| Admin customer/returns/coupon screens | Every operation is available through the API and tested. **Products and purchasing are done** — products at `/admin/products`, purchase orders and suppliers at `/admin/purchases` and `/admin/suppliers` — as are organization and branch settings at `/admin/settings` | `docs/api/endpoints.md` |
+| Live payment gateway | COD works and is how this market buys; the card option is visibly **disabled**, not faked. Needs a provider account | `orders/payments/providers/base.py` |
+| SMS gateway account | The layer shipped 2026-09-10 — provider interface, a `console` no-op default, a message log, an allowlist, wired to confirmed / shipped / refunded. What is left is an aggregator account and an approved sender ID | [operations/sms.md](operations/sms.md) |
 | Offline POS | **Dropped 2026-09-09, owner's decision** — declined, not deferred. The POS needs connectivity, and an outage is covered by a paper pad and a re-key | `architecture/offline-pos.md` (design notes only) |
-| SMS notifications | Email + in-app work | `notifications/tasks.py` |
+| Quotation and the cheque register | **Dropped 2026-09-09, owner's decision.** Both are wholesale instruments and this shop sells retail. A cheque is still recordable as a payment into a `BANK` account | [roadmap.md](roadmap.md) phase 39 |
+| Customer accounts on the storefront | **Withdrawn 2026-09-15, owner's decision.** No shopper could create an account, so the wishlist, the account pages and the review form were gated on a login nobody could obtain. The endpoints are kept, unadvertised | [api/endpoints.md](api/endpoints.md#the-customer-account-endpoints-have-no-caller-deliberately) |
+| Screens for `audit-logs/`, `inventory-transactions/`, `permissions/` and `auth/password/change/` | Nothing is stuck: an owner can reset any password from `/admin/staff`, and the audit trail and stock movements are recorded — readable only through the API or the database | [roadmap.md](roadmap.md#still-api-only-no-ui) |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
 
-### The three UI dead ends are closed (2026-08-21)
+### The UI dead ends
 
-All three looked shipped and were not: a rendered page with no way to reach the endpoint behind it.
+Each looked shipped and was not: a rendered page with no way to reach the endpoint behind it.
 
-| Feature | Fixed by |
+| Feature | What happened |
 |---|---|
-| Wishlist | `WishlistHeart` on the product card, backed by a shared `useWishlist` store |
-| Reviews | `ReviewForm` on the product page; the section now renders even at zero reviews, because hiding it made the only way to write the first one invisible |
-| Notifications | A polling bell in the admin header and `/admin/notifications` |
+| Notifications | Closed 2026-08-21 — a polling bell in the admin header and `/admin/notifications` |
+| Wishlist and writing reviews | Closed 2026-08-21 with a heart on the product card and a form on the product page — then **removed 2026-09-15** with the account surface, because both needed a customer login. Reviews are read-only |
+| Track your order | The footer's form 404'd on every submission until 2026-09-15 (D67), and no tracking number had ever been recorded, because nothing created a shipment. Both fixed that day; the Delivery panel that books a parcel has not yet been driven in a browser |
 
 Worth keeping in mind when adding anything else: **a route that 404s gets noticed; a page that renders
 and does nothing does not.** "The API is tested" and "the feature works" are different claims.
 
 ## 6. Decisions someone must confirm
 
-[business-rules.md](business-rules.md) carries **11** `DECISION REQUIRED` markers. A sensible default
+[business-rules.md](business-rules.md) carries **18** `DECISION REQUIRED` markers. A sensible default
 is implemented so the system runs; each one is a business call, not a technical one. The headline six
 (the last of which is not a marker but blocks prepaid orders and shipping integration):
 
-1. **VAT: inclusive or exclusive, and at what rate.** Currently exclusive at 0%. **Settle this before
-   the first real sale** — it changes every historical total and every report.
+1. **VAT: inclusive or exclusive, and at what rate.** Currently exclusive at 0%, which is a
+   placeholder. **Settle this before the first real sale.** It is editable at `/admin/settings`,
+   audited, and asks for confirmation once orders exist — but every order keeps the treatment it was
+   priced under, so a later change corrects nothing already sold, and a report spanning the change
+   mixes two.
 2. Return window — assumed 14 days.
 3. Discount needing manager approval — assumed above 20%.
 4. Reservation expiry for unpaid online orders — assumed 60 minutes.
 5. Shipping refunded on a change-of-mind return — assumed no.
 6. Which payment gateway and which courier.
 
-The remaining four markers are narrower but still open: the point in the order lifecycle where stock
-is deducted (currently `PACKED`), whether transfers need a formal in-transit location, the restocking
-fee (currently none), and whether coupons may stack (currently one per order). Read them in full
-before implementing anything that depends on them.
+The other thirteen markers are narrower but still open:
+
+- **Stock and orders:** stock is deducted at `PACKED`, transfers have no formal in-transit location,
+  there is no restocking fee, and one coupon per order.
+- **Purchasing:** a supplier's minimum order quantity is advisory; a single-SKU product cannot be
+  created from a purchase order; the VAT return dates a purchase by when it was raised, because a
+  purchase order has no invoice date.
+- **Paying suppliers:** no overpaying an order, no paying a draft or cancelled one, no advance
+  without a purchase order from that screen, and a credit from returning goods on a paid order is
+  settled with the supplier off-system.
+- **Settled by construction:** selling on credit (D-A) no longer blocks any code, and the cash book
+  was built on a flat account list (D-B).
+
+Read them in full before implementing anything that depends on them. The same list, with the section
+each lives in, is in [.claude/open-questions.md](../.claude/open-questions.md).
 
 ## 7. Where to look
 
@@ -161,7 +205,8 @@ before implementing anything that depends on them.
 |---|---|
 | What are the rules of this codebase? | `CLAUDE.md` |
 | How does stock actually work? | `docs/architecture/inventory.md` |
-| Why is it built this way? | `docs/architecture/decisions/` (8 ADRs) |
+| How does money actually work? | `docs/architecture/finance.md` |
+| Why is it built this way? | `docs/architecture/decisions/` (11 ADRs) |
 | What does the business do in case X? | `docs/business-rules.md` |
 | What endpoints exist? | `docs/api/endpoints.md` + `/api/docs` |
 | It is 2 a.m. and it is broken | `docs/operations/disaster-recovery.md` |
@@ -169,15 +214,22 @@ before implementing anything that depends on them.
 
 ## 8. Next four tasks, in order
 
-1. **Financial accounts and the cash book** (roadmap phase 35). The largest structural gap: Rangon
-   records a payment *method* and never which account the money landed in, so there is no cash
-   position, no expenses and no net profit. Blocks phases 36–38.
-2. **Return approve / reject / receive / refund** — four buttons on a list that already renders.
-3. **Unblock E2E and widen CI.** Playwright cannot run in the Alpine dev image; move it to a
-   glibc-based runner, then add both `npm run test` and `npm run test:e2e` to `ci.yml` — today CI
-   builds and type-checks the frontend but runs none of its tests.
-4. **One real payment gateway**, end to end, with webhook signature verification and replay tests.
+The roadmap's Tier 0: the first real sale waits on each of these, and three of the four are not code.
 
-Then work down the go-live checklist. The two items that will bite hardest if left late are the **VAT
-decision** and the **backup restore rehearsal** — a backup that has never been restored is not a
-backup.
+1. **Deploy somewhere.** As the roadmap stands (reviewed 2026-09-14), nothing is deployed and no
+   real order has been placed. A load test, a backup schedule, a security review and
+   `verify_accounts` against real data all need an environment to be true of.
+2. **Settle VAT.** An owner's answer, entered at `/admin/settings`. See §6.
+3. **Real product photography** (D9). A clothing shop with no product images cannot sell, and every
+   demo reads as broken without them.
+4. **Automate the backup.** `scripts/backup-db.sh` takes `BACKUP_S3_BUCKET` and
+   `BACKUP_RETAIN_DAYS`; nothing schedules it.
+
+Then the Tier 2 backlog, in the roadmap's order: **D40**, so E2E can run against a production build
+in CI; a media library; a reader for the audit log and the stock ledger; password self-service; and
+mypy (D6). The payment gateway and the SMS account wait on provider accounts — start the SMS
+sender-ID paperwork early, because approval takes days to weeks.
+
+The two items that will bite hardest if left late are the **VAT decision** and **backup
+automation**. The restore has been rehearsed for real, on 2026-08-22 — but it worked only because a
+dump taken by hand happened to be 14 minutes old.
