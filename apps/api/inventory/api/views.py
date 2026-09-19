@@ -13,9 +13,11 @@ from rest_framework.response import Response
 from accounts.models import Branch
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from core.dates import parse_window
 from core.exceptions import Conflict, ValidationError
 from core.services import next_number
 from inventory import services as inventory_services
+from inventory.api import documents
 from inventory.api.serializers import (
     AdjustStockSerializer,
     CreateTransferSerializer,
@@ -32,6 +34,7 @@ from inventory.models import (
     StockCountItem,
     StockCountStatus,
     StockTransfer,
+    TransactionType,
 )
 
 
@@ -219,14 +222,45 @@ class InventoryTransactionViewSet(
     def get_queryset(self) -> Any:
         queryset = InventoryTransaction.objects.select_related(
             "branch", "variant", "variant__product", "created_by"
-        )
+        ).prefetch_related("variant__attribute_values__attribute_value")
         queryset = branch_queryset(self.request.user, queryset)
         params = self.request.query_params
-        if date_from := params.get("date_from"):
-            queryset = queryset.filter(created_at__date__gte=date_from)
-        if date_to := params.get("date_to"):
-            queryset = queryset.filter(created_at__date__lte=date_to)
-        return queryset.order_by("-created_at")
+
+        # The same parser the cash book and the reports use, so "the 14th"
+        # means the shop's 14th on every screen.
+        date_from, date_to = parse_window(params)
+        if date_from:
+            queryset = queryset.filter(created_at__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__lte=date_to)
+
+        # `types=DAMAGE,LOSS`: the screen filters by family (everything written
+        # off, everything transferred), which `transaction_type` cannot express.
+        if types := params.get("types"):
+            wanted = {part.strip().upper() for part in types.split(",") if part.strip()}
+            unknown = sorted(wanted - set(TransactionType.values))
+            if unknown:
+                raise ValidationError(
+                    f"Unknown movement type: {', '.join(unknown)}.",
+                    details={"types": [f"Choose from {', '.join(TransactionType.values)}."]},
+                )
+            queryset = queryset.filter(transaction_type__in=wanted)
+
+        if search := params.get("search", "").strip():
+            queryset = queryset.filter(
+                Q(variant__sku__icontains=search) | Q(variant__product__name__icontains=search)
+            )
+        # `id` breaks ties: a transfer writes its two rows in the same instant,
+        # and without a total order they swap places between page loads.
+        return queryset.order_by("-created_at", "-id")
+
+    def list(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        rows = list(page if page is not None else queryset)
+        context = {**self.get_serializer_context(), "documents": documents.resolve(rows)}
+        data = self.get_serializer_class()(rows, many=True, context=context).data
+        return self.get_paginated_response(data) if page is not None else Response(data)
 
 
 class StockTransferViewSet(

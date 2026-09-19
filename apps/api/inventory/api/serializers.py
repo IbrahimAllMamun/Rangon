@@ -4,6 +4,7 @@ from typing import Any
 
 from rest_framework import serializers
 
+from inventory.api import documents
 from inventory.models import (
     Inventory,
     InventoryTransaction,
@@ -58,8 +59,23 @@ class InventorySerializer(serializers.ModelSerializer):
 class InventoryTransactionSerializer(serializers.ModelSerializer):
     sku = serializers.CharField(source="variant.sku", read_only=True)
     product_name = serializers.CharField(source="variant.product.name", read_only=True)
+    product = serializers.UUIDField(source="variant.product_id", read_only=True)
+    variant_label = serializers.CharField(source="variant.label", read_only=True)
     branch_code = serializers.CharField(source="branch.code", read_only=True)
+    transaction_type_label = serializers.CharField(
+        source="get_transaction_type_display", read_only=True
+    )
     created_by_email = serializers.CharField(source="created_by.email", read_only=True, default="")
+    document = serializers.SerializerMethodField()
+
+    def get_document(self, obj: InventoryTransaction) -> dict[str, str] | None:
+        # The list resolves a whole page at once and hands it over in the
+        # context; a single row (retrieve) resolves itself.
+        found = self.context.get("documents")
+        if found is None:
+            found = documents.resolve([obj])
+        document = found.get((obj.reference_type, obj.reference_id))
+        return document.as_dict() if document else None
 
     class Meta:
         model = InventoryTransaction
@@ -68,15 +84,19 @@ class InventoryTransactionSerializer(serializers.ModelSerializer):
             "branch",
             "branch_code",
             "variant",
+            "variant_label",
+            "product",
             "sku",
             "product_name",
             "transaction_type",
+            "transaction_type_label",
             "quantity",
             "unit_cost",
             "on_hand_after",
             "reserved_after",
             "reference_type",
             "reference_id",
+            "document",
             "reason",
             "notes",
             "created_by",

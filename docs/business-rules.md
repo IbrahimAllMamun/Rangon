@@ -37,6 +37,7 @@ Signed ledger effects:
 | `ADJUSTMENT` | ± | – |
 | `TRANSFER_IN` | + | – |
 | `TRANSFER_OUT` | − | – |
+| `PURCHASE_RETURN` | − | – |
 | `RESERVATION` | 0 | + |
 | `RESERVATION_RELEASE` | 0 | − |
 
@@ -113,6 +114,29 @@ because marking it applied having adjusted nothing would record a stock take tha
 A count that should not proceed is **cancelled**, which touches no stock. An applied count is
 history: it can be neither re-counted nor cancelled, and correcting it means a new count or an
 adjustment with its own reason.
+
+### 1.9 Reading the ledger
+
+`/admin/inventory/movements` reads the ledger back through `GET /inventory-transactions/`. It needs
+`inventory.view` and is branch-scoped exactly like the stock list: a cashier sees their own branch's
+movements, an owner sees every branch. It can change nothing — the ledger is append-only (§1.1), so
+the screen has no edit, and a correction is a new movement made from `/admin/inventory` or a count.
+
+- **Every stock row links to its own history.** The *History* action on `/admin/inventory` opens
+  the movements of that variant at that branch, newest first, so the figure on one screen can be
+  checked against the rows that add up to it on the next. For every type but the reservation pair,
+  the quantities of a variant's rows sum to its `on_hand`; `on_hand_after` on the newest row is the
+  figure the stock list shows.
+- **A row names its cause in words.** The API resolves `reference_type` / `reference_id` into the
+  document a person would open: a sale or a void to its order, a customer return to its return, a
+  stock count to its sheet. A goods receipt and a supplier return have no screen of their own and
+  resolve to **their purchase order**, labelled with both numbers (`PO-000123 · GRN-000045`). A
+  manual adjustment, a product import and a reconciliation have no document; the row's reason says
+  what happened instead. A link is shown only where the reader's role can open the screen.
+- **Filters by family, not by type.** *Written off* is `DAMAGE` and `LOSS`; *Transfers* is both
+  sides of a transfer; *Reservations* is the reserve/release pair. The API takes a list —
+  `types=DAMAGE,LOSS` — and refuses a type it does not know rather than ignoring it. Dates are the
+  shop's days, read by the same parser as the cash book (`core.dates.parse_window`).
 
 ---
 
@@ -1157,6 +1181,31 @@ settings changes.
 
 Each entry stores actor, action, entity type/id, `old_values`, `new_values`, reason, IP, user agent,
 request id, timestamp. Passwords, tokens and full card data are never logged.
+
+### 8.1 Reading the trail
+
+`/admin/audit` reads it back through `GET /audit-logs/`, which needs `audit.view` — held by
+`OWNER`, `ADMIN` and `ACCOUNTANT`. A manager does not hold it: the trail records the manager's own
+refunds, overrides and adjustments. The screen is read-only by construction; `AuditLog` is
+append-only and the endpoint offers list and retrieve and nothing else.
+
+**Branch scope ([D85](roadmap.md#known-defects)).** An entry that names a branch belongs to that
+branch's readers and to those who see across branches. A reader confined to one branch — an
+accountant assigned to DHK1 — sees DHK1's entries and the **organisation-wide** ones, which are the
+entries with no branch: the catalogue, settings, staff accounts and sign-ins. Until 2026-09-19 the
+endpoint was not scoped at all, so that accountant could read every other branch's refunds,
+payments and stock adjustments in full.
+
+> **DECISION REQUIRED — default chosen.** Organisation-wide entries are visible to every audit
+> reader, including the sign-ins and account changes of staff at other branches. The stricter
+> alternative scopes them by the actor's branch, which would also hide who changed a setting every
+> branch shares. Revisit if a branch-bound reader should not see other branches' sign-ins.
+
+What the screen offers: a search over who, what and why (a staff email, an order number, a reason),
+the action, a date window in the shop's days, and one record's whole history (`entity_id`) — reached
+from any entry through *Its whole history*. Each entry opens its before/after values on demand. A
+record links to its own screen where it has one and the reader's role can open it; a payment or a
+refund is recorded against its own id, which no screen takes, so it is named and not linked.
 
 ---
 

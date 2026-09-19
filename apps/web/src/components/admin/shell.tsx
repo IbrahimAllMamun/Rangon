@@ -11,6 +11,7 @@ import {
   Compass,
   Factory,
   FolderTree,
+  History,
   Landmark,
   LayoutDashboard,
   LogOut,
@@ -19,6 +20,7 @@ import {
   Package,
   PhoneCall,
   Receipt,
+  ScrollText,
   Settings,
   ShoppingCart,
   Star,
@@ -144,6 +146,12 @@ const GROUPS: NavGroup[] = [
         icon: ArrowRightLeft,
         permission: "inventory.view",
       },
+      {
+        href: "/admin/inventory/movements",
+        label: "Stock movements",
+        icon: History,
+        permission: "inventory.view",
+      },
     ],
   },
   {
@@ -202,6 +210,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/staff", label: "Staff", icon: UserCog, permission: "users.view" },
       { href: "/admin/settings", label: "Settings", icon: Settings, permission: "settings.view" },
+      { href: "/admin/audit", label: "Audit log", icon: ScrollText, permission: "audit.view" },
     ],
   },
 ];

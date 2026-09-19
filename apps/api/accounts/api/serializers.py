@@ -317,6 +317,8 @@ class PasswordChangeSerializer(serializers.Serializer):
 
 class AuditLogSerializer(serializers.ModelSerializer):
     actor_email = serializers.CharField(source="actor_label", read_only=True)
+    action_label = serializers.CharField(source="get_action_display", read_only=True)
+    branch_code = serializers.CharField(source="branch.code", read_only=True, default=None)
 
     class Meta:
         model = AuditLog
@@ -325,6 +327,9 @@ class AuditLogSerializer(serializers.ModelSerializer):
             "actor",
             "actor_email",
             "action",
+            "action_label",
+            "branch",
+            "branch_code",
             "entity_type",
             "entity_id",
             "entity_label",

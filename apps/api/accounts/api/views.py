@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -41,6 +42,7 @@ from accounts.services import (
     update_tax_settings,
 )
 from core import audit
+from core.dates import parse_window
 from core.middleware import get_audit_context
 from core.models import AuditLog
 from customers.models import Customer, CustomerType
@@ -406,9 +408,35 @@ class PermissionViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
 
 class AuditLogViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    queryset = AuditLog.objects.select_related("actor").all()
     serializer_class = AuditLogSerializer
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = ["audit.view"]
-    filterset_fields = ["action", "entity_type", "actor"]
+    filterset_fields = ["action", "entity_type", "entity_id", "actor", "branch"]
     ordering_fields = ["created_at"]
+
+    def get_queryset(self) -> Any:
+        user = self.request.user
+        queryset = AuditLog.objects.select_related("actor", "branch")
+
+        # Branch-scoped like every other staff list (D85). A row with no branch
+        # is organisation-wide -- the catalogue, settings, staff accounts,
+        # sign-ins -- and belongs to every reader; a row that names a branch
+        # belongs to that branch's readers and to those who see across them.
+        if not (user.is_superuser or user.can_cross_branch) and user.branch_id:
+            queryset = queryset.filter(Q(branch_id=user.branch_id) | Q(branch__isnull=True))
+
+        params = self.request.query_params
+        date_from, date_to = parse_window(params)
+        if date_from:
+            queryset = queryset.filter(created_at__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__lte=date_to)
+
+        # Who, what and why: an order number, a staff email, "damaged box".
+        if search := params.get("search", "").strip():
+            queryset = queryset.filter(
+                Q(entity_label__icontains=search)
+                | Q(reason__icontains=search)
+                | Q(actor_label__icontains=search)
+            )
+        return queryset.order_by("-created_at", "-id")
