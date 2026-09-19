@@ -139,6 +139,16 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
 ]
 
+# `seed_demo` creates one account per role, all sharing a password printed in
+# the public README, and `--reset` deletes every order and ledger row. Fine on a
+# laptop; ruinous on anything a customer can reach. Three modes:
+#   "development"  allowed, with the README password unless one is supplied
+#   "production"   allowed only with DJANGO_DEMO_SEED_PASSWORD, never the README one
+#   "off"          refused
+# prod.py sets "off" unless DJANGO_ALLOW_DEMO_SEED opts in.
+DEMO_SEED = "development"
+DEMO_SEED_PASSWORD = env("DJANGO_DEMO_SEED_PASSWORD")
+
 # --------------------------------------------------------------------------- i18n
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = env("DJANGO_TIME_ZONE", "Asia/Dhaka")

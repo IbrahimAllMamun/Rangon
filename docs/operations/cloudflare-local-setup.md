@@ -418,8 +418,9 @@ remove the CNAMEs, and what is left is a domain that resolves to a dead tunnel a
 The moment this is reachable from the internet it is a public web application, not a demo.
 
 - [ ] **Rotate the seed passwords.** `owner@rangon.test / rangon12345` is in the public GitHub README
-      and grants full owner access — and `seed_demo --reset` puts it straight back. Never point that
-      command at an internet-facing instance. Rotation snippet:
+      and grants full owner access. Since 2026-09-19 `seed_demo` refuses that password under
+      production settings and seeds with your `DJANGO_DEMO_SEED_PASSWORD` instead — but a database
+      seeded before then still carries it. Reseed or rotate before exposing. Rotation snippet:
       [self-hosting-with-a-domain.md §5.4](self-hosting-with-a-domain.md).
 - [ ] `/django-admin/` returns 403 through the tunnel (§9, step 4).
 - [ ] `DJANGO_DEBUG=0` and a real `DJANGO_SECRET_KEY` in `.env.prod.local`.
