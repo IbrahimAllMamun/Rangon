@@ -4,10 +4,12 @@ import {
   type DraftLine,
   type OrderItem,
   defaultReceipt,
+  lineFromVariant,
   lineTotals,
   orderTotals,
   quantize,
   receiptValue,
+  repriceForSupplier,
   toCreatePayload,
   toReceivePayload,
   validateLines,
@@ -240,5 +242,76 @@ describe("receiptValue", () => {
 
   it("is zero when nothing is being received", () => {
     expect(receiptValue([{ itemId: "i1", quantity: "0", unitCost: "450.00" }])).toBe(0);
+  });
+});
+
+describe("lineFromVariant", () => {
+  const variant = {
+    id: "v1",
+    sku: "RGN-PAN-NAV-M",
+    product_name: "Linen Panjabi",
+    label: "Navy / M",
+    cost: "1100.00",
+  };
+
+  it("prices from this supplier's last delivery when there is one", () => {
+    const supplierCosts = new Map([["v1", "980.00"]]);
+    const drafted = lineFromVariant(variant, { key: "a", supplierCosts });
+    expect(drafted.unitCost).toBe("980.00");
+    expect(drafted.costSource).toBe("supplier");
+  });
+
+  it("falls back to the variant's last cost from anyone", () => {
+    const drafted = lineFromVariant(variant, { key: "a", supplierCosts: new Map() });
+    expect(drafted.unitCost).toBe("1100.00");
+    expect(drafted.costSource).toBe("variant");
+  });
+
+  it("keeps a cost the buyer typed over both", () => {
+    const supplierCosts = new Map([["v1", "980.00"]]);
+    const drafted = lineFromVariant(variant, { key: "a", unitCost: "1000.00", supplierCosts });
+    expect(drafted.unitCost).toBe("1000.00");
+    expect(drafted.costSource).toBe("entered");
+  });
+
+  it("carries the quantity and marks a product made on this order", () => {
+    const drafted = lineFromVariant(variant, { key: "a", quantity: "6", isNew: true });
+    expect(drafted).toMatchObject({
+      variantId: "v1",
+      productName: "Linen Panjabi",
+      variantLabel: "Navy / M",
+      quantity: "6",
+      discount: "0",
+      isNew: true,
+    });
+  });
+
+  it("defaults to one unit", () => {
+    expect(lineFromVariant(variant, { key: "a" }).quantity).toBe("1");
+  });
+});
+
+describe("repriceForSupplier", () => {
+  const variant = { id: "v1", sku: "S", product_name: "Shirt", label: "M", cost: "500.00" };
+
+  it("moves a guessed line to the new supplier's last price", () => {
+    const guessed = lineFromVariant(variant, { key: "a" });
+    const [line] = repriceForSupplier([guessed], new Map([["v1", "450.00"]]));
+    expect(line.unitCost).toBe("450.00");
+    expect(line.costSource).toBe("supplier");
+  });
+
+  it("falls back to the variant's cost, not the previous supplier's price", () => {
+    const fromOld = lineFromVariant(variant, { key: "a", supplierCosts: new Map([["v1", "450.00"]]) });
+    const [line] = repriceForSupplier([fromOld], new Map());
+    expect(line.unitCost).toBe("500.00");
+    expect(line.costSource).toBe("variant");
+  });
+
+  it("never touches a cost the buyer typed", () => {
+    const typed = lineFromVariant(variant, { key: "a", unitCost: "475.00" });
+    const [line] = repriceForSupplier([typed], new Map([["v1", "450.00"]]));
+    expect(line.unitCost).toBe("475.00");
+    expect(line.costSource).toBe("entered");
   });
 });

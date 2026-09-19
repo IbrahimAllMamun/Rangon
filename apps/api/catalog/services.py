@@ -12,11 +12,13 @@ from django.utils.text import slugify
 from catalog.models import (
     Attribute,
     AttributeValue,
+    Brand,
     Category,
     CategoryAttribute,
     Product,
     ProductAttributeValue,
     ProductVariant,
+    PublishStatus,
     VariantAttributeValue,
 )
 from core import audit
@@ -112,9 +114,23 @@ def generate_variants(
         attribute = Attribute.objects.filter(code=attribute_code).first()
         if attribute is None:
             raise ValidationError(f"Unknown attribute {attribute_code!r}.")
+        # A specification builds no SKUs (business-rules §5a rule 1). The guard
+        # used to live only on the specification side, so Material could be
+        # stated on a product *and* sprout variants -- the one state §5a exists
+        # to make impossible (D79).
+        if not attribute.is_variant_defining:
+            message = f"{attribute.name} is a specification, not a variant option."
+            raise ValidationError(message, details={"selections": [message]})
+        if not values:
+            message = f"Choose at least one {attribute.name} value."
+            raise ValidationError(message, details={"selections": [message]})
         options = list(attribute.values.filter(value__in=values))
-        if not options:
-            raise ValidationError(f"No matching values for {attribute_code!r}.")
+        # All or nothing: an unknown value used to be skipped as long as one
+        # other matched, so S and XXXL made S alone and said nothing (D79).
+        unknown = sorted(set(values) - {option.value for option in options})
+        if unknown:
+            message = f"{attribute.name} has no value {', '.join(unknown)}."
+            raise ValidationError(message, details={"selections": [message]})
         groups.append(options)
 
     existing = {
@@ -145,6 +161,66 @@ def generate_variants(
         reason="Variant matrix generated",
     )
     return created
+
+
+@transaction.atomic
+def create_product_for_purchase(
+    *,
+    name: str,
+    category: Category,
+    price: Any,
+    cost: Any,
+    brand: Brand | None = None,
+    selections: dict[str, list[str]] | None = None,
+    actor: Any = None,
+) -> tuple[Product, list[ProductVariant]]:
+    """A product created where its goods arrive: on a purchase order.
+
+    The product form and the purchase order used to be two doors for one job,
+    and only one of them carried the cost the goods were bought at (D72). This
+    is the purchase order's door, and it creates exactly what a delivery needs:
+    the product, its variants, a selling price and the cost -- one transaction,
+    so a failure part-way leaves no half-made product behind.
+
+    ACTIVE, so the counter can sell it the moment it is received. Unpublished,
+    so the storefront shows nothing until someone has given it photographs and
+    a description on the product form (business-rules §4.0b).
+
+    With no `selections` the product gets one variant with no options, which is
+    what a single-size perfume or a one-off scarf is.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError("A product needs a name.", details={"name": ["Enter a name."]})
+    chosen = {code: values for code, values in (selections or {}).items() if values}
+
+    product = Product.objects.create(
+        name=name,
+        slug=unique_slug(Product, name),
+        category=category,
+        brand=brand,
+        status=PublishStatus.ACTIVE,
+        published=False,
+        created_by=actor,
+    )
+    if chosen:
+        variants = generate_variants(
+            product=product, selections=chosen, price=price, cost=cost, actor=actor
+        )
+    else:
+        variants = [
+            create_variant(
+                product=product, attribute_values=[], price=price, cost=cost, actor=actor
+            )
+        ]
+    audit.record(
+        action=audit.AuditAction.CREATE,
+        entity=product,
+        actor=actor,
+        new_values={"name": name, "category": category.name, "variants": len(variants)},
+        reason="Created on a purchase order",
+    )
+    return product, variants
 
 
 def category_attributes(category: Category) -> list[CategoryAttribute]:

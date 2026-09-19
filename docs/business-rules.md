@@ -327,7 +327,45 @@ drift repaired. It is not a way to bring goods in, because it carries no cost wi
 
 To put existing stock on the shelf when the business first goes live, use the CSV import
 (`/admin/products/import`), which carries a `cost` column per row. To bring in goods afterwards,
-raise and receive a purchase order.
+raise and receive a purchase order — including goods nothing in the catalogue describes yet (§4.0b).
+
+### 4.0b Goods arrive through purchasing
+
+The product form and the purchase order used to be two doors for one job, and only the purchase
+order's carried the cost the goods were bought at (D72). Since 2026-09-19 the purchase order can do
+the whole job, so it is the one door:
+
+1. **A product that has never been stocked is made on the order.** "New product" on
+   `/admin/purchases/new` asks for what a delivery needs — name, category, the sizes or colours that
+   came, a selling price and the cost — and `POST /products/quick-create/` makes the product and every
+   combination in one transaction. The variants arrive on the order as lines at that cost. No options
+   ticked makes one plain variant (a single-size attar, a one-off scarf).
+2. **Goods that came with the supplier are received in the same step.** "The goods are here — receive
+   them now" creates, sends and receives the order in full inside one transaction
+   (`receive_now`), so the three can never be seen apart. It needs `purchases.receive` as well as
+   `purchases.create`, or raising an order would be a way round the receive permission.
+3. **A line is priced at what this supplier was last paid**, not the last price paid to anyone.
+   `GET /suppliers/{id}/products/` derives it from receipts — there is no stored "supplier price",
+   for the reason there is no balance column on `Supplier` (§4.2): a copy drifts from the documents it
+   summarises. A cost the buyer types is never overwritten.
+
+A product made on an order is **`ACTIVE` and unpublished**: the counter can sell it the moment it is
+received, and the storefront shows nothing until someone has given it photographs and a description on
+the product form, which is what that form is now for.
+
+*`DECISION REQUIRED` — assumed **sellable at the counter immediately**. The alternative is `DRAFT`
+until someone reviews it on the product form, which keeps an unchecked price off the till at the cost
+of goods sitting on the shelf unsellable.*
+
+Because it can reach the till within the minute, the selling price has a floor of **0.01** on this
+path; the product form, where a deliberate zero belongs, keeps its floor of zero.
+
+**A purchase order can be cancelled only while nothing has happened to it** — `DRAFT` or `SENT`, no
+receipt, and **no money paid against it**. The last is D75: payables (§4.2) drop a cancelled order and
+a supplier payment can be neither edited nor deleted (§6b.1b), so cancelling a paid order left the
+money with the supplier and on no list anywhere. Until a supplier credit note exists, an order with a
+payment against it is received, not cancelled. All three are decided under the order's row lock, the
+same lock receiving and paying take (D76).
 
 ### 4.1 Net profit (the business summary)
 

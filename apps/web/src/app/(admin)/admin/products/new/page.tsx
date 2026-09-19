@@ -60,6 +60,15 @@ export default async function NewProductPage() {
         </Link>
       </p>
 
+      <p className="mb-4 rounded-md border border-border bg-neutral-50 px-4 py-3 text-body-sm">
+        Bringing in stock of something new? Make it on a{" "}
+        <Link href="/admin/purchases/new" className="text-brand-600 hover:underline">
+          purchase order
+        </Link>{" "}
+        instead — the product, its sizes and colours, and the cost you paid, in one step. This form
+        is for everything a delivery does not need: photographs, descriptions and specifications.
+      </p>
+
       <ProductForm
         mode="create"
         initial={blankProduct()}

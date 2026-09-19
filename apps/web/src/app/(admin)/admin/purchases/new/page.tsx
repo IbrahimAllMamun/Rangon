@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { PurchaseOrderForm } from "@/components/admin/purchase-order-form";
+import { type ProductReference, PurchaseOrderForm } from "@/components/admin/purchase-order-form";
 import type { SupplierRow } from "@/components/admin/supplier-form";
 import { PageHeader } from "@/components/admin/shell";
 import { Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
+import { getProductFormData } from "@/lib/commerce/product-form-data";
 
 export const metadata = { title: "New purchase order" };
 
@@ -15,8 +16,8 @@ export default async function NewPurchaseOrderPage() {
   const user = await currentUser<SessionUser>();
   if (!user) redirect("/login?next=/admin/purchases/new");
 
-  const allowed = user.permissions.includes("*") || user.permissions.includes("purchases.create");
-  if (!allowed) {
+  const can = (code: string) => user.permissions.includes("*") || user.permissions.includes(code);
+  if (!can("purchases.create")) {
     return (
       <>
         <PageHeader title="New purchase order" />
@@ -31,10 +32,23 @@ export default async function NewPurchaseOrderPage() {
   }
 
   let suppliers: SupplierRow[] = [];
+  let productReference: ProductReference | null = null;
   let error: string | null = null;
   try {
-    const page = await apiServer<Paginated<SupplierRow>>("/suppliers/?page_size=100");
+    // The new-product panel's lists are only fetched for someone who may use
+    // it; the API refuses `products/quick-create/` without the permission anyway.
+    const [page, reference] = await Promise.all([
+      apiServer<Paginated<SupplierRow>>("/suppliers/?page_size=100"),
+      can("products.create") ? getProductFormData() : Promise.resolve(null),
+    ]);
     suppliers = page.results;
+    productReference = reference
+      ? {
+          categories: reference.categories,
+          brands: reference.brands,
+          attributes: reference.attributes,
+        }
+      : null;
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load suppliers.";
   }
@@ -54,7 +68,7 @@ export default async function NewPurchaseOrderPage() {
     <>
       <PageHeader
         title="New purchase order"
-        description="Raising an order does not move stock — that happens when the goods are received."
+        description="Stock moves only when goods are received — straight away if they have already arrived, or later from the order."
       />
 
       <p className="mb-4 flex flex-wrap gap-4 text-body-sm">
@@ -69,6 +83,8 @@ export default async function NewPurchaseOrderPage() {
       <PurchaseOrderForm
         suppliers={suppliers}
         defaultBranchLabel={user.branch ? `${user.branch.name} (${user.branch.code})` : "Default branch"}
+        productReference={productReference}
+        canReceive={can("purchases.receive")}
       />
     </>
   );

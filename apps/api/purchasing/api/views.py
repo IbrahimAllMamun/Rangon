@@ -6,6 +6,7 @@ from django.db.models import Count, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -13,6 +14,8 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from catalog.api.serializers import ProductVariantSerializer
+from catalog.models import ProductVariant
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (
     CreatePurchaseOrderSerializer,
@@ -23,6 +26,7 @@ from purchasing.api.serializers import (
     SupplierSerializer,
 )
 from purchasing.models import PurchaseOrder, PurchaseOrderStatus, Supplier, SupplierPayment
+from purchasing.selectors import supplier_products
 from purchasing.services import PurchaseLine
 
 
@@ -36,6 +40,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         "update": ["purchases.create"],
         "partial_update": ["purchases.create"],
         "destroy": ["settings.manage"],
+        "products": ["purchases.view"],
     }
     # `search_fields` below was declared but inert: SearchFilter is not one of
     # the global DEFAULT_FILTER_BACKENDS, so `?search=` was silently ignored.
@@ -56,6 +61,38 @@ class SupplierViewSet(viewsets.ModelViewSet):
                 ),
             )
         ).order_by("name")
+
+    @action(detail=True, methods=["get"])
+    def products(self, request: Request, pk: str | None = None) -> Response:
+        """What this supplier has delivered before, with the price paid last time.
+
+        The order form offers these as quick-add lines and prices a searched
+        variant from here when it has been bought from this supplier -- the
+        supplier's own last price, rather than the last price paid to anyone.
+        Capped at `SUPPLIER_PRODUCTS_LIMIT`, most recent first, so unpaginated.
+        """
+        deliveries = supplier_products(supplier=self.get_object())
+        variants = {
+            variant.pk: variant
+            for variant in ProductVariant.objects.filter(
+                pk__in=[row["variant_id"] for row in deliveries]
+            )
+            .select_related("product", "product__brand")
+            .prefetch_related("attribute_values__attribute_value", "attribute_values__attribute")
+        }
+        results = []
+        for row in deliveries:
+            variant = variants.get(row["variant_id"])
+            if variant is None:
+                continue
+            results.append(
+                {
+                    **ProductVariantSerializer(variant).data,
+                    "last_cost": str(row["last_cost"]),
+                    "last_received_at": row["last_received_at"].isoformat(),
+                }
+            )
+        return Response(results)
 
 
 class PurchaseOrderViewSet(
@@ -103,8 +140,14 @@ class PurchaseOrderViewSet(
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        # Receiving on arrival writes stock, which `purchases.create` alone
+        # does not grant; without this, raising an order would be a way round
+        # the receive permission.
+        if data.get("receive_now") and not request.user.has_perm_code("purchases.receive"):
+            raise PermissionDenied("Receiving goods needs the purchases.receive permission.")
+
         purchase_order = purchasing_services.create_purchase_order(
-            supplier=Supplier.objects.get(pk=data["supplier"]),
+            supplier=data["supplier"],
             branch=resolve_branch(request.user, data.get("branch")),
             lines=[
                 PurchaseLine(
@@ -120,6 +163,7 @@ class PurchaseOrderViewSet(
             invoice_number=data.get("invoice_number", ""),
             shipping_total=data.get("shipping_total", 0),
             notes=data.get("notes", ""),
+            receive_now=data.get("receive_now", False),
         )
         return Response(
             PurchaseOrderSerializer(purchase_order).data, status=status.HTTP_201_CREATED

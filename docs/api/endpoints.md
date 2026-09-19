@@ -33,7 +33,8 @@ Extras:
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `products/{id}/generate-variants/` | cartesian product of chosen attribute values |
+| POST | `products/{id}/generate-variants/` | cartesian product of chosen attribute values. Refuses a specification attribute and any value the attribute does not have — all or nothing (D79) |
+| POST | `products/quick-create/` | a product **and** its variants in one transaction, from the purchase order (`products.create`). Body: `name`, `category`, `brand?`, `selections?`, `price` (≥ 0.01), `cost`. Created `ACTIVE` and unpublished; no `selections` makes one plain variant. Answers `{product, variants}` with variants in the `GET variants/` shape — [business-rules §4.0b](../business-rules.md#40b-goods-arrive-through-purchasing) |
 | POST | `products/{id}/publish/` · `unpublish/` | storefront visibility |
 | GET | `variants/lookup/?code=<barcode\|sku>` | exact-first lookup (POS + admin) |
 | POST | `variants/{id}/barcode/` | generate a barcode if missing |
@@ -89,9 +90,11 @@ treated as a count of zero.
 
 | Method | Path | Perm |
 |---|---|---|
+| POST | `purchase-orders/` with `"receive_now": true` | `purchases.create` **and** `purchases.receive` — created, sent and received in full in one transaction |
 | POST | `purchase-orders/{id}/send/` · `cancel/` | `purchases.create` |
 | POST | `purchase-orders/{id}/receive/` | `purchases.receive` — lines received → `PURCHASE` ledger + WAC |
 | GET | `purchase-orders/{id}/receipts/` | `purchases.view` |
+| GET | `suppliers/{id}/products/` | `purchases.view` — what this supplier has delivered, most recent first, each in the `GET variants/` shape plus `last_cost` and `last_received_at`. Derived from receipts; capped at 50, so unpaginated |
 | GET | `supplier-payments/?purchase_order={id}` | `purchases.view` — payment history |
 | POST | `supplier-payments/` | `purchases.pay` — `Idempotency-Key` honoured |
 
@@ -101,6 +104,12 @@ order with **409 `CONFLICT`**, and a `supplier` that is not the purchase order's
 **400 `VALIDATION_ERROR`**. `paid_at` is optional and defaults to now. Retrying with the same
 `Idempotency-Key` returns the payment already recorded rather than paying twice
 ([business-rules.md §6b.1b](../business-rules.md)).
+
+`POST purchase-orders/` refuses, as **400 `VALIDATION_ERROR`** with a field in `details`: negative
+`shipping_total`, a line discount above its line, the same variant on two lines, and an unknown
+`supplier` (D77). `receive/` refuses one order line named twice in a delivery (D78). `cancel/` answers
+**409 `CONFLICT`** for an order that is not `DRAFT`/`SENT`, has any receipt, or has **any money paid
+against it** (D75) — decided under the order's row lock, like `send/` (D76).
 
 ## Finance — `/api/v1/`
 

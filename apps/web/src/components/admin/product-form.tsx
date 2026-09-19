@@ -4,6 +4,7 @@ import { Check, Eye, EyeOff, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { AxisPicker } from "@/components/admin/axis-picker";
 import { ProductSpecPicker } from "@/components/admin/product-spec-picker";
 import { VariantMatrixEditor, type RowDraft, draftFromRow } from "@/components/admin/variant-matrix-editor";
 import {
@@ -28,6 +29,7 @@ import {
   declaredSpecs,
   resolveVariantAxes,
 } from "@/lib/commerce/category-attributes";
+import { orderCategories } from "@/lib/commerce/categories";
 import type { ProductValues } from "@/lib/commerce/product-values";
 import {
   type ExistingVariant,
@@ -39,7 +41,6 @@ import {
   pendingSelections,
   selectionsFromVariants,
 } from "@/lib/commerce/variant-matrix";
-import { cn } from "@/lib/cn";
 import { useCategoryAttributes } from "@/lib/use-category-attributes";
 
 export interface CategoryOption {
@@ -552,50 +553,11 @@ export function ProductForm({
               <Skeleton className="h-9 w-2/3" />
             </div>
           ) : (
-          <div className="space-y-4">
-            {variantAttributes.map((attribute) => {
-              const picked = selections[attribute.code] ?? [];
-              return (
-                <fieldset key={attribute.code}>
-                  <legend className="mb-2 text-body-sm font-medium">
-                    {attribute.name}
-                    {picked.length > 0 && (
-                      <span className="ml-2 font-normal text-muted">{picked.length} selected</span>
-                    )}
-                  </legend>
-                  <div className="flex flex-wrap gap-2">
-                    {attribute.values.map((option) => {
-                      const checked = picked.includes(option.value);
-                      return (
-                        <label
-                          key={option.value}
-                          className={cn(
-                            "inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-body-sm transition-colors duration-fast",
-                            checked
-                              ? "border-brand-500 bg-brand-50 text-brand-700"
-                              : "border-neutral-300 bg-white hover:bg-neutral-50",
-                          )}
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onChange={() => toggleValue(attribute.code, option.value)}
-                          />
-                          {option.swatch && (
-                            <span
-                              className="size-4 rounded-full border border-border"
-                              style={{ backgroundColor: option.swatch }}
-                              aria-hidden
-                            />
-                          )}
-                          {option.label}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </fieldset>
-              );
-            })}
-          </div>
+          <AxisPicker
+            attributes={variantAttributes}
+            selections={selections}
+            onToggle={toggleValue}
+          />
           )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:w-1/2">
@@ -763,32 +725,4 @@ function firstCost(
   const row = rows.find((candidate) => candidate.state === "new");
   const cost = row ? drafts[row.key]?.cost : "";
   return cost || fallback || "0";
-}
-
-/** Categories as a parent-then-child list, so the select reads like the tree. */
-function orderCategories(categories: CategoryOption[]): { id: string; label: string }[] {
-  const byParent = new Map<string | null, CategoryOption[]>();
-  for (const category of categories) {
-    const siblings = byParent.get(category.parent ?? null) ?? [];
-    siblings.push(category);
-    byParent.set(category.parent ?? null, siblings);
-  }
-
-  const out: { id: string; label: string }[] = [];
-  const walk = (parent: string | null, depth: number) => {
-    for (const category of byParent.get(parent) ?? []) {
-      out.push({ id: category.id, label: `${"— ".repeat(depth)}${category.name}` });
-      walk(category.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-
-  // Anything whose parent is outside the list (inactive, filtered) would be
-  // invisible otherwise.
-  for (const category of categories) {
-    if (!out.some((entry) => entry.id === category.id)) {
-      out.push({ id: category.id, label: category.name });
-    }
-  }
-  return out;
 }

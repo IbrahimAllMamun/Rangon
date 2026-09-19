@@ -26,6 +26,81 @@ export interface DraftLine {
   quantity: string;
   unitCost: string;
   discount: string;
+  /** Made on this order through `POST /products/quick-create/`. Display only. */
+  isNew?: boolean;
+  /** Where the unit cost came from, so the buyer knows what they are looking at. */
+  costSource?: "supplier" | "variant" | "entered";
+  /** `ProductVariant.cost`, kept so a line can fall back to it when the supplier changes. */
+  variantCost?: string;
+}
+
+/** What a line needs from a variant, whichever way the variant was found. */
+export interface LineVariant {
+  id: string;
+  sku: string;
+  product_name: string;
+  label: string;
+  cost: string;
+}
+
+/**
+ * A draft line for a variant.
+ *
+ * The unit cost is the best first guess at what this delivery will cost:
+ * what *this supplier* was last paid for it (`GET /suppliers/{id}/products/`)
+ * when there is such a figure, and otherwise `ProductVariant.cost`, which is
+ * the last price paid to anyone.
+ */
+export function lineFromVariant(
+  variant: LineVariant,
+  options: {
+    key: string;
+    quantity?: string;
+    unitCost?: string;
+    supplierCosts?: ReadonlyMap<string, string>;
+    isNew?: boolean;
+  },
+): DraftLine {
+  const supplierCost = options.supplierCosts?.get(variant.id);
+  const unitCost = options.unitCost ?? supplierCost ?? variant.cost;
+  const costSource: DraftLine["costSource"] =
+    options.unitCost !== undefined ? "entered" : supplierCost !== undefined ? "supplier" : "variant";
+  return {
+    key: options.key,
+    variantId: variant.id,
+    sku: variant.sku,
+    productName: variant.product_name,
+    variantLabel: variant.label,
+    quantity: options.quantity ?? "1",
+    unitCost,
+    discount: "0",
+    isNew: options.isNew,
+    costSource,
+    variantCost: variant.cost,
+  };
+}
+
+/**
+ * Re-price the lines that were priced by a guess, for a newly chosen supplier.
+ *
+ * A cost the buyer typed (`entered`) is theirs and never moves. A guessed one
+ * follows the supplier: to what *they* were last paid when there is a figure,
+ * and back to the variant's own cost when there is not -- never left at the
+ * previous supplier's price.
+ */
+export function repriceForSupplier(
+  lines: DraftLine[],
+  supplierCosts: ReadonlyMap<string, string>,
+): DraftLine[] {
+  return lines.map((line) => {
+    if (line.costSource !== "supplier" && line.costSource !== "variant") return line;
+    const cost = supplierCosts.get(line.variantId);
+    if (cost !== undefined) return { ...line, unitCost: cost, costSource: "supplier" };
+    if (line.costSource === "supplier") {
+      return { ...line, unitCost: line.variantCost ?? line.unitCost, costSource: "variant" };
+    }
+    return line;
+  });
 }
 
 export interface LineTotals {
@@ -120,8 +195,8 @@ export function validateLines(lines: DraftLine[]): LineProblem[] {
     if (totals.discount > totals.gross) {
       problems.push({ key: line.key, message: "Discount cannot exceed the line total." });
     }
-    // `purchasing_poi_uniq` is a database constraint on (purchase_order,
-    // variant), so a duplicate variant fails with an opaque 409. Catch it here.
+    // The API refuses a variant named twice (D77); catching it here saves the
+    // round trip and points at the line.
     const duplicate = seen.get(line.variantId);
     if (duplicate) {
       problems.push({

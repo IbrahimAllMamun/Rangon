@@ -136,7 +136,7 @@ const disabledCount = await page.locator('[role="option"] button[disabled]').cou
 ok("a variant already on the order cannot be added twice", disabledCount > 0);
 await page.keyboard.press("Escape");
 
-await page.getByRole("checkbox").last().check(); // send straight away
+await page.getByLabel("Send to the supplier").check();
 await page.getByRole("button", { name: /create and send/i }).click();
 await page.waitForURL(/\/admin\/purchases\/[0-9a-f-]{36}/);
 ok("create redirects to the order", /\/admin\/purchases\//.test(page.url()), page.url());

@@ -40,6 +40,7 @@ from catalog.api.serializers import (
     ProductListSerializer,
     ProductVariantSerializer,
     ProductWriteSerializer,
+    QuickProductSerializer,
 )
 from catalog.models import (
     Attribute,
@@ -55,6 +56,7 @@ from catalog.models import (
 )
 from catalog.services import (
     category_attributes,
+    create_product_for_purchase,
     generate_barcode,
     generate_variants,
     set_product_specs,
@@ -247,6 +249,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     required_permissions = {
         **PRODUCT_PERMISSIONS,
         "generate_variants": ["products.create"],
+        "quick_create": ["products.create"],
         "publish": ["products.update"],
         "unpublish": ["products.update"],
         # An import creates products and can receive stock, so it needs both.
@@ -384,6 +387,39 @@ class ProductViewSet(viewsets.ModelViewSet):
             {
                 "created": len(created),
                 "variants": ProductVariantSerializer(created, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=False, methods=["post"], url_path="quick-create")
+    def quick_create(self, request: Request) -> Response:
+        """A product and its variants in one step, from the purchase-order screen.
+
+        Answers with the variants in the shape `GET /variants/` uses, so the
+        order form adds them as lines exactly as if they had been searched for.
+        """
+        serializer = QuickProductSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        product, variants = create_product_for_purchase(
+            name=data["name"],
+            category=data["category"],
+            brand=data.get("brand"),
+            selections=data.get("selections") or {},
+            price=data["price"],
+            cost=data["cost"],
+            actor=request.user,
+        )
+        fresh = (
+            ProductVariant.objects.filter(pk__in=[variant.pk for variant in variants])
+            .select_related("product", "product__brand")
+            .prefetch_related("attribute_values__attribute_value", "attribute_values__attribute")
+            .order_by("created_at", "pk")
+        )
+        return Response(
+            {
+                "product": {"id": str(product.pk), "name": product.name, "slug": product.slug},
+                "variants": ProductVariantSerializer(fresh, many=True).data,
             },
             status=status.HTTP_201_CREATED,
         )

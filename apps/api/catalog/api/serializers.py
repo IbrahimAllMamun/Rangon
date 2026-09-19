@@ -579,6 +579,27 @@ class GenerateVariantsSerializer(serializers.Serializer):
     cost = serializers.DecimalField(max_digits=14, decimal_places=2, required=False, default=0)
 
 
+class QuickProductSerializer(serializers.Serializer):
+    """`POST /products/quick-create/` -- a product made on the purchase order.
+
+    `price` has a floor of 0.01 here and not on the product form: a product
+    made this way can be received and sold at the counter within the minute,
+    and a price nobody set sells it for nothing. The product form is where a
+    deliberate zero belongs.
+    """
+
+    name = serializers.CharField(max_length=200)
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+    brand = serializers.PrimaryKeyRelatedField(
+        queryset=Brand.objects.all(), required=False, allow_null=True
+    )
+    selections = serializers.DictField(
+        child=serializers.ListField(child=serializers.CharField()), required=False, default=dict
+    )
+    price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+    cost = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.00"))
+
+
 class ProductImportSerializer(serializers.Serializer):
     """The upload behind `POST /products/import/`.
 

@@ -97,6 +97,40 @@ def recalculate_totals(purchase_order: PurchaseOrder) -> PurchaseOrder:
     return purchase_order
 
 
+def _check_lines(lines: list[PurchaseLine], shipping_total: Decimal) -> None:
+    """What makes a purchase order's money wrong rather than merely unusual.
+
+    Each of these used to be stored (roadmap D77): a negative shipping figure
+    lowered the liability, a discount above its line made the line negative and
+    quietly cancelled out other lines, and a variant named twice reached the
+    unique index as a bare 409 with no field for the form to point at.
+    """
+    if not lines:
+        raise ValidationError("A purchase order needs at least one line.")
+    if quantize(shipping_total) < 0:
+        raise ValidationError(
+            "Shipping cannot be negative.",
+            details={"shipping_total": ["Shipping cannot be negative."]},
+        )
+    seen: set[str] = set()
+    for line in lines:
+        if line.quantity <= 0:
+            raise ValidationError("Ordered quantity must be positive.")
+        if quantize(line.unit_cost) < 0 or quantize(line.discount) < 0:
+            raise ValidationError(
+                "Costs and discounts cannot be negative.",
+                details={"lines": ["Costs and discounts cannot be negative."]},
+            )
+        if quantize(line.discount) > quantize(line.unit_cost * line.quantity):
+            message = "A line's discount cannot be more than the line itself."
+            raise ValidationError(message, details={"lines": [message]})
+        key = str(line.variant_id)
+        if key in seen:
+            message = "The same product appears on two lines; change the quantity on one instead."
+            raise ValidationError(message, details={"lines": [message]})
+        seen.add(key)
+
+
 @transaction.atomic
 def create_purchase_order(
     *,
@@ -108,10 +142,17 @@ def create_purchase_order(
     invoice_number: str = "",
     shipping_total: Decimal = Decimal("0.00"),
     notes: str = "",
+    receive_now: bool = False,
 ) -> PurchaseOrder:
+    """Raise a purchase order -- or, with `receive_now`, record goods that have arrived.
+
+    `receive_now` is the counter-side case: the supplier walked in with the
+    goods, so there is nothing to wait for. The order is created, sent and
+    received in full in this one transaction, which is the only way the three
+    can never be seen apart (business-rules §4.0b).
+    """
     materialised = list(lines)
-    if not materialised:
-        raise ValidationError("A purchase order needs at least one line.")
+    _check_lines(materialised, shipping_total)
 
     purchase_order = PurchaseOrder.objects.create(
         number=next_number("purchase_order", prefix="PO"),
@@ -126,8 +167,6 @@ def create_purchase_order(
     )
 
     for line in materialised:
-        if line.quantity <= 0:
-            raise ValidationError("Ordered quantity must be positive.")
         PurchaseOrderItem.objects.create(
             purchase_order=purchase_order,
             variant_id=line.variant_id,
@@ -136,13 +175,28 @@ def create_purchase_order(
             discount=quantize(line.discount),
         )
 
-    return recalculate_totals(purchase_order)
+    purchase_order = recalculate_totals(purchase_order)
+    if not receive_now:
+        return purchase_order
+
+    purchase_order = send_purchase_order(purchase_order=purchase_order, actor=actor)
+    receive_purchase(
+        purchase_order=purchase_order,
+        lines={str(item.pk): item.quantity_ordered for item in purchase_order.items.all()},
+        actor=actor,
+        notes="Received on arrival",
+    )
+    return PurchaseOrder.objects.get(pk=purchase_order.pk)
 
 
 @transaction.atomic
 def send_purchase_order(
     *, purchase_order: PurchaseOrder, actor: User | None = None
 ) -> PurchaseOrder:
+    # Decided under the row lock, not against the caller's copy: a cancel that
+    # committed after the caller read the order would otherwise be overwritten
+    # with SENT (roadmap D76).
+    purchase_order = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)
     if purchase_order.status != PurchaseOrderStatus.DRAFT:
         raise Conflict("Only a draft purchase order can be sent.")
     purchase_order.status = PurchaseOrderStatus.SENT
@@ -270,9 +324,34 @@ def _refresh_receipt_status(purchase_order: PurchaseOrder) -> None:
 def cancel_purchase_order(
     *, purchase_order: PurchaseOrder, actor: User | None = None, reason: str = ""
 ) -> PurchaseOrder:
+    """Withdraw an order nothing has happened to yet.
+
+    Three things make an order impossible to cancel, and each is decided under
+    the order's row lock -- the lock `receive_purchase` and
+    `record_supplier_payment` both take -- so a delivery or a payment
+    committing at the same moment is seen rather than overwritten (D76).
+    """
+    purchase_order = PurchaseOrder.objects.select_for_update().get(pk=purchase_order.pk)
+    if purchase_order.status == PurchaseOrderStatus.CANCELLED:
+        raise Conflict(f"{purchase_order.number} is already cancelled.")
+    if purchase_order.status not in {PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.SENT}:
+        raise Conflict(
+            f"A {purchase_order.get_status_display().lower()} purchase order cannot be cancelled.",
+            details={"status": purchase_order.status},
+        )
     if purchase_order.receipts.exists():
         raise Conflict(
             "Stock has already been received against this order; close it instead of cancelling."
+        )
+    # Payables (§4.2) drop a cancelled order, and a payment can be neither
+    # edited nor deleted (§6b.1b) -- so cancelling a paid order would leave the
+    # money with the supplier and on no list anywhere (D75).
+    if purchase_order.paid_total > 0:
+        raise Conflict(
+            f"{purchase_order.paid_total} has already been paid against "
+            f"{purchase_order.number}. Cancelling would leave that money with the supplier "
+            "and on no list anywhere; receive the goods against this order instead.",
+            details={"paid_total": str(purchase_order.paid_total)},
         )
     purchase_order.status = PurchaseOrderStatus.CANCELLED
     purchase_order.save(update_fields=["status", "updated_at"])
