@@ -113,9 +113,23 @@ def generate_variants(
         attribute = Attribute.objects.filter(code=attribute_code).first()
         if attribute is None:
             raise ValidationError(f"Unknown attribute {attribute_code!r}.")
+        # A specification builds no SKUs (business-rules §5a rule 1). The guard
+        # used to live only on the specification side, so Material could be
+        # stated on a product *and* sprout variants -- the one state §5a exists
+        # to make impossible (D84).
+        if not attribute.is_variant_defining:
+            message = f"{attribute.name} is a specification, not a variant option."
+            raise ValidationError(message, details={"selections": [message]})
+        if not values:
+            message = f"Choose at least one {attribute.name} value."
+            raise ValidationError(message, details={"selections": [message]})
         options = list(attribute.values.filter(value__in=values))
-        if not options:
-            raise ValidationError(f"No matching values for {attribute_code!r}.")
+        # All or nothing: an unknown value used to be skipped as long as one
+        # other matched, so S and XXXL made S alone and said nothing (D84).
+        unknown = sorted(set(values) - {option.value for option in options})
+        if unknown:
+            message = f"{attribute.name} has no value {', '.join(unknown)}."
+            raise ValidationError(message, details={"selections": [message]})
         groups.append(options)
 
     existing = {

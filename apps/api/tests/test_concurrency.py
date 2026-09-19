@@ -8,12 +8,18 @@ its own connection on the way out.
 from __future__ import annotations
 
 import threading
+import time
 from decimal import Decimal
 
 import pytest
 from django.db import connections
 
-from core.exceptions import BusinessError, InsufficientFunds, PaymentExceedsOutstanding
+from core.exceptions import (
+    BusinessError,
+    Conflict,
+    InsufficientFunds,
+    PaymentExceedsOutstanding,
+)
 from customers.models import Customer
 from finance import services as finance_services
 from finance.models import AccountKind
@@ -27,7 +33,7 @@ from orders.services import returns as return_services
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
 from promotions.models import Coupon, CouponRedemption, DiscountType
 from purchasing import services as purchasing_services
-from purchasing.models import SupplierPayment
+from purchasing.models import PurchaseOrder, PurchaseOrderStatus, SupplierPayment
 from purchasing.services import PurchaseLine
 from tests import factories
 
@@ -563,3 +569,69 @@ def test_a_replayed_supplier_payment_pays_once(last_unit):
 
     order.refresh_from_db()
     assert order.paid_total == Decimal("400.00"), "a double click paid the supplier twice"
+
+
+def test_a_cancel_cannot_land_on_an_order_being_received(last_unit, monkeypatch):
+    """A delivery being posted and a cancel arriving at the same moment.
+
+    `cancel_purchase_order` read the receipts and then wrote the status with no
+    lock between the two. A delivery that had locked the order and written its
+    receipt but not yet committed was invisible to that read, so the cancel
+    found "no receipts", queued behind the delivery's row lock, and once the
+    delivery committed overwrote RECEIVED with CANCELLED (D81) -- stock on the shelf
+    against an order that says it was never placed, and off the payable list.
+
+    The interleaving is forced rather than hoped for: the delivery is held open
+    at `receive_stock` until the cancel has had time to read and reach the lock.
+    """
+    order = _payable_order(last_unit["branch"], last_unit["variant"], last_unit["cashier"])
+    item = order.items.get()
+    receipt_written = threading.Event()
+    release = threading.Event()
+    real_receive_stock = inventory_services.receive_stock
+
+    def held_receive_stock(**kwargs):
+        receipt_written.set()
+        release.wait(timeout=10)
+        return real_receive_stock(**kwargs)
+
+    monkeypatch.setattr(inventory_services, "receive_stock", held_receive_stock)
+    outcomes: dict = {}
+
+    def receive() -> None:
+        try:
+            purchasing_services.receive_purchase(
+                purchase_order=order, lines={str(item.pk): 1}, actor=last_unit["cashier"]
+            )
+            outcomes["receive"] = "ok"
+        except Exception as exc:
+            outcomes["receive"] = exc
+        finally:
+            connections.close_all()
+
+    def cancel() -> None:
+        receipt_written.wait(timeout=10)
+        try:
+            purchasing_services.cancel_purchase_order(
+                purchase_order=PurchaseOrder.objects.get(pk=order.pk),
+                actor=last_unit["cashier"],
+            )
+            outcomes["cancel"] = "ok"
+        except Exception as exc:
+            outcomes["cancel"] = exc
+        finally:
+            connections.close_all()
+
+    threads = [threading.Thread(target=receive), threading.Thread(target=cancel)]
+    for thread in threads:
+        thread.start()
+    receipt_written.wait(timeout=10)
+    time.sleep(0.5)  # the cancel reads, then blocks on the delivery's lock
+    release.set()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert outcomes.get("receive") == "ok", outcomes
+    assert isinstance(outcomes.get("cancel"), Conflict), outcomes
+    order.refresh_from_db()
+    assert order.status == PurchaseOrderStatus.RECEIVED

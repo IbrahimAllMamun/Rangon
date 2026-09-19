@@ -274,13 +274,16 @@ class PurchaseLineSerializer(serializers.Serializer):
 
 
 class CreatePurchaseOrderSerializer(serializers.Serializer):
-    supplier = serializers.UUIDField()
+    #: A related field rather than a bare UUID, so an unknown supplier is a
+    #: field error the form can point at. It used to reach
+    #: `Supplier.objects.get` in the view and come back as a 404 (D82).
+    supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all())
     branch = serializers.UUIDField(required=False)
     lines = PurchaseLineSerializer(many=True)
     expected_at = serializers.DateField(required=False, allow_null=True)
     invoice_number = serializers.CharField(required=False, allow_blank=True, max_length=64)
     shipping_total = serializers.DecimalField(
-        max_digits=14, decimal_places=2, required=False, default=0
+        max_digits=14, decimal_places=2, required=False, default=0, min_value=Decimal("0.00")
     )
     notes = serializers.CharField(required=False, allow_blank=True)
 
@@ -347,6 +350,16 @@ class ReceiveLineSerializer(serializers.Serializer):
 class ReceivePurchaseSerializer(serializers.Serializer):
     lines = ReceiveLineSerializer(many=True)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_lines(self, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # The view keys the delivery by line, so a line named twice used to
+        # keep only its last quantity -- 3 then 4 received 4, silently (D83).
+        items = [str(line["item"]) for line in lines]
+        if len(items) != len(set(items)):
+            raise serializers.ValidationError(
+                "The same order line appears twice in this delivery; enter its total once."
+            )
+        return lines
 
 
 class SupplierPaymentSerializer(serializers.ModelSerializer):

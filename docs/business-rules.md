@@ -1097,6 +1097,30 @@ nothing: that means the figures disagree, not that the goods are worth less than
 > against the next order, is a larger piece of work and is not built. The documented default is that
 > such a credit is settled with the supplier off-system.
 
+## 7c. Raising and cancelling a purchase order
+
+**What an order may not say.** `purchasing.services.create_purchase_order` refuses — as a
+`VALIDATION_ERROR` naming the field — negative shipping, a line discount larger than the line it
+discounts, a negative cost, and the same variant on two lines. Each of these used to be stored
+(D82): negative shipping lowered what the business owes, and an oversized discount made a negative
+line that silently cancelled out others. The order form checks the same things first; the service is
+where they are enforced, so a shell, the seed and the importer meet them too. A discount *equal* to
+its line is allowed — a free sample or a replacement is a real delivery.
+
+**A delivery names each order line once.** Two entries for one line used to keep only the last
+quantity (D83); now the request is refused and the storekeeper enters the total.
+
+**Cancelling is for an order nothing has happened to.** An order can be cancelled only while it is
+`DRAFT` or `SENT`, has no receipt, and has **no money paid against it**. The last is D80: payables
+(§4.2) drop a cancelled order and a supplier payment can be neither edited nor deleted (§6b.1b), so
+cancelling a paid order left the money with the supplier and on no list anywhere. Until a supplier
+credit note exists, an order with a payment against it is received, not cancelled. Cancelling an
+order that is already cancelled is refused rather than audited twice.
+
+**Sending and cancelling decide under the order's row lock** — the lock receiving and paying already
+take. Both used to decide against the caller's copy, so a cancel could land on an order a delivery
+was posting at that moment and overwrite `RECEIVED` with `CANCELLED` (D81).
+
 ## 8. Audit
 
 Recorded for: authentication events, permission elevation, price/discount overrides, stock adjustments

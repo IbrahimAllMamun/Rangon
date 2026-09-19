@@ -33,7 +33,7 @@ Extras:
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `products/{id}/generate-variants/` | cartesian product of chosen attribute values |
+| POST | `products/{id}/generate-variants/` | cartesian product of chosen attribute values. Refuses a specification attribute, and any value the attribute does not have — the whole request or none of it (D84) |
 | POST | `products/{id}/publish/` · `unpublish/` | storefront visibility |
 | GET | `variants/lookup/?code=<barcode\|sku>` | exact-first lookup (POS + admin) |
 | POST | `variants/{id}/barcode/` | generate a barcode if missing |
@@ -101,6 +101,13 @@ order with **409 `CONFLICT`**, and a `supplier` that is not the purchase order's
 **400 `VALIDATION_ERROR`**. `paid_at` is optional and defaults to now. Retrying with the same
 `Idempotency-Key` returns the payment already recorded rather than paying twice
 ([business-rules.md §6b.1b](../business-rules.md)).
+
+`POST purchase-orders/` refuses as **400 `VALIDATION_ERROR`**, with a field in `details`: negative
+`shipping_total`, a line discount above its line, a negative cost, the same variant on two lines, and
+an unknown `supplier` (D82). `receive/` refuses one order line named twice in a delivery (D83).
+`cancel/` answers **409 `CONFLICT`** for an order that is not `DRAFT`/`SENT`, has a receipt, or has
+**any money paid against it** (D80); `send/` and `cancel/` decide under the order's row lock (D81).
+See [business-rules.md §7c](../business-rules.md#7c-raising-and-cancelling-a-purchase-order).
 
 ## Finance — `/api/v1/`
 
