@@ -305,6 +305,15 @@ class PasswordChangeSerializer(serializers.Serializer):
         validate_password(value, self.context["request"].user)
         return value
 
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        # Someone changing a password because it may have leaked has fixed
+        # nothing by choosing it again.
+        if attrs["new_password"] == attrs["current_password"]:
+            raise serializers.ValidationError(
+                {"new_password": "Choose a password you are not already using."}
+            )
+        return attrs
+
 
 class AuditLogSerializer(serializers.ModelSerializer):
     actor_email = serializers.CharField(source="actor_label", read_only=True)

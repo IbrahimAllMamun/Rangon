@@ -29,8 +29,11 @@ STORAGES = {
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
 
-# Throttling off by default: rate limits are asserted explicitly in
-# tests/api/test_throttling.py, which re-enables them.
+# Throttling off by default, so a suite of thousands of requests is not rate
+# limited against itself. This used to say the limits were asserted in
+# tests/api/test_throttling.py; that file never existed. A view whose limit is
+# part of its security names `throttle_classes` itself and is therefore limited
+# here too -- `PasswordChangeView`, asserted in test_password_self_service.py.
 REST_FRAMEWORK = {**globals()["REST_FRAMEWORK"], "DEFAULT_THROTTLE_CLASSES": ()}
 
 # One database per run, not one per machine (D47).
