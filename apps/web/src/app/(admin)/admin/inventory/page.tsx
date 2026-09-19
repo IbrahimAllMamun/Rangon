@@ -134,11 +134,9 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Avg cost</th>
                     <th scope="col" className="px-4 py-2.5 text-right font-medium">Value</th>
                     <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
-                    {canAdjust && (
-                      <th scope="col" className="px-4 py-2.5 text-right font-medium">
-                        <span className="sr-only">Adjust stock</span>
-                      </th>
-                    )}
+                    <th scope="col" className="px-4 py-2.5 text-right font-medium">
+                      <span className="sr-only">History and adjustment</span>
+                    </th>
                   </tr>
                 </thead>
                 <InventoryRows
@@ -156,7 +154,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                     </td>
                     <td className="tabular px-4 py-2.5 text-right font-bold">{money(totalValue)}</td>
                     <td />
-                    {canAdjust && <td />}
+                    <td />
                   </tr>
                 </tfoot>
               </table>

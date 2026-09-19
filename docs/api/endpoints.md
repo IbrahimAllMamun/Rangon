@@ -22,7 +22,7 @@ Authoritative machine-readable version: `/api/schema/` (drf-spectacular). This i
 | GET/POST/PATCH | `branches/` | `settings.view` / `settings.manage` |
 | GET/POST/PATCH | `users/` | `users.view` / `users.manage` |
 | GET | `roles/`, `permissions/` | `users.view` |
-| GET | `audit-logs/` | `audit.view` |
+| GET | `audit-logs/` | `audit.view` — newest first. Branch-scoped: a reader confined to a branch sees that branch's entries and the organisation-wide ones (no branch) — [D85](../roadmap.md#known-defects). Filters: `action`, `entity_type`, `entity_id` (one record's history), `actor`, `branch`, `search` (entity label, reason, actor), `date_from`/`date_to` (shop days). Rows carry `action_label` and `branch_code` |
 
 ## Catalog — `/api/v1/`
 
@@ -57,7 +57,6 @@ kept as given, and editing a supplier never regenerates it.
 | Method | Path | Perm |
 |---|---|---|
 | GET | `` | `inventory.view` — per branch × variant, filters: low stock, out of stock, category |
-| GET | `transactions/` | `inventory.view` — the ledger, filterable by type/variant/date |
 | POST | `adjust/` | `inventory.adjust` — `{variant, branch, new_on_hand, reason}` |
 | POST | `write-off/` | `inventory.adjust` — `DAMAGE`/`LOSS` + reason (both mandatory) |
 | GET | `low-stock/` · `valuation/` | `inventory.view` / `reports.financial` |
@@ -69,6 +68,7 @@ Stock transfers and counts are **top-level** resources, not nested under
 | Method | Path | Perm |
 |---|---|---|
 | GET/POST | `/stock-transfers/` | `inventory.view` / `inventory.transfer` — writes `TRANSFER_OUT` + `TRANSFER_IN` in one transaction; cost travels with the goods (ADR-0006) |
+| GET | `/inventory-transactions/` | `inventory.view` — **the ledger**, append-only, newest first, branch-scoped. Filters: `variant`, `branch`, `transaction_type`, `types=DAMAGE,LOSS` (a list; an unknown type is a 400), `search` (SKU or product name), `date_from`/`date_to` (shop days, `core.dates`). Each row carries `variant_label`, `transaction_type_label` and `document` — `{kind, id, label}` for the order, return, purchase order or count behind it, or `null`; a goods receipt or supplier return resolves to its purchase order ([business-rules §1.9](../business-rules.md#19-reading-the-ledger)). This page used to list it as `inventory/transactions/`, which never existed |
 | GET/POST | `/stock-counts/` | `inventory.view` / `inventory.count` — creating one snapshots the branch's current on-hand as `expected_quantity` |
 | POST | `/stock-counts/{id}/record/` | `inventory.count` — `{lines: [{variant, counted_quantity, notes}]}` |
 | POST | `/stock-counts/{id}/apply/` | `inventory.count` — counted figures → `ADJUSTMENT` ledger rows |

@@ -380,6 +380,78 @@ export interface InventoryRow {
   updated_at: string;
 }
 
+/** `inventory.models.TransactionType`. */
+export type StockMovementType =
+  | "PURCHASE"
+  | "SALE"
+  | "RETURN"
+  | "DAMAGE"
+  | "LOSS"
+  | "ADJUSTMENT"
+  | "TRANSFER_IN"
+  | "TRANSFER_OUT"
+  | "RESERVATION"
+  | "RESERVATION_RELEASE"
+  | "PURCHASE_RETURN";
+
+/**
+ * The document a ledger row was caused by, resolved by the API
+ * (`inventory/api/documents.py`). A goods receipt or a supplier return resolves
+ * to its purchase order, which is the screen that shows it.
+ */
+export interface LedgerDocument {
+  kind: "order" | "return" | "purchase_order" | "stock_count" | "stock_transfer";
+  id: string;
+  label: string;
+}
+
+/** One row of `GET /inventory-transactions/` — append-only, newest first. */
+export interface StockMovement {
+  id: string;
+  branch: string;
+  branch_code: string;
+  variant: string;
+  variant_label: string;
+  product: string;
+  sku: string;
+  product_name: string;
+  transaction_type: StockMovementType;
+  transaction_type_label: string;
+  /** Signed: what this row did to on-hand, or to reserved for the reservation pair. */
+  quantity: number;
+  unit_cost: string | null;
+  on_hand_after: number;
+  reserved_after: number;
+  reference_type: string;
+  reference_id: string;
+  document: LedgerDocument | null;
+  reason: string;
+  notes: string;
+  created_by: string | null;
+  created_by_email: string;
+  created_at: string;
+}
+
+/** One row of `GET /audit-logs/`. Secrets are redacted before it is written. */
+export interface AuditEntry {
+  id: string;
+  actor: string | null;
+  actor_email: string;
+  action: string;
+  action_label: string;
+  branch: string | null;
+  branch_code: string | null;
+  entity_type: string;
+  entity_id: string;
+  entity_label: string;
+  old_values: Record<string, unknown>;
+  new_values: Record<string, unknown>;
+  reason: string;
+  ip_address: string | null;
+  request_id: string;
+  created_at: string;
+}
+
 export interface DashboardData {
   range: { start: string; end: string; label: string };
   kpis: {

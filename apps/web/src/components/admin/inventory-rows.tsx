@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Pencil, X } from "lucide-react";
+import { Check, History, Pencil, X } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -94,8 +95,17 @@ function Row({
         <td className="px-4 py-2.5">
           <StockBadge available={row.available} reorderPoint={row.reorder_point} />
         </td>
-        {canAdjust && (
-          <td className="px-4 py-2.5 text-right">
+        <td className="whitespace-nowrap px-4 py-2.5 text-right">
+          {/* The figure's own history: the ledger rows that add up to it. */}
+          <Link
+            href={`/admin/inventory/movements?variant=${row.variant}&branch=${row.branch}`}
+            className="inline-flex h-8 items-center gap-2 rounded-md px-3 text-body-sm font-semibold text-neutral-700 hover:bg-neutral-100"
+            aria-label={`History of ${row.sku}${showBranch ? ` at ${row.branch_code}` : ""}`}
+          >
+            <History className="size-4" aria-hidden />
+            History
+          </Link>
+          {canAdjust && (
             <Button
               type="button"
               variant="ghost"
@@ -107,8 +117,8 @@ function Row({
               {open ? <X className="size-4" aria-hidden /> : <Pencil className="size-4" aria-hidden />}
               {open ? "Cancel" : "Adjust"}
             </Button>
-          </td>
-        )}
+          )}
+        </td>
       </tr>
       {canAdjust && open && (
         <tr id={`adjust-${row.id}`} className="bg-neutral-50">
