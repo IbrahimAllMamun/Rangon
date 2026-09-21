@@ -33,6 +33,10 @@ services:
       # request to https and nothing loads over http://localhost.
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DJANGO_SECURE_SSL_REDIRECT: "0"
+      # Matches production: nginx is one hop. Note the published port below is
+      # a debugging door *around* nginx, and a request through it carries no
+      # proxy-appended entry -- so measure throttling through 4100, not 8100.
+      DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
     ports:
       - "${API_PORT:-8100}:8000"
     restart: unless-stopped

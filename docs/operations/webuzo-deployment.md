@@ -92,7 +92,9 @@ So:
 Internet
    │  :80 / :443  + Let's Encrypt
    ▼
-Webuzo's Nginx (or Apache)            ← the only public web server
+Webuzo's Nginx (or Apache)            ← the only public web server, and the one
+                                        trusted hop: keep DJANGO_TRUSTED_PROXY_HOPS=1
+                                        and make sure it forwards X-Forwarded-For
    ├── /api/  ──► 127.0.0.1:8001      ← api container (Gunicorn)
    └── /      ──► 127.0.0.1:8080      ← web container (Next.js)
                      │

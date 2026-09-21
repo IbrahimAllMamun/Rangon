@@ -13,6 +13,8 @@ from typing import Any
 
 from django.http import HttpRequest, HttpResponse
 
+from core.ip import client_ip
+
 _request_id: ContextVar[str] = ContextVar("request_id", default="")
 # Default is None, not {}: a mutable default on a ContextVar is shared by every
 # context that never sets it, which is exactly the bug this module must not have.
@@ -62,7 +64,11 @@ class AuditContextMiddleware:
     def __call__(self, request: HttpRequest) -> HttpResponse:
         token = _audit_context.set(
             {
-                "ip_address": self._client_ip(request),
+                # `core.ip`, not a second reading of the header here. This
+                # used to take the left-most `X-Forwarded-For` entry, which is
+                # the part the client writes -- so the trail recorded whatever
+                # address an attacker typed, and recorded it as fact.
+                "ip_address": client_ip(request),
                 "user_agent": request.META.get("HTTP_USER_AGENT", "")[:512],
                 "request_id": get_request_id(),
             }
@@ -71,13 +77,3 @@ class AuditContextMiddleware:
             return self.get_response(request)
         finally:
             _audit_context.reset(token)
-
-    @staticmethod
-    def _client_ip(request: HttpRequest) -> str | None:
-        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-        if forwarded:
-            # Left-most entry is the original client; the proxy appends itself.
-            candidate = forwarded.split(",")[0].strip()
-            if candidate:
-                return candidate[:45]
-        return request.META.get("REMOTE_ADDR")

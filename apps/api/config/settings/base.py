@@ -41,6 +41,20 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", "insecure-dev-key-do-not-use-in-production
 DEBUG = env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
+#: How many reverse proxies we control sit in front of Django, each appending
+#: its peer to `X-Forwarded-For`. 0 means none: ignore the header and use the
+#: socket address.
+#:
+#: The default is 0 because it is the safe way to be wrong. Set too low, a
+#: shared bucket throttles honest traffic and somebody notices; set too high --
+#: or left to DRF's "trust the whole header" fallback -- the limit silently
+#: stops applying and nobody notices, which is the state this replaced.
+#:
+#: The shipped Nginx stack sets `DJANGO_TRUSTED_PROXY_HOPS=1` in
+#: `docker-compose.yml`. Put a CDN or load balancer in front of that and it
+#: becomes 2, or the outer hop's entry is the attacker's again.
+TRUSTED_PROXY_HOPS = env_int("DJANGO_TRUSTED_PROXY_HOPS", 0)
+
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
@@ -209,10 +223,14 @@ REST_FRAMEWORK = {
     ),
     "EXCEPTION_HANDLER": "core.handlers.rangon_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Ours, not DRF's: the stock classes key on the client-supplied
+    # `X-Forwarded-For` when `NUM_PROXIES` is unset, so varying one header buys
+    # a fresh bucket per request and every rate below stops existing. See
+    # `core.throttling` and `TRUSTED_PROXY_HOPS`.
     "DEFAULT_THROTTLE_CLASSES": (
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
-        "rest_framework.throttling.ScopedRateThrottle",
+        "core.throttling.AnonRateThrottle",
+        "core.throttling.UserRateThrottle",
+        "core.throttling.ScopedRateThrottle",
     ),
     # The anon rate is the one that is read from the environment, because it is
     # the one a whole test suite contends on: every request the E2E run makes --

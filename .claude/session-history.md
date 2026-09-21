@@ -615,3 +615,64 @@ raises the question. It is §1.1a of `docs/business-rules.md` now.
   this box belonged to a different interpreter and failed like project faults;
   `ruff` was 0.15.8 against a pinned 0.8.4 and reported eight findings CI would
   never see. All four traps are now §8 of `environment.md`.
+
+---
+
+## 2026-09-21 — D88: the rate limits were decorative, and nothing had asked
+
+The backlog had run out. Tier 1 was empty, Tier 2 was down to a media library
+that waits on photography, and three of Tier 0's four items are not code. So
+instead of building, a control was audited — the habit this file keeps
+crediting — and the control turned out not to be one.
+
+**What was measured, against `main`:**
+
+```text
+control: 14 wrong passwords, no header ... 401 x10 then 429 x4
+bypass:  40 wrong passwords, each with a different X-Forwarded-For
+                                         ... 401 x40, none refused
+redis after ............................. 120 keys (40 buckets x 3 classes)
+audit rows .............................. 40 attacker-chosen addresses
+```
+
+`X-Forwarded-For` is written by the client and *appended to* by each proxy, so
+the caller owns a prefix of it. DRF's `BaseThrottle.get_ident` keys on the whole
+header when `NUM_PROXIES` is unset — it never was — and
+`AuditContextMiddleware._client_ip` took the **left-most** entry, commented
+"the original client", which is exactly the part the client writes. One rule,
+wrong in two places, for the same reason.
+
+**Three things found by doing it:**
+
+1. **The first draft of the tests passed against `main`.** It aimed at
+   `auth/password/change/`, and `ScopedRateThrottle` keys on `request.user.pk`
+   once the caller is authenticated — so D87's limit was never reachable this
+   way and the test measured nothing. Anonymous requests are the whole of the
+   defect. *Lesson, again: run the new test against the old code before
+   believing it. It cost one round here and would have shipped a test that
+   guarded nothing.*
+2. **The second draft passed alone and failed inside the suite.**
+   `APIView.throttle_classes` is read from `api_settings` once, at import, so
+   `override_settings(REST_FRAMEWORK=...)` never reaches a view that is already
+   imported — the result depended on what had run first. The tests patch the
+   view's own attribute now. *A test whose answer depends on ordering is the
+   same failure as a gate that never blocks: it reports on something other than
+   what it claims to.*
+3. **D87 was sound and this file nearly said otherwise.** The recommendation
+   written before the tests listed password change among the bypassable limits.
+   It is not. Corrected before it reached the roadmap.
+
+**The default is the interesting decision.** `DJANGO_TRUSTED_PROXY_HOPS`
+defaults to **0** — no proxy, ignore the header — and `docker-compose.prod.yml`
+sets 1 beside the Nginx that is the only service publishing a port. Too low,
+callers share a bucket and honest traffic gets 429s, which somebody notices
+within the hour. Too high, the limit silently stops applying. Fail toward the
+noisy wrong answer.
+
+**The lessons:**
+
+- *An empty backlog is not an idle session.* Every defect from D49 on was found
+  by a complaint or an audit; D88 is the first found with no prompt at all.
+- *A control listed as implemented is a claim like any other.* `security.md` had
+  said "Throttle 10/min on login… (per IP)" since before there was a per-IP
+  anything worth the name, and CI was green throughout.

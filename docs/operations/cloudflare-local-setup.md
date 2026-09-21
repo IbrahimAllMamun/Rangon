@@ -276,6 +276,22 @@ DJANGO_CORS_ALLOWED_ORIGINS=https://rangonfashion.com,https://www.rangonfashion.
 Keep all three in step. Adding a hostname to only the first gets you a page that renders and a login
 that fails CSRF.
 
+**A fourth variable, and it is a security one.** A tunnel is a second proxy:
+`cloudflared` appends to `X-Forwarded-For` and Nginx appends behind it, so the
+entry Django must believe is two in from the right, not one.
+`docker-compose.prodlocal.yml` sets `DJANGO_TRUSTED_PROXY_HOPS=1` for the
+Nginx-only topology; through a tunnel, override it:
+
+```bash
+DJANGO_TRUSTED_PROXY_HOPS=2
+```
+
+Leave it at 1 and every rate limit applies to the tunnel's own address — one
+shared bucket for the whole internet, so honest traffic starts getting 429s.
+Set it higher than the proxies that actually run and the limit stops applying
+to anyone who sends a header ([D88](../roadmap.md#known-defects)).
+[security.md](security.md) has the topology table and the two rules.
+
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --force-recreate
 ```

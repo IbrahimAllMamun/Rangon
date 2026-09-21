@@ -10,7 +10,7 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Password storage | Argon2id (Django `ARGON2` hasher first), minimum length 10, common-password and numeric validators |
 | Session | JWT access 30 min + rotating refresh 14 days, blacklist on logout, tokens only in `httpOnly` `SameSite=Lax` cookies ([ADR-0005](../architecture/decisions/0005-jwt-cookie-auth.md)). Every token carries a hash of the password it was issued under (`CHECK_REVOKE_TOKEN`) and every refresh token is blacklisted on a password change or reset, so either ends every session at once ([D86](../roadmap.md#known-defects)) |
 | Authorization | Role → permission codes enforced by DRF permission classes on **every** endpoint; branch scoping on every branch-bearing queryset; `OWNER` bypass is explicit and audited |
-| Brute force | Throttle 10/min on login and register (per IP) and on password change (per account, since 2026-09-19 — [D87](../roadmap.md#known-defects)); failed logins and wrong current passwords audit-logged as `LOGIN_FAILED` |
+| Brute force | Throttle 10/min on login and register (per IP) and on password change (per account, since 2026-09-19 — [D87](../roadmap.md#known-defects)); failed logins and wrong current passwords audit-logged as `LOGIN_FAILED`. **Per IP means per *trusted* IP** — see the row below; until 2026-09-21 it did not ([D88](../roadmap.md#known-defects)) |
 | Input | DRF serializers validate and coerce everything; the ORM parameterises all SQL; no raw string SQL anywhere |
 | XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP sent by the web app itself (`apps/web/src/middleware.ts`) with a per-request nonce — **not** by Nginx, which would append a second policy and block the nonced scripts |
 | CSRF | Cookie-borne auth on same-origin Next routes uses `SameSite=Lax` + a double-submit token on state-changing routes; the API itself is token-authenticated and CSRF-exempt by construction |
@@ -23,6 +23,7 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Audit | Actor, action, entity, before/after, reason, IP, user agent, request id for every sensitive action; passwords and tokens never logged |
 | Errors | Uniform error envelope; no stack traces, SQL or settings in responses; `DEBUG=False` enforced in production settings |
 | Dependencies | Pinned; `pip-audit` and `npm audit` in CI; Trivy image scan fails the build on fixed HIGH/CRITICAL |
+| Client address | Every rate limit, and the audit trail's `ip_address`, resolve the caller through `core.ip.client_ip`, which counts `DJANGO_TRUSTED_PROXY_HOPS` entries **from the right** of `X-Forwarded-For` — the entries our own proxies appended. The default is 0: no proxy, ignore the header. See **Deploying behind a proxy** below |
 | Database | Private network only, never published to the internet; least-privilege application user |
 
 ## Threats considered
@@ -38,6 +39,33 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Enumeration of orders/customers | UUID primary keys; guest order tracking requires a signed token as well as the order number |
 | Account takeover | Argon2, throttling, refresh rotation + blacklist, logout everywhere on password change or an owner's reset. The last was listed here before it existed: until 2026-09-19 a changed password left every session open for up to 14 days ([D86](../roadmap.md#known-defects)) |
 | PII exposure in logs | Structured logging with an explicit field allow-list; no request bodies logged on auth endpoints |
+| Rate limits defeated by a forged header | `X-Forwarded-For` is client-supplied. DRF's stock throttles key on the whole of it when `NUM_PROXIES` is unset, so one varying header bought a fresh bucket per request. `core.throttling` keys on the trusted entry instead ([D88](../roadmap.md#known-defects)) |
+| Audit trail attributed to a forged address | The same header, read left-most, was recorded as `AuditLog.ip_address` and `User.last_login_ip` — attacker-writable evidence, which is worse than a blank field because it is believed. Same fix, same helper ([D88](../roadmap.md#known-defects)) |
+
+## Deploying behind a proxy
+
+`DJANGO_TRUSTED_PROXY_HOPS` is **how many reverse proxies you control** sit in
+front of Django, each appending the peer it saw to `X-Forwarded-For`.
+
+| Topology | Value |
+|---|---|
+| Django exposed directly (dev, `runserver`, tests) | `0` — the default; the header is ignored entirely |
+| The shipped Nginx stack (`docker-compose.prod.yml`) | `1` — set there already |
+| CDN or load balancer in front of that Nginx | `2` |
+
+Two rules, and getting either wrong is silent:
+
+1. **Never set it higher than the number of proxies that actually run.** Each
+   extra hop steps one entry further left, into the part the caller wrote, and
+   the limit stops applying to anyone who sends a header.
+2. **Django must not be reachable around the proxy.** A request that arrives
+   directly carries no proxy-appended entry, so the count cannot be satisfied
+   honestly. `docker-compose.prod.yml` publishes a port on Nginx only;
+   `docker-compose.prodlocal.yml` also publishes the API on 8100 as a debugging
+   door, which is why throttling is measured there through 4100.
+
+Too low is the safe way to be wrong: callers share a bucket, honest traffic
+gets 429s, and somebody notices within the hour. Too high is silent.
 
 ## Not done
 
