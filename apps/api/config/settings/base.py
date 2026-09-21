@@ -10,6 +10,7 @@ import os
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import dj_database_url
 
@@ -161,7 +162,10 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-STORAGES = {
+# Annotated, not inferred: the S3 branch below replaces "default" with an entry
+# carrying a nested OPTIONS mapping, which does not fit the `dict[str, str]`
+# that this literal alone would imply.
+STORAGES: dict[str, dict[str, Any]] = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
@@ -306,7 +310,12 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "Rangon Fashion <no-reply@rangonf
 # --------------------------------------------------------------------------- business config
 # Business behaviour lives here, never as a literal inside a service.
 # Documented in docs/business-rules.md.
-RANGON = {
+# Annotated as `Any`-valued on purpose. This is a heterogeneous settings bag --
+# strings, bools, ints and Decimals -- and left to inference every read of it
+# is `object`, which is what made `Decimal(settings.RANGON["DEFAULT_TAX_RATE"])`
+# and its cousins errors in a dozen services (D6). Values are validated where
+# they are read, not here.
+RANGON: dict[str, Any] = {
     "CURRENCY": env("RANGON_CURRENCY", "BDT"),
     "CURRENCY_SYMBOL": env("RANGON_CURRENCY_SYMBOL", "৳"),
     "ALLOW_OVERSELL": env_bool("RANGON_ALLOW_OVERSELL", False),

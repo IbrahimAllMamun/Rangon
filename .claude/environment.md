@@ -546,7 +546,7 @@ cd apps/web
 API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 npx next dev --port 4000
 ```
 
-Two traps, both of which cost time:
+Four traps, each of which cost time:
 
 1. **Redis is not optional.** The auth throttle is Redis-backed, so with no
    Redis `POST /api/v1/auth/login/` returns **500**, not a throttling error —
@@ -557,6 +557,41 @@ Two traps, both of which cost time:
    `NEXT_PUBLIC_API_URL`. It defaults to `http://api:8000/api/v1` — the compose
    service hostname — which does not resolve outside compose, so every
    server-side fetch fails while the pages still render.
+
+3. **`mypy` and `pytest` on `PATH` are the wrong interpreter.** The project's
+   dependencies — Django, DRF, `mypy_django_plugin`, `mypy_drf_plugin` — are
+   installed under **python3.11**, while `/root/.local/bin/mypy` and the
+   `pytest` on `PATH` belong to another one. Both fail in a way that reads like
+   a project fault rather than a path fault:
+
+   ```text
+   $ mypy .
+   pyproject.toml:1: error: Error importing plugin "mypy_django_plugin.main":
+                            No module named 'mypy_django_plugin'
+   $ pytest
+   ImportError while loading conftest ... No module named 'rest_framework'
+   ```
+
+   Run both through the interpreter that has them:
+
+   ```bash
+   cd apps/api
+   python3.11 -m mypy .
+   DJANGO_SETTINGS_MODULE=config.settings.test DJANGO_SECRET_KEY=any \
+   DATABASE_URL=postgresql://rangon:rangon@127.0.0.1:5432/rangon \
+   REDIS_URL=redis://127.0.0.1:6379/0 python3.11 -m pytest -q
+   ```
+
+4. **`ruff` on `PATH` is not the pinned one either.** `requirements/dev.txt`
+   pins `ruff==0.8.4`; this box had 0.15.8, which reported 8 findings and 4
+   files to reformat in files nobody had touched (`RUF059`, `RUF046` — rules
+   that did not exist in 0.8.4). None of it is what CI runs. Install the pin
+   beside it rather than trusting the newer one:
+
+   ```bash
+   pip install --target=<scratch>/ruff084 ruff==0.8.4
+   <scratch>/ruff084/bin/ruff check . && <scratch>/ruff084/bin/ruff format --check .
+   ```
 
 For a browser pass, this environment ships Chromium at
 `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`. `playwright.config.ts`

@@ -126,7 +126,7 @@ class NavigationItem(BaseModel):
     def display_label(self) -> str:
         if self.label:
             return self.label
-        return self.category.name if self.category_id else ""
+        return self.category.name if self.category else ""
 
 
 class BannerPlacement(models.TextChoices):

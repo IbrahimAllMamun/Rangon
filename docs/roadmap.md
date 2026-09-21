@@ -11,6 +11,16 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 
 Last updated: **2026-09-21**.
 
+**[D6](#known-defects) is fixed and `mypy .` now blocks.** 271 errors in 41 files to **0 in 152**,
+and the trailing `|| echo` is off the CI step, so the next error to arrive fails the build instead of
+printing a warning nobody reads. Most of the 271 were one sentence repeated: DRF types `request.user`
+as `User | AnonymousUser`, and a view guarded by `IsAuthenticated` has already ruled out half of it —
+`core.requests.AuthedRequest` says that once, at 87 handlers. One annotation
+(`MONEY_FIELD: dict[str, Any]`) accounted for 80 on its own. Two real defects fell out of the pass:
+saving an address on a customer account with no customer row answered **500**, and `seed_demo` read
+`ShippingMethod…first().pk` unguarded. Details in
+[§ D6 fixed](#d6-fixed-and-the-type-gate-now-blocks-2026-09-21).
+
 **[D40](#known-defects) is worked around, and a production build is 42/42 for the first time.**
 `router.refresh()` fetches the new payload and discards it, the more reliably the heavier the page:
 `/admin/expenses` measured 0/5, 0/5, 2/5 and 0/8 on one build while every write landed every time.
@@ -23,11 +33,13 @@ defect. Details in
 
 **Every defect in this file was checked against the code on 2026-09-21, and two of the five open
 rows were understating themselves.** 89 rows carrying 87 distinct defect numbers — 84 struck
-through, 5 open. No struck-through fix was found to have regressed, and all 82 distinct fixes are
-present in the layer each row names. What the audit changed is the open half.
+through, 5 open — **2 by the end of the day**, once D40 and D77 were worked around and D6 fixed.
+No struck-through fix was found to have regressed, and all 82 distinct fixes are present in the
+layer each row names. What the audit changed is the open half.
 **[D6](#known-defects) is 271 mypy errors in 41 files, not the 98 in 29 this file has claimed since
 2026-08-18** — nothing broke, the gate simply runs with `|| echo` and never blocked, so five weeks
-of new code accumulated errors unopposed. And **[D40](#known-defects)
+of new code accumulated errors unopposed. *(Fixed the same day: 0 errors, and the `|| echo` is
+gone.)* And **[D40](#known-defects)
 is app-wide, not one screen**: driven against a real production build, `router.refresh()` applied in
 0 of 5 runs on `/admin/expenses`, 2 of 6 on brands, 4 of 6 on categories, and failed on the
 stock-count sheet — while every write landed, every time. That makes [D77](#known-defects) the same
@@ -373,6 +385,75 @@ is still open and tracked in
 
 ## Verification log
 
+### D6 fixed, and the type gate now blocks, 2026-09-21
+
+The fourth pass of 09-21. The morning's audit had found [D6](#known-defects)
+drifted by a factor of nearly three — 271 errors in 41 files, not the 98 in 29
+recorded on 2026-08-18 — for one reason: the CI step ran `mypy . || echo`, so it
+had never once failed a build.
+
+```text
+mypy .  before ......................... 271 errors in 41 files, 151 source files
+mypy .  after .......................... Success: no issues found in 152 source files
+pytest ................................. 1161 passed, 4m17s   (1158 + 3 new)
+ruff check . (0.8.4, the pinned one) ... All checks passed
+ruff format --check . .................. 208 files already formatted
+makemigrations --check --dry-run ....... No changes detected
+```
+
+**The count was never the work.** 189 of the 271 were `arg-type`, and the single
+largest group inside that — 81 — was one sentence repeated: DRF types
+`Request.user` as `User | AnonymousUser`, and a handler behind `IsAuthenticated`
+has already ruled out the second half. `core.requests.AuthedRequest` states that
+invariant once and 87 handlers now annotate their request with it. It is a
+declaration only: the class is never instantiated, so nothing shadows DRF's
+property at runtime.
+
+**Where that trick does not work, and why it matters.** Annotating
+`AuthedRequest` on a method that *overrides* a DRF mixin — `create`, `update`,
+`list` — produced 12 new `[override]` errors, and they were right: narrowing a
+parameter in an override is a Liskov violation however true it happens to be
+here, because DRF calls those methods through the base class. Those 12 went back
+to `Request`, with `core.requests.actor(request)` inside. 36 call sites use it.
+
+**One annotation was worth 80 errors.** `finance/api/serializers.py` defined
+`MONEY_FIELD = {"max_digits": 16, "decimal_places": 2}`, inferred as
+`dict[str, int]`; every `DecimalField(**MONEY_FIELD)` below it then drew one
+error per `DecimalField` parameter it could not match. Eight lines, 80 errors,
+one `: dict[str, Any]`. `RANGON` and `STORAGES` in `config/settings/base.py`
+were the same shape and took about ten more with them.
+
+**Two real defects fell out of the pass**, which is the argument for the gate:
+
+* `POST /shop/account/addresses/` answered **500**, not 404, for a signed-in
+  CUSTOMER account with no `Customer` row behind it — `IsCustomer` proves the
+  role, not the row, and `customers.services.add_address` then read `None.pk`.
+  Registration is the only path that creates the row, so any staff-created or
+  fixture-made customer account hit it. Now a 404 in the standard envelope,
+  with three tests (`tests/api/test_shop.py::TestAccountAddresses`); the first
+  of them fails with the old code, against a real `AttributeError`.
+* `seed_demo` read `ShippingMethod.objects.filter(code="standard").first().pk`
+  inside the online-order loop. The lookup is hoisted, checked once, and says so
+  once rather than failing every order separately with an attribute error.
+
+**Behaviour held everywhere else, deliberately.** A nullable FK reads
+`obj.fk_id` in five places where mypy can only narrow `obj.fk`; each is
+`select_related`, so the swap costs no query. `accounts.services` grew
+`storefront_branch()`, which preserves today's behaviour exactly — the
+storefront reads stock against `None` when no branch is active, and every
+product quietly reads out of stock — and carries the `DECISION REQUIRED` that
+raises, rather than changing a business rule as a side effect of a typing pass.
+It is now §1.1a of [business-rules.md](business-rules.md).
+
+**Three deliberate `# type: ignore`s remain**, each naming the stub imprecision
+it covers: `@action`'s descriptor (a bound call looks like it is missing
+`self`), and two serializer fields genuinely named `label`, which is also the
+name of `Field.label`. Three *stale* ignores came out — annotations that had
+drifted past the errors they were written to silence, which is exactly what a
+gate that never blocks produces.
+
+**`mypy .` now blocks.** The `|| echo` is off `.github/workflows/ci.yml`.
+
 ### CI drives the artefact that ships, 2026-09-21
 
 The third pass of 09-21, and the follow-up the D40 work left behind: the E2E job
@@ -535,9 +616,13 @@ files. Nothing regressed a fix; the gate simply never blocked — `mypy . || ech
 supplier payments, shipments, purchase returns, VAT and the audit readers were written with no
 type-checking pressure at all, and the errors accumulated exactly where the new code went:
 `finance/api/serializers.py` holds 80 of them. The shape is unchanged, which is the good news:
-189 of 271 are `arg-type`, nearly all DRF's `request.user` typed `User | AnonymousUser` where a
-service wants `User`. Three are now `unused-ignore` — annotations that have drifted past the errors
-they were written to silence.
+189 of 271 are `arg-type`. **Corrected while fixing it:** this paragraph first read *"nearly all"* of
+that 189 as DRF's `request.user` typed `User | AnonymousUser` where a service wants `User`. 189 is
+the `arg-type` total; the `AnonymousUser` group inside it is **81**. It was still the largest single
+cause and the first thing fixed, but the smaller number is the true one. Three are now
+`unused-ignore` — annotations that have drifted past the errors they were written to silence.
+**All 271 are fixed as of 2026-09-21** — see
+[§ D6 fixed](#d6-fixed-and-the-type-gate-now-blocks-2026-09-21).
 
 **[D40](#known-defects) is not one screen, and this file said it was.** The row has read
 *"Not app-wide … specific to this screen"* since 2026-08-31. Driven against a real production build
@@ -840,7 +925,7 @@ run #15 on `423cdf4`, is **green on all four jobs**:
 
 | Job                 | Steps that passed                                                                                                 |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Backend             | ruff check · ruff format --check ·`makemigrations --check` · mypy (non-blocking) · pytest incl. concurrency |
+| Backend             | ruff check · ruff format --check ·`makemigrations --check` · mypy (non-blocking *on that run* — it blocks as of [D6](#known-defects), 2026-09-21) · pytest incl. concurrency |
 | Frontend            | `npm ci` · lint · typecheck · **`npm run build`**                                                    |
 | Dependency audit    | `pip-audit` · `npm audit`                                                                                    |
 | Build & scan images | API image · web image · Trivy HIGH/CRITICAL on both                                                             |
@@ -1661,7 +1746,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D3~~  | ~~**Notifications have no UI.**~~ **Fixed 2026-08-21** — a bell in the admin header polls `GET /notifications/count/` every 60s (only while the tab is visible), opens a panel of the eight most recent, and links to `/admin/notifications` with all/unread filtering, per-item and bulk mark-as-read                                                                                                                                                                                                                                                                                                                                                                                                                                  | `apps/web/src/components/admin/notification-bell.tsx`, `app/(admin)/admin/notifications/page.tsx` | —                                                                                                                                              |
 | ~~D4~~   | ~~**The brand appears twice in product titles.**~~ **Fixed 2026-09-09** — the seed wrote `seo_title = "<name> | Rangon Fashion"` while the root layout applied `template: "%s | Rangon Fashion"`. The admin form had papered over it with a hint asking merchants not to type the shop name, which is a rule an import or a seed never reads. `lib/seo.pageTitle()` now returns an absolute title and appends the shop name only when it is not already there, so the decision sits in one place rather than in whoever wrote the field. The seed no longer writes the suffix, and the hint says what the field does instead of warning about a defect |
 | ~~D5~~  | ~~**The cart drawer dialog has no description.**~~ **Fixed 2026-08-18** — `Dialog.Description` added; the drawer now renders `aria-describedby`, verified in the browser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `apps/web/src/components/commerce/cart-drawer.tsx`                                                  | —                                                                                                                                              |
-| D6       | **mypy reports 271 errors in 41 files.** CI runs it with a trailing `\|\| echo`, so it never blocks — and the count has grown with the code because nothing made it stop. **Re-measured 2026-09-21** on the CI recipe (`pip install -r requirements/dev.txt`, then `mypy .`): **271 errors in 41 files, 151 source files checked**, against the 98 in 29 this row claimed since 2026-08-18. The shape is unchanged and is what makes it cheap to read and tedious to fix: **189 of 271 are `arg-type`**, overwhelmingly DRF's `request.user` typed `User \| AnonymousUser` where a service wants `User`, plus 44 `union-attr`. It concentrates — `finance/api/serializers.py` alone holds 80, `finance/api/views.py` 30, `accounts/api/views.py` 18. Three are `unused-ignore`, which means some annotations have already drifted past the errors they were silencing | `apps/api` (41 files) | The gate is decorative. Nearly tripling while every other check stayed green is what a non-blocking gate does |
+| ~~D6~~   | ~~**mypy reports 271 errors in 41 files, and the gate never blocks.**~~ **Fixed 2026-09-21** — **271 errors in 41 files to 0 in 152**, and the trailing `\|\| echo` is off the CI step, so the next error to arrive fails the build. The count had drifted by a factor of nearly three since 2026-08-18 for exactly that reason. **189 of the 271 were `arg-type`**, and the largest group inside it — 81 — was one sentence repeated: DRF types `Request.user` as `User \| AnonymousUser`, and a handler behind `IsAuthenticated` has already ruled out the second half. `core.requests.AuthedRequest` states that once; 87 handlers use it, and 36 more use `actor(request)` where narrowing an override's parameter would break Liskov. One annotation — `MONEY_FIELD: dict[str, Any]` — was worth 80 on its own. **Two real defects fell out of it**: `POST /shop/account/addresses/` answered 500 for a customer account with no `Customer` row (now 404, three tests), and `seed_demo` read `ShippingMethod…first().pk` unguarded. Three deliberate `# type: ignore`s remain, each naming the stub imprecision it covers; three stale ones came out. See [§ D6 fixed](#d6-fixed-and-the-type-gate-now-blocks-2026-09-21) | `apps/api`, `.github/workflows/ci.yml` | — |
 | D7       | **Playwright cannot run in the *dev container*.** `apps/web/Dockerfile.dev` is `node:22-alpine`; Playwright ships no musl browser builds. **Narrowed 2026-08-28** — this was being read as "Playwright cannot run here", which is false: a pre-installed Chromium drove the full signed-in walk-through (see the verification log). The defect is the Alpine dev image alone, and `playwright.config.ts` already carries the `PW_CHROMIUM_PATH` escape hatch |
 | ~~D21~~ | ~~**The image scan went red on a base-image CVE.**~~ **Fixed 2026-08-27** — `node:22-alpine` shipped openssl `3.5.7-r0` while Alpine 3.24 already carried the `3.5.8-r0` fix for CVE-2026-14456, so `Build & scan images` failed on every branch through no fault of any diff. The runtime stage now runs `apk upgrade --no-cache`, which is safe to do unconditionally because the gate sets `ignore-unfixed: true` — it only ever fails on a CVE whose fix is already published. Without this, the scan stays red until upstream rebuilds the base image. **The Debian half followed 2026-09-09**, when the same gate went red on the *API* image: `python:3.12-slim-bookworm` shipped libssh2-1 `1.10.0-3+b1` while bookworm-security already carried the `1.10.0-3+deb12u1` fix for CVE-2026-58050 and CVE-2026-7598. `main` had been red on it since 2026-09-08 and no diff had caused it. The runtime stage now runs `apt-get upgrade -y`, which is safe for the reason the Alpine half is: the gate sets `ignore-unfixed: true`, so it only ever fails on a CVE whose fix is published |
 | ~~D19~~ | ~~**CSV export 404'd on every report.**~~ **Fixed 2026-08-27** — `?format=csv` is DRF's format-negotiation parameter, and no renderer advertised `csv`, so all eight report endpoints answered 404 and the download links on `/admin/reports` had never worked. A `CSVRenderer` on `BaseReportView` fixes all of them |
@@ -1829,10 +1914,10 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
    `docs/database/indexing.md` are no longer part of this item — all eleven are asserted as of
    2026-09-09 — but a budget is a query count, not a latency under concurrency, and nothing has
    driven these paths at peak.
-6. **Make mypy mean something** (D6) — fix the errors or annotate them deliberately, then drop the
-   `|| echo` and let the step block. **Re-measured 2026-09-21: 271 errors in 41 files, not the 98
-   in 29 recorded on 2026-08-18.** Not a regression — the step has never blocked, so the count
-   grows with the code. It will keep growing until the `|| echo` goes.
+6. ~~**Make mypy mean something** (D6).~~ **Done 2026-09-21** — 271 errors in 41 files to 0 in
+   152, and the `|| echo` is off the CI step, so `mypy .` blocks. The count had grown from 98 in 29
+   precisely because the step never failed a build; that cannot happen again. Two real defects came
+   out of the pass — see [§ D6 fixed](#d6-fixed-and-the-type-gate-now-blocks-2026-09-21).
 7. **Independent security review.**
 8. **An SMS account.** The layer itself shipped 2026-09-10 — provider interface, message log, segment counting, allowlist, and the three messages that earn their cost (confirmed, shipped, refunded). What is left is not code: choose a Bangladeshi aggregator, get a masked sender ID approved (days to weeks), and set `SMS_PROVIDER`. Writing the provider class is an afternoon. [operations/sms.md](operations/sms.md) says what to ask them for.
 9. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired), and real
@@ -1928,7 +2013,7 @@ Ordered by value per day of work.
 | 2 | **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
 | 3 | ~~**A reader for `audit-logs/` and `inventory-transactions/`**~~ | **Shipped 2026-09-19** — `/admin/audit` and `/admin/inventory/movements`. Auditing the endpoints first found the audit log unscoped by branch ([D85](#known-defects)) |
 | 4 | ~~**Password self-service** (`auth/password/change/`)~~ | **Shipped 2026-09-19** — `/admin/account`. Auditing the endpoint first found that no password change ended a session ([D86](#known-defects)) and that the current password could be guessed at 600 a minute ([D87](#known-defects)) |
-| 5 | **[D6](#known-defects) — mypy's 271 errors** | **Not 98 — re-measured 2026-09-21**, and the growth is the argument: 98 in 29 files on 2026-08-18, 271 in 41 today, because the step runs with `\|\| echo` and has never blocked. 189 are one repeated `arg-type` (`request.user` as `User \| AnonymousUser`), and 80 of the 271 sit in `finance/api/serializers.py`, so it is bulk work rather than hard work. Left last because nothing depends on it — but it gets dearer every week |
+| 5 | ~~**[D6](#known-defects) — mypy's 271 errors**~~ | **Fixed 2026-09-21** — 271 in 41 files to 0 in 152, and `mypy .` blocks now that the `\|\| echo` is gone, so the count cannot drift again. It was bulk work rather than hard work, as billed: `core.requests.AuthedRequest` covered 81 of the errors in one sentence and one annotation covered 80 more. The argument for doing it turned out to be the two real defects it surfaced, not the count |
 
 Shipped from this list on 2026-09-15:
 

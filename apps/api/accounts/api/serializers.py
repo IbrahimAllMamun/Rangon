@@ -6,7 +6,6 @@ from typing import Any
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import (
     Branch,
@@ -18,6 +17,7 @@ from accounts.models import (
     TaxMode,
     User,
 )
+from accounts.services import mint_refresh_token
 from core.fields import BangladeshiPhoneField, ContactPhoneField
 from core.models import AuditLog
 
@@ -268,7 +268,7 @@ class LoginSerializer(serializers.Serializer):
 
     @staticmethod
     def tokens_for(user: User) -> dict[str, str]:
-        refresh = RefreshToken.for_user(user)
+        refresh = mint_refresh_token(user)
         return {"access": str(refresh.access_token), "refresh": str(refresh)}
 
 

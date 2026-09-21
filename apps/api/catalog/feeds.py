@@ -21,7 +21,7 @@ than raising an error:
   renders a strikethrough. Publishing the discounted figure as `price` with no
   `sale_price` is not an error -- the shop simply loses the discount badge.
 * **Availability is per branch.** Stock is a branch-level fact, and the feed
-  advertises the online branch. `default_branch()` is the same answer the
+  advertises the online branch. `storefront_branch()` is the same answer the
   storefront gives, so the feed cannot say "in stock" about a product the
   storefront calls sold out.
 * **Every URL must be absolute.** `media_url()` deliberately returns a root
@@ -52,7 +52,7 @@ from xml.etree import ElementTree as ET
 from django.conf import settings
 from django.db.models import Prefetch
 
-from accounts.services import default_branch, get_organization
+from accounts.services import get_organization, storefront_branch
 from catalog.models import AttributeKind, ProductImage, PublishStatus
 from catalog.search import visible_products
 from core.exceptions import BusinessError
@@ -268,9 +268,11 @@ def feed_items() -> list[FeedItem]:
     """
     origin = public_url()
     shop_name = _shop_name()
-    branch = default_branch()
+    branch = storefront_branch()
 
-    products = (
+    # Materialised once: the products are walked twice below, and a queryset
+    # re-runs its query on the second pass.
+    products = list(
         visible_products()
         .select_related("category", "category__parent", "brand")
         .prefetch_related(None)
@@ -284,7 +286,6 @@ def feed_items() -> list[FeedItem]:
         )
         .order_by("name", "pk")
     )
-    products = list(products)
 
     sellable = [
         variant

@@ -5,9 +5,9 @@ from typing import Any
 from rest_framework import mixins, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
 from rest_framework.response import Response
 
+from core.requests import AuthedRequest, actor
 from notifications import services as notification_services
 from notifications.models import Notification
 
@@ -38,18 +38,18 @@ class NotificationViewSet(
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self) -> Any:
-        queryset = Notification.objects.filter(user=self.request.user)
+        queryset = Notification.objects.filter(user=actor(self.request))
         if self.request.query_params.get("unread") == "true":
             queryset = queryset.filter(read_at__isnull=True)
         return queryset.order_by("-created_at")
 
     @action(detail=False, methods=["get"])
-    def count(self, request: Request) -> Response:
+    def count(self, request: AuthedRequest) -> Response:
         unread = Notification.objects.filter(user=request.user, read_at__isnull=True).count()
         return Response({"unread": unread})
 
     @action(detail=False, methods=["post"], url_path="mark-read")
-    def mark_read(self, request: Request) -> Response:
+    def mark_read(self, request: AuthedRequest) -> Response:
         updated = notification_services.mark_read(
             user=request.user, notification_ids=request.data.get("ids")
         )

@@ -73,16 +73,19 @@ Two real bugs were found early by the backend tests and fixed:
 2. A checked-out cart token **collided with its unique index** when the same browser started a second
    cart.
 
-The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D78. **Five are open, and
-none of them is a money or data-integrity bug:**
+The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D87. **Two are open, and
+neither of them is a money or data-integrity bug:**
 
 | # | Defect |
 |---|---|
-| D6 | mypy reports 98 errors and CI runs it non-blocking, so it proves nothing |
 | D7 | Playwright cannot run in the Alpine *dev container*. The defect is that image alone — a glibc Chromium runs the suite |
 | D9 | The seed has no product images, so every card shows a placeholder |
-| D40 | `router.refresh()` does not apply on the expenses screen in a production build — the expense is written; only the screen is stale |
-| D77 | After receiving stock the purchase order screen showed the un-received state in 3 runs out of 5. Worked around with a full reload, **not explained** |
+
+Closed on 2026-09-21: **D6** — mypy was 271 errors in 41 files, not the 98 this table used to quote,
+because the CI step ran with `|| echo` and had never blocked. It is 0 errors now and the step
+blocks. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
+the new payload and discarded it, so `refreshAfterWrite()` now verifies the server render actually
+changed and reloads when it did not. The root cause is upstream and still unknown.
 
 The money bugs the register records are all fixed — among them a coupon redeemable twice under a
 race (D28), supplier payments that could land on another supplier's order, exceed what was owed or
@@ -225,10 +228,11 @@ The roadmap's Tier 0: the first real sale waits on each of these, and three of t
 4. **Automate the backup.** `scripts/backup-db.sh` takes `BACKUP_S3_BUCKET` and
    `BACKUP_RETAIN_DAYS`; nothing schedules it.
 
-Then the Tier 2 backlog, in the roadmap's order: **D40**, so E2E can run against a production build
-in CI; a media library; a reader for the audit log and the stock ledger; password self-service; and
-mypy (D6). The payment gateway and the SMS account wait on provider accounts — start the SMS
-sender-ID paperwork early, because approval takes days to weeks.
+Then the Tier 2 backlog, which is down to a **media library**: D40 was worked around and CI's E2E
+job now runs against a production build; the readers for the audit log and the stock ledger and
+password self-service all shipped; and mypy (D6) is clean and blocking as of 2026-09-21. The payment
+gateway and the SMS account wait on provider accounts — start the SMS sender-ID paperwork early,
+because approval takes days to weeks.
 
 The two items that will bite hardest if left late are the **VAT decision** and **backup
 automation**. The restore has been rehearsed for real, on 2026-08-22 — but it worked only because a

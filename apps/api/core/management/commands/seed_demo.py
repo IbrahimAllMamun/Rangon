@@ -110,7 +110,7 @@ STAFF = [
     ("accounts@rangon.test", RoleCode.ACCOUNTANT, "Farhana", "Akter"),
 ]
 
-ATTRIBUTES = {
+ATTRIBUTES: dict[str, tuple[str, str, list[str | tuple[str, str]]]] = {
     "size": ("Size", AttributeKind.SIZE, ["XS", "S", "M", "L", "XL", "XXL"]),
     "shoe-size": ("Shoe size", AttributeKind.SIZE, ["38", "39", "40", "41", "42", "43", "44"]),
     "color": (
@@ -565,7 +565,7 @@ class Command(BaseCommand):
         from finance.models import Account, AccountKind
 
         self.stdout.write("Opening financial accounts…")
-        specs = [
+        specs: list[tuple[str, str, str, str, dict[str, Any]]] = [
             ("cash", "Counter Cash Drawer", AccountKind.CASH, "20000.00", {}),
             (
                 "bank",
@@ -1156,6 +1156,14 @@ class Command(BaseCommand):
             except Exception as exc:  # a demo order failing must not abort the seed
                 self.stderr.write(f"  POS demo order skipped: {exc}")
 
+        # Seeded by `_shipping()` above.  Read once, and said once if it is
+        # somehow missing: every online order needs it, and without the check
+        # each one failed separately with an attribute error.
+        standard_shipping = ShippingMethod.objects.filter(code="standard").first()
+        if standard_shipping is None:
+            self.stderr.write("  Online demo orders skipped: no 'standard' shipping method.")
+            return
+
         for index in range(count - pos_count):
             customer = random.choice(customers)
             cart = checkout_services.get_or_create_cart(customer=customer, branch=branch)
@@ -1182,7 +1190,7 @@ class Command(BaseCommand):
                         "city": "Dhaka",
                     },
                     payment_method=PaymentMethod.COD,
-                    shipping_method_id=ShippingMethod.objects.filter(code="standard").first().pk,
+                    shipping_method_id=standard_shipping.pk,
                     customer=customer,
                     idempotency_key=f"seed-order-{index}",
                 )

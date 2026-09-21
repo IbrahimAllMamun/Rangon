@@ -49,7 +49,7 @@ from purchasing.models import (
     PurchaseReturnItem,
 )
 
-MONEY = DecimalField(max_digits=18, decimal_places=2)
+MONEY: DecimalField = DecimalField(max_digits=18, decimal_places=2)
 
 #: Revenue from one order line, with VAT taken out when it is sitting inside
 #: the price.  `line_total` is what the customer was charged for the goods; under

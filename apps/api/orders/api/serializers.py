@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from rest_framework import serializers
 
@@ -203,7 +203,7 @@ class PosSaleLineSerializer(serializers.Serializer):
     variant = serializers.UUIDField()
     quantity = serializers.IntegerField(min_value=1)
     line_discount = serializers.DecimalField(
-        max_digits=14, decimal_places=2, required=False, default=0, min_value=0
+        max_digits=14, decimal_places=2, required=False, default=Decimal("0.00"), min_value=0
     )
 
 
@@ -224,7 +224,7 @@ class PosSaleSerializer(serializers.Serializer):
     payments = PosPaymentSerializer(many=True)
     customer = serializers.UUIDField(required=False, allow_null=True)
     manual_discount = serializers.DecimalField(
-        max_digits=14, decimal_places=2, required=False, default=0, min_value=0
+        max_digits=14, decimal_places=2, required=False, default=Decimal("0.00"), min_value=0
     )
     register = serializers.CharField(required=False, allow_blank=True, max_length=32)
     note = serializers.CharField(required=False, allow_blank=True)
@@ -447,11 +447,16 @@ class CartSerializer(serializers.ModelSerializer):
         fields = ["id", "token", "items", "totals", "issues", "coupon_code"]
 
     def get_items(self, cart: Cart) -> list[dict[str, Any]]:
-        return CartItemSerializer(
-            cart.items.select_related("variant", "variant__product").all(),
-            many=True,
-            context=self.context,
-        ).data
+        # `many=True` builds a `ListSerializer`, whose `.data` is a list; the
+        # stub only knows the single-object `ReturnDict`.
+        return cast(
+            list[dict[str, Any]],
+            CartItemSerializer(
+                cart.items.select_related("variant", "variant__product").all(),
+                many=True,
+                context=self.context,
+            ).data,
+        )
 
     def get_totals(self, cart: Cart) -> dict[str, Any]:
         priced = self.context.get("priced")

@@ -11,6 +11,7 @@ import copy
 from typing import Any
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Model
 from rest_framework import serializers
 
 from content.models import NavigationItem, StorefrontBanner
@@ -55,13 +56,23 @@ class ScheduledContentSerializer(serializers.ModelSerializer):
     the API, the Django admin and any management command alike.
     """
 
+    # drf-stubs types `instance` to cover a `many=True` serializer too, so every
+    # attribute read off it is invisible.  Declaration only: a bare annotation
+    # creates no class attribute, so `SerializerMetaclass` sees nothing new and
+    # nothing changes at runtime.  `Model` rather than a concrete class because
+    # this base serves both content models (D6).
+    instance: Model | None
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
         ends_at = attrs.get("ends_at", getattr(self.instance, "ends_at", None))
         if starts_at and ends_at and ends_at < starts_at:
             raise serializers.ValidationError({"ends_at": "The window must end after it starts."})
 
-        candidate = copy.copy(self.instance) if self.instance is not None else self.Meta.model()
+        # `Meta.model` is typed as the serializer's bound model variable, which
+        # mypy will not instantiate directly; the local states what it is.
+        model: type[Model] = self.Meta.model
+        candidate = copy.copy(self.instance) if self.instance is not None else model()
         for key, value in attrs.items():
             setattr(candidate, key, value)
         try:

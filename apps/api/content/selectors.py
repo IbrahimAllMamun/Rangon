@@ -101,7 +101,10 @@ def category_navigation() -> list[NavNode]:
 
 def _item_node(item: NavigationItem) -> NavNode:
     url = item.url
-    if item.type == NavigationItemType.CATEGORY and item.category_id:
+    # Guarded on the object, not on `category_id`: the same test, but it is
+    # the object the next line needs and the one the checker can narrow.  The
+    # row is `select_related`, so reading it costs no query.
+    if item.type == NavigationItemType.CATEGORY and item.category:
         url = category_url(category_path(item.category))
     return NavNode(
         id=str(item.pk),

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 
+from accounts.models import RoleCode
 from inventory import services as inventory_services
 from orders.models import Order, PaymentMethod
 from tests import factories
@@ -329,6 +330,43 @@ class TestReviews:
         response = api.get(f"/api/v1/shop/products/{shop['product'].slug}/")
 
         assert response.data["reviews"]["count"] == 0
+
+
+class TestAccountAddresses:
+    """`IsCustomer` proves the role, not that a `Customer` row exists."""
+
+    def test_saving_an_address_without_a_customer_row_is_refused(self, auth_client):
+        # A CUSTOMER account created anywhere but the registration endpoint --
+        # by an admin, by a fixture -- has no customer row behind it.
+        account = factories.user(RoleCode.CUSTOMER)
+        assert getattr(account, "customer", None) is None
+
+        response = auth_client(account).post(
+            "/api/v1/shop/account/addresses/", ADDRESS, format="json"
+        )
+
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "NOT_FOUND"
+
+    def test_listing_addresses_without_a_customer_row_is_empty(self, auth_client):
+        account = factories.user(RoleCode.CUSTOMER)
+
+        response = auth_client(account).get("/api/v1/shop/account/addresses/")
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_a_customer_saves_and_reads_back_an_address(self, auth_client):
+        account = factories.user(RoleCode.CUSTOMER)
+        factories.customer(user=account)
+
+        created = auth_client(account).post(
+            "/api/v1/shop/account/addresses/", ADDRESS, format="json"
+        )
+        listed = auth_client(account).get("/api/v1/shop/account/addresses/")
+
+        assert created.status_code == 201
+        assert [row["recipient_name"] for row in listed.json()] == [ADDRESS["recipient_name"]]
 
 
 class TestHealth:

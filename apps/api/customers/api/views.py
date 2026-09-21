@@ -7,11 +7,11 @@ from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from core import phone as phone_utils
+from core.requests import AuthedRequest
 from customers import services
 from customers.api.serializers import (
     CustomerAddressSerializer,
@@ -84,7 +84,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
     LOOKUP_MIN_LENGTH = 3
 
     @action(detail=False, methods=["get"])
-    def lookup(self, request: Request) -> Response:
+    def lookup(self, request: AuthedRequest) -> Response:
         """Fast phone lookup for the POS counter.
 
         Deliberately *not* `get_queryset()`: that prefetches addresses for the
@@ -129,7 +129,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         return Response({"results": CustomerLookupSerializer(matches, many=True).data})
 
     @action(detail=True, methods=["get"])
-    def orders(self, request: Request, pk: str | None = None) -> Response:
+    def orders(self, request: AuthedRequest, pk: str | None = None) -> Response:
         from orders.api.serializers import OrderListSerializer
 
         customer = self.get_object()
@@ -138,7 +138,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
     # --- addresses ---------------------------------------------------------
     @action(detail=True, methods=["get", "post"])
-    def addresses(self, request: Request, pk: str | None = None) -> Response:
+    def addresses(self, request: AuthedRequest, pk: str | None = None) -> Response:
         customer = self.get_object()
         if request.method == "GET":
             return Response(CustomerAddressSerializer(customer.addresses.all(), many=True).data)
@@ -159,7 +159,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         url_path=r"addresses/(?P<address_id>[^/.]+)",
     )
     def address_detail(
-        self, request: Request, pk: str | None = None, address_id: str | None = None
+        self, request: AuthedRequest, pk: str | None = None, address_id: str | None = None
     ) -> Response:
         customer = self.get_object()
         address = get_object_or_404(CustomerAddress, pk=address_id, customer=customer)
@@ -179,7 +179,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
     # --- notes -------------------------------------------------------------
     @action(detail=True, methods=["get", "post"])
-    def notes(self, request: Request, pk: str | None = None) -> Response:
+    def notes(self, request: AuthedRequest, pk: str | None = None) -> Response:
         customer = self.get_object()
         if request.method == "GET":
             return Response(CustomerNoteSerializer(customer.customer_notes.all(), many=True).data)
@@ -200,7 +200,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         url_path=r"notes/(?P<note_id>[^/.]+)",
     )
     def note_detail(
-        self, request: Request, pk: str | None = None, note_id: str | None = None
+        self, request: AuthedRequest, pk: str | None = None, note_id: str | None = None
     ) -> Response:
         customer = self.get_object()
         note = get_object_or_404(CustomerNote, pk=note_id, customer=customer)

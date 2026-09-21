@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import (
     Branch,
@@ -69,6 +70,26 @@ def default_branch() -> Branch | None:
     return Branch.objects.filter(status=Status.ACTIVE).order_by("-is_default", "created_at").first()
 
 
+def storefront_branch() -> Branch:
+    """The branch a public request reads stock against.
+
+    `default_branch()` answers `None` when no branch is active, and the
+    storefront's callers -- availability, facets, the product feed -- are all
+    typed to need a real one.  Passing `None` into an inventory lookup does not
+    raise: it matches no rows, so every product quietly reads out of stock.
+
+    **DECISION REQUIRED** (docs/business-rules.md): what the storefront *should*
+    do with no active branch.  `resolve_branch` below treats it as an error for
+    staff requests; whether the public surface should 503, show an empty
+    catalogue, or keep today's silent out-of-stock is the owner's call.
+
+    Until then this preserves today's behaviour exactly, in one place, rather
+    than changing it as a side effect of a typing pass (D6).  When the decision
+    lands, this function is the only thing to change.
+    """
+    return cast(Branch, default_branch())
+
+
 def resolve_branch(user: User, branch_id: Any = None) -> Branch:
     """Which branch is this request acting on?
 
@@ -83,7 +104,7 @@ def resolve_branch(user: User, branch_id: Any = None) -> Branch:
             raise PermissionDenied("You may only act on your own branch.")
         return branch
 
-    if user.branch_id:
+    if user.branch:
         return user.branch
     branch = default_branch()
     if branch is None:
@@ -176,11 +197,23 @@ def check_can_lose_access(*, user: User, actor: User | None, what: str) -> None:
             f"You cannot {what} your own account.",
             details={"user": f"Ask another owner to {what} it."},
         )
-    if user.role_id and user.role.code == RoleCode.OWNER and _active_owner_count(exclude=user) == 0:
+    if user.role and user.role.code == RoleCode.OWNER and _active_owner_count(exclude=user) == 0:
         raise ValidationError(
             f"You cannot {what} the last owner.",
             details={"user": "Give another account the owner role first."},
         )
+
+
+def mint_refresh_token(user: User) -> RefreshToken:
+    """A fresh refresh token, with its paired access token reachable.
+
+    `RefreshToken.for_user` is inherited from `Token`, whose annotation says it
+    returns a `Token`; `access_token` is defined only on `RefreshToken`, so the
+    attribute is invisible to the type checker at every call site. The method
+    builds `cls(...)`, so the runtime type really is `RefreshToken` -- this
+    states that once, rather than once per caller (D6).
+    """
+    return cast(RefreshToken, RefreshToken.for_user(user))
 
 
 def end_sessions(user: User) -> int:
@@ -244,7 +277,7 @@ def update_staff_user(
     """
     fields = dict(fields or {})
     before = {
-        "role": user.role.code if user.role_id else None,
+        "role": user.role.code if user.role else None,
         "status": user.status,
         "email": user.email,
         "branch": str(user.branch) if user.branch_id else None,
@@ -254,8 +287,8 @@ def update_staff_user(
     if new_status is not None and new_status != user.status and new_status != Status.ACTIVE:
         check_can_lose_access(user=user, actor=actor, what="deactivate")
 
-    if role_code and (not user.role_id or role_code != user.role.code):
-        if user.role_id and user.role.code == RoleCode.OWNER:
+    if role_code and (user.role is None or role_code != user.role.code):
+        if user.role and user.role.code == RoleCode.OWNER:
             check_can_lose_access(user=user, actor=actor, what="demote")
         user.role = Role.objects.get(code=role_code)
 
@@ -269,7 +302,7 @@ def update_staff_user(
     sessions_ended = end_sessions(user) if password else 0
 
     after = {
-        "role": user.role.code if user.role_id else None,
+        "role": user.role.code if user.role else None,
         "status": user.status,
         "email": user.email,
         "branch": str(user.branch) if user.branch_id else None,

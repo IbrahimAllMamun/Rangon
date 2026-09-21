@@ -29,7 +29,7 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     OrderStatus.CANCELLED: set(),
 }
 
-TIMESTAMP_FIELDS = {
+TIMESTAMP_FIELDS: dict[str, str] = {
     OrderStatus.CONFIRMED: "confirmed_at",
     OrderStatus.PACKED: "packed_at",
     OrderStatus.SHIPPED: "shipped_at",
@@ -171,7 +171,7 @@ def transition(
 def _notify_status(order: Order, to_status: str) -> None:
     from notifications import services as notification_services
 
-    mapping = {
+    mapping: dict[str, tuple[str, str]] = {
         OrderStatus.SHIPPED: ("ORDER_SHIPPED", "Your order is on the way"),
         OrderStatus.DELIVERED: ("ORDER_DELIVERED", "Your order has been delivered"),
     }

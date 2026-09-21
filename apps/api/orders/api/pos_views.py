@@ -8,7 +8,6 @@ from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -18,6 +17,7 @@ from catalog.api.serializers import ProductVariantSerializer
 from catalog.models import ProductVariant, PublishStatus
 from core.media import media_url
 from core.money import quantize
+from core.requests import AuthedRequest, actor
 from inventory import services as inventory_services
 from orders.api.serializers import (
     ElevateSerializer,
@@ -37,7 +37,7 @@ class PosSessionView(APIView):
     required_permissions = ["sales.create"]
     throttle_scope = "pos"
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         from accounts.services import get_organization
         from finance.selectors import active_accounts
 
@@ -93,7 +93,7 @@ class PosLookupView(APIView):
     required_permissions = ["sales.create"]
     throttle_scope = "pos"
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         code = request.query_params.get("code", "")
         variant = pos_services.lookup_variant(code=code)
         if variant is None:
@@ -123,7 +123,7 @@ class PosProductSearchView(APIView):
     required_permissions = ["sales.create"]
     throttle_scope = "pos"
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         branch = resolve_branch(request.user, request.query_params.get("branch"))
         query = request.query_params.get("q", "").strip()
         category = request.query_params.get("category", "").strip()
@@ -180,7 +180,7 @@ class PosSaleViewSet(viewsets.GenericViewSet):
     serializer_class = PosSaleSerializer
     queryset = Order.objects.all()
 
-    def create(self, request: Request) -> Response:
+    def create(self, request: AuthedRequest) -> Response:
         serializer = PosSaleSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -217,12 +217,12 @@ class PosSaleViewSet(viewsets.GenericViewSet):
         )
         return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
 
-    def retrieve(self, request: Request, pk: str | None = None) -> Response:
+    def retrieve(self, request: AuthedRequest, pk: str | None = None) -> Response:
         order = self.get_object()
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["get"])
-    def receipt(self, request: Request, pk: str | None = None) -> Response:
+    def receipt(self, request: AuthedRequest, pk: str | None = None) -> Response:
         from orders.api.views import _organization_payload
 
         order = self.get_object()
@@ -242,7 +242,7 @@ class PosSaleViewSet(viewsets.GenericViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def void(self, request: Request, pk: str | None = None) -> Response:
+    def void(self, request: AuthedRequest, pk: str | None = None) -> Response:
         order = pos_services.void_sale(
             order=self.get_object(),
             actor=request.user,
@@ -259,7 +259,7 @@ class HeldSaleViewSet(viewsets.ModelViewSet):
     pagination_class = None
 
     def get_queryset(self) -> Any:
-        branch = resolve_branch(self.request.user, self.request.query_params.get("branch"))
+        branch = resolve_branch(actor(self.request), self.request.query_params.get("branch"))
         return (
             HeldSale.objects.filter(branch=branch)
             .select_related("customer")
@@ -267,11 +267,11 @@ class HeldSaleViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer: Any) -> None:
-        branch = resolve_branch(self.request.user, self.request.data.get("branch"))
+        branch = resolve_branch(actor(self.request), self.request.data.get("branch"))
         serializer.save(branch=branch, created_by=self.request.user)
 
     @action(detail=True, methods=["post"])
-    def resume(self, request: Request, pk: str | None = None) -> Response:
+    def resume(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Return the parked cart. The POS re-looks-up every line, so a stale
         hold can never sell at a stale price."""
         payload = pos_services.resume_sale(hold=self.get_object())
@@ -285,7 +285,7 @@ class PosElevateView(APIView):
     required_permissions = ["sales.create"]
     throttle_scope = "auth"
 
-    def post(self, request: Request) -> Response:
+    def post(self, request: AuthedRequest) -> Response:
         serializer = ElevateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         approver = pos_services.elevate(
@@ -311,7 +311,7 @@ class PosReturnView(APIView):
     required_permissions = ["sales.refund"]
     throttle_scope = "pos"
 
-    def post(self, request: Request) -> Response:
+    def post(self, request: AuthedRequest) -> Response:
         from orders.api.serializers import CreateReturnSerializer, ReturnRequestSerializer
 
         serializer = CreateReturnSerializer(data=request.data)

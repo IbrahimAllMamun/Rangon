@@ -6,7 +6,7 @@ operational.  V1 runs a single branch but nothing here assumes it.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
@@ -241,7 +241,10 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     objects = UserManager()
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS: list[str] = []
+    REQUIRED_FIELDS: ClassVar[list[str]] = []
+
+    #: Per-instance cache for `permission_codes()`; not a database column.
+    _permission_codes: set[str] | None = None
 
     class Meta:
         db_table = "accounts_user"
@@ -287,16 +290,15 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
 
     def permission_codes(self) -> set[str]:
         """Resolved permission codes, cached for the life of the instance."""
-        cached = getattr(self, "_permission_codes", None)
-        if cached is not None:
-            return cached
+        if self._permission_codes is not None:
+            return self._permission_codes
         if self.is_owner or self.is_superuser:
             codes = {"*"}
-        elif self.role_id:
+        elif self.role:
             codes = set(self.role.permissions.values_list("code", flat=True))
         else:
             codes = set()
-        self._permission_codes = codes  # type: ignore[attr-defined]
+        self._permission_codes = codes
         return codes
 
     def has_perm_code(self, code: str) -> bool:

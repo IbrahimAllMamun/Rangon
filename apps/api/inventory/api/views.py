@@ -15,6 +15,7 @@ from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
 from core.exceptions import Conflict, ValidationError
+from core.requests import AuthedRequest, actor
 from core.services import next_number
 from inventory import services as inventory_services
 from inventory.api import documents
@@ -64,7 +65,7 @@ class InventoryViewSet(
         queryset = Inventory.objects.select_related(
             "branch", "variant", "variant__product", "variant__product__category"
         )
-        queryset = branch_queryset(self.request.user, queryset)
+        queryset = branch_queryset(actor(self.request), queryset)
 
         params = self.request.query_params
         # Soonest-expiring first is the whole point of that filter, so it sets
@@ -109,7 +110,7 @@ class InventoryViewSet(
         return Response(self.get_serializer(instance).data)
 
     @action(detail=False, methods=["post"])
-    def adjust(self, request: Request) -> Response:
+    def adjust(self, request: AuthedRequest) -> Response:
         serializer = AdjustStockSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -127,7 +128,7 @@ class InventoryViewSet(
         return Response(InventoryTransactionSerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="write-off")
-    def write_off(self, request: Request) -> Response:
+    def write_off(self, request: AuthedRequest) -> Response:
         serializer = WriteOffSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -145,14 +146,14 @@ class InventoryViewSet(
         return Response(InventoryTransactionSerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["get"], url_path="low-stock")
-    def low_stock(self, request: Request) -> Response:
+    def low_stock(self, request: AuthedRequest) -> Response:
         queryset = self.get_queryset().filter(on_hand__lte=F("reorder_point"))
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page or queryset, many=True)
         return self.get_paginated_response(serializer.data) if page else Response(serializer.data)
 
     @action(detail=False, methods=["get"])
-    def valuation(self, request: Request) -> Response:
+    def valuation(self, request: AuthedRequest) -> Response:
         """Stock value at weighted average cost, per branch."""
         queryset = branch_queryset(request.user, Inventory.objects.all())
         totals = queryset.aggregate(
@@ -184,7 +185,7 @@ class InventoryViewSet(
         return Response({"totals": totals, "by_branch": by_branch})
 
     @action(detail=False, methods=["post"], url_path="verify-integrity")
-    def verify_integrity(self, request: Request) -> Response:
+    def verify_integrity(self, request: AuthedRequest) -> Response:
         branch = (
             resolve_branch(request.user, request.data.get("branch"))
             if request.data.get("branch")
@@ -223,7 +224,7 @@ class InventoryTransactionViewSet(
         queryset = InventoryTransaction.objects.select_related(
             "branch", "variant", "variant__product", "created_by"
         ).prefetch_related("variant__attribute_values__attribute_value")
-        queryset = branch_queryset(self.request.user, queryset)
+        queryset = branch_queryset(actor(self.request), queryset)
         params = self.request.query_params
 
         # The same parser the cash book and the reports use, so "the 14th"
@@ -293,7 +294,7 @@ class StockTransferViewSet(
             source_branch=Branch.objects.get(pk=data["source_branch"]),
             target_branch=Branch.objects.get(pk=data["target_branch"]),
             lines=[(line["variant"], line["quantity"]) for line in data["lines"]],
-            actor=request.user,
+            actor=actor(request),
             notes=data.get("notes", ""),
         )
         return Response(StockTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
@@ -315,12 +316,12 @@ class StockCountViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self) -> Any:
         return branch_queryset(
-            self.request.user,
+            actor(self.request),
             StockCount.objects.select_related("branch").prefetch_related("items__variant__product"),
         ).order_by("-created_at")
 
     def perform_create(self, serializer: Any) -> None:
-        branch = resolve_branch(self.request.user, self.request.data.get("branch"))
+        branch = resolve_branch(actor(self.request), self.request.data.get("branch"))
         count = serializer.save(
             number=next_number("stock_count", prefix="SC"),
             branch=branch,
@@ -341,7 +342,7 @@ class StockCountViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def record(self, request: Request, pk: str | None = None) -> Response:
+    def record(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Write down what was actually on the shelf.
 
         The counting step itself, which had no endpoint before: `items` on
@@ -384,7 +385,7 @@ class StockCountViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def cancel(self, request: Request, pk: str | None = None) -> Response:
+    def cancel(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Abandon a count without touching stock."""
         count = self.get_object()
         if count.status == StockCountStatus.APPLIED:
@@ -397,7 +398,7 @@ class StockCountViewSet(viewsets.ModelViewSet):
         return Response(StockCountSerializer(count).data)
 
     @action(detail=True, methods=["post"])
-    def apply(self, request: Request, pk: str | None = None) -> Response:
+    def apply(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Turn counted figures into ADJUSTMENT ledger rows."""
         count = self.get_object()
         if count.status != StockCountStatus.COUNTING:

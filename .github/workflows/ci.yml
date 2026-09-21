@@ -69,7 +69,7 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       - name: Type check
-        run: mypy . || echo "::warning::mypy reported issues (not yet blocking)"
+        run: mypy .
 
       - name: Tests (incl. concurrency)
         run: pytest --cov=. --cov-report=term-missing --cov-report=xml

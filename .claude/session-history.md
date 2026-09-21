@@ -542,3 +542,76 @@ column that can drift. `VariantAttributeValue` carries one only because its
 run against the database the full suite was already using errored on collection.
 The workaround is still one flag; it is now Tier 2 #1 rather than "fix it when
 it next bites", because it next bit.
+
+---
+
+## 2026-09-21 — D6: a gate that never blocked, and the two defects behind it
+
+`mypy .` reported **271 errors in 41 files**, against the 98 in 29 the roadmap
+had claimed since 2026-08-18. Nothing had regressed. The CI step ran
+`mypy . || echo "::warning::..."`, so in five weeks it had never failed a build,
+and the errors accumulated exactly where the new code went.
+
+Fixed to **0 errors across 152 source files**, and the `|| echo` is gone.
+
+**The count was never the work.** 189 of the 271 were `arg-type`, and the
+largest group inside that — 81 — was one sentence repeated: DRF types
+`Request.user` as `User | AnonymousUser`, and a handler behind `IsAuthenticated`
+has already ruled out the second half. `core/requests.py` states that once:
+
+```python
+class AuthedRequest(Request):
+    user: User            # declaration only — the class is never instantiated
+```
+
+87 handlers now annotate their request with it. A second annotation —
+`MONEY_FIELD: dict[str, Any]` in `finance/api/serializers.py`, eight lines —
+was worth 80 errors on its own, because every `DecimalField(**MONEY_FIELD)`
+below it drew one error per parameter it could not match.
+
+**Three things found by doing it:**
+
+1. **`AuthedRequest` on a DRF *override* is unsound, and mypy said so.**
+   Putting it on `create`, `update` or `list` produced 12 `[override]` errors,
+   and they were right: narrowing a parameter in an override is a Liskov
+   violation however true it happens to be at that one call site, because DRF
+   dispatches through the base class. Those 12 went back to `Request`, with
+   `core.requests.actor(request)` inside — 36 call sites. **Type errors that
+   appear when you "fix" a type error are worth reading, not silencing.**
+2. **`POST /shop/account/addresses/` answered 500.** `IsCustomer` proves the
+   *role*, not that a `Customer` row exists behind it; registration is the only
+   path that creates one, so any staff-created or fixture-made customer account
+   reached `customers.services.add_address` with `customer=None` and died on
+   `None.pk`. Now a 404 in the standard envelope, with three tests — the first
+   of which was watched failing against the old code, on the real
+   `AttributeError`, before the guard went in.
+3. **`seed_demo` read `ShippingMethod…first().pk` unguarded**, inside a
+   `try/except Exception` that would have printed the attribute error once per
+   order. Hoisted, checked once, said once.
+
+**Where the checker was simply wrong, it says so out loud.** Three deliberate
+`# type: ignore[code]`s remain, each naming the stub imprecision it covers
+(`@action`'s descriptor; two serializer fields genuinely named `label`, which
+collides with `Field.label`). Three *stale* ignores came out — annotations that
+had drifted past the errors they were written to silence, which is precisely
+what a non-blocking gate produces.
+
+**One business rule was left alone on purpose.** `default_branch()` returns
+`None` when no branch is active, and the storefront then reads stock against
+nothing — every product quietly out of stock, no error anywhere. Making that
+type-check by *changing* it would have smuggled a business decision into a
+typing pass, so `accounts.services.storefront_branch()` preserves today's
+behaviour exactly, in one place, and carries the `DECISION REQUIRED` that
+raises the question. It is §1.1a of `docs/business-rules.md` now.
+
+**The lessons:**
+
+- *A non-blocking check drifts to noise, then to zero information.* This file
+  recorded that exact lesson on 2026-08-18, under "**`mypy` reports 98 errors**"
+  — and then 173 more arrived while nothing failed. The fix that matters is not
+  the 271; it is the `|| echo` removed from `ci.yml`, which is what stops the
+  next 173.
+- *The tooling on `PATH` is not the tooling CI runs.* `mypy` and `pytest` on
+  this box belonged to a different interpreter and failed like project faults;
+  `ruff` was 0.15.8 against a pinned 0.8.4 and reported eight findings CI would
+  never see. All four traps are now §8 of `environment.md`.

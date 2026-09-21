@@ -41,6 +41,19 @@ Signed ledger effects:
 | `RESERVATION` | 0 | + |
 | `RESERVATION_RELEASE` | 0 | − |
 
+### 1.1a Which branch the storefront reads
+
+Stock is per branch, so every public request — a product page, a facet count, the product feed —
+needs one branch to read against. It uses the **default branch**, or, if none is marked default, the
+oldest active branch (`accounts.services.storefront_branch`).
+
+*`DECISION REQUIRED` — what the storefront should do when **no branch is active at all**. Today it
+reads stock against nothing, which matches no rows, so the catalogue renders with every product out
+of stock and no error anywhere. Staff requests already treat the same state as an error
+(`resolve_branch` raises). The alternatives are to answer 503 while the shop has no branch, to show
+an empty catalogue, or to keep today's silent out-of-stock. Today's behaviour is assumed until the
+owner chooses; `storefront_branch()` is the single place that changes.*
+
 ### 1.2 When stock is reserved
 
 - **Online order:** at order creation, before payment. `RESERVATION` rows are written.
@@ -596,6 +609,10 @@ one row.
   address never rewrites history (CLAUDE.md §3.3).
 - The owning customer is never read from the request body. It comes from the URL (admin) or the
   session (storefront), so an address cannot be written onto another customer's record.
+- A signed-in **account with no customer record** — created by an admin, or by a fixture, rather than
+  through the storefront's own registration — has nothing to hang an address on. Saving one is
+  refused with a 404; listing returns an empty list. Registration is the only path that creates the
+  customer record, so this is the state of a staff-made CUSTOMER account, not of a shopper.
 
 ### 6.2 Who may edit a customer
 

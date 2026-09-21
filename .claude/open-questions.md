@@ -93,7 +93,7 @@ with its date, is in `../docs/roadmap.md`.
 | Security | Controls implemented, audits and image scans automated, passing clean as of 2026-09-12; **no independent penetration test** |
 | Deployment | Compose prod stack + green CI; the roadmap records **no live environment and no real order** |
 | Backup automation | The restore was rehearsed for real (2026-08-22), but the dump was taken by hand, stored on one machine, on no schedule and with no retention. The scripts themselves run where the docs say since D14 was fixed (2026-09-09); nothing schedules them |
-| `mypy` | Runs, reports 98 errors (D6), and is non-blocking in CI. It currently proves nothing |
+| ~~`mypy`~~ | **Settled 2026-09-21 (D6).** It was 271 errors in 41 files, not 98 — the step ran with `\|\| echo` and had never blocked. Clean now, across 152 source files, and the step blocks |
 | Two screens from 2026-09-15 | The supplier payment form on `/admin/purchases/[id]`, and the Delivery panel on `/admin/orders/[id]` with the customer's parcel view. Written, typechecked and unit-tested; **nobody has signed in and used either** |
 | `router.refresh()` on the admin | [D77](../docs/roadmap.md#known-defects): after receiving stock the screen showed the un-received state in 3 runs out of 5. **Worked around with a full reload, not root-caused.** Anything else relying on `router.refresh()` is suspect |
 

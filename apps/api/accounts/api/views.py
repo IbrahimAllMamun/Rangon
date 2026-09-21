@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.db import transaction
 from django.db.models import Q
@@ -38,6 +38,7 @@ from accounts.permissions import RolePermission
 from accounts.services import (
     change_own_password,
     get_organization,
+    mint_refresh_token,
     priced_order_count,
     update_tax_settings,
 )
@@ -45,6 +46,7 @@ from core import audit
 from core.dates import parse_window
 from core.middleware import get_audit_context
 from core.models import AuditLog
+from core.requests import AuthedRequest, actor
 from customers.models import Customer, CustomerType
 
 
@@ -117,7 +119,7 @@ class RefreshView(APIView):
             refresh.blacklist()  # rotation: the old refresh token dies here
             # Both tokens are minted afresh rather than the access token being
             # derived from the old refresh, so both carry the current claim.
-            fresh = RefreshToken.for_user(user)
+            fresh = mint_refresh_token(user)
             access, new_refresh = str(fresh.access_token), str(fresh)
         except (TokenError, User.DoesNotExist):
             return Response(
@@ -136,7 +138,7 @@ class RefreshView(APIView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request: Request) -> Response:
+    def post(self, request: AuthedRequest) -> Response:
         token = request.data.get("refresh")
         if token:
             try:
@@ -150,7 +152,7 @@ class LogoutView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         return Response(MeSerializer(request.user).data)
 
 
@@ -212,13 +214,16 @@ class PasswordChangeView(GenericAPIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth"
 
-    def post(self, request: Request) -> Response:
+    def post(self, request: AuthedRequest) -> Response:
         serializer = self.get_serializer(data=request.data)
         user = request.user
         if not serializer.is_valid():
             # A wrong guess, not a blank field: `validate_current_password`
             # raises with the default "invalid" code, `required`/`blank` do not.
-            guesses = serializer.errors.get("current_password", [])
+            # drf-stubs widens `.errors` to cover a `many=True` serializer,
+            # which answers with a list.  This view never builds one (D6).
+            errors = cast(dict[str, Any], serializer.errors)
+            guesses = errors.get("current_password", [])
             if any(getattr(error, "code", "") == "invalid" for error in guesses):
                 audit.record(
                     action=audit.AuditAction.LOGIN_FAILED,
@@ -226,7 +231,7 @@ class PasswordChangeView(GenericAPIView):
                     actor=user,
                     reason="Wrong current password when changing the password",
                 )
-            raise ValidationError(serializer.errors)
+            raise ValidationError(errors)
 
         change_own_password(user=user, new_password=serializer.validated_data["new_password"])
         return Response(LoginSerializer.tokens_for(user))
@@ -235,13 +240,13 @@ class PasswordChangeView(GenericAPIView):
 class OrganizationView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         organization = get_organization()
         if organization is None:
             return Response({"detail": "No organisation configured."}, status=404)
         return Response(OrganizationSerializer(organization).data)
 
-    def patch(self, request: Request) -> Response:
+    def patch(self, request: AuthedRequest) -> Response:
         if not request.user.has_perm_code("settings.manage"):
             return Response(
                 {"error": {"code": "PERMISSION_DENIED", "message": "Not allowed.", "details": {}}},
@@ -272,7 +277,7 @@ class OrganizationTaxView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         if not request.user.has_perm_code("settings.view"):
             return Response(
                 {"error": {"code": "PERMISSION_DENIED", "message": "Not allowed.", "details": {}}},
@@ -294,7 +299,7 @@ class OrganizationTaxView(APIView):
             }
         )
 
-    def patch(self, request: Request) -> Response:
+    def patch(self, request: AuthedRequest) -> Response:
         if not request.user.has_perm_code("settings.manage"):
             return Response(
                 {"error": {"code": "PERMISSION_DENIED", "message": "Not allowed.", "details": {}}},
@@ -365,10 +370,13 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         # Staff are deactivated, never deleted: their audit trail must survive.
-        return self.deactivate(request, *args, **kwargs)
+        # `@action` is annotated as returning the plain function rather than a
+        # descriptor, so the bound call looks to mypy as though it is missing
+        # `self` (D6).
+        return self.deactivate(request, *args, **kwargs)  # type: ignore[arg-type]
 
     @action(detail=True, methods=["post"])
-    def deactivate(self, request: Request, pk: str | None = None) -> Response:
+    def deactivate(self, request: AuthedRequest, pk: str | None = None) -> Response:
         from accounts.services import check_can_lose_access, set_user_status
 
         user = self.get_object()
@@ -384,7 +392,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(UserSerializer(user).data)
 
     @action(detail=True, methods=["post"])
-    def activate(self, request: Request, pk: str | None = None) -> Response:
+    def activate(self, request: AuthedRequest, pk: str | None = None) -> Response:
         from accounts.services import set_user_status
 
         user = set_user_status(user=self.get_object(), status="ACTIVE", actor=request.user)
@@ -415,7 +423,7 @@ class AuditLogViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets
     ordering_fields = ["created_at"]
 
     def get_queryset(self) -> Any:
-        user = self.request.user
+        user = actor(self.request)
         queryset = AuditLog.objects.select_related("actor", "branch")
 
         # Branch-scoped like every other staff list (D85). A row with no branch

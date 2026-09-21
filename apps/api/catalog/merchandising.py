@@ -39,7 +39,7 @@ SOLD_STATUSES = [
     OrderStatus.REFUNDED,
 ]
 
-MONEY = DecimalField(max_digits=14, decimal_places=2)
+MONEY: DecimalField = DecimalField(max_digits=14, decimal_places=2)
 
 
 def price_drops(*, limit: int = 12) -> Any:
