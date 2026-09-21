@@ -118,17 +118,20 @@ jobs:
   # The four critical flows, driven in a real browser against a real API and a
   # real database (docs/testing/strategy.md).
   #
-  # Runs against `next dev`, not a production build, and that is a known gap
-  # rather than an oversight: one spec fails consistently against a production
-  # build and passes consistently in dev ([D40](../../docs/roadmap.md)). Adding
-  # a knowingly-red job would turn every future build red for a defect
-  # unrelated to whatever the build is checking, and skipping the spec to get
-  # green is what CLAUDE.md §9 forbids. So this job covers the flows now, and
-  # the production-build run lands with D40.
+  # Runs against a **production build** as of 2026-09-21: `next build`, then the
+  # standalone `server.js` the image itself runs. It drove `next dev` until then
+  # because two specs failed against a real build -- D41, a race in the spec,
+  # and D40 ([docs/roadmap.md](../../docs/roadmap.md)) -- and a knowingly-red
+  # job helps nobody. Both are dealt with, so the suite now exercises the
+  # artefact that ships. See the steps below for the three things that build
+  # needs which `next dev` does not.
   #
   # The suite consumes seeded fixtures -- the returns spec approves the one
-  # seeded REQUESTED return -- so E2E_SEED_CMD restores them first. Without it
-  # the suite is only repeatable once (D18).
+  # seeded REQUESTED return -- so it is repeatable only once against a given
+  # database (D18). That is exactly what this job does: "Migrate and seed"
+  # leaves it pristine, the storefront starts after that, and the suite runs
+  # once. `E2E_SEED_CMD` would reseed *underneath* the running server, which is
+  # a different and worse problem -- see the note on "Run the suite".
   e2e:
     name: E2E (Playwright, four critical flows)
     runs-on: ubuntu-latest
