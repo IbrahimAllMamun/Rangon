@@ -21,7 +21,7 @@ And in this folder:
 
 ---
 
-## State as of 2026-09-18
+## State as of 2026-09-21
 
 That is the roadmap's last update. **Every phase is ✅ or declined (❌) with the reason written
 down, except six that are 🟡 or ⬜ for a stated reason:** 16 (no payment gateway), 24 (no ESC/POS
@@ -46,30 +46,36 @@ say which.
 
 ### Last recorded run of each check
 
-Each line is the most recent result the roadmap's verification log records, with its date. Nothing
-here is newer than the log.
+Each line is the most recent result the roadmap's verification log records, with its date. These are
+from the 2026-09-21 defect audit, which ran every check itself rather than quoting an older entry.
 
 ```text
-pytest ................................. 1097 passed              2026-09-18
-ruff 0.8.4 check + format --check ...... clean, 201 files         2026-09-18
-tsc --noEmit / next lint ............... clean                    2026-09-18
-vitest ................................. 260 passed               2026-09-18
-query budgets .......................... 20/20 pass               2026-09-14
-playwright ............................. 22 passed                2026-09-09
-playwright, production standalone ...... NOT green — D40 and D41  2026-08-31
-                                         (D41 fixed 2026-09-09; no production run recorded since)
-verify_inventory / verify_accounts ..... consistent               2026-08-28
-migrations from an empty database ...... OK                       2026-08-18
+pytest ................................. 1158 passed              2026-09-21
+ruff 0.8.4 check + format --check ...... clean, 207 files         2026-09-21
+tsc --noEmit ........................... clean                    2026-09-21
+vitest (TZ=UTC) ........................ 282 passed, 24 files     2026-09-21
+query budgets + concurrency ............ 38 passed                2026-09-21
+mypy ................................... 271 errors, 41 files     2026-09-21  <- D6, was "98 in 29"
+playwright, PRODUCTION standalone ...... 40 passed / 2 failed     2026-09-21
+                                         (both failures are D40: expenses, stock count)
+verify_inventory / verify_accounts ..... consistent               2026-09-21
+migrations from an empty database ...... OK                       2026-09-21
 ```
+
+All of the above were run natively on Linux, per §8 below: PostgreSQL 16 and Redis on the host,
+Django on 8000, and — for the browser pass — `next build` followed by the standalone `server.js`
+the production image runs, on 4000. That recipe works as written.
 
 Use the pinned ruff. A newer one on `PATH` reports findings 0.8.4 does not — see the 2026-09-18 log
 entry.
 
 ### Never successfully run — do not claim these work
 
-- **The E2E suite against a production build.** D41 turned out to be a race in the spec, not the
-  build, and was fixed 2026-09-09. **D40 is still open** and is now the only recorded reason the CI
-  job runs against `next dev`. No production-build run is recorded since.
+- ~~**The E2E suite against a production build.**~~ **Run 2026-09-21: 40 passed, 2 failed,
+  42 specs**, against `next build` + the standalone `server.js`. Both failures are **D40** — the
+  expenses spec it was found on, and the stock-count spec, which nobody had connected to it. D41
+  was a race in the spec, not the build, and was fixed 2026-09-09. D40 is now the only thing
+  keeping the CI job on `next dev`.
 - **A live payment gateway.** The card option is visibly disabled, not faked.
 - **Anything deployed.** The roadmap records no live environment and no real order; "deploy
   somewhere" is still Tier 0 #1.
@@ -77,9 +83,13 @@ entry.
 - **Two screens from 2026-09-15, in a browser:** the supplier payment form on
   `/admin/purchases/[id]`, and the Delivery panel on `/admin/orders/[id]` with the customer's parcel
   view. Written, typechecked and unit-tested; nobody has signed in and used either.
-- **`router.refresh()` on the admin.** D77 — receiving stock left the screen showing the
-  un-received state in 3 runs out of 5 — is worked around with a full reload, not explained. Anything
-  else that relies on `router.refresh()` is suspect until someone finds out why.
+- **`router.refresh()` on the admin — now known to be app-wide.** D77 (receiving stock showed the
+  un-received state in 3 runs of 5) is worked around with a full reload, not explained. On
+  2026-09-21 the same defect was measured on three more screens against a production build:
+  `/admin/expenses` **0/5**, brands **2/6**, categories **4/6**, and the stock-count sheet, which
+  goes on offering *Apply to stock* after applying it. Every write landed every time; only the
+  screen lied. **D77 and D40 are one defect**, across 63 call sites. Do not trust any admin
+  screen's post-write state.
 
 ### The two habits that keep finding things
 

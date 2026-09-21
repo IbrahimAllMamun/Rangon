@@ -1,4 +1,4 @@
-"""One walk-in customer per branch, and the merge that gets there (D43).
+"""One walk-in customer per branch, and the merge that gets there (D43a).
 
 `pos.walk_in_customer()` resolves the branch's anonymous counter row with
 `get_or_create`, which is only atomic when a unique constraint backs its
