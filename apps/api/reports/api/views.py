@@ -8,12 +8,12 @@ from typing import Any
 from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import BaseRenderer, JSONRenderer
-from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Branch
 from accounts.permissions import RolePermission
+from core.requests import AuthedRequest
 from reports import services as report_services
 from reports.services import DateRange
 
@@ -41,7 +41,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _branch_for(request: Request) -> Branch | None:
+def _branch_for(request: AuthedRequest) -> Branch | None:
     """Which branch to report on: explicit, else the user's own if they are scoped."""
     branch_id = request.query_params.get("branch")
     if branch_id:
@@ -102,7 +102,7 @@ class BaseReportView(APIView):
             return data
         return data.get("daily", [])
 
-    def get(self, request: Request) -> Response | HttpResponse:
+    def get(self, request: AuthedRequest) -> Response | HttpResponse:
         branch = _branch_for(request)
         kwargs: dict[str, Any] = {"branch": branch}
         if self.needs_range:
@@ -136,7 +136,7 @@ class DashboardView(BaseReportView):
 class SalesReportView(BaseReportView):
     filename = "sales.csv"
 
-    def get(self, request: Request) -> Response | HttpResponse:
+    def get(self, request: AuthedRequest) -> Response | HttpResponse:
         rows = report_services.sales_report(
             date_range=DateRange.from_params(request.query_params),
             branch=_branch_for(request),

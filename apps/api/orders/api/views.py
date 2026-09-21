@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset
 from core import phone as phone_utils
+from core.requests import AuthedRequest, actor
 from orders.api.serializers import (
     AbandonedCheckoutSerializer,
     CompleteReturnSerializer,
@@ -59,7 +60,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
             )
         else:
             queryset = queryset.prefetch_related("items")
-        queryset = branch_queryset(self.request.user, queryset)
+        queryset = branch_queryset(actor(self.request), queryset)
 
         params = self.request.query_params
         if search := params.get("search"):
@@ -82,7 +83,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         return OrderDetailSerializer if self.action == "retrieve" else OrderListSerializer
 
     @action(detail=True, methods=["post"])
-    def status(self, request: Request, pk: str | None = None) -> Response:
+    def status(self, request: AuthedRequest, pk: str | None = None) -> Response:
         serializer = StatusChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         order = lifecycle_services.transition(
@@ -94,7 +95,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["post"])
-    def cancel(self, request: Request, pk: str | None = None) -> Response:
+    def cancel(self, request: AuthedRequest, pk: str | None = None) -> Response:
         order = lifecycle_services.cancel_order(
             order=self.get_object(),
             actor=request.user,
@@ -103,12 +104,12 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["get"])
-    def timeline(self, request: Request, pk: str | None = None) -> Response:
+    def timeline(self, request: AuthedRequest, pk: str | None = None) -> Response:
         order = self.get_object()
         return Response(OrderEventSerializer(order.events.all(), many=True).data)
 
     @action(detail=True, methods=["post"])
-    def payments(self, request: Request, pk: str | None = None) -> Response:
+    def payments(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Record money actually received (COD remittance, bank transfer, cash)."""
         serializer = RecordPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -136,7 +137,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         return Response(OrderDetailSerializer(payment.order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
-    def refunds(self, request: Request, pk: str | None = None) -> Response:
+    def refunds(self, request: AuthedRequest, pk: str | None = None) -> Response:
         serializer = RefundRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -153,7 +154,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         return Response(RefundSerializer(refund).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
-    def invoice(self, request: Request, pk: str | None = None) -> Response:
+    def invoice(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Payload for the printable A4 invoice; the frontend renders it."""
         order = self.get_object()
         return Response(
@@ -165,7 +166,7 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         )
 
     @action(detail=True, methods=["get"], url_path="packing-slip")
-    def packing_slip(self, request: Request, pk: str | None = None) -> Response:
+    def packing_slip(self, request: AuthedRequest, pk: str | None = None) -> Response:
         order = self.get_object()
         data = OrderDetailSerializer(order).data
         for item in data["items"]:  # a packing slip never shows prices
@@ -217,7 +218,7 @@ class ReturnRequestViewSet(
 
     def get_queryset(self) -> Any:
         return branch_queryset(
-            self.request.user,
+            actor(self.request),
             ReturnRequest.objects.select_related(
                 "order", "order__customer", "order__branch"
             ).prefetch_related("items__order_item"),
@@ -233,7 +234,7 @@ class ReturnRequestViewSet(
             order=Order.objects.get(pk=data["order"]),
             lines=[(line["order_item"], line["quantity"]) for line in data["lines"]],
             reason=data["reason"],
-            actor=request.user,
+            actor=actor(request),
             customer_comment=data.get("customer_comment", ""),
             restock_decisions={
                 str(line["order_item"]): line.get("restock_decision", "RESTOCK")
@@ -245,7 +246,7 @@ class ReturnRequestViewSet(
         )
 
     @action(detail=True, methods=["post"])
-    def approve(self, request: Request, pk: str | None = None) -> Response:
+    def approve(self, request: AuthedRequest, pk: str | None = None) -> Response:
         result = return_services.approve(
             return_request=self.get_object(),
             actor=request.user,
@@ -254,7 +255,7 @@ class ReturnRequestViewSet(
         return Response(ReturnRequestSerializer(result).data)
 
     @action(detail=True, methods=["post"])
-    def reject(self, request: Request, pk: str | None = None) -> Response:
+    def reject(self, request: AuthedRequest, pk: str | None = None) -> Response:
         result = return_services.reject(
             return_request=self.get_object(),
             actor=request.user,
@@ -263,7 +264,7 @@ class ReturnRequestViewSet(
         return Response(ReturnRequestSerializer(result).data)
 
     @action(detail=True, methods=["post"])
-    def receive(self, request: Request, pk: str | None = None) -> Response:
+    def receive(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Goods are back, with the per-line decision made on inspection."""
         serializer = ReceiveReturnSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -277,7 +278,7 @@ class ReturnRequestViewSet(
         return Response(ReturnRequestSerializer(result).data)
 
     @action(detail=True, methods=["post"])
-    def complete(self, request: Request, pk: str | None = None) -> Response:
+    def complete(self, request: AuthedRequest, pk: str | None = None) -> Response:
         serializer = CompleteReturnSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -319,12 +320,12 @@ class AbandonedCheckoutViewSet(
 
     def get_queryset(self) -> Any:
         return branch_queryset(
-            self.request.user,
+            actor(self.request),
             AbandonedCheckout.objects.select_related("branch", "recovered_order", "customer"),
         )
 
     @action(detail=True, methods=["post"])
-    def lost(self, request: Request, pk: str | None = None) -> Response:
+    def lost(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Write a lead off after it has been chased and gone nowhere."""
         lead = leads.mark_lost(
             lead=self.get_object(), note=str(request.data.get("note", "")).strip()

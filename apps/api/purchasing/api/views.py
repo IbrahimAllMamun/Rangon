@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from core.requests import AuthedRequest, actor
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (
     CreatePurchaseOrderSerializer,
@@ -96,7 +97,7 @@ class PurchaseOrderViewSet(
 
     def get_queryset(self) -> Any:
         return branch_queryset(
-            self.request.user,
+            actor(self.request),
             PurchaseOrder.objects.select_related("supplier", "branch").prefetch_related(
                 "items__variant__product",
                 # `ProductVariant.label` is a property that joins its attribute
@@ -130,7 +131,7 @@ class PurchaseOrderViewSet(
 
         purchase_order = purchasing_services.create_purchase_order(
             supplier=data["supplier"],
-            branch=resolve_branch(request.user, data.get("branch")),
+            branch=resolve_branch(actor(request), data.get("branch")),
             lines=[
                 PurchaseLine(
                     variant_id=line["variant"],
@@ -141,7 +142,7 @@ class PurchaseOrderViewSet(
                 )
                 for line in data["lines"]
             ],
-            actor=request.user,
+            actor=actor(request),
             expected_at=data.get("expected_at"),
             invoice_number=data.get("invoice_number", ""),
             shipping_total=data.get("shipping_total", 0),
@@ -152,14 +153,14 @@ class PurchaseOrderViewSet(
         )
 
     @action(detail=True, methods=["post"])
-    def send(self, request: Request, pk: str | None = None) -> Response:
+    def send(self, request: AuthedRequest, pk: str | None = None) -> Response:
         purchase_order = purchasing_services.send_purchase_order(
             purchase_order=self.get_object(), actor=request.user
         )
         return Response(PurchaseOrderSerializer(purchase_order).data)
 
     @action(detail=True, methods=["post"])
-    def cancel(self, request: Request, pk: str | None = None) -> Response:
+    def cancel(self, request: AuthedRequest, pk: str | None = None) -> Response:
         purchase_order = purchasing_services.cancel_purchase_order(
             purchase_order=self.get_object(),
             actor=request.user,
@@ -168,7 +169,7 @@ class PurchaseOrderViewSet(
         return Response(PurchaseOrderSerializer(purchase_order).data)
 
     @action(detail=True, methods=["post"])
-    def receive(self, request: Request, pk: str | None = None) -> Response:
+    def receive(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Receive goods: writes PURCHASE ledger rows and updates average cost."""
         serializer = ReceivePurchaseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -196,7 +197,7 @@ class PurchaseOrderViewSet(
         )
 
     @action(detail=True, methods=["post"], url_path="return")
-    def purchase_return(self, request: Request, pk: str | None = None) -> Response:
+    def purchase_return(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Send goods back: writes PURCHASE_RETURN ledger rows and credits the order.
 
         `Idempotency-Key` is honoured because a replay would take the stock off
@@ -229,7 +230,7 @@ class PurchaseOrderViewSet(
         )
 
     @action(detail=True, methods=["get"])
-    def receipts(self, request: Request, pk: str | None = None) -> Response:
+    def receipts(self, request: AuthedRequest, pk: str | None = None) -> Response:
         purchase_order = self.get_object()
         return Response(PurchaseReceiptSerializer(purchase_order.receipts.all(), many=True).data)
 
@@ -255,10 +256,10 @@ class SupplierPaymentViewSet(
             purchase_order=data.get("purchase_order"),
             reference=data.get("reference", ""),
             paid_at=data.get("paid_at"),
-            actor=request.user,
+            actor=actor(request),
             notes=data.get("notes", ""),
             account=data.get("account"),
-            branch=resolve_branch(request.user, request.data.get("branch")),
+            branch=resolve_branch(actor(request), request.data.get("branch")),
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(SupplierPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
@@ -315,7 +316,7 @@ class SupplierProductViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=["post"], url_path="set-preferred")
-    def set_preferred(self, request: Request, pk: str | None = None) -> Response:
+    def set_preferred(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Promote this supplier, demoting whoever held it, in one transaction."""
         offer = self.get_object()
         updated = purchasing_services.set_preferred_supplier(

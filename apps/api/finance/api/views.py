@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
+from core.requests import AuthedRequest, actor
 from finance import selectors
 from finance import services as finance_services
 from finance.api.serializers import (
@@ -75,7 +76,9 @@ class AccountViewSet(
 
     def get_queryset(self) -> Any:
         queryset = Account.objects.select_related("branch")
-        return branch_queryset(self.request.user, queryset).order_by("branch__name", "kind", "name")
+        return branch_queryset(actor(self.request), queryset).order_by(
+            "branch__name", "kind", "name"
+        )
 
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = self.get_serializer(data=request.data)
@@ -85,7 +88,7 @@ class AccountViewSet(
         # ModelSerializer resolves `branch` to a Branch instance, but a bare
         # `pk=` lookup against a UUID primary key does not unwrap one.
         submitted = data.get("branch")
-        branch = resolve_branch(request.user, getattr(submitted, "pk", submitted))
+        branch = resolve_branch(actor(request), getattr(submitted, "pk", submitted))
 
         account = finance_services.create_account(
             branch=branch,
@@ -97,7 +100,7 @@ class AccountViewSet(
             is_default=data.get("is_default", False),
             allow_overdraft=data.get("allow_overdraft", False),
             notes=data.get("notes", ""),
-            actor=request.user,
+            actor=actor(request),
         )
         return Response(
             AccountSerializer(account).data,
@@ -114,11 +117,11 @@ class AccountViewSet(
             for key, value in serializer.validated_data.items()
             if key not in {"branch", "opening_balance"}
         }
-        account = finance_services.update_account(account=account, actor=request.user, **editable)
+        account = finance_services.update_account(account=account, actor=actor(request), **editable)
         return Response(AccountSerializer(account).data)
 
     @action(detail=True, methods=["get"])
-    def transactions(self, request: Request, pk: str | None = None) -> Response:
+    def transactions(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """This account's cash book, newest first."""
         account = self.get_object()
         queryset = selectors.ledger(
@@ -134,7 +137,7 @@ class AccountViewSet(
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"], url_path="cash-position")
-    def cash_position(self, request: Request) -> Response:
+    def cash_position(self, request: AuthedRequest) -> Response:
         """What the business is holding right now, split by kind."""
         branch = None
         if branch_id := request.query_params.get("branch"):
@@ -150,7 +153,7 @@ class AccountViewSet(
         return Response(CashPositionSerializer(position).data)
 
     @action(detail=False, methods=["post"], url_path="record-movement")
-    def record_movement(self, request: Request) -> Response:
+    def record_movement(self, request: AuthedRequest) -> Response:
         """A manual deposit, withdrawal or correction."""
         serializer = RecordMovementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -172,7 +175,7 @@ class AccountViewSet(
         return Response(AccountTransactionSerializer(entry).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="verify-integrity")
-    def verify_integrity(self, request: Request) -> Response:
+    def verify_integrity(self, request: AuthedRequest) -> Response:
         branch = (
             resolve_branch(request.user, request.data.get("branch"))
             if request.data.get("branch")
@@ -213,7 +216,7 @@ class AccountTransactionViewSet(
         queryset = AccountTransaction.objects.select_related(
             "account", "account__branch", "created_by"
         )
-        queryset = branch_queryset(self.request.user, queryset, field="account__branch")
+        queryset = branch_queryset(actor(self.request), queryset, field="account__branch")
 
         params = self.request.query_params
         if date_from := params.get("date_from"):
@@ -243,7 +246,7 @@ class AccountTransferViewSet(
             "source_account", "target_account", "created_by"
         )
         return branch_queryset(
-            self.request.user, queryset, field="source_account__branch"
+            actor(self.request), queryset, field="source_account__branch"
         ).order_by("-occurred_at")
 
     def get_serializer_class(self) -> Any:
@@ -255,8 +258,8 @@ class AccountTransferViewSet(
         data = serializer.validated_data
 
         # Both ends must be branches this user may act on.
-        resolve_branch(request.user, data["source_account"].branch_id)
-        resolve_branch(request.user, data["target_account"].branch_id)
+        resolve_branch(actor(request), data["source_account"].branch_id)
+        resolve_branch(actor(request), data["target_account"].branch_id)
 
         record = finance_services.transfer(
             source_account=data["source_account"],
@@ -264,7 +267,7 @@ class AccountTransferViewSet(
             amount=data["amount"],
             notes=data.get("notes", ""),
             occurred_at=data.get("occurred_at"),
-            actor=request.user,
+            actor=actor(request),
         )
         return Response(AccountTransferSerializer(record).data, status=status.HTTP_201_CREATED)
 
@@ -311,7 +314,7 @@ class ExpenseCategoryViewSet(
             code=data.get("code", ""),
             description=data.get("description", ""),
             is_active=data.get("is_active", True),
-            actor=request.user,
+            actor=actor(request),
         )
         return Response(ExpenseCategorySerializer(category).data, status=status.HTTP_201_CREATED)
 
@@ -320,7 +323,7 @@ class ExpenseCategoryViewSet(
         serializer = self.get_serializer(category, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         category = finance_services.update_expense_category(
-            category=category, actor=request.user, **serializer.validated_data
+            category=category, actor=actor(request), **serializer.validated_data
         )
         return Response(ExpenseCategorySerializer(category).data)
 
@@ -365,7 +368,7 @@ class ExpenseViewSet(
             # total still excludes them (finance.selectors.expense_totals).
             include_void=params.get("include_void", "true").lower() != "false",
         )
-        return branch_queryset(self.request.user, queryset)
+        return branch_queryset(actor(self.request), queryset)
 
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = CreateExpenseSerializer(data=request.data)
@@ -374,7 +377,7 @@ class ExpenseViewSet(
 
         submitted = data.get("branch")
         branch = resolve_branch(
-            request.user, getattr(submitted, "pk", submitted) if submitted else None
+            actor(request), getattr(submitted, "pk", submitted) if submitted else None
         )
 
         expense = finance_services.record_expense(
@@ -385,7 +388,7 @@ class ExpenseViewSet(
             spent_at=data.get("spent_at"),
             note=data.get("note", ""),
             attachment=data.get("attachment"),
-            actor=request.user,
+            actor=actor(request),
         )
         return Response(
             ExpenseSerializer(expense, context={"request": request}).data,
@@ -393,7 +396,7 @@ class ExpenseViewSet(
         )
 
     @action(detail=True, methods=["post"])
-    def void(self, request: Request, pk: str | None = None) -> Response:
+    def void(self, request: AuthedRequest, pk: str | None = None) -> Response:
         serializer = VoidExpenseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         expense = finance_services.void_expense(
@@ -404,7 +407,7 @@ class ExpenseViewSet(
         return Response(ExpenseSerializer(expense, context={"request": request}).data)
 
     @action(detail=False, methods=["get"])
-    def summary(self, request: Request) -> Response:
+    def summary(self, request: AuthedRequest) -> Response:
         """Total spent in a period, split by category."""
         branch = None
         if branch_id := request.query_params.get("branch"):
@@ -433,7 +436,7 @@ class PartyLedgerView(APIView):
     # position, which is a manager, accountant and owner concern.
     required_permissions = ["reports.financial"]
 
-    def get(self, request: Request) -> Response:
+    def get(self, request: AuthedRequest) -> Response:
         branch = None
         if branch_id := request.query_params.get("branch"):
             branch = resolve_branch(request.user, branch_id)

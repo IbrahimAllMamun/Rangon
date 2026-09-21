@@ -10,6 +10,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset
+from core.requests import AuthedRequest, actor
 from orders.models import Order
 from shipping import services as shipping_services
 from shipping.api.serializers import (
@@ -89,7 +90,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         # (D68), while orders, inventory, purchasing and finance all have one.
         # A manager confined to one branch could list, read and ship another
         # branch's orders.
-        return branch_queryset(self.request.user, super().get_queryset(), field="order__branch")
+        return branch_queryset(actor(self.request), super().get_queryset(), field="order__branch")
 
     def get_serializer(self, *args: Any, **kwargs: Any) -> Any:
         serializer = super().get_serializer(*args, **kwargs)
@@ -97,7 +98,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         # see reads as one that does not exist rather than one they may ship.
         fields = getattr(serializer, "fields", None)
         if fields and "order" in fields:
-            fields["order"].queryset = branch_queryset(self.request.user, Order.objects.all())
+            fields["order"].queryset = branch_queryset(actor(self.request), Order.objects.all())
         return serializer
 
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
@@ -112,12 +113,12 @@ class ShipmentViewSet(viewsets.ModelViewSet):
             tracking_number=data.get("tracking_number", ""),
             cost=data.get("cost"),
             notes=data.get("notes", ""),
-            actor=request.user,
+            actor=actor(request),
         )
         return Response(ShipmentSerializer(shipment).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
-    def events(self, request: Request, pk: str | None = None) -> Response:
+    def events(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Record a tracking update and keep the order status in step.
 
         The payload goes through `ShipmentEventSerializer` rather than being

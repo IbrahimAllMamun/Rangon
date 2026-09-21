@@ -475,9 +475,9 @@ class ProductImage(BaseModel):
     def clean(self) -> None:
         """Only a variant-defining colour may group images, and only one the
         product actually comes in (product-media.md §2)."""
-        if self.attribute_value_id is None:
-            return
         value = self.attribute_value
+        if value is None:
+            return
         if value.attribute.kind != AttributeKind.COLOR:
             raise ValidationError(
                 {"attribute_value": "Images group by colour; that is not a colour attribute."}
@@ -498,7 +498,7 @@ class ProductImage(BaseModel):
 
     @property
     def colour_label(self) -> str:
-        return self.attribute_value.display if self.attribute_value_id else ""
+        return self.attribute_value.display if self.attribute_value else ""
 
     @property
     def effective_alt(self) -> str:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-from typing import Any
+from decimal import Decimal, InvalidOperation
+from typing import Any, cast
 
 from django.db.models import Avg, Count, Prefetch
 from django.shortcuts import get_object_or_404
@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsCustomer
-from accounts.services import default_branch, tax_settings
+from accounts.services import storefront_branch, tax_settings
 from catalog import merchandising, search
 from catalog import services as catalog_services
 from catalog.api.serializers import colour_payload
@@ -35,6 +35,7 @@ from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
 from core.media import media_url
 from core.pagination import StandardPagination
+from core.requests import AuthedRequest
 from customers import services as customer_services
 from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
@@ -49,6 +50,16 @@ from shipping.api.serializers import CustomerShipmentSerializer
 CART_HEADER = "HTTP_X_CART_TOKEN"
 
 
+def _decimal_or_none(raw: str | None) -> Decimal | None:
+    """A price bound from the query string, or nothing."""
+    if not raw:
+        return None
+    try:
+        return Decimal(raw)
+    except InvalidOperation:
+        return None
+
+
 def _customer_for(request: Request) -> Customer | None:
     user = request.user
     if not (user and user.is_authenticated):
@@ -60,7 +71,7 @@ def _cart_for(request: Request):
     return checkout_services.get_or_create_cart(
         token=request.META.get(CART_HEADER) or request.query_params.get("cart_token"),
         customer=_customer_for(request),
-        branch=default_branch(),
+        branch=storefront_branch(),
     )
 
 
@@ -152,7 +163,7 @@ def _product_payload(
         }
         for image in product.images.all()
     ]
-    variants = []
+    variants: list[dict[str, Any]] = []
     for variant in product.variants.all():
         if variant.status != PublishStatus.ACTIVE:
             continue
@@ -225,11 +236,15 @@ class ShopProductViewSet(viewsets.GenericViewSet):
             query=params.get("q", ""),
             category_slug=params.get("category", ""),
             brand_slugs=params.getlist("brand"),
-            price_min=params.get("price_min") or None,
-            price_max=params.get("price_max") or None,
+            # Query strings, and `search_products` is typed for `Decimal`.
+            # Django coerced these on the way into the filter, so the values
+            # that work today still work; a value that is not a number now
+            # reads as "no bound" instead of reaching the ORM as junk.
+            price_min=_decimal_or_none(params.get("price_min")),
+            price_max=_decimal_or_none(params.get("price_max")),
             attribute_filters=attribute_filters,
             in_stock_only=params.get("in_stock") == "true",
-            branch=default_branch(),
+            branch=storefront_branch(),
             sort=params.get("sort", "relevance"),
         )
 
@@ -240,7 +255,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         page = self.paginate_queryset(queryset)
         products = page if page is not None else list(queryset)
 
-        branch = default_branch()
+        branch = storefront_branch()
         variants = ProductVariant.objects.filter(product__in=products)
         snapshots = inventory_services.availability(branch=branch, variants=list(variants))
 
@@ -250,10 +265,17 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         # Merchandising signal, logged once per search rather than per page.
         query = request.query_params.get("q", "")
         if query and str(request.query_params.get("page", "1")) == "1":
+            # `GenericAPIView.paginator` is declared only as the base class,
+            # which has no page; this view sets `pagination_class`, so the
+            # concrete one is the class named above it.  Its `page` is set by
+            # the `paginate_queryset` call above and is optional only because
+            # the annotation describes the state before that call -- the same
+            # condition `page is not None` tests.
+            paginator = cast(StandardPagination, self.paginator)
             search.log_search(
                 query,
-                result_count=self.paginator.page.paginator.count
-                if page is not None
+                result_count=paginator.page.paginator.count
+                if paginator.page is not None
                 else len(payload),
             )
 
@@ -285,7 +307,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         if product is None:
             raise NotFound("That product is not available.")
 
-        branch = default_branch()
+        branch = storefront_branch()
         snapshots = inventory_services.availability(
             branch=branch, variants=list(product.variants.all())
         )
@@ -558,14 +580,14 @@ class ShopFacetsView(APIView):
             query=request.query_params.get("q", ""),
             category_slug=request.query_params.get("category", ""),
         )
-        return Response(facets(products=products, branch=default_branch()))
+        return Response(facets(products=products, branch=storefront_branch()))
 
 
 class ShopHomeView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request: Request) -> Response:
-        branch = default_branch()
+        branch = storefront_branch()
         # Hoisted out of `serialise`, which the home page calls once a row: the
         # organisation's VAT treatment is the same for all of them.
         tax = tax_settings()
@@ -835,8 +857,15 @@ class AccountAddressView(APIView):
         addresses = customer.addresses.all() if customer else []
         return Response(CustomerAddressSerializer(addresses, many=True).data)
 
-    def post(self, request: Request) -> Response:
+    def post(self, request: AuthedRequest) -> Response:
         customer = _customer_for(request)
+        if customer is None:
+            # `IsCustomer` proves the role, not that a `Customer` row exists --
+            # a staff-created account, or one whose row was unlinked, has none.
+            # `patch` and `delete` already answer 404 for that state, through
+            # `get_object_or_404(..., customer=None)`; this says the same thing
+            # rather than handing `None` to the service (D6).
+            raise NotFound("This account has no customer profile.")
         serializer = CustomerAddressSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         # Same service as the admin surface: the one-default-per-customer rule
@@ -847,7 +876,7 @@ class AccountAddressView(APIView):
         )
         return Response(CustomerAddressSerializer(address).data, status=status.HTTP_201_CREATED)
 
-    def patch(self, request: Request) -> Response:
+    def patch(self, request: AuthedRequest) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(CustomerAddress, pk=request.data.get("id"), customer=customer)
         serializer = CustomerAddressSerializer(address, data=request.data, partial=True)
@@ -857,7 +886,7 @@ class AccountAddressView(APIView):
         )
         return Response(CustomerAddressSerializer(updated).data)
 
-    def delete(self, request: Request) -> Response:
+    def delete(self, request: AuthedRequest) -> Response:
         customer = _customer_for(request)
         address = get_object_or_404(
             CustomerAddress, pk=request.query_params.get("id"), customer=customer

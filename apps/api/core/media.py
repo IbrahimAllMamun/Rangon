@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.conf import settings
-from django.http import HttpRequest, HttpResponse
+from django.http import FileResponse, HttpRequest
 from django.views.static import serve
 from rest_framework import serializers
 
@@ -43,7 +43,7 @@ def media_url(file: Any) -> str:
     return str(file.url)
 
 
-def serve_media(request: HttpRequest, path: str) -> HttpResponse:
+def serve_media(request: HttpRequest, path: str) -> FileResponse:
     """Serve an uploaded file from `MEDIA_ROOT` (wired up in `config.urls`).
 
     A thin wrapper rather than `serve` with a baked-in `document_root`, because
@@ -51,7 +51,7 @@ def serve_media(request: HttpRequest, path: str) -> HttpResponse:
     override of `MEDIA_ROOT` — a test's `tmp_path`, most obviously — could ever
     take effect.
     """
-    return serve(request, path, document_root=settings.MEDIA_ROOT)
+    return serve(request, path, document_root=str(settings.MEDIA_ROOT))
 
 
 class RelativeFileField(serializers.FileField):
@@ -64,12 +64,12 @@ class RelativeFileField(serializers.FileField):
     field with this class keeps it writable and makes the read origin-relative.
     """
 
-    def to_representation(self, value: Any) -> str:  # type: ignore[override]
+    def to_representation(self, value: Any) -> str:
         return media_url(value)
 
 
 class RelativeImageField(serializers.ImageField):
     """`RelativeFileField` for image fields: keeps Pillow's decode check."""
 
-    def to_representation(self, value: Any) -> str:  # type: ignore[override]
+    def to_representation(self, value: Any) -> str:
         return media_url(value)

@@ -37,7 +37,10 @@ class _FeedView(APIView):
     authentication_classes: list = []
     throttle_scope = "search"
 
+    # Both are set by the concrete feeds below; named here so the contract is
+    # stated on the base rather than discovered at render time.
     content_type = ""
+    filename = ""
 
     def render(self, items: list[feeds.FeedItem]) -> str:  # pragma: no cover - abstract
         raise NotImplementedError

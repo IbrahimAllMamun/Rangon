@@ -130,7 +130,9 @@ def price_cart(*, cart: Cart, shipping_method: ShippingMethod | None = None) -> 
         branch=cart.branch, variants=[item.variant for item in sellable]
     )
 
-    raw_lines = []
+    # Spelled out because `price_lines` takes an optional per-line discount and
+    # a list of the narrower element type is not a list of the wider one.
+    raw_lines: list[tuple[ProductVariant, int, Decimal | None]] = []
     for item in sellable:
         snapshot = snapshots[str(item.variant_id)]
         quantity = item.quantity
@@ -159,7 +161,7 @@ def price_cart(*, cart: Cart, shipping_method: ShippingMethod | None = None) -> 
 
     coupon_discount = ZERO
     free_shipping = False
-    if cart.coupon_id and priced_lines:
+    if cart.coupon and priced_lines:
         try:
             result = promotion_services.validate_coupon(
                 coupon=cart.coupon,
@@ -396,7 +398,7 @@ def place_order(
         customer_visible=False,
     )
 
-    if cart.coupon_id:
+    if cart.coupon:
         promotion_services.redeem(
             coupon=cart.coupon,
             order=order,

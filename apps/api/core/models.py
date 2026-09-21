@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 from django.db import models
 
@@ -79,7 +79,7 @@ class AppendOnlyModel(BaseModel):
             )
         super().save(*args, **kwargs)
 
-    def delete(self, *args: Any, **kwargs: Any) -> None:
+    def delete(self, *args: Any, **kwargs: Any) -> NoReturn:
         raise AppendOnlyError(
             f"{type(self).__name__} is append-only and cannot be deleted "
             f"(attempted on {self.pk})."

@@ -257,7 +257,7 @@ class PurchaseLineSerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=1)
     unit_cost = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)
     discount = serializers.DecimalField(
-        max_digits=14, decimal_places=2, required=False, default=0, min_value=0
+        max_digits=14, decimal_places=2, required=False, default=Decimal("0.00"), min_value=0
     )
     #: A fraction, not a percentage: 0.1500 is 15%, matching `Organization.
     #: default_tax_rate` and the shape the model column has always had. Bounded
@@ -283,7 +283,11 @@ class CreatePurchaseOrderSerializer(serializers.Serializer):
     expected_at = serializers.DateField(required=False, allow_null=True)
     invoice_number = serializers.CharField(required=False, allow_blank=True, max_length=64)
     shipping_total = serializers.DecimalField(
-        max_digits=14, decimal_places=2, required=False, default=0, min_value=Decimal("0.00")
+        max_digits=14,
+        decimal_places=2,
+        required=False,
+        default=Decimal("0.00"),
+        min_value=Decimal("0.00"),
     )
     notes = serializers.CharField(required=False, allow_blank=True)
 

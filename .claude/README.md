@@ -47,17 +47,19 @@ say which.
 ### Last recorded run of each check
 
 Each line is the most recent result the roadmap's verification log records, with its date. These are
-from the 2026-09-21 defect audit, which ran every check itself rather than quoting an older entry.
+from the four 2026-09-21 passes — the defect audit, the D40 workaround, the CI E2E move and the D6
+fix — each of which ran its checks itself rather than quoting an older entry.
 
 ```text
-pytest ................................. 1158 passed              2026-09-21
-ruff 0.8.4 check + format --check ...... clean, 207 files         2026-09-21
+pytest ................................. 1161 passed              2026-09-21
+ruff 0.8.4 check + format --check ...... clean, 208 files         2026-09-21
 tsc --noEmit ........................... clean                    2026-09-21
 vitest (TZ=UTC) ........................ 282 passed, 24 files     2026-09-21
 query budgets + concurrency ............ 38 passed                2026-09-21
-mypy ................................... 271 errors, 41 files     2026-09-21  <- D6, was "98 in 29"
-playwright, PRODUCTION standalone ...... 40 passed / 2 failed     2026-09-21
-                                         (both failures are D40: expenses, stock count)
+mypy ................................... clean, 152 source files  2026-09-21  <- D6 fixed; the
+                                         step blocks now (no `|| echo`)
+playwright, PRODUCTION standalone ...... 42 passed / 42           2026-09-21  <- after the D40
+                                         workaround
 verify_inventory / verify_accounts ..... consistent               2026-09-21
 migrations from an empty database ...... OK                       2026-09-21
 ```
@@ -120,10 +122,10 @@ waits on them — and three of the four are not code:
 4. **Automate the backup.** The restore was proven 2026-08-22 only because a hand-taken dump was 14
    minutes old. Nothing schedules `scripts/backup-db.sh`.
 
-Then the Tier 2 backlog: **D40**, a **media library**, a **reader for `audit-logs/` and
-`inventory-transactions/`**, **password self-service**, and **D6** (mypy). The **payment gateway**
-and the **SMS account** wait on provider accounts; COD works today, so only prepaid waits on the
-gateway.
+Tier 2 is down to a **media library**: D40 was worked around, the readers for `audit-logs/` and
+`inventory-transactions/` and password self-service all shipped, and **D6** closed 2026-09-21 —
+`mypy .` is clean and the CI step blocks. The **payment gateway** and the **SMS account** wait on
+provider accounts; COD works today, so only prepaid waits on the gateway.
 
 Details and the lesson from each session are in `session-history.md`; the decisions the owner still
 owes are in `open-questions.md`.

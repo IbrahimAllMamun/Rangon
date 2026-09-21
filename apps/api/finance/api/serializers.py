@@ -338,7 +338,11 @@ class ExpenseTotalsSerializer(serializers.Serializer):
 
 # --------------------------------------------------------------------------- party ledger
 
-MONEY_FIELD = {"max_digits": 16, "decimal_places": 2}
+# Annotated rather than inferred. Left as `dict[str, int]`, every
+# `DecimalField(**MONEY_FIELD)` below drew one error per parameter of
+# `DecimalField` it could not match -- 80 of D6's 271 came from these eight
+# lines alone. `Any` is the honest type for a bundle of keyword arguments.
+MONEY_FIELD: dict[str, Any] = {"max_digits": 16, "decimal_places": 2}
 
 
 class AgeingSerializer(serializers.Serializer):

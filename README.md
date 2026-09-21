@@ -28,7 +28,7 @@ Not production-ready; not deployed anywhere. As of **2026-08-18** (commit `423cd
 | Backend tests    | 167 passing, including 7 threaded concurrency tests against real PostgreSQL                                                                                       |
 | Frontend tests   | Vitest 17 passing —**not run by CI**. Playwright specs exist but [cannot run in the dev image](docs/roadmap.md#known-defects)                               |
 | Verified by hand | Migrations from empty, seeded demo data, ledger integrity, a POS sale, and a full browser purchase (add to cart → COD checkout → confirmed order)               |
-| Type checking    | `tsc` clean; `mypy` reports 98 errors and is deliberately non-blocking in CI                                                                                  |
+| Type checking    | `tsc` clean; `mypy` clean across 152 source files and **blocking** in CI since 2026-09-21 ([D6](docs/roadmap.md#known-defects))                               |
 | Biggest gaps     | No payment gateway, no live environment, most admin**write** screens are still API-only, and the wishlist/reviews/notifications features have no working UI |
 
 Phase-by-phase status, the full verification log, and the known defects (D1–D9) are in

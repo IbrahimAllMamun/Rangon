@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import re
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -68,6 +68,12 @@ class AttributeValueSerializer(serializers.ModelSerializer):
 
 
 class AttributeSerializer(serializers.ModelSerializer):
+    # drf-stubs types `instance` to cover a `many=True` serializer too, so
+    # every attribute read off it is invisible.  Declaration only: a bare
+    # annotation creates no class attribute, so `SerializerMetaclass` sees
+    # nothing new and nothing changes at runtime (D6).
+    instance: Attribute | None
+
     values = AttributeValueSerializer(many=True, read_only=True)
     #: So the admin can warn *before* the save rather than refuse after it.
     variant_usage = serializers.SerializerMethodField()
@@ -141,6 +147,12 @@ class AttributeSerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    # drf-stubs types `instance` to cover a `many=True` serializer too, so
+    # every attribute read off it is invisible.  Declaration only: a bare
+    # annotation creates no class attribute, so `SerializerMetaclass` sees
+    # nothing new and nothing changes at runtime (D6).
+    instance: Category | None
+
     # Origin-relative, like every other media URL (`core.media`).
     image = RelativeImageField(required=False, allow_null=True)
     product_count = serializers.IntegerField(read_only=True, required=False)
@@ -172,11 +184,16 @@ class CategorySerializer(serializers.ModelSerializer):
     def get_children(self, category: Category) -> list[dict[str, Any]]:
         if self.context.get("tree") is False:
             return []
-        return CategorySerializer(
-            category.children.filter(is_active=True).order_by("position", "name"),
-            many=True,
-            context=self.context,
-        ).data
+        # `many=True` builds a `ListSerializer`, whose `.data` is a list; the
+        # stub only knows the single-object `ReturnDict`.
+        return cast(
+            list[dict[str, Any]],
+            CategorySerializer(
+                category.children.filter(is_active=True).order_by("position", "name"),
+                many=True,
+                context=self.context,
+            ).data,
+        )
 
     def validate_tax_rate(self, value: Decimal | None) -> Decimal | None:
         """A category override replaces the organisation's VAT rate, and a
@@ -205,7 +222,7 @@ class CategorySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("A category cannot be its own parent.")
 
         seen = {self.instance.pk}
-        ancestor = value
+        ancestor: Category | None = value
         while ancestor is not None:
             if ancestor.pk in seen:
                 raise serializers.ValidationError(
@@ -283,6 +300,12 @@ ALLOWED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
+    # drf-stubs types `instance` to cover a `many=True` serializer too, so
+    # every attribute read off it is invisible.  Declaration only: a bare
+    # annotation creates no class attribute, so `SerializerMetaclass` sees
+    # nothing new and nothing changes at runtime (D6).
+    instance: ProductImage | None
+
     url = serializers.SerializerMethodField()
     alt = serializers.CharField(source="effective_alt", read_only=True)
     color = serializers.SerializerMethodField()
@@ -363,7 +386,12 @@ class VariantAttributeValueSerializer(serializers.ModelSerializer):
     attribute_code = serializers.CharField(source="attribute.code", read_only=True)
     attribute_name = serializers.CharField(source="attribute.name", read_only=True)
     value = serializers.CharField(source="attribute_value.value", read_only=True)
-    label = serializers.CharField(source="attribute_value.display", read_only=True)
+    # `label` is also the name of `Field.label`, the human title DRF puts in the
+    # browsable API; declaring a field by that name is legal and is what the
+    # payload publishes, but it does not match the inherited annotation (D6).
+    label = serializers.CharField(  # type: ignore[assignment]
+        source="attribute_value.display", read_only=True
+    )
     swatch = serializers.CharField(source="attribute_value.swatch", read_only=True)
 
     class Meta:
@@ -372,7 +400,8 @@ class VariantAttributeValueSerializer(serializers.ModelSerializer):
 
 
 class ProductVariantSerializer(serializers.ModelSerializer):
-    label = serializers.CharField(read_only=True)
+    # Shadows `Field.label`, as above.
+    label = serializers.CharField(read_only=True)  # type: ignore[assignment]
     attributes = VariantAttributeValueSerializer(
         source="attribute_values", many=True, read_only=True
     )
@@ -576,7 +605,9 @@ class ProductWriteSerializer(serializers.ModelSerializer):
 class GenerateVariantsSerializer(serializers.Serializer):
     selections = serializers.DictField(child=serializers.ListField(child=serializers.CharField()))
     price = serializers.DecimalField(max_digits=14, decimal_places=2)
-    cost = serializers.DecimalField(max_digits=14, decimal_places=2, required=False, default=0)
+    cost = serializers.DecimalField(
+        max_digits=14, decimal_places=2, required=False, default=Decimal("0.00")
+    )
 
 
 class ProductImportSerializer(serializers.Serializer):

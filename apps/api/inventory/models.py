@@ -45,7 +45,10 @@ RESERVATION_AFFECTING = {
 }
 
 #: Sign applied to the absolute quantity supplied by the caller.
-TRANSACTION_SIGN = {
+#: Keyed by ``str`` rather than by the enum: callers hold a validated
+#: ``transaction_type: str`` (see ``inventory.services.apply_transaction``), and
+#: ``TextChoices`` members *are* strings, so both forms hash to the same bucket.
+TRANSACTION_SIGN: dict[str, int] = {
     TransactionType.PURCHASE: 1,
     TransactionType.SALE: -1,
     TransactionType.RETURN: 1,

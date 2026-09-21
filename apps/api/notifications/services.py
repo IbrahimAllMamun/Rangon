@@ -6,6 +6,7 @@ a slow SMTP server can never delay a sale.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from django.db import transaction
@@ -60,7 +61,10 @@ def notify_staff(
         from notifications.tasks import send_notification_email
 
         for notification in created:
-            transaction.on_commit(lambda pk=str(notification.pk): send_notification_email.delay(pk))
+            # `partial` rather than a lambda with a default argument: both bind
+            # the row's id eagerly instead of closing over the loop variable,
+            # but only one of them has a type the checker can read.
+            transaction.on_commit(partial(send_notification_email.delay, str(notification.pk)))
     return created
 
 

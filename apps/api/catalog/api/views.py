@@ -21,7 +21,6 @@ from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.request import Request
 from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
@@ -62,6 +61,7 @@ from catalog.services import (
 )
 from core import audit
 from core.exceptions import Conflict, ValidationError
+from core.requests import AuthedRequest, actor
 from inventory import services as inventory_services
 
 PRODUCT_PERMISSIONS = {
@@ -96,7 +96,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
         return context
 
     @action(detail=True, methods=["get"])
-    def attributes(self, request: Request, pk: str | None = None) -> Response:
+    def attributes(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Which attributes this category uses, inherited from its ancestors.
 
         The product form asks this whenever the category changes, so a handbag
@@ -206,7 +206,7 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
         super().perform_destroy(instance)
 
     @action(detail=True, methods=["post"])
-    def move(self, request: Request, pk: str | None = None) -> Response:
+    def move(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Swap `position` with the previous/next value of the same attribute.
 
         Up/down rather than drag-and-drop, so the control is operable by
@@ -299,7 +299,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         if self.action == "retrieve":
             product = self.get_object()
-            branch = resolve_branch(self.request.user, self.request.query_params.get("branch"))
+            branch = resolve_branch(actor(self.request), self.request.query_params.get("branch"))
             context["stock"] = inventory_services.availability(
                 branch=branch, variants=list(product.variants.all())
             )
@@ -370,7 +370,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     @action(detail=True, methods=["post"], url_path="generate-variants")
-    def generate_variants(self, request: Request, pk: str | None = None) -> Response:
+    def generate_variants(self, request: AuthedRequest, pk: str | None = None) -> Response:
         product = self.get_object()
         serializer = GenerateVariantsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -390,7 +390,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
-    def publish(self, request: Request, pk: str | None = None) -> Response:
+    def publish(self, request: AuthedRequest, pk: str | None = None) -> Response:
         # Thin: the gates and the audit row belong to the service (CLAUDE.md §4).
         # It used to hand-roll the error envelope here too, which is what
         # `core.exceptions.BusinessError` and the DRF handler exist to do.
@@ -398,14 +398,14 @@ class ProductViewSet(viewsets.ModelViewSet):
         return Response(ProductDetailSerializer(product, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
-    def unpublish(self, request: Request, pk: str | None = None) -> Response:
+    def unpublish(self, request: AuthedRequest, pk: str | None = None) -> Response:
         product = self.get_object()
         product.published = False
         product.save(update_fields=["published", "updated_at"])
         return Response(ProductDetailSerializer(product, context={"request": request}).data)
 
     @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser])
-    def import_csv(self, request: Request) -> Response:
+    def import_csv(self, request: AuthedRequest) -> Response:
         """Load a catalogue from a spreadsheet.
 
         Two-step by design, and the client cannot skip the first: `dry_run`
@@ -461,7 +461,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
     ordering_fields = ["sku", "created_at"]
 
     @action(detail=False, methods=["get"])
-    def lookup(self, request: Request) -> Response:
+    def lookup(self, request: AuthedRequest) -> Response:
         """Exact-first barcode/SKU lookup shared by admin and POS."""
         from orders.services.pos import lookup_variant
 
@@ -485,7 +485,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         return Response(ProductVariantSerializer(variant, context=context).data)
 
     @action(detail=True, methods=["post"])
-    def barcode(self, request: Request, pk: str | None = None) -> Response:
+    def barcode(self, request: AuthedRequest, pk: str | None = None) -> Response:
         """Assign this variant an in-store barcode, or return the one it has.
 
         Locked, because the caller prints the number it is given. Two requests
