@@ -338,7 +338,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 26  | SEO                                   | ✅      | ✅       | Metadata, OG, sitemap, robots, canonicals, JSON-LD product + breadcrumbs. The doubled brand in product titles ([D4](#known-defects)) was fixed 2026-09-09                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: four N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15, and **POS grid search 81→5** on 2026-09-09) plus a per-keystroke POS request storm. **All ten documented budgets are now asserted** — that table had said "enforced in tests" while two of ten were, which is how the counter's own search sat at nine queries a row. Product detail's budget was raised from an unmeasured 10 to 18 deliberately. Remaining: no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. **Re-measured 2026-09-21: the suite is 42 specs and a production build passes 40**, with both failures [D40](#known-defects) — the expenses spec it was found on and the stock-count spec, which nobody had connected to it. D41 was fixed 2026-09-09, so D40 is now the only thing keeping the CI job on `next dev` |
+| 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. **Re-measured 2026-09-21: the suite is 42 specs and a production build passes 40**, with both failures [D40](#known-defects) — the expenses spec it was found on and the stock-count spec, which nobody had connected to it. D41 was fixed 2026-09-09 and D40 was worked around the same day, after which a production build ran **42/42**. **The CI job moved onto a production build on 2026-09-21**: it builds the app and serves it from the standalone `server.js` the image itself runs, so the suite now drives the artefact that ships rather than `next dev` |
 | 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 31  | Backup/recovery                       | ✅      | —       | Scripts + runbook written, and **the restore has now been rehearsed for real** — 2026-08-22, against a production database that was actually destroyed. See the verification log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 32  | Production launch                     | ⬜      | ⬜       | Blocked on`docs/operations/go-live-checklist.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -372,6 +372,77 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### CI drives the artefact that ships, 2026-09-21
+
+The third pass of 09-21, and the follow-up the D40 work left behind: the E2E job
+ran against `next dev`, which is not what any customer will ever load.
+
+**Why it mattered more than a workflow tidy.** The one production-only defect
+that reached `main` — [D74](#known-defects) — made `/login` and `/checkout`
+inert while `tsc`, lint, the backend suite and this very job were all green. A
+dev server cannot see that class of fault. [D40](#known-defects) was the second,
+and it is what had kept the job on `next dev` since 2026-08-31.
+
+**Three traps between a passing local build and a passing CI job**, each of
+which fails in a way that does not name its cause:
+
+* `next.config.ts` sets `output: "standalone"`, and **`next start` refuses to
+  serve that build**. The image runs `server.js` directly; the job now does too.
+* The standalone output carries the server and its `node_modules` but **not
+  `.next/static` or `public`**. Without copying them in, the pages return 200
+  and every asset 400s, which reads as a broken app rather than a staging step.
+* `server.js` binds `process.env.HOSTNAME`, and **a runner sets that to its own
+  hostname**, so the server listens somewhere `127.0.0.1` never reaches. The
+  same one-line trap the production image has (`ENV HOSTNAME=0.0.0.0`).
+
+**And one that cost most of the pass, with two wrong diagnoses on the way.**
+With the job switched over, the checkout specs failed about half the time —
+`POST /shop/cart/` answering **400**, the drawer never opening, and the button
+still cheerfully reading *"Added to cart"*, because `ProductBuyPanel.handleAdd`
+sets that state without checking whether the add succeeded.
+
+The cause is the suite's own `E2E_SEED_CMD`. `seed_demo --reset` rebuilds the
+catalogue and **every variant comes back with a new UUID**; a production server
+already running keeps serving the old ones from `.next/cache`, and the API
+rightly refuses them. `next dev` never showed this because it does not hold that
+cache. The fix is ordering, not code: seed first, start the server after, and do
+not reseed underneath it. The job's own "Migrate and seed" step already leaves
+the database pristine a few steps earlier, so `E2E_SEED_CMD` is simply not set
+here — it exists for running the suite twice against one database locally.
+
+Two diagnoses were wrong before that one was right, and both are worth
+recording. The first blamed hydration — a click landing on a button React had
+not wired up yet — and a retry that should have fixed that did not: still 50%.
+The second *looked* like proof of the stale-id theory and was not: it compared
+the API's first variant id against the first UUID in the page HTML, which are
+different things, because a product page is full of product, image and category
+ids too. Comparing the **set** of current variant ids against the page settled
+it in one command: 0 of 4 present after a reseed.
+
+**A spec was genuinely wrong, and a production build is what found it.** The D4
+title spec read `page.title()` immediately after a client-side navigation.
+`page.title()` is a plain read and does not auto-wait, so it saw the empty title
+of `loading.tsx`. Polling `toContain` and then re-reading was not enough either
+— the poll saw a good title and the second read saw a different one, failing on
+a count of 0. It now polls the property the spec is actually about: the shop's
+name appears exactly once, decided by a single read.
+
+**Measured, not assumed — and the last wobble was this machine, not the job.**
+Before the ordering fix the checkout specs failed 4 of 6 runs. After it a full
+cycle — seed, fresh cache, start, run — reaches **42/42**. Three back-to-back
+cycles then went 42, 41, 40, which looked like the fix being unreliable and was
+not: `checkout` is a **scoped** throttle at **20/hour** that `DJANGO_THROTTLE_ANON`
+does not touch, one suite run spends about four of them, and by then this session
+had made 28 checkout attempts and collected 8 `429`s. A CI job gets a fresh Redis
+and spends four of twenty. The symptom is worth knowing because it does not look
+like throttling from the test's side — it fails as a locator timeout, with
+nothing saying 429 — so it is written up in
+[.claude/environment.md § 15](../.claude/environment.md).
+
+The habit that got there is the one this file keeps writing down, applied twice
+in one afternoon: *read what the running system serves.* Two plausible theories
+died against one `curl` of the page and one of the API.
 
 ### D40 worked around, and the admin stopped lying after a write, 2026-09-21
 
@@ -415,8 +486,8 @@ not to have landed, rather than on every send, cancel and receive.
 
 **A production build is 42/42 for the first time.** It was 40/42 that morning, both failures D40 —
 the expenses spec it was found on, and the stock-count spec nobody had connected to it. That was the
-whole reason the CI job runs against `next dev`; moving it is now a workflow edit rather than a
-defect.
+whole reason the CI job ran against `next dev`. **It was moved the same day** — the job builds
+the app and serves the standalone `server.js`, so CI now drives the artefact that ships.
 
 **One thing this pass changed that it did not set out to.** Getting to 42/42 first produced 41/42,
 with a *storefront* spec failing that had passed before — and a change that touches only admin
@@ -1561,7 +1632,7 @@ Do not describe any of these as working.
 | Area                                    | State                                                                                                                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~Playwright (`npm run test:e2e`)~~ | **Proven repeatable.** 20/20 against `next dev` with a reseed, 2026-08-31, and in CI from the same day. **The suite is 42 specs now, not 20** (desktop + mobile projects). On 2026-09-21 it ran **40 passed / 2 failed against a production build** — both failures [D40](#known-defects) — and after that fix, **42/42 against a production build**, which is the first time the whole suite has been green against the artefact that actually ships. `apps/web/Dockerfile.dev` is still alpine, so [D7](#known-defects) stands *for the dev container* only |
-| ~~Vitest and Playwright in CI~~         | **Both wired in.** Vitest since 2026-08-28; the Playwright job landed 2026-08-31 and runs the suite against `next dev` with a reseed. It still runs against `next dev` rather than a production build, which was [D40](#known-defects). With D40 worked around, a production build is **42/42** (2026-09-21), so nothing is left in the way of moving the CI job onto one — that switch is the follow-up, and it is now a workflow edit rather than a defect |
+| ~~Vitest and Playwright in CI~~         | **Both wired in, and the Playwright job now runs against a production build.** Vitest since 2026-08-28; the Playwright job landed 2026-08-31. It used `next dev` because [D40](#known-defects) failed two specs against a real build; with D40 worked around it ran 42/42, and the job was switched on 2026-09-21 — `next build`, then the standalone `server.js`, with `.next/static` and `public` copied in beside it the way the Dockerfile does. `next start` cannot serve a `standalone` build, and the server binds `process.env.HOSTNAME`, so the job overrides it to `0.0.0.0` |
 | ~~Admin**write** screens, signed in~~ | **Proven 2026-08-28.** A real Chromium signed in as the owner and drove all five new screens: a customer created, an address and a note added, two coupons created, a zone and a method created, a review rejected and re-approved. 13 writes, all landing. The organization and branch editors are still only read-anonymously-redirected |
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
@@ -1744,9 +1815,10 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
    shipping and review moderation shipped 2026-08-28; categories/brands/attributes and users/roles
    followed on 2026-08-31 as `/admin/taxonomy` and `/admin/staff`. Nothing is API-only any more —
    see [§ Still API-only](#still-api-only-no-ui).
-3. ~~**Unblock and run E2E**, then wire both Vitest and Playwright into `ci.yml`.~~ Done. Vitest
-   landed 2026-08-28 and the Playwright job 2026-08-31. What is left is running the suite against a
-   **production build** in CI, which waits on [D40](#known-defects).
+3. ~~**Unblock and run E2E**, then wire both Vitest and Playwright into `ci.yml`.~~ Done, and
+   **finished 2026-09-21**: Vitest landed 2026-08-28, the Playwright job 2026-08-31, and the job now
+   runs against a **production build** rather than `next dev`. That last step waited on
+   [D40](#known-defects) and took a workflow edit once D40 was worked around.
 4. ~~**Restore rehearsal.**~~ Done 2026-08-22, for real (see the verification log). The script it
    used could not run where the docs pointed it (D14); that is fixed as of 2026-09-09 — both
    scripts now run the client inside the database container, so the version can never drift again.
@@ -1852,7 +1924,7 @@ Ordered by value per day of work.
 
 | # | Item | Why now |
 |---|---|---|
-| 1 | ~~**[D40](#known-defects) — `router.refresh()` applies the payload it fetched, or does not**~~ | **Worked around 2026-09-21.** Not root-caused — it is upstream and vercel/next.js#77504 was closed as not planned — but the screens are correct now and a production build is 42/42. Six hypotheses ruled out, recorded so nobody repeats them. The follow-up is the cheap half: move the CI E2E job off `next dev` onto a production build, which is now a workflow edit |
+| 1 | ~~**[D40](#known-defects) — `router.refresh()` applies the payload it fetched, or does not**~~ | **Worked around 2026-09-21.** Not root-caused — it is upstream and vercel/next.js#77504 was closed as not planned — but the screens are correct now and a production build is 42/42. Six hypotheses ruled out, recorded so nobody repeats them. **The follow-up landed the same day**: the CI E2E job now runs against a production build rather than `next dev`, so the class of defect D40 belongs to — and D74 before it — is finally inside CI's reach |
 | 2 | **Media library** | Worth having once there is a real photo library to manage. Before Tier 0 #3 there is nothing to organise |
 | 3 | ~~**A reader for `audit-logs/` and `inventory-transactions/`**~~ | **Shipped 2026-09-19** — `/admin/audit` and `/admin/inventory/movements`. Auditing the endpoints first found the audit log unscoped by branch ([D85](#known-defects)) |
 | 4 | ~~**Password self-service** (`auth/password/change/`)~~ | **Shipped 2026-09-19** — `/admin/account`. Auditing the endpoint first found that no password change ended a session ([D86](#known-defects)) and that the current password could be guessed at 600 a minute ([D87](#known-defects)) |

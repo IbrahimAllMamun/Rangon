@@ -421,6 +421,71 @@ current timezone — `reports.services._day_start` is the pattern.
 
 A green test run on this host is not evidence that a date is right.
 
+## 15. `seed_demo --reset` under a running production server serves dead ids
+
+Added 2026-09-21, after it cost most of a session and produced two wrong
+diagnoses before the right one.
+
+`seed_demo --reset` rebuilds the catalogue, and every product and variant comes
+back with a **new UUID**. A `next dev` server notices. A **production** server
+does not: `apiServer` caches reads that pass a `revalidate`, Next keeps them in
+`.next/cache` on disk, and nothing in a reseed invalidates them. So the product
+page goes on serving variant ids that no longer exist.
+
+What that looks like from the outside is nothing like a cache problem:
+
+```text
+POST /api/v1/shop/cart/  400     ("That product is not available.")
+```
+
+The *button still says "Added to cart"* — `ProductBuyPanel.handleAdd` sets that
+state without checking whether the add succeeded — while the header still reads
+"Cart, empty" and the drawer never opens. Every checkout spec then fails, about
+half the time, with a locator timeout on a dialog that was never going to open.
+
+Check it directly rather than inferring, and compare **sets**, not first
+matches — comparing "the API's first variant" against "the first UUID in the
+HTML" is meaningless, because the page is full of product, image and category
+ids too, and that mistake sent this investigation down a blind alley:
+
+```bash
+curl -s "$API/shop/products/<slug>/" -o /tmp/p.json
+curl -s "$WEB/product/<slug>"        -o /tmp/p.html
+python3 - <<'EOF'
+import json, re
+ids = {v["id"] for v in json.load(open("/tmp/p.json"))["variants"]}
+page = set(re.findall(r"[0-9a-f-]{36}", open("/tmp/p.html").read()))
+print("fresh" if ids <= page else "STALE — the page serves variants that are gone")
+EOF
+```
+
+**The ordering is the fix: seed first, start the server after.** That is why the
+CI E2E job does not set `E2E_SEED_CMD` — the suite would reseed underneath a
+server that had already started. `E2E_SEED_CMD` is for running the suite twice
+against one database locally, and there it needs the server restarted (and
+`.next/cache` cleared) after the reseed to mean anything.
+
+### And the suite cannot be run many times an hour here
+
+`checkout: 20/hour` is a **scoped** throttle, and `DJANGO_THROTTLE_ANON` does
+not touch it. One full suite run spends about four of those twenty, so the fifth
+run in an hour starts failing the two checkout specs — and it fails them the way
+a flaky test fails, with a locator timeout, not with anything that says 429.
+Measured while proving out the CI switch: 28 checkout attempts in one session,
+4 of them refused.
+
+This is an artefact of running the suite repeatedly on one machine. A CI job
+gets a fresh Redis and spends four. If you are iterating locally and the
+checkout specs start failing for no reason, check before you debug:
+
+```bash
+grep -aoE '"POST /api/v1/shop/checkout/[^"]*" 429' /path/to/api.log | wc -l
+```
+
+Wait out the hour, or flush the throttle counters from Redis.
+
+---
+
 ## Commands that actually work here
 
 ```bash

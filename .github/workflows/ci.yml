@@ -235,14 +235,45 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome*
           npx playwright install --with-deps chromium
 
+      # The suite drives the artefact that ships, not `next dev`. It used to
+      # run against the dev server because two specs failed against a
+      # production build (D40 and D41); D41 was a race in the spec, fixed
+      # 2026-09-09, and D40 was worked around 2026-09-21, after which a
+      # production build ran 42/42. A production-only defect has reached `main`
+      # before -- D74 made `/login` and `/checkout` inert in a production build
+      # while `tsc`, lint, the backend suite and this job were all green -- and
+      # `next dev` can never see that class of fault.
+      #
+      # `NEXT_PUBLIC_*` are inlined at build time, so they have to be present
+      # here rather than only when the server starts; both come from the job's
+      # `env` block above.
+      - name: Build the storefront
+        working-directory: apps/web
+        run: npx next build
+
       - name: Start the storefront
         working-directory: apps/web
         run: |
-          nohup npx next dev --port 4000 > /tmp/web.log 2>&1 &
+          # `next.config.ts` sets `output: "standalone"`, and `next start`
+          # refuses to serve that build -- the image runs `server.js` directly,
+          # so this does too. The standalone output carries the server and its
+          # node_modules but not `.next/static` or `public`, which Next expects
+          # to be copied in beside it (the Dockerfile does the same).
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
+
+          # `server.js` binds `process.env.HOSTNAME`, and a runner sets that to
+          # its own hostname, so without this the server listens somewhere
+          # 127.0.0.1 never reaches and every spec times out on a healthy
+          # process. Same one-line trap as the production image (environment.md
+          # section 11).
+          cd .next/standalone
+          HOSTNAME=0.0.0.0 PORT=4000 nohup node server.js > /tmp/web.log 2>&1 &
+
           for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/ || true)
             if [ "$code" = "200" ]; then
-              echo "Storefront ready"
+              echo "Storefront ready (production build)"
               exit 0
             fi
             sleep 2
@@ -251,11 +282,23 @@ jobs:
           cat /tmp/web.log
           exit 1
 
+      # Deliberately no `E2E_SEED_CMD` here. That variable makes the suite
+      # reseed itself at start-up, which is what a developer wants when they
+      # run it twice on one database -- but `seed_demo --reset` rebuilds the
+      # catalogue with new UUIDs, and a production server started beforehand
+      # goes on serving a product page carrying the *old* variant ids. Adding
+      # one to the cart is then refused with 400 ("That product is not
+      # available"), the drawer never opens, and the checkout specs fail about
+      # half the time. `next dev` never showed this because it does not hold
+      # that cache.
+      #
+      # The database is already pristine: "Migrate and seed" above runs the
+      # same `seed_demo --reset` a few steps earlier, and it runs *before* the
+      # storefront starts, which is the ordering that matters. This job runs
+      # the suite exactly once against a fresh container, so the repeatability
+      # that `E2E_SEED_CMD` buys is not needed here.
       - name: Run the suite
         working-directory: apps/web
-        env:
-          E2E_SEED_CWD: ${{ github.workspace }}/apps/api
-          E2E_SEED_CMD: python manage.py seed_demo --reset
         run: npx playwright test
 
       - name: Upload the report
