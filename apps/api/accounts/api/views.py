@@ -12,7 +12,6 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
@@ -47,6 +46,7 @@ from core.dates import parse_window
 from core.middleware import get_audit_context
 from core.models import AuditLog
 from core.requests import AuthedRequest, actor
+from core.throttling import ScopedRateThrottle
 from customers.models import Customer, CustomerType
 
 

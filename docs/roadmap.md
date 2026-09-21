@@ -11,6 +11,17 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 
 Last updated: **2026-09-21**.
 
+**[D88](#known-defects): every rate limit could be bypassed with one header, and the audit trail
+recorded whatever address the caller typed.** `X-Forwarded-For` is written by the client; DRF's stock
+throttles key on the whole of it when `NUM_PROXIES` is unset, and `AuditContextMiddleware` took its
+left-most entry. Measured against `main`: **40 wrong-password posts to `/auth/login/`, none refused**,
+each logged under a different address of the caller's choosing — against a control that was refused
+at the eleventh. Both now resolve the caller through `core.ip.client_ip`, which counts
+`DJANGO_TRUSTED_PROXY_HOPS` entries from the **right**. The same 40 attempts are now refused at the
+eleventh and Redis holds 3 buckets where it held 120. Found by auditing a control rather than by a
+complaint, which is the fourth time that has paid. Details in
+[§ D88 fixed](#d88-fixed-the-rate-limits-were-decorative-2026-09-21).
+
 **[D6](#known-defects) is fixed and `mypy .` now blocks.** 271 errors in 41 files to **0 in 152**,
 and the trailing `|| echo` is off the CI step, so the next error to arrive fails the build instead of
 printing a warning nobody reads. Most of the 271 were one sentence repeated: DRF types `request.user`
@@ -384,6 +395,88 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### D88 fixed: the rate limits were decorative, 2026-09-21
+
+The fifth pass of 09-21, and the first one this file did not ask for: with
+Tier 1 empty and Tier 2 down to an item that waits on photography, the backlog
+had nothing to hand over. So a control was audited instead of a feature built,
+which is the habit that produced D59/D60, D85–D87 and the two defects inside
+the D6 pass.
+
+**What was measured, against `main`, with the API and Redis running.**
+
+```text
+control: 14 wrong passwords, no header ... 401 x10 then 429 x4   <- the limit works
+bypass:  40 wrong passwords, X-Forwarded-For: 203.0.113.$i
+                                         ... 401 x40, none refused
+redis after the bypass run ............... 120 keys (40 buckets x 3 classes)
+audit rows for those 40 attempts ......... 40 distinct attacker-chosen addresses
+```
+
+`auth` is 10/min. It is the limit between one address and every password in a
+word list, and it did not exist for anyone who sent a header. The same is true
+of `checkout` (20/hour), `search` (120/min) and the general `anon` rate.
+
+**Why.** DRF's `BaseThrottle.get_ident`, with `NUM_PROXIES` unset — it never
+was — ends at `return ''.join(xff.split()) if xff else remote_addr`. The header
+is client-supplied and Nginx *appends* to it rather than replacing it, so the
+caller controls a prefix of the throttle key. `AuditContextMiddleware._client_ip`
+had the mirror-image fault: it took the **left-most** entry, commented "the
+original client", which is exactly the part the client writes.
+
+**The fix is one rule with one implementation.** `core.ip.client_ip` counts
+`settings.TRUSTED_PROXY_HOPS` entries from the right — the entries our own
+proxies appended — and falls back to `REMOTE_ADDR` when the header holds fewer
+than that, because a request that did not come the way we were told is not one
+to take a hint from. `core.throttling` subclasses the three DRF throttles to
+key on it; the audit middleware calls it directly. A test asserts the two agree
+on the same request, because two implementations of this rule is how the defect
+came to exist in two places at once.
+
+**The default is 0, and that is the interesting decision.** Too low, callers
+share a bucket and honest traffic gets 429s — visible within the hour. Too high,
+the limit silently stops applying. `docker-compose.prod.yml` sets 1 beside the
+Nginx that is the only service publishing a port; put a CDN in front and it is
+2. `docs/operations/security.md` carries the rule and the topology table.
+
+**A first draft of the tests passed against `main` and proved nothing.** It
+aimed at `auth/password/change/`, and `ScopedRateThrottle` keys on
+`request.user.pk` once the caller is authenticated — so D87's limit was never
+reachable this way, and the test was measuring the wrong endpoint. Anonymous
+requests are the whole of it. Corrected, and re-expressed without the new
+modules, the behaviour tests fail on `main` and their control passes:
+
+```text
+test_..._by_changing_the_header ....... assert [401, 401] == [429, 429]
+test_..._reach_the_audit_trail ........ assert '203.0.113.9' != '203.0.113.9'
+test_control_one_address_is_limited ... passed -- main does limit a caller
+                                        who does not vary the header
+```
+
+**A second draft passed alone and failed inside the suite**, which is the same
+shape of mistake one layer down. `APIView.throttle_classes` is read from
+`api_settings` once, at import, so `override_settings(REST_FRAMEWORK=...)` never
+reaches a view that is already imported, and the result depended on what had run
+first. The tests patch the view's own attribute now.
+
+**Verified live after the fix**, same probe as the measurement above:
+
+```text
+40 posts, each a different X-Forwarded-For ... 401 x10 then 429 x30
+redis buckets ................................ 3, not 120
+hops=1, forged prefix + proxy entry .......... 401 x10 then 429
+hops=1, a second real caller ................. 401 -- not collateral damage
+audit rows ................................... 198.51.100.7, never 203.0.113.*
+```
+
+```text
+pytest ................................. 1177 passed, 4m10s   (1161 + 16 new)
+mypy . ................................. clean, 154 source files
+ruff check . (0.8.4, the pinned one) ... All checks passed
+ruff format --check . .................. 211 files already formatted
+makemigrations --check --dry-run ....... No changes detected
+```
 
 ### D6 fixed, and the type gate now blocks, 2026-09-21
 
@@ -1722,7 +1815,7 @@ Do not describe any of these as working.
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets **are** asserted — `tests/test_performance.py` and `tests/test_concurrency.py` ran 38 passed on 2026-09-21. What is still missing is a **load test**: a budget is a query count, not a latency under concurrency, and nothing has driven listing, checkout or POS search at peak |
-| Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**                                                  |
+| Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**. 2026-09-21 is the argument for one: auditing a single control found every rate limit bypassable by a header and the audit trail writable by the caller ([D88](#known-defects)), both of which this table and `security.md` had listed as present |
 | Deployment                              | Compose prod stack + green CI;**no live environment** — nothing has ever been deployed                                                     |
 
 ## Known defects
@@ -1732,6 +1825,8 @@ process gaps. D1, D2, D3, D4, D5, D10, D11, D12, D13, D16, D17, D41, D43a, D43b,
 and D49-D60 have since been fixed and are struck through.
 
 **Everything from D49 on was found by a complaint or by an audit, not by diagnosis.**
+D88 is the first found with no prompt at all: the backlog had run out of unblocked work, so a
+control was audited instead — and the control was decorative.
 D49-D55 came from one sentence — the owner said the dashboard's date filters did nothing —
 behind which sat seven separate causes, only one of them (D54, the seed) the obvious one.
 D56-D58 were three more the owner could see: the sidebar, the header, the loaders. D59 and D60
@@ -1835,6 +1930,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D85~~ | ~~**The audit log was the one staff list with no branch scoping.**~~ **Fixed 2026-09-19.** `AuditLogViewSet` had a class-level queryset and no `get_queryset`, so no `branch_queryset` call — while orders, inventory, purchasing, finance and shipments all scope. `ACCOUNTANT` holds `audit.view` and is not cross-branch, so an accountant assigned to one branch could list every other branch's refunds, payments, stock adjustments and transfers, with the values before and after. Twenty-five services record the branch on their entries; none of it was being read. A branch-bound reader now sees their branch's entries and the organisation-wide ones (no branch: catalogue, settings, staff, sign-ins) — the second half a documented default, [business-rules §8.1](business-rules.md#81-reading-the-trail) | `apps/api/accounts/api/views.py` | Found by auditing the endpoint before building the screen over it |
 | ~~D86~~ | ~~**Changing a password signed nobody out.**~~ **Fixed 2026-09-19.** Neither `PasswordChangeView` nor `update_staff_user` touched a token: every refresh token already issued rotated on for up to fourteen days, and every access token lived out its half hour. A person who changed a password because someone else might know it — the one reason to change it in a hurry — left that someone signed in, and an owner's reset from `/admin/staff` did the same. `docs/operations/security.md` listed "logout everywhere on password change" as an account-takeover control. Both now blacklist every refresh token the account holds (`accounts.services.end_sessions`), and `SIMPLE_JWT["CHECK_REVOKE_TOKEN"]` puts a hash of the password in every token so access tokens die at once too. The refresh endpoint also minted fresh tokens for a deactivated account and never looked at the password claim, which would have reopened the hole: it refuses both now | `apps/api/accounts/services.py`, `apps/api/accounts/api/views.py`, `apps/api/config/settings/base.py` | Tokens issued before the fix carry no claim; a refresh token like that is honoured once and exchanged for one that does, so the rollout signs nobody out beyond, at most, one page load |
 | ~~D87~~ | ~~**The current password could be guessed at 600 a minute, silently.**~~ **Fixed 2026-09-19.** `PasswordChangeView` set no throttle scope, so it ran at the general user rate, while the sign-in form is held to ten a minute — and a wrong guess wrote nothing, while a wrong sign-in writes `LOGIN_FAILED`. A stolen session is exactly when someone would try to learn the real password this way. Scoped to `auth` (ten a minute, per account) and audited. `config/settings/test.py` disables throttling and cites `tests/api/test_throttling.py` as where limits are asserted; that file has never existed, so no rate limit had a test until this one | `apps/api/accounts/api/views.py` | — |
+| ~~D88~~ | ~~**Every rate limit was bypassable with one header, and the audit trail believed it.**~~ **Fixed 2026-09-21.** `X-Forwarded-For` is written by the client and *appended to* by each proxy, so the caller owns a prefix of it. DRF's `BaseThrottle.get_ident` keys on the whole header when `NUM_PROXIES` is unset — it never was — and `AuditContextMiddleware._client_ip` took its left-most entry, commented *"the original client"*, which is precisely the part the client writes. **Measured on `main`: 40 wrong-password posts to `/auth/login/`, each with a different header, none refused** (control: refused at the eleventh), and all 40 logged under addresses of the caller's choosing. That is `auth` at 10/min — the limit between one address and a word list — plus `checkout` 20/hour, `search` 120/min and the general `anon` rate. D87 was **not** reachable this way: `ScopedRateThrottle` keys on `request.user.pk` once authenticated, and a first draft of the tests aimed there and passed against `main`, proving nothing. Anonymous requests are the whole of it. Fixed with one rule and one implementation — `core.ip.client_ip` counts `DJANGO_TRUSTED_PROXY_HOPS` entries from the **right** and falls back to `REMOTE_ADDR` when the header is shorter than that; `core.throttling` keys the three DRF throttles on it and the audit middleware calls it directly, with a test that the two agree. Default 0 (no proxy, ignore the header); `docker-compose.prod.yml` sets 1 beside the Nginx that is the only service publishing a port. Re-measured after: refused at the eleventh, 3 Redis buckets where there were 120, and the trail records the proxy's entry. See [§ D88 fixed](#d88-fixed-the-rate-limits-were-decorative-2026-09-21) | `apps/api/core/ip.py`, `apps/api/core/throttling.py`, `apps/api/core/middleware.py`, `apps/api/config/settings/base.py`, `docker-compose.prod.yml` | Found by auditing a control, not by a complaint. The limits read as present in `security.md` and in CI the whole time |
 
 ## Still API-only (no UI)
 
@@ -1918,7 +2014,10 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
    152, and the `|| echo` is off the CI step, so `mypy .` blocks. The count had grown from 98 in 29
    precisely because the step never failed a build; that cannot happen again. Two real defects came
    out of the pass — see [§ D6 fixed](#d6-fixed-and-the-type-gate-now-blocks-2026-09-21).
-7. **Independent security review.**
+7. **Independent security review.** Worth more than this line used to suggest: on 2026-09-21 an
+   audit of one control found every rate limit bypassable by a forged header and the audit trail
+   writable by the caller ([D88](#known-defects)) — both listed as implemented in
+   [operations/security.md](operations/security.md), and both green in CI throughout.
 8. **An SMS account.** The layer itself shipped 2026-09-10 — provider interface, message log, segment counting, allowlist, and the three messages that earn their cost (confirmed, shipped, refunded). What is left is not code: choose a Bangladeshi aggregator, get a masked sender ID approved (days to weeks), and set `SMS_PROVIDER`. Writing the provider class is an afternoon. [operations/sms.md](operations/sms.md) says what to ask them for.
 9. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired), and real
    product photography for the seed (D9).

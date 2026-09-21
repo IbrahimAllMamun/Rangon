@@ -115,6 +115,15 @@ Nginx terminates TLS, redirects HTTP→HTTPS, sets security headers (HSTS, `X-Co
 web. If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service
 and record that decision here rather than running two proxies.
 
+**Whatever the topology, `DJANGO_TRUSTED_PROXY_HOPS` must equal the number of proxies in front of
+Django.** Every rate limit, and the audit trail's `ip_address`, count that many `X-Forwarded-For`
+entries from the right; anything further left is written by the caller. One managed load balancer
+instead of this Nginx is still 1. A CDN or tunnel in front of a proxy is 2. Set it too high, or
+leave it at the default 0 behind a proxy, and the limits stop doing their job in one direction or
+the other — [security.md](security.md#deploying-behind-a-proxy) has the table and the two rules, and
+[D88](../roadmap.md#known-defects) is what happens without them. Django must also be unreachable
+around the proxy, or a direct request carries no trusted entry at all.
+
 A worked example of exactly that: [webuzo-deployment.md](webuzo-deployment.md), where the panel's own
 web server terminates TLS and the project's Nginx container is not used. It also recorded three defects
 in the shipped prod stack that stopped a first deploy. Two are fixed as of 2026-09-09: the Nginx

@@ -34,6 +34,12 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DJANGO_DEBUG: "0"
+      # One proxy in front of Django -- the nginx below, which is the only
+      # service that publishes a port, so nothing reaches the API around it.
+      # Without this the rate limits key on the whole client-supplied
+      # `X-Forwarded-For` and a caller varying one header is never throttled.
+      # Put a CDN or load balancer in front of nginx and this becomes 2.
+      DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
     read_only: true
     tmpfs:
       - /tmp

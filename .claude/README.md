@@ -47,12 +47,12 @@ say which.
 ### Last recorded run of each check
 
 Each line is the most recent result the roadmap's verification log records, with its date. These are
-from the four 2026-09-21 passes — the defect audit, the D40 workaround, the CI E2E move and the D6
-fix — each of which ran its checks itself rather than quoting an older entry.
+from the five 2026-09-21 passes — the defect audit, the D40 workaround, the CI E2E move, the D6 fix
+and D88 — each of which ran its checks itself rather than quoting an older entry.
 
 ```text
-pytest ................................. 1161 passed              2026-09-21
-ruff 0.8.4 check + format --check ...... clean, 208 files         2026-09-21
+pytest ................................. 1177 passed              2026-09-21
+ruff 0.8.4 check + format --check ...... clean, 211 files         2026-09-21
 tsc --noEmit ........................... clean                    2026-09-21
 vitest (TZ=UTC) ........................ 282 passed, 24 files     2026-09-21
 query budgets + concurrency ............ 38 passed                2026-09-21
@@ -122,9 +122,11 @@ waits on them — and three of the four are not code:
 4. **Automate the backup.** The restore was proven 2026-08-22 only because a hand-taken dump was 14
    minutes old. Nothing schedules `scripts/backup-db.sh`.
 
-Tier 2 is down to a **media library**: D40 was worked around, the readers for `audit-logs/` and
-`inventory-transactions/` and password self-service all shipped, and **D6** closed 2026-09-21 —
-`mypy .` is clean and the CI step blocks. The **payment gateway** and the **SMS account** wait on
+Tier 2 is down to a **media library**, and that waits on Tier 0 #3 (real photos), so **the written
+backlog has no unblocked work left**: D40 was worked around, the readers for `audit-logs/` and
+`inventory-transactions/` and password self-service all shipped, and **D6** closed 2026-09-21.
+That is what produced **D88** the same day — with nothing to build, a control was audited instead,
+and every rate limit turned out to be bypassable with one header. The **payment gateway** and the **SMS account** wait on
 provider accounts; COD works today, so only prepaid waits on the gateway.
 
 Details and the lesson from each session are in `session-history.md`; the decisions the owner still

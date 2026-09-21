@@ -83,7 +83,11 @@ neither of them is a money or data-integrity bug:**
 
 Closed on 2026-09-21: **D6** — mypy was 271 errors in 41 files, not the 98 this table used to quote,
 because the CI step ran with `|| echo` and had never blocked. It is 0 errors now and the step
-blocks. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
+blocks. **D88** — every rate limit could be bypassed by varying `X-Forwarded-For`, and the audit
+trail recorded whatever address the caller sent: measured at 40 unrefused password guesses against
+a control refused at the eleventh. Both now resolve the caller through one helper that counts
+trusted proxy hops from the right; `DJANGO_TRUSTED_PROXY_HOPS` must match the deployment, and
+`docs/operations/security.md` has the table. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
 the new payload and discarded it, so `refreshAfterWrite()` now verifies the server render actually
 changed and reloads when it did not. The root cause is upstream and still unknown.
 
