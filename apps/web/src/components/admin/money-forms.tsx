@@ -19,6 +19,7 @@ import {
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Account } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 function label(account: Account) {
   return `${account.name} — ${money(account.balance)}`;
@@ -84,7 +85,7 @@ export function TransferForm({
       setAmount("");
       setNotes("");
       onDone?.();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "tr-amount"));
     } finally {
@@ -266,7 +267,7 @@ export function MovementForm({
       setAmount("");
       setReason("");
       onDone?.();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "mv-amount"));
     } finally {

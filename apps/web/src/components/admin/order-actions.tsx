@@ -16,6 +16,7 @@ import {
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Account, Order, OrderStatus } from "@/lib/api/types";
 import { humanise, money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 /**
  * Status changes, payment capture and refunds.
@@ -60,7 +61,7 @@ export function OrderActions({
     setError(null);
     try {
       await work();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "That action could not be completed.");
     } finally {

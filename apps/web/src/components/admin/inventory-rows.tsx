@@ -10,6 +10,7 @@ import { Button, ErrorSummary, Field, Input, Textarea } from "@/components/ui/pr
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { InventoryRow } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 type FieldError = { field: string; message: string };
 
@@ -179,7 +180,7 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
         },
       });
       onDone();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       if (caught instanceof ApiError) {
         const fieldErrors = caught.fieldErrors();

@@ -19,8 +19,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // this just avoids showing an empty shell.
   if (user.role === "CUSTOMER") redirect("/");
 
+  // Re-stamped on every server render, which is how `refreshAfterWrite` can
+  // tell a `router.refresh()` that landed from one the browser threw away
+  // (D40). Cheap, inert, and invisible; remove it only with that helper.
   return (
-    <div data-surface="admin">
+    <div data-surface="admin" data-render-id={String(Date.now())}>
       <AdminShell user={user}>{children}</AdminShell>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { Ban, PackageCheck, Send, Undo2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 
 import {
@@ -31,6 +32,7 @@ import {
 } from "@/lib/commerce/purchase-order";
 import { cn } from "@/lib/cn";
 import { money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 export type OrderStatus =
   | "DRAFT"
@@ -76,6 +78,7 @@ export function PurchaseActions({
   const [returnNotes, setReturnNotes] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -154,29 +157,19 @@ export function PurchaseActions({
   }
 
   /**
-   * Call the endpoint, then reload the page outright.
+   * Call the endpoint, then make sure the screen shows the result.
    *
-   * `router.refresh()` is unreliable on this screen and it was measured, not
-   * guessed: receive the goods, read the page without reloading, and it still
-   * showed the un-received state in **3 runs out of 5** — bimodal, landing in
-   * ~220 ms or never at all, even given 45 seconds. The server had re-rendered
-   * correctly every time (the RSC response carried the new receipt); the
-   * browser simply discarded it. A manual reload always showed the truth.
-   *
-   * Two explanations were tested and **both were wrong**, recorded so nobody
-   * spends the time again: moving `router.refresh()` after the local state
-   * updates so it could not be interrupted (still 2/5), and disabling the
-   * admin sidebar's link prefetching, which `force-dynamic` turns into a
-   * storm of full server renders (0/5, no better).
-   *
-   * So: a real reload. These three actions are deliberate, rare, and two of
-   * them write to the inventory ledger — a screen that says "not received"
-   * about stock now sitting on the shelf is far worse than ~300 ms. Elegance
-   * loses to being right. The underlying flake is D77 and is not fixed here.
+   * This used to reload the page outright, because `router.refresh()` left it
+   * showing the un-received state in 3 runs out of 5 (D77). That was the right
+   * call and the wrong scope: D40 turned out to be the same defect, it is not
+   * specific to this screen, and `refreshAfterWrite` now makes the trade once
+   * for every screen that writes to the ledger — refresh, check it landed,
+   * reload only if it did not. Two of these three actions move stock, and a
+   * screen that says "not received" about goods on the shelf is far worse than
+   * the reload it falls back to.
    */
-  /** A full reload, for the reason set out above. */
   function reload() {
-    window.location.reload();
+    void refreshAfterWrite(router);
   }
 
   async function act(path: string, body: Record<string, unknown> = {}) {
