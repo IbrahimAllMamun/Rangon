@@ -18,6 +18,7 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 type FieldError = { field: string; message: string };
 
@@ -92,7 +93,7 @@ export function WriteOffForm({ branchId, branchLabel }: { branchId: string; bran
       setQuantity("");
       setReason("");
       setNotes("");
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       if (caught instanceof ApiError) {
         const fieldErrors = caught.fieldErrors();

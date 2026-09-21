@@ -71,11 +71,12 @@ entry.
 
 ### Never successfully run — do not claim these work
 
-- ~~**The E2E suite against a production build.**~~ **Run 2026-09-21: 40 passed, 2 failed,
-  42 specs**, against `next build` + the standalone `server.js`. Both failures are **D40** — the
-  expenses spec it was found on, and the stock-count spec, which nobody had connected to it. D41
-  was a race in the spec, not the build, and was fixed 2026-09-09. D40 is now the only thing
-  keeping the CI job on `next dev`.
+- ~~**The E2E suite against a production build.**~~ **42/42 on 2026-09-21**, against `next build`
+  + the standalone `server.js` — the first time the whole suite has been green against the artefact
+  that ships. It was 40/42 earlier the same day, both failures D40; with D40 worked around, moving
+  the CI job off `next dev` is a workflow edit rather than a defect. Note the run needs
+  `DJANGO_THROTTLE_ANON` raised, or storefront specs collect 429s from the shared `anon: 60/min`
+  bucket — every request in the run comes from one address.
 - **A live payment gateway.** The card option is visibly disabled, not faked.
 - **Anything deployed.** The roadmap records no live environment and no real order; "deploy
   somewhere" is still Tier 0 #1.
@@ -83,13 +84,13 @@ entry.
 - **Two screens from 2026-09-15, in a browser:** the supplier payment form on
   `/admin/purchases/[id]`, and the Delivery panel on `/admin/orders/[id]` with the customer's parcel
   view. Written, typechecked and unit-tested; nobody has signed in and used either.
-- **`router.refresh()` on the admin — now known to be app-wide.** D77 (receiving stock showed the
-  un-received state in 3 runs of 5) is worked around with a full reload, not explained. On
-  2026-09-21 the same defect was measured on three more screens against a production build:
-  `/admin/expenses` **0/5**, brands **2/6**, categories **4/6**, and the stock-count sheet, which
-  goes on offering *Apply to stock* after applying it. Every write landed every time; only the
-  screen lied. **D77 and D40 are one defect**, across 63 call sites. Do not trust any admin
-  screen's post-write state.
+- ~~**`router.refresh()` on the admin.**~~ **Worked around 2026-09-21, not root-caused.** It
+  discards the payload it fetched, the more reliably the heavier the page (`/admin/expenses`
+  measured 0/5, 0/5, 2/5 and 0/8 on one build). D40 and D77 are one defect. Every admin write that
+  moves stock or money now goes through `refreshAfterWrite()`, which checks the layout's
+  `data-render-id` moved and reloads only when it did not — 8/8 where the bare call was 0/8. **If
+  you add a new admin write screen, call that helper, not `router.refresh()`.** The root cause is
+  upstream and still open.
 
 ### The two habits that keep finding things
 

@@ -210,8 +210,15 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
         "rest_framework.throttling.ScopedRateThrottle",
     ),
+    # The anon rate is the one that is read from the environment, because it is
+    # the one a whole test suite contends on: every request the E2E run makes --
+    # the storefront's own server-side fetches included -- arrives from a single
+    # address, so 60/min is a budget for the suite rather than for a shopper, and
+    # which spec gets the 429 depends on wall-clock timing. CI raises it for that
+    # job alone (.github/workflows/ci.yml). Production keeps this default, and a
+    # deployment behind NAT can raise it deliberately rather than by editing code.
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "60/min",
+        "anon": env("DJANGO_THROTTLE_ANON", "60/min"),
         "user": "600/min",
         "auth": "10/min",
         "checkout": "20/hour",

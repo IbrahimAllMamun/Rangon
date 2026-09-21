@@ -19,6 +19,7 @@ import {
 import { ApiError, apiClient, apiUpload } from "@/lib/api/client";
 import type { Account, ExpenseCategory } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 type FieldError = { field: string; message: string };
 
@@ -149,7 +150,7 @@ export function ExpenseForm({
       setNote("");
       setReceipt(null);
       onDone?.();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "ex-amount"));
     } finally {
@@ -343,7 +344,7 @@ export function VoidExpenseButton({
       });
       setConfirming(false);
       setReason("");
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "That did not work. Try again.");
     } finally {

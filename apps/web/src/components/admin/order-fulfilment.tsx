@@ -20,6 +20,7 @@ import {
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { OrderStatus, Shipment, ShipmentStatus } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 /**
  * Hand an order to a courier, and record what the courier says afterwards.
@@ -130,7 +131,7 @@ export function OrderFulfilment({
       setTracking("");
       setCost("");
       setNotes("");
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "ship-tracking"));
     } finally {
@@ -156,7 +157,7 @@ export function OrderFulfilment({
                 key={shipment.id}
                 shipment={shipment}
                 canFulfil={canFulfil}
-                onChanged={() => router.refresh()}
+                onChanged={() => void refreshAfterWrite(router)}
               />
             ))}
           </ul>

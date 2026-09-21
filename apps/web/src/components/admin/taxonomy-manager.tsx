@@ -18,6 +18,7 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 import { useRouter } from "next/navigation";
 
 export interface CategoryRow {
@@ -132,7 +133,7 @@ export function CategoryForm({
         body,
       });
       onDone();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "cat-name"));
     } finally {
@@ -433,7 +434,7 @@ export function BrandManager({
         body,
       });
       close();
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "brand-name"));
     } finally {

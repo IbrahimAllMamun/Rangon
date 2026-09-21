@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { Badge, Button, Card, ErrorSummary, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { StockCount, StockCountItem } from "@/lib/api/types";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 type FieldError = { field: string; message: string };
 
@@ -102,7 +103,7 @@ export function StockCountSheet({ count, canCount }: { count: StockCount; canCou
       setSaved(`Saved ${result.recorded} line${result.recorded === 1 ? "" : "s"} — ${result.counted} of ${result.total} counted.`);
       setTyped({});
       setNotes({});
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors([
         {
@@ -121,7 +122,7 @@ export function StockCountSheet({ count, canCount }: { count: StockCount; canCou
     setApplying(true);
     try {
       await apiClient(`/stock-counts/${count.id}/${path}/`, { method: "POST", body: {} });
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors([
         {

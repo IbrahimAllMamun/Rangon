@@ -161,6 +161,14 @@ jobs:
       DJANGO_DEBUG: "1"
       DJANGO_ALLOWED_HOSTS: "*"
       REVALIDATE_SECRET: ci-revalidate-secret
+      # Every request in this job -- the storefront's own server-side fetches
+      # included -- comes from 127.0.0.1, so the production `anon: 60/min` is a
+      # budget for the whole suite rather than for one shopper. With it in place
+      # the suite runs close enough to the limit that which storefront spec
+      # collects the 429 depends on how long the admin specs happened to take.
+      # Nothing here asserts throttling; the limits that are part of a view's
+      # security declare their own scope and are unaffected by this.
+      DJANGO_THROTTLE_ANON: 10000/min
       E2E_BASE_URL: http://127.0.0.1:4000
       # API_INTERNAL_URL is the one that matters for server-side fetches; it
       # defaults to the compose hostname, which does not resolve here.

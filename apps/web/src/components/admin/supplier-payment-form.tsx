@@ -19,6 +19,7 @@ import {
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Account, AccountKind } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 /**
  * Which kind of account each supplier-payment method comes out of.
@@ -129,7 +130,7 @@ export function SupplierPaymentForm({
       setReference("");
       setNotes("");
       setKey(newKey());
-      router.refresh();
+      await refreshAfterWrite(router);
     } catch (caught) {
       setErrors(toFieldErrors(caught, "sp-amount"));
     } finally {
