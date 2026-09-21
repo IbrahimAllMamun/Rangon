@@ -71,12 +71,15 @@ entry.
 
 ### Never successfully run — do not claim these work
 
-- ~~**The E2E suite against a production build.**~~ **42/42 on 2026-09-21**, against `next build`
-  + the standalone `server.js` — the first time the whole suite has been green against the artefact
-  that ships. It was 40/42 earlier the same day, both failures D40; with D40 worked around, moving
-  the CI job off `next dev` is a workflow edit rather than a defect. Note the run needs
-  `DJANGO_THROTTLE_ANON` raised, or storefront specs collect 429s from the shared `anon: 60/min`
-  bucket — every request in the run comes from one address.
+- ~~**The E2E suite against a production build.**~~ **42/42 on 2026-09-21**, and **CI runs it that
+  way now** — the job builds the app and serves the standalone `server.js`, so the suite drives the
+  artefact that ships rather than `next dev`. It was 40/42 earlier the same day, both failures D40.
+  Three things that recipe needs, each of which fails confusingly without it: `next start` cannot
+  serve an `output: "standalone"` build (run `server.js` directly); `.next/static` and `public` must
+  be copied in beside it; and `server.js` binds `process.env.HOSTNAME`, which a runner sets to its
+  own hostname, so override it to `0.0.0.0`. The run also needs `DJANGO_THROTTLE_ANON` raised, or
+  storefront specs collect 429s from the shared `anon: 60/min` bucket — every request comes from one
+  address.
 - **A live payment gateway.** The card option is visibly disabled, not faked.
 - **Anything deployed.** The roadmap records no live environment and no real order; "deploy
   somewhere" is still Tier 0 #1.

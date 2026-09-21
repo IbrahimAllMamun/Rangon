@@ -309,8 +309,22 @@ test.describe("Accessibility basics", () => {
     await page.goto("/shop");
     await page.locator("article a").first().click();
 
-    const title = await page.title();
-    expect(title).toContain("Rangon Fashion");
-    expect(title.split("Rangon Fashion").length - 1).toBe(1);
+    // Against a production build the click is a client-side navigation: the
+    // document title is empty while `loading.tsx` shows, then settles to the
+    // product's own metadata. `page.title()` is a plain read -- it does not
+    // auto-wait the way a locator does -- so this spec has to poll.
+    //
+    // Polling `toContain` and then re-reading `page.title()` is not enough,
+    // and that was measured, not guessed: the poll saw a good title and the
+    // second read then saw a different one, failing on a count of 0. One read
+    // has to decide it, so poll the property the spec is actually about --
+    // D4 is "the shop's name appears exactly once", and a count of 1 says
+    // both that it is there and that it is not doubled.
+    await expect
+      .poll(async () => (await page.title()).split("Rangon Fashion").length - 1, {
+        message: 'the product page title should name "Rangon Fashion" exactly once (D4)',
+        timeout: 15000,
+      })
+      .toBe(1);
   });
 });
