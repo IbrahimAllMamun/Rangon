@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { Logo } from "@/components/brand/logo";
-import { Button, Card, ErrorSummary, Field, Input } from "@/components/ui/primitives";
+import { Button, Card, ErrorSummary, Field, Input, PasswordInput } from "@/components/ui/primitives";
 
 export function LoginForm() {
   const router = useRouter();
@@ -93,9 +93,8 @@ export function LoginForm() {
         </Field>
 
         <Field label="Password" htmlFor="password" required error={errorFor("password")}>
-          <Input
+          <PasswordInput
             id="password"
-            type="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}

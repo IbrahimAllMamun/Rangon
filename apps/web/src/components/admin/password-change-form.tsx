@@ -3,7 +3,7 @@
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 
-import { Button, ErrorSummary, Field, Input } from "@/components/ui/primitives";
+import { Button, ErrorSummary, Field, PasswordInput } from "@/components/ui/primitives";
 
 type FieldError = { field: string; message: string };
 
@@ -106,9 +106,8 @@ export function PasswordChangeForm() {
       )}
 
       <Field label="Current password" htmlFor="current-password" required error={errorFor("current-password")}>
-        <Input
+        <PasswordInput
           id="current-password"
-          type="password"
           autoComplete="current-password"
           value={current}
           onChange={(event) => setCurrent(event.target.value)}
@@ -124,9 +123,8 @@ export function PasswordChangeForm() {
         hint="At least 10 characters, not a common password, not only numbers, and not close to your name or email."
         error={errorFor("new-password")}
       >
-        <Input
+        <PasswordInput
           id="new-password"
-          type="password"
           autoComplete="new-password"
           value={next}
           onChange={(event) => setNext(event.target.value)}
@@ -145,9 +143,8 @@ export function PasswordChangeForm() {
         required
         error={errorFor("confirm-password")}
       >
-        <Input
+        <PasswordInput
           id="confirm-password"
-          type="password"
           autoComplete="new-password"
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}

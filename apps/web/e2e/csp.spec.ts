@@ -52,7 +52,9 @@ test.describe("Content Security Policy", () => {
     // The symptom, stated the way it was reported: a white screen, no form.
     const form = page.locator("form");
     await expect(form.getByLabel("Email address")).toBeVisible();
-    await expect(form.getByLabel("Password")).toBeVisible();
+    // Anchored: the show/hide toggle beside it is called "Show password", and
+    // the label's own text carries the required marker ("Password*").
+    await expect(form.getByLabel(/^Password/)).toBeVisible();
     await expect(form.getByRole("button", { name: "Sign in" })).toBeVisible();
 
     expect(refusals, `CSP refused ${refusals.length} script(s):\n${refusals.join("\n")}`).toEqual(
