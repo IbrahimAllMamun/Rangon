@@ -92,6 +92,13 @@ Prefer borders and spacing over shadows. Admin cards use borders.
 - **Input / Select / Textarea** — 40–44 px desktop, 44–48 px touch, 1 px `#D4D4D4` border, radius 8,
   focus `border: brand-500` + `ring: rgba(251,50,8,.18)`. Label + control + error message, always;
   errors are text, never colour alone, and are tied to the field with `aria-describedby`.
+- **PasswordInput** — every password field in the product. An `Input` with a 36 px show/hide toggle
+  inside its own box, right-aligned, so nothing reflows when it appears and the input's focus ring is
+  never covered. The button's accessible name is always **"Show password"** and its state rides on
+  `aria-pressed`: renaming it to "Hide password" *as well* would announce the control twice over.
+  The eye is `aria-hidden` (the button is already named), it sits outside the tab order (tabbing out
+  of a password field should reach submit), and visibility resets to hidden whenever the field
+  empties — so a cleared form never reveals the next thing typed on a counter screen.
 - **Badge** — semantic colour + text. `Paid → success`, `Pending → warning`, `Failed → error`,
   `Processing → info`, `Cancelled → error-muted`, `Delivered → success`, `Returned → neutral`.
 - **ProductCard** — 4:5 image, optional badge, brand/category, name (2-line clamp), price + compare-at,

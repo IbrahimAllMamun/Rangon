@@ -14,7 +14,7 @@ import * as LabelPrimitive from "@radix-ui/react-label";
 import * as SeparatorPrimitive from "@radix-ui/react-separator";
 import { Slot } from "@radix-ui/react-slot";
 import { type VariantProps, cva } from "class-variance-authority";
-import { Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/lib/cn";
@@ -173,6 +173,137 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ),
 );
 Input.displayName = "Input";
+
+/* ------------------------------------------------------- PasswordInput -- */
+
+export type PasswordInputProps = Omit<InputProps, "type">;
+
+/**
+ * A password field with a show/hide toggle.
+ *
+ * Every password field in the product uses this, so "can I see what I typed"
+ * is answered in one place rather than per form.
+ *
+ * The accessibility decisions, because each one has a wrong-looking
+ * alternative that is easy to reach for:
+ *
+ *  - **The name is stable, the state is not.** The button is always called
+ *    "Show password" and carries `aria-pressed`. Flipping the *name* to
+ *    "Hide password" as well would announce the toggle twice over — once as a
+ *    renamed control, once as a state change — which is the usual complaint
+ *    about this widget. One of the two has to stay still, and a stable name is
+ *    what `aria-pressed` is for.
+ *  - **No live region.** A screen reader announces an `aria-pressed` change
+ *    already; adding `role="status"` on top is the double-announcement this
+ *    pattern is known for.
+ *  - **The icon is decorative.** The button is already named, so the glyph is
+ *    `aria-hidden` rather than a second, competing label.
+ *  - **It is in the tab order**, and `onMouseDown` is prevented rather than the
+ *    button being skipped. Both halves were wrong first and a browser found
+ *    them: a pointer click moved focus to the button, so typing after
+ *    revealing went nowhere until the person clicked back into the field;
+ *    and `tabIndex={-1}`, written to keep the tab path short, denied a
+ *    keyboard-only user a control everyone else gets -- WCAG 2.1.1 asks that
+ *    all functionality be keyboard operable, and checking what you typed is
+ *    functionality. Preventing the default on `mousedown` keeps the caret
+ *    where it was without costing the keyboard anything -- and the caret is
+ *    then restored by hand, because a real pointer click collapses the field's
+ *    selection anyway and the next keystroke landed at position 0.
+ *  - **36px square**, over the 24 CSS px WCAG 2.2 AA asks of a pointer target,
+ *    and inside the input's own 40/44px box rather than beside it, so nothing
+ *    reflows when it appears and the input's focus ring is never covered.
+ *
+ * Visibility resets to hidden whenever the field empties -- after a successful
+ * submit that clears it, or after the person clears it themselves -- so a
+ * password is never left readable on a counter screen for the next customer.
+ */
+export const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
+  ({ className, ...props }, ref) => {
+    const [visible, setVisible] = React.useState(false);
+    const inputRef = React.useRef<HTMLInputElement | null>(null);
+    const caret = React.useRef<[number | null, number | null]>([null, null]);
+
+    // Our own handle on the input, without taking the caller's away.
+    const attachRef = React.useCallback(
+      (node: HTMLInputElement | null) => {
+        inputRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref],
+    );
+
+    // Put the caret back where it was: a click on the toggle sent the next
+    // keystroke to the start of the password instead of where the person was
+    // typing.
+    //
+    // What was measured, because the obvious explanation is wrong: setting
+    // `type` by hand on a detached input does *not* drop the selection, and a
+    // synthetic `btn.click()` keeps it too. Only a trusted pointer click loses
+    // it, and it loses it *after* React commits -- a `useLayoutEffect` restore
+    // is overwritten, one on the next frame survives. Whether that is the
+    // browser's own post-click selection handling or React restoring the
+    // controlled value was not pinned down; the timing was, and that is what
+    // this depends on.
+    React.useEffect(() => {
+      const node = inputRef.current;
+      const [start, end] = caret.current;
+      if (!node || start === null) return;
+      const frame = requestAnimationFrame(() => node.setSelectionRange(start, end));
+      return () => cancelAnimationFrame(frame);
+    }, [visible]);
+
+    // A field that has emptied is a field whose password is gone: there is
+    // nothing to keep revealed, and leaving the toggle on would reveal the
+    // *next* thing typed without anyone asking for it.
+    const empty = props.value === "" || props.value === undefined;
+    React.useEffect(() => {
+      if (empty) setVisible(false);
+    }, [empty]);
+
+    // The wrapper is `w-full`, not bare `relative`: the staff form puts this in
+    // a flex row beside an icon, where a shrink-to-fit wrapper collapses the
+    // field to its intrinsic width. The bare `Input` it replaced was `w-full`,
+    // so this has to keep behaving that way.
+    return (
+      <div className="relative w-full">
+        <Input
+          ref={attachRef}
+          type={visible ? "text" : "password"}
+          // Room for the button, so revealed text never runs underneath it.
+          className={cn("pr-12", className)}
+          {...props}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const node = inputRef.current;
+            caret.current = node ? [node.selectionStart, node.selectionEnd] : [null, null];
+            setVisible((shown) => !shown);
+          }}
+          // Keeps the caret in the field: without this the click focuses the
+          // button and the next keystroke goes nowhere.
+          onMouseDown={(event) => event.preventDefault()}
+          aria-label="Show password"
+          aria-pressed={visible}
+          className={cn(
+            "absolute right-1 top-1/2 grid size-9 -translate-y-1/2 place-items-center",
+            "rounded-md text-neutral-500 transition-colors duration-fast",
+            "hover:bg-neutral-100 hover:text-neutral-700",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]",
+          )}
+        >
+          {visible ? (
+            <EyeOff className="size-4" aria-hidden />
+          ) : (
+            <Eye className="size-4" aria-hidden />
+          )}
+        </button>
+      </div>
+    );
+  },
+);
+PasswordInput.displayName = "PasswordInput";
 
 export const Textarea = React.forwardRef<
   HTMLTextAreaElement,

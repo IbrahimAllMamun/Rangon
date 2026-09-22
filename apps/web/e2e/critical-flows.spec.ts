@@ -20,7 +20,12 @@ async function signIn(page: import("@playwright/test").Page, user: typeof CASHIE
   // grow another control, so the scope stays.
   const form = page.locator("form");
   await form.getByLabel("Email address").fill(user.email);
-  await form.getByLabel("Password").fill(user.password);
+  // Anchored, not exact. A bare "Password" now matches two controls -- the
+  // field, and its own show/hide toggle, which is called "Show password".
+  // `{ exact: true }` does not fix it: `getByLabel` matches the *label's* text
+  // and `Field` renders a required marker inside it, so the text is
+  // "Password*" and an exact match finds nothing at all.
+  await form.getByLabel(/^Password/).fill(user.password);
   await form.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 }
@@ -291,6 +296,51 @@ test.describe("Accessibility basics", () => {
     await page.goto("/");
     await page.keyboard.press("Tab");
     await expect(page.getByRole("link", { name: /skip to content/i })).toBeFocused();
+  });
+
+  test("the password toggle reveals without losing the caret", async ({ page }) => {
+    // Three faults a browser found and jsdom could not. The toggle used to
+    // take focus on click, so the next keystroke went nowhere; it was out of
+    // the tab order, so a keyboard-only user could not reach it at all; and
+    // the caret collapsed to the start of the field, so typing after revealing
+    // inserted at position 0. jsdom reproduces none of the three.
+    await page.goto("/login");
+    const field = page.locator("#password");
+    const toggle = page.getByRole("button", { name: "Show password" });
+
+    await field.click();
+    await page.keyboard.type("correct-horse");
+    await expect(field).toHaveAttribute("type", "password");
+
+    await toggle.click();
+
+    await expect(field).toHaveAttribute("type", "text");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(field).toBeFocused();
+
+    // The caret has to still be where it was, or this lands at the start.
+    await page.keyboard.type("XYZ");
+    await expect(field).toHaveValue("correct-horseXYZ");
+  });
+
+  test("the password toggle is operable by keyboard", async ({ page }) => {
+    await page.goto("/login");
+    const field = page.locator("#password");
+    const toggle = page.getByRole("button", { name: "Show password" });
+
+    await field.click();
+    await page.keyboard.type("correct-horse");
+    await page.keyboard.press("Tab");
+    await expect(toggle).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await expect(field).toHaveAttribute("type", "text");
+    await page.keyboard.press(" ");
+    await expect(field).toHaveAttribute("type", "password");
+
+    // And the tab path still ends where it should.
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeFocused();
   });
 
   test("product page exposes structured data", async ({ page }) => {

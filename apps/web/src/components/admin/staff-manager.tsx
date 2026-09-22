@@ -14,6 +14,7 @@ import {
   ErrorSummary,
   Field,
   Input,
+  PasswordInput,
   Select,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
@@ -435,9 +436,8 @@ function StaffForm({
           >
             <div className="flex items-center gap-2">
               <KeyRound className="size-4 shrink-0 text-neutral-400" aria-hidden />
-              <Input
+              <PasswordInput
                 id="staff-password"
-                type="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
