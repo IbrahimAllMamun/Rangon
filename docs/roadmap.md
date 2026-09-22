@@ -11,6 +11,17 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 
 Last updated: **2026-09-21**.
 
+**[D89](#known-defects) and [D90](#known-defects): `Idempotency-Key` was accepted and ignored on
+every finance and inventory endpoint, and where it *was* honoured the race recovery had never
+worked.** Measured on `main`: the same key posted twice moved a cash balance **+2000 instead of
++1000**, and took **two** units off the shelf instead of one — and because both rows are honest
+ledger entries, `verify_accounts` and `verify_inventory` reconciled afterwards and nothing flagged
+it. Then the fix's own concurrency test found the second one: four simultaneous POS sale retries
+sharing a key raised **`TransactionManagementError` three times out of four**, because the
+`IntegrityError` was caught inside the outer `atomic()` with no savepoint, so the recovery query
+could not run. That catch had been there since the feature was written. Details in
+[§ D89 and D90 fixed](#d89-and-d90-fixed-a-retry-that-doubled-and-a-recovery-that-never-ran-2026-09-22).
+
 **[D88](#known-defects): every rate limit could be bypassed with one header, and the audit trail
 recorded whatever address the caller typed.** `X-Forwarded-For` is written by the client; DRF's stock
 throttles key on the whole of it when `NUM_PROXIES` is unset, and `AuditContextMiddleware` took its
@@ -395,6 +406,81 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### D89 and D90 fixed: a retry that doubled, and a recovery that never ran, 2026-09-22
+
+The backlog was empty again — Tier 1 done, Tier 2 waiting on photography, three
+of Tier 0's four items not code — so a control was audited instead of a feature
+built, which is now the third time that has paid.
+
+**D89, measured on `main` against the running API as the owner:**
+
+```text
+balance before ........ 342205.00
+POST #1 -> 201   POST #2 -> 201     (same Idempotency-Key)
+balance after ......... 344205.00   -- +2000, not +1000
+
+on_hand before ........ 9
+write-off #1 -> 201   write-off #2 -> 201
+on_hand after ......... 7           -- two units gone, not one
+```
+
+CLAUDE.md §7 asks for the header "where a retry could double-charge or
+double-deduct". `orders` read it in 3 of 3 view modules and `purchasing` in 1
+of 1; **`finance` and `inventory` read it in 0 of 1 each**, and no model in
+either app carried the column. The header was accepted, never stored, never
+checked. And because both rows a replay leaves behind are honest ledger
+entries, `verify_accounts` and `verify_inventory` reconcile afterwards — the
+cash book and the shelf are simply wrong, and nothing detects it.
+
+Five operations were exposed: cash movements, account transfers, expenses,
+write-offs and stock transfers. Two deliberately need no key and are asserted
+rather than argued: `adjust` states an absolute `new_on_hand`, so a replay is a
+no-op, and `stock-counts/{id}/apply` is a status transition that answers 409.
+
+**D90 was found by D89's own concurrency test**, which is the reason to write
+one. Four simultaneous POS sale retries sharing a key, against `main`:
+
+```text
+AssertionError: ['TransactionManagementError("An error occurred in the current
+transaction. You can't execute queries until the end of the 'atomic' block.")',
+ ... 3 of 4 threads]
+```
+
+The `except IntegrityError:` recovery was inside the outer `transaction.atomic()`
+with no savepoint, so the error poisoned the transaction and the lookup that was
+supposed to return the winner's order could not run. A cashier double-tapping
+"Complete sale" on a slow connection got a 500 instead of the receipt. **The
+catch had been there since the feature was written and had never worked.**
+
+Three sites had it (POS sale, checkout, refund), one had a pre-check and no
+recovery at all (purchase return), and **two were already correct** — the
+supplier payment and the webhook dedupe, both of which use an inner `atomic()`.
+An earlier draft of this entry said "all four", which was wrong; the two correct
+ones are the newest, which suggests whoever wrote them knew.
+
+**The ordering mattered more than the constraint.** The first implementation put
+the key check before the row lock only, and the write-off race test caught it:
+four retries released together all read nothing, then queued on the lock, and
+the losers failed the *stock* check — "Only 0 unit(s) in stock" for a write-off
+they had already made. The key is now re-read **after** the lock and **before**
+the business validation, in both `inventory.apply_transaction` and
+`finance.record_movement`. The cheap pre-check stays, so an obvious replay never
+takes a lock at all.
+
+```text
+pytest ................................. 1188 passed, 4m27s   (1177 + 11 new)
+  of which concurrency ................. 20 passed
+mypy . ................................. clean, 154 source files
+ruff check . (0.8.4, the pinned one) ... All checks passed
+ruff format --check . .................. 212 files already formatted
+makemigrations --check --dry-run ....... No changes detected
+verify_inventory / verify_accounts ..... consistent, after the probes
+```
+
+Re-measured over HTTP after the fix: `+1000` for two posts sharing a key,
+`+2000` for two without one (the control — a fix that merged genuinely separate
+deposits would be worse than the defect), and `on_hand` down by one, not two.
 
 ### D88 fixed: the rate limits were decorative, 2026-09-21
 
@@ -1931,6 +2017,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D86~~ | ~~**Changing a password signed nobody out.**~~ **Fixed 2026-09-19.** Neither `PasswordChangeView` nor `update_staff_user` touched a token: every refresh token already issued rotated on for up to fourteen days, and every access token lived out its half hour. A person who changed a password because someone else might know it — the one reason to change it in a hurry — left that someone signed in, and an owner's reset from `/admin/staff` did the same. `docs/operations/security.md` listed "logout everywhere on password change" as an account-takeover control. Both now blacklist every refresh token the account holds (`accounts.services.end_sessions`), and `SIMPLE_JWT["CHECK_REVOKE_TOKEN"]` puts a hash of the password in every token so access tokens die at once too. The refresh endpoint also minted fresh tokens for a deactivated account and never looked at the password claim, which would have reopened the hole: it refuses both now | `apps/api/accounts/services.py`, `apps/api/accounts/api/views.py`, `apps/api/config/settings/base.py` | Tokens issued before the fix carry no claim; a refresh token like that is honoured once and exchanged for one that does, so the rollout signs nobody out beyond, at most, one page load |
 | ~~D87~~ | ~~**The current password could be guessed at 600 a minute, silently.**~~ **Fixed 2026-09-19.** `PasswordChangeView` set no throttle scope, so it ran at the general user rate, while the sign-in form is held to ten a minute — and a wrong guess wrote nothing, while a wrong sign-in writes `LOGIN_FAILED`. A stolen session is exactly when someone would try to learn the real password this way. Scoped to `auth` (ten a minute, per account) and audited. `config/settings/test.py` disables throttling and cites `tests/api/test_throttling.py` as where limits are asserted; that file has never existed, so no rate limit had a test until this one | `apps/api/accounts/api/views.py` | — |
 | ~~D88~~ | ~~**Every rate limit was bypassable with one header, and the audit trail believed it.**~~ **Fixed 2026-09-21.** `X-Forwarded-For` is written by the client and *appended to* by each proxy, so the caller owns a prefix of it. DRF's `BaseThrottle.get_ident` keys on the whole header when `NUM_PROXIES` is unset — it never was — and `AuditContextMiddleware._client_ip` took its left-most entry, commented *"the original client"*, which is precisely the part the client writes. **Measured on `main`: 40 wrong-password posts to `/auth/login/`, each with a different header, none refused** (control: refused at the eleventh), and all 40 logged under addresses of the caller's choosing. That is `auth` at 10/min — the limit between one address and a word list — plus `checkout` 20/hour, `search` 120/min and the general `anon` rate. D87 was **not** reachable this way: `ScopedRateThrottle` keys on `request.user.pk` once authenticated, and a first draft of the tests aimed there and passed against `main`, proving nothing. Anonymous requests are the whole of it. Fixed with one rule and one implementation — `core.ip.client_ip` counts `DJANGO_TRUSTED_PROXY_HOPS` entries from the **right** and falls back to `REMOTE_ADDR` when the header is shorter than that; `core.throttling` keys the three DRF throttles on it and the audit middleware calls it directly, with a test that the two agree. Default 0 (no proxy, ignore the header); `docker-compose.prod.yml` sets 1 beside the Nginx that is the only service publishing a port. Re-measured after: refused at the eleventh, 3 Redis buckets where there were 120, and the trail records the proxy's entry. See [§ D88 fixed](#d88-fixed-the-rate-limits-were-decorative-2026-09-21) | `apps/api/core/ip.py`, `apps/api/core/throttling.py`, `apps/api/core/middleware.py`, `apps/api/config/settings/base.py`, `docker-compose.prod.yml` | Found by auditing a control, not by a complaint. The limits read as present in `security.md` and in CI the whole time |
+| ~~D89~~ | ~~**`Idempotency-Key` was accepted and ignored on every finance and inventory endpoint.**~~ **Fixed 2026-09-22.** CLAUDE.md §7 asks for the header "where a retry could double-charge or double-deduct". `orders` read it in 3 of 3 view modules and `purchasing` in 1 of 1; **`finance` and `inventory` in 0 of 1 each**, and neither app's models carried the column — the header was accepted, never stored, never checked. **Measured on `main`:** the same key posted twice moved a balance **342205.00 → 344205.00** (+2000, not +1000) and took `on_hand` **9 → 7**. Both rows are honest ledger entries, so `verify_accounts` and `verify_inventory` reconcile afterwards and nothing flags it — the same shape as [D88](#known-defects), a control that reads as present. Five operations were exposed: cash movements, account transfers, expenses, write-offs and stock transfers. `adjust` and `stock-counts/apply` need no key (an absolute figure and a status transition) and are asserted rather than argued. **The ordering was the hard part**: the key is re-read *after* the row lock and *before* the business validation, because four retries released together all read nothing up front and the losers then failed the stock check for a write-off they had already made. See [§ D89 and D90](#d89-and-d90-fixed-a-retry-that-doubled-and-a-recovery-that-never-ran-2026-09-22) | `apps/api/finance`, `apps/api/inventory`, `apps/api/core/models.py` | Found by auditing a control, not by a complaint. Third time that has paid |
+| ~~D90~~ | ~~**The idempotency race recovery had never worked.**~~ **Fixed 2026-09-22**, and found by D89's own concurrency test. `except IntegrityError:` sat inside the outer `transaction.atomic()` with **no savepoint**, so the error poisoned the transaction and the lookup meant to return the winner's row raised `TransactionManagementError` instead. Four simultaneous POS sale retries sharing a key: **3 of 4 threads raised it**. A cashier double-tapping "Complete sale" on a slow connection got a 500 rather than the receipt — a till-stopping fault in the same family as [D43a](#known-defects). Three sites had it (POS sale, checkout, refund), one had a pre-check and no recovery at all (purchase return), and **two were already correct** (supplier payment, webhook dedupe) — both the newest, which suggests whoever wrote them knew. All four now wrap the claiming insert in an inner `atomic()`. Proven by running the race against `main` before and after | `apps/api/orders/services/{pos,checkout,payments}.py`, `apps/api/purchasing/services.py` | The catch had been there since each feature was written. Nothing had ever exercised it: the concurrency suite tests oversell, not duplicate keys |
 
 ## Still API-only (no UI)
 

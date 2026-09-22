@@ -47,12 +47,13 @@ say which.
 ### Last recorded run of each check
 
 Each line is the most recent result the roadmap's verification log records, with its date. These are
-from the five 2026-09-21 passes — the defect audit, the D40 workaround, the CI E2E move, the D6 fix
-and D88 — each of which ran its checks itself rather than quoting an older entry.
+from the 2026-09-21 and 09-22 passes — the defect audit, the D40 workaround, the CI E2E move, the D6
+fix, D88, the password toggle and D89/D90 — each of which ran its checks itself rather than quoting
+an older entry.
 
 ```text
-pytest ................................. 1177 passed              2026-09-21
-ruff 0.8.4 check + format --check ...... clean, 211 files         2026-09-21
+pytest ................................. 1188 passed              2026-09-22
+ruff 0.8.4 check + format --check ...... clean, 212 files         2026-09-22
 tsc --noEmit ........................... clean                    2026-09-21
 vitest (TZ=UTC) ........................ 282 passed, 24 files     2026-09-21
 query budgets + concurrency ............ 38 passed                2026-09-21
@@ -126,7 +127,9 @@ Tier 2 is down to a **media library**, and that waits on Tier 0 #3 (real photos)
 backlog has no unblocked work left**: D40 was worked around, the readers for `audit-logs/` and
 `inventory-transactions/` and password self-service all shipped, and **D6** closed 2026-09-21.
 That is what produced **D88** the same day — with nothing to build, a control was audited instead,
-and every rate limit turned out to be bypassable with one header. The **payment gateway** and the **SMS account** wait on
+and every rate limit turned out to be bypassable with one header. The same habit produced **D89 and
+D90** on 09-22: `Idempotency-Key` was accepted and ignored across finance and inventory, and the
+race recovery it was supposed to have had never worked anywhere. The **payment gateway** and the **SMS account** wait on
 provider accounts; COD works today, so only prepaid waits on the gateway.
 
 Details and the lesson from each session are in `session-history.md`; the decisions the owner still

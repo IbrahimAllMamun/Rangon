@@ -531,15 +531,25 @@ def create_purchase_return(
         .filter(purchase_order=purchase_order)
     }
 
-    purchase_return = PurchaseReturn.objects.create(
-        number=next_number("purchase_return", prefix="PRN"),
-        purchase_order=purchase_order,
-        reason=reason,
-        notes=notes,
-        returned_at=timezone.now(),
-        returned_by=actor,
-        idempotency_key=idempotency_key or None,
-    )
+    try:
+        # Savepoint, so a retry that loses the race on the key is answered with
+        # the winner's return rather than a raw IntegrityError. This site had
+        # the pre-check and no recovery at all (D90).
+        with transaction.atomic():
+            purchase_return = PurchaseReturn.objects.create(
+                number=next_number("purchase_return", prefix="PRN"),
+                purchase_order=purchase_order,
+                reason=reason,
+                notes=notes,
+                returned_at=timezone.now(),
+                returned_by=actor,
+                idempotency_key=idempotency_key or None,
+            )
+    except IntegrityError:
+        existing = PurchaseReturn.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
 
     credit = Decimal("0.00")
     for line in materialised:

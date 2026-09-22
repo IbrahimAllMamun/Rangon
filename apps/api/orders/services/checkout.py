@@ -338,30 +338,34 @@ def place_order(
     )
 
     try:
-        order = Order.objects.create(
-            number=next_number("order:WEB", prefix="RGN-WEB"),
-            channel=Channel.ONLINE,
-            status=OrderStatus.PENDING,
-            branch=cart.branch,
-            customer=customer,
-            subtotal=priced.subtotal,
-            coupon_discount=priced.coupon_discount,
-            discount_total=priced.discount_total,
-            tax_rate=priced.tax_rate,
-            tax_mode=priced.tax_mode,
-            tax_total=priced.tax_total,
-            shipping_total=priced.shipping_total,
-            grand_total=priced.grand_total,
-            currency=settings.RANGON["CURRENCY"],
-            coupon=cart.coupon,
-            shipping_method=shipping_method,
-            shipping_address=shipping_address,
-            billing_address=billing_address or shipping_address,
-            customer_note=note,
-            idempotency_key=idempotency_key,
-            guest_token=secrets.token_urlsafe(24),
-            placed_at=timezone.now(),
-        )
+        # Savepoint: without it the IntegrityError poisons the transaction
+        # and the lookup below raises `TransactionManagementError` instead
+        # of answering -- the recovery never ran (D90).
+        with transaction.atomic():
+            order = Order.objects.create(
+                number=next_number("order:WEB", prefix="RGN-WEB"),
+                channel=Channel.ONLINE,
+                status=OrderStatus.PENDING,
+                branch=cart.branch,
+                customer=customer,
+                subtotal=priced.subtotal,
+                coupon_discount=priced.coupon_discount,
+                discount_total=priced.discount_total,
+                tax_rate=priced.tax_rate,
+                tax_mode=priced.tax_mode,
+                tax_total=priced.tax_total,
+                shipping_total=priced.shipping_total,
+                grand_total=priced.grand_total,
+                currency=settings.RANGON["CURRENCY"],
+                coupon=cart.coupon,
+                shipping_method=shipping_method,
+                shipping_address=shipping_address,
+                billing_address=billing_address or shipping_address,
+                customer_note=note,
+                idempotency_key=idempotency_key,
+                guest_token=secrets.token_urlsafe(24),
+                placed_at=timezone.now(),
+            )
     except IntegrityError:
         existing = Order.objects.filter(idempotency_key=idempotency_key).first()
         if existing is not None:

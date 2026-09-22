@@ -16,8 +16,25 @@ Base: `/api/v1/`. OpenAPI schema at `/api/schema/`, Swagger UI at `/api/docs/`.
 
 - JSON only (`application/json`), except uploads (`multipart/form-data`).
 - Auth: `Authorization: Bearer <access>`.
-- `Idempotency-Key: <uuid>` required on `POST /shop/checkout/`, `POST /pos/sales/`,
-  `POST /orders/{id}/refunds/`. Repeats return the original result.
+- `Idempotency-Key: <uuid>` is **required** on `POST /shop/checkout/`, and **honoured** on every
+  other endpoint that moves money or stock, because a retry there would double-charge or
+  double-deduct. A repeat with the same key returns the original result rather than a second one:
+
+  | Endpoint | Key claimed by |
+  |---|---|
+  | `POST /shop/checkout/`, `POST /pos/sales/` | `Order` |
+  | `POST /orders/{id}/refunds/` | `Refund` |
+  | `POST /purchase-orders/{id}/payments/`, `.../returns/` | `SupplierPayment`, `PurchaseReturn` |
+  | `POST /accounts/record-movement/` | `AccountTransaction` |
+  | `POST /account-transfers/`, `POST /expenses/` | `AccountTransfer`, `Expense` |
+  | `POST /inventory/write-off/`, `POST /stock-transfers/` | `InventoryTransaction`, `StockTransfer` |
+
+  Two endpoints deliberately need no key: `POST /inventory/adjust/` states an absolute
+  `new_on_hand`, so a replay is a no-op, and `POST /stock-counts/{id}/apply/` is a status
+  transition that answers 409 the second time.
+
+  A key is at most 80 characters and is unique **across all time**, not per account or per day:
+  reusing yesterday's key returns yesterday's row.
 - `X-Request-ID` is echoed back and appears in logs and audit entries; generated if absent.
 - Writes are `POST`/`PATCH`; `PUT` is not used. `DELETE` exists only for non-financial rows
   (draft product, unused coupon) — financial rows are cancelled/reversed, never deleted.

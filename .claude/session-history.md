@@ -676,3 +676,64 @@ noisy wrong answer.
 - *A control listed as implemented is a claim like any other.* `security.md` had
   said "Throttle 10/min on login… (per IP)" since before there was a per-IP
   anything worth the name, and CI was green throughout.
+
+---
+
+## 2026-09-22 — D89 and D90: a retry that doubled, and a recovery that never ran
+
+Third time the backlog ran out and a control was audited instead. This one paid
+twice: the defect that was looked for, and a worse one found by the test written
+to prove it.
+
+**D89, measured on `main` against the running API:**
+
+```text
+balance before ........ 342205.00
+POST #1 -> 201   POST #2 -> 201     (same Idempotency-Key)
+balance after ......... 344205.00   -- +2000, not +1000
+
+on_hand 9 -> 7 on two write-offs sharing one key
+```
+
+`orders` read the header in 3 of 3 view modules, `purchasing` in 1 of 1,
+**`finance` and `inventory` in 0 of 1 each** — accepted, never stored, never
+checked. Both rows a replay leaves are honest ledger entries, so
+`verify_accounts` and `verify_inventory` reconcile and nothing flags it.
+
+**D90 was found by D89's own concurrency test.** Four simultaneous POS sale
+retries sharing a key, against `main`: `TransactionManagementError` in 3 of 4
+threads. The `except IntegrityError:` recovery sat inside the outer
+`transaction.atomic()` with no savepoint, so the error poisoned the transaction
+and the lookup meant to return the winner's order could not run. A cashier
+double-tapping "Complete sale" got a 500 instead of the receipt. **The catch had
+been there since each feature was written and had never worked once.**
+
+**Four things found by doing it:**
+
+1. **The ordering matters more than the constraint.** The first implementation
+   checked the key only before the row lock. Four retries released together all
+   read nothing, queued on the lock, and the losers failed the *stock* check —
+   "Only 0 unit(s) in stock" for a write-off they had already made. The key is
+   re-read after the lock and before the business validation now. *The
+   concurrency test earned its place on its first run.*
+2. **"All four sites are broken" was wrong.** Two were already correct — the
+   supplier payment and the webhook dedupe, both using an inner `atomic()`, and
+   both the newest of them. Checked each before claiming, after writing the
+   broad version first.
+3. **A unit test can show a guard is absent without showing what it prevents.**
+   The replay tests fail on `main` with `TypeError: unexpected keyword argument`,
+   not with a doubled balance — the parameter did not exist. The doubling proof
+   is the HTTP measurement; the docstring says which is which rather than
+   implying the tests demonstrate it.
+4. **The pre-check is not the mechanism.** Reading the table then inserting is a
+   check-then-act; the unique index is what makes the loser lose. A service that
+   kept the pre-check and dropped the constraint would have a guard that works
+   only when it is not needed. `core.models.idempotency_key_field` says so where
+   the column is defined.
+
+**The lessons:**
+
+- *Write the race test even when the replay test passes.* D90 was invisible to
+  sequential tests and had survived every suite since the feature shipped,
+  because the concurrency suite tests oversell, not duplicate keys.
+- *An empty backlog is not an idle session* — for the third time.

@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 
 from accounts.models import Branch, User
@@ -122,6 +122,7 @@ def _write_ledger(
     reason: str,
     notes: str,
     unit_cost: Decimal | None,
+    idempotency_key: str | None = None,
 ) -> InventoryTransaction:
     """Apply `delta` to the locked row and append the matching ledger entry."""
     if transaction_type in RESERVATION_AFFECTING:
@@ -144,6 +145,7 @@ def _write_ledger(
         reason=reason,
         notes=notes,
         created_by=actor,
+        idempotency_key=idempotency_key or None,
     )
 
 
@@ -216,12 +218,19 @@ def apply_transaction(
     notes: str = "",
     unit_cost: Decimal | None = None,
     allow_negative: bool = False,
+    idempotency_key: str | None = None,
 ) -> InventoryTransaction:
     """Apply a single stock movement.
 
     `quantity` is an absolute count for typed movements (the sign comes from
     the transaction type); for ADJUSTMENT it is the signed delta.
     """
+    # The cheap check: an obvious replay never takes a lock at all.
+    if idempotency_key:
+        existing = InventoryTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
     if transaction_type not in TransactionType.values:
         raise ValidationError(f"Unknown transaction type {transaction_type!r}.")
     if transaction_type in REASON_REQUIRED and not reason.strip():
@@ -241,6 +250,17 @@ def apply_transaction(
 
     inventories = _lock_inventories(branch, [_variant_id(variant)])
     inventory = inventories[str(_variant_id(variant))]
+
+    # And again, now the lock is held. The check above cannot see a retry that
+    # is still in flight: released together, every attempt reads nothing, then
+    # queues here. By the time a loser holds the lock the winner has committed,
+    # so this is the read that finds it -- and it has to happen *before* the
+    # stock validation below, or a replay arriving after the shelf emptied is
+    # told "insufficient stock" for a write-off it already made (D89).
+    if idempotency_key:
+        existing = InventoryTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
 
     if transaction_type in RESERVATION_AFFECTING:
         if delta > 0:
@@ -265,17 +285,28 @@ def apply_transaction(
     elif transaction_type in STOCK_AFFECTING:
         _check_can_reduce(inventory, delta, allow_negative=allow_negative)
 
-    entry = _write_ledger(
-        inventory=inventory,
-        transaction_type=transaction_type,
-        delta=delta,
-        actor=actor,
-        reference_type=reference_type,
-        reference_id=reference_id,
-        reason=reason,
-        notes=notes,
-        unit_cost=unit_cost,
-    )
+    try:
+        # Savepoint, so a retry that loses the race on the key can still be
+        # answered: without it the IntegrityError poisons the transaction and
+        # the lookup raises `TransactionManagementError` (D90).
+        with transaction.atomic():
+            entry = _write_ledger(
+                inventory=inventory,
+                transaction_type=transaction_type,
+                delta=delta,
+                actor=actor,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                reason=reason,
+                notes=notes,
+                unit_cost=unit_cost,
+                idempotency_key=idempotency_key,
+            )
+    except IntegrityError:
+        existing = InventoryTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
     _schedule_low_stock_check(inventory)
     return entry
 
@@ -698,8 +729,13 @@ def write_off(
     reason: str,
     actor: User | None = None,
     notes: str = "",
+    idempotency_key: str | None = None,
 ) -> InventoryTransaction:
-    """Damage or loss.  Requires a reason and is audit-logged."""
+    """Damage or loss.  Requires a reason and is audit-logged.
+
+    Idempotent on ``idempotency_key``: a retried write-off returns the row the
+    first attempt wrote rather than taking the units off the shelf twice.
+    """
     if transaction_type not in {TransactionType.DAMAGE, TransactionType.LOSS}:
         raise ValidationError("Write-off must be DAMAGE or LOSS.")
     entry = apply_transaction(
@@ -711,6 +747,7 @@ def write_off(
         reference_type="manual",
         reason=reason,
         notes=notes,
+        idempotency_key=idempotency_key,
     )
     audit.record(
         action=audit.AuditAction.STOCK_ADJUSTMENT,
@@ -733,13 +770,23 @@ def transfer(
     lines: Iterable[Line],
     actor: User | None = None,
     notes: str = "",
+    idempotency_key: str | None = None,
 ) -> Any:
     """Move stock between branches: TRANSFER_OUT + TRANSFER_IN in one transaction.
 
     Cost travels with the goods (ADR-0006), so each branch's margin stays honest.
+
+    Idempotent on ``idempotency_key``, claimed by the transfer document, which
+    is written before any stock moves -- so a retry that loses the race aborts
+    with both branches' shelves untouched.
     """
     from core.services import next_number
     from inventory.models import StockTransfer, StockTransferItem, TransferStatus
+
+    if idempotency_key:
+        existing = StockTransfer.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
 
     if source_branch.pk == target_branch.pk:
         raise ValidationError("Source and destination branches must differ.")
@@ -748,14 +795,23 @@ def transfer(
     if not materialised:
         raise ValidationError("A transfer needs at least one line.")
 
-    stock_transfer = StockTransfer.objects.create(
-        number=next_number("stock_transfer", prefix="TRF"),
-        source_branch=source_branch,
-        target_branch=target_branch,
-        status=TransferStatus.RECEIVED,
-        notes=notes,
-        created_by=actor,
-    )
+    try:
+        # Savepoint, as everywhere else the key is claimed (D90).
+        with transaction.atomic():
+            stock_transfer = StockTransfer.objects.create(
+                number=next_number("stock_transfer", prefix="TRF"),
+                source_branch=source_branch,
+                target_branch=target_branch,
+                status=TransferStatus.RECEIVED,
+                notes=notes,
+                created_by=actor,
+                idempotency_key=idempotency_key or None,
+            )
+    except IntegrityError:
+        existing = StockTransfer.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
 
     source_locks = _lock_inventories(source_branch, [v for v, _ in materialised])
     for variant_id, quantity in materialised:

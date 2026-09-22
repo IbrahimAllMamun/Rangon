@@ -177,29 +177,33 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
     ) or walk_in_customer(branch)
 
     try:
-        order = Order.objects.create(
-            number=next_number("order:POS", prefix="RGN-POS"),
-            channel=Channel.POS,
-            status=OrderStatus.DELIVERED,
-            branch=branch,
-            customer=customer,
-            created_by=actor,
-            register=data.register,
-            subtotal=priced.subtotal,
-            manual_discount=priced.manual_discount,
-            discount_total=priced.discount_total,
-            tax_rate=priced.tax_rate,
-            tax_mode=priced.tax_mode,
-            tax_total=priced.tax_total,
-            shipping_total=ZERO,
-            grand_total=priced.grand_total,
-            currency=settings.RANGON["CURRENCY"],
-            customer_note=data.note,
-            idempotency_key=data.idempotency_key,
-            placed_at=timezone.now(),
-            delivered_at=timezone.now(),
-            stock_committed=True,
-        )
+        # Savepoint: without it the IntegrityError poisons the transaction
+        # and the lookup below raises `TransactionManagementError` instead
+        # of answering -- the recovery never ran (D90).
+        with transaction.atomic():
+            order = Order.objects.create(
+                number=next_number("order:POS", prefix="RGN-POS"),
+                channel=Channel.POS,
+                status=OrderStatus.DELIVERED,
+                branch=branch,
+                customer=customer,
+                created_by=actor,
+                register=data.register,
+                subtotal=priced.subtotal,
+                manual_discount=priced.manual_discount,
+                discount_total=priced.discount_total,
+                tax_rate=priced.tax_rate,
+                tax_mode=priced.tax_mode,
+                tax_total=priced.tax_total,
+                shipping_total=ZERO,
+                grand_total=priced.grand_total,
+                currency=settings.RANGON["CURRENCY"],
+                customer_note=data.note,
+                idempotency_key=data.idempotency_key,
+                placed_at=timezone.now(),
+                delivered_at=timezone.now(),
+                stock_committed=True,
+            )
     except IntegrityError:
         existing = Order.objects.filter(idempotency_key=data.idempotency_key).first()
         if existing is not None:

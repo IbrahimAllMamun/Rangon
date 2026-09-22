@@ -635,3 +635,118 @@ def test_a_cancel_cannot_land_on_an_order_being_received(last_unit, monkeypatch)
     assert isinstance(outcomes.get("cancel"), Conflict), outcomes
     order.refresh_from_db()
     assert order.status == PurchaseOrderStatus.RECEIVED
+
+
+# ---------------------------------------------------------------------------
+# Retries that arrive together (D89, D90)
+#
+# The pre-check in each service is a check-then-act: two retries released at the
+# same instant both read nothing and both try to insert. The unique index is
+# what makes the second lose, and the service has to turn that loss into the
+# winner's row rather than an error.
+#
+# Against `main` the loser got `TransactionManagementError` at three of these
+# sites and a raw `IntegrityError` at a fourth, because the `IntegrityError` was
+# caught inside the outer `atomic()` with no savepoint -- so the recovery query
+# could not run. The catch had been there since the feature was written and had
+# never worked.
+# ---------------------------------------------------------------------------
+
+
+def test_two_simultaneous_movements_with_one_key_post_once(last_unit):
+    """The money moves once and both callers are told the same thing."""
+    branch = last_unit["branch"]
+    account = factories.account(branch, kind=AccountKind.CASH, opening_balance="1000.00")
+
+    def deposit(index: int):
+        return finance_services.record_movement(
+            account=account,
+            transaction_type="DEPOSIT",
+            amount=Decimal("500.00"),
+            idempotency_key="race-movement",
+        )
+
+    results, errors = run_together(deposit, 4)
+
+    assert errors == [], [repr(e) for e in errors]
+    assert len({entry.pk for entry in results}) == 1
+    account.refresh_from_db()
+    assert account.balance == Decimal("1500.00")
+
+
+def test_two_simultaneous_write_offs_with_one_key_deduct_once(last_unit):
+    """One unit on the shelf, four retries: the losers must be answered, not refused.
+
+    This is the test that found the ordering. The pre-check runs before the row
+    lock, so every attempt reads nothing; the losers then queue on the lock and,
+    with the key checked only up there, failed the *stock* validation instead --
+    "Only 0 unit(s) in stock" for a write-off they had already made.
+    """
+    branch, variant = last_unit["branch"], last_unit["variant"]
+
+    def write_off(index: int):
+        return inventory_services.write_off(
+            branch=branch,
+            variant=variant,
+            quantity=1,
+            transaction_type="DAMAGE",
+            reason="Dropped",
+            idempotency_key="race-write-off",
+        )
+
+    results, errors = run_together(write_off, 4)
+
+    assert errors == [], [repr(e) for e in errors]
+    assert len({entry.pk for entry in results}) == 1
+    assert Inventory.objects.get(branch=branch, variant=variant).on_hand == 0
+
+
+def test_a_replayed_withdrawal_is_answered_not_refused(last_unit):
+    """The money half of the same ordering problem.
+
+    Four retries of a withdrawal that empties the account. The losers reach
+    `_check_can_reduce` with nothing left, so unless the key is re-read under
+    the lock they are told the drawer is short for a movement that succeeded.
+    """
+    account = factories.account(
+        last_unit["branch"], kind=AccountKind.CASH, opening_balance="500.00"
+    )
+
+    def withdraw(index: int):
+        return finance_services.record_movement(
+            account=account,
+            transaction_type="WITHDRAWAL",
+            amount=Decimal("500.00"),
+            reason="Bank run",
+            idempotency_key="race-withdrawal",
+        )
+
+    results, errors = run_together(withdraw, 4)
+
+    assert errors == [], [repr(e) for e in errors]
+    assert len({entry.pk for entry in results}) == 1
+    account.refresh_from_db()
+    assert account.balance == Decimal("0.00")
+
+
+def test_two_simultaneous_pos_sales_with_one_key_sell_once(last_unit):
+    """The oldest of the sites that had the broken recovery (D90)."""
+    branch, variant, cashier = last_unit["branch"], last_unit["variant"], last_unit["cashier"]
+
+    def sell(index: int):
+        return pos.create_pos_sale(
+            branch=branch,
+            actor=cashier,
+            data=SaleInput(
+                lines=[SaleLineInput(variant_id=str(variant.pk), quantity=1)],
+                payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("1000.00"))],
+                idempotency_key="race-pos-sale",
+            ),
+        )
+
+    results, errors = run_together(sell, 4)
+
+    assert errors == [], [repr(e) for e in errors]
+    assert len({order.pk for order in results}) == 1
+    assert Order.objects.count() == 1
+    assert Inventory.objects.get(branch=branch, variant=variant).on_hand == 0

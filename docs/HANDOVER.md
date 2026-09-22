@@ -87,7 +87,12 @@ blocks. **D88** — every rate limit could be bypassed by varying `X-Forwarded-F
 trail recorded whatever address the caller sent: measured at 40 unrefused password guesses against
 a control refused at the eleventh. Both now resolve the caller through one helper that counts
 trusted proxy hops from the right; `DJANGO_TRUSTED_PROXY_HOPS` must match the deployment, and
-`docs/operations/security.md` has the table. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
+`docs/operations/security.md` has the table. **D89** and **D90** followed on 2026-09-22:
+`Idempotency-Key` was accepted and silently ignored on every finance and inventory endpoint, so a
+retried deposit credited the drawer twice and a retried write-off took the units off the shelf
+twice; and everywhere the header *was* honoured, the race recovery raised
+`TransactionManagementError` instead of returning the winner's row, so a double-tapped POS sale
+answered 500. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
 the new payload and discarded it, so `refreshAfterWrite()` now verifies the server render actually
 changed and reloads when it did not. The root cause is upstream and still unknown.
 
