@@ -26,6 +26,32 @@ def money_field(**kwargs: Any) -> models.DecimalField:
     return models.DecimalField(**kwargs)
 
 
+def idempotency_key_field(**kwargs: Any) -> models.CharField:
+    """The caller's `Idempotency-Key`, and the constraint that makes it mean something.
+
+    **The unique index is the mechanism, not the lookup.** Reading the table
+    first and then creating is a check-then-act: two retries that arrive
+    together both read nothing and both insert. The constraint is what makes
+    the second one lose, and the service turns that loss into the winner's
+    row. A service that keeps the pre-check and drops the constraint has a
+    guard that works only when it is not needed.
+
+    Claim the key on the **first** row the operation writes, so an aborted
+    insert takes the whole `transaction.atomic()` block with it rather than
+    leaving half an operation behind.
+
+    80 characters because a UUID with a prefix fits and nothing sensible is
+    longer; nullable because most rows are written by paths that carry no key
+    (a sale's ledger rows, a seed, a management command), and `unique` ignores
+    NULLs in PostgreSQL, so those rows do not collide with each other.
+    """
+    kwargs.setdefault("max_length", 80)
+    kwargs.setdefault("null", True)
+    kwargs.setdefault("blank", True)
+    kwargs.setdefault("unique", True)
+    return models.CharField(**kwargs)
+
+
 def rate_field(**kwargs: Any) -> models.DecimalField:
     """A rate/percentage column (e.g. 0.1500 for 15%)."""
     kwargs.setdefault("max_digits", 6)

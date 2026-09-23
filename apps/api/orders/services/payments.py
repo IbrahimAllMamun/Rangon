@@ -328,18 +328,22 @@ def refund_order(
     refund_account = account or (source_payment.account if source_payment else None)
 
     try:
-        refund = Refund.objects.create(
-            order=order,
-            payment=source_payment,
-            return_request=return_request,
-            amount=amount,
-            method=refund_method,
-            status=RefundStatus.COMPLETED,
-            reason=reason[:255],
-            idempotency_key=idempotency_key,
-            account=refund_account,
-            created_by=actor,
-        )
+        # Savepoint: without it the IntegrityError poisons the transaction
+        # and the lookup below raises `TransactionManagementError` instead
+        # of answering -- the recovery never ran (D90).
+        with transaction.atomic():
+            refund = Refund.objects.create(
+                order=order,
+                payment=source_payment,
+                return_request=return_request,
+                amount=amount,
+                method=refund_method,
+                status=RefundStatus.COMPLETED,
+                reason=reason[:255],
+                idempotency_key=idempotency_key,
+                account=refund_account,
+                created_by=actor,
+            )
     except IntegrityError:
         # Lost the race on the idempotency key: return the winner's refund.
         existing = Refund.objects.filter(idempotency_key=idempotency_key).first()

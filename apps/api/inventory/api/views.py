@@ -142,6 +142,7 @@ class InventoryViewSet(
             reason=data["reason"],
             actor=request.user,
             notes=data.get("notes", ""),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(InventoryTransactionSerializer(entry).data, status=status.HTTP_201_CREATED)
 
@@ -296,6 +297,7 @@ class StockTransferViewSet(
             lines=[(line["variant"], line["quantity"]) for line in data["lines"]],
             actor=actor(request),
             notes=data.get("notes", ""),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(StockTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
 

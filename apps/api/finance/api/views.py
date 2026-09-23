@@ -171,6 +171,7 @@ class AccountViewSet(
             notes=data.get("notes", ""),
             occurred_at=data.get("occurred_at"),
             actor=request.user,
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(AccountTransactionSerializer(entry).data, status=status.HTTP_201_CREATED)
 
@@ -268,6 +269,7 @@ class AccountTransferViewSet(
             notes=data.get("notes", ""),
             occurred_at=data.get("occurred_at"),
             actor=actor(request),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(AccountTransferSerializer(record).data, status=status.HTTP_201_CREATED)
 
@@ -389,6 +391,7 @@ class ExpenseViewSet(
             note=data.get("note", ""),
             attachment=data.get("attachment"),
             actor=actor(request),
+            idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return Response(
             ExpenseSerializer(expense, context={"request": request}).data,

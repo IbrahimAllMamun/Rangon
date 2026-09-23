@@ -544,6 +544,14 @@ verification call may capture a payment.
 
 - Checkout requires an `Idempotency-Key`; a repeat with the same key returns the original order rather
   than creating a second one.
+- **Every other operation that moves money or stock honours the same header** — counter sales,
+  refunds, supplier payments and returns, cash movements, account transfers, expenses, write-offs
+  and stock transfers. Until 2026-09-22 the finance and inventory ones accepted the header and
+  ignored it, so a retried deposit credited the drawer twice and a retried write-off took the units
+  off the shelf twice ([D89](roadmap.md#known-defects)). Both rows were honest ledger entries, so
+  `verify_accounts` and `verify_inventory` reconciled and nothing flagged it.
+- A stock adjustment needs no key: it states the figure stock should *be*, not the amount to move,
+  so repeating it changes nothing.
 - Payment webhooks are deduplicated on `(provider, provider_event_id)` in `PaymentEvent`, so a replayed
   webhook is recorded and ignored.
 - Returns are idempotent on `(order, stage)`.

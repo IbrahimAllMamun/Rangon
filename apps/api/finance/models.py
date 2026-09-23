@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from django.db import models
 
-from core.models import AppendOnlyModel, BaseModel, money_field
+from core.models import AppendOnlyModel, BaseModel, idempotency_key_field, money_field
 
 
 class AccountKind(models.TextChoices):
@@ -156,6 +156,9 @@ class AccountTransaction(AppendOnlyModel):
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    #: Set only by the paths that accept an `Idempotency-Key` header; see
+    #: `core.models.idempotency_key_field`.
+    idempotency_key = idempotency_key_field()
 
     class Meta:
         db_table = "finance_accounttransaction"
@@ -190,6 +193,9 @@ class AccountTransfer(BaseModel):
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+    #: Set only by the paths that accept an `Idempotency-Key` header; see
+    #: `core.models.idempotency_key_field`.
+    idempotency_key = idempotency_key_field()
 
     class Meta:
         db_table = "finance_accounttransfer"
@@ -272,6 +278,9 @@ class Expense(BaseModel):
     status = models.CharField(
         max_length=16, choices=ExpenseStatus.choices, default=ExpenseStatus.RECORDED
     )
+    #: Set only by the paths that accept an `Idempotency-Key` header; see
+    #: `core.models.idempotency_key_field`.
+    idempotency_key = idempotency_key_field()
     transaction = models.OneToOneField(
         AccountTransaction,
         null=True,

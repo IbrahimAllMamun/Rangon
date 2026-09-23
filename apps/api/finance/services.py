@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -246,6 +246,7 @@ def _apply(
     reason: str,
     notes: str,
     occurred_at: Any,
+    idempotency_key: str | None = None,
 ) -> AccountTransaction:
     """Apply ``delta`` to the locked row and append the matching ledger entry."""
     account.balance = quantize(account.balance + delta)
@@ -262,6 +263,7 @@ def _apply(
         notes=notes,
         occurred_at=occurred_at or timezone.now(),
         created_by=actor,
+        idempotency_key=idempotency_key or None,
     )
 
 
@@ -295,13 +297,25 @@ def record_movement(
     reason: str = "",
     notes: str = "",
     occurred_at: Any = None,
+    idempotency_key: str | None = None,
 ) -> AccountTransaction:
     """Append one movement to an account's cash book.
 
     ``amount`` is the absolute figure for every type except ``ADJUSTMENT``,
     which carries its own sign because the caller states the delta -- the same
     contract as inventory.services.apply_transaction().
+
+    Idempotent on ``idempotency_key``: a retried request returns the movement
+    the first attempt posted rather than posting a second one. Without it a
+    double-submitted deposit credited the drawer twice, and because both rows
+    are honest ledger entries `verify_accounts` reconciled them happily.
     """
+    # The cheap check: an obvious replay never takes a lock at all.
+    if idempotency_key:
+        existing = AccountTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
     sign = TRANSACTION_SIGN.get(transaction_type)
     if sign is None:
         raise ValidationError(f"{transaction_type} is not a valid account transaction type.")
@@ -322,22 +336,45 @@ def record_movement(
     locked = _lock_accounts([_account_id(account)])
     locked_account = locked[str(_account_id(account))]
 
+    # And again, now the lock is held. Retries released together all read
+    # nothing above and then queue here; by the time a loser holds the lock the
+    # winner has committed. It has to precede the checks below, or a replayed
+    # withdrawal arriving after the drawer ran low is refused for a movement it
+    # already made (D89).
+    if idempotency_key:
+        existing = AccountTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
     if not locked_account.is_active:
         raise ValidationError(f"{locked_account.name} is closed; money cannot move through it.")
 
     _check_can_reduce(locked_account, delta)
 
-    entry = _apply(
-        account=locked_account,
-        transaction_type=transaction_type,
-        delta=delta,
-        actor=actor,
-        reference_type=reference_type,
-        reference_id=reference_id,
-        reason=reason,
-        notes=notes,
-        occurred_at=occurred_at,
-    )
+    try:
+        # The inner `atomic` is a savepoint, and it is the difference between a
+        # recovery and a 500: without it the IntegrityError poisons the whole
+        # transaction and the lookup below raises `TransactionManagementError`
+        # instead of answering. Measured, not assumed (D90).
+        with transaction.atomic():
+            entry = _apply(
+                account=locked_account,
+                transaction_type=transaction_type,
+                delta=delta,
+                actor=actor,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                reason=reason,
+                notes=notes,
+                occurred_at=occurred_at,
+                idempotency_key=idempotency_key,
+            )
+    except IntegrityError:
+        # Lost the race on the key: the winner already posted this movement.
+        existing = AccountTransaction.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
 
     # Manual movements are the ones a person chose to make, so they are the
     # ones worth an audit entry of their own.  Movements posted as a side
@@ -411,14 +448,23 @@ def transfer(
     actor: User | None = None,
     notes: str = "",
     occurred_at: Any = None,
+    idempotency_key: str | None = None,
 ) -> AccountTransfer:
     """Move money between two of the business's own accounts.
 
     TRANSFER_OUT and TRANSFER_IN in one transaction, so the pair can never be
     half-applied: a bank run that credits the bank without debiting the drawer
     would invent money.
+
+    Idempotent on ``idempotency_key``: a retry returns the transfer the first
+    attempt made rather than moving the money a second time.
     """
     from core.services import next_number
+
+    if idempotency_key:
+        existing = AccountTransfer.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
 
     source_id = _account_id(source_account)
     target_id = _account_id(target_account)
@@ -433,6 +479,12 @@ def transfer(
     source = locked[str(source_id)]
     target = locked[str(target_id)]
 
+    # After the lock, for the reason `record_movement` gives.
+    if idempotency_key:
+        existing = AccountTransfer.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+
     for account in (source, target):
         if not account.is_active:
             raise ValidationError(f"{account.name} is closed; money cannot move through it.")
@@ -440,15 +492,26 @@ def transfer(
     _check_can_reduce(source, -amount)
 
     when = occurred_at or timezone.now()
-    record = AccountTransfer.objects.create(
-        number=next_number("account_transfer", prefix="ATR"),
-        source_account=source,
-        target_account=target,
-        amount=amount,
-        occurred_at=when,
-        notes=notes,
-        created_by=actor,
-    )
+    try:
+        # The transfer row is written before either movement precisely so the
+        # key is claimed first: a loser aborts here, having moved nothing.
+        # The inner `atomic` is a savepoint -- see `record_movement` (D90).
+        with transaction.atomic():
+            record = AccountTransfer.objects.create(
+                number=next_number("account_transfer", prefix="ATR"),
+                source_account=source,
+                target_account=target,
+                amount=amount,
+                occurred_at=when,
+                notes=notes,
+                created_by=actor,
+                idempotency_key=idempotency_key or None,
+            )
+    except IntegrityError:
+        existing = AccountTransfer.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
 
     _apply(
         account=source,
@@ -677,6 +740,7 @@ def record_expense(
     note: str = "",
     attachment: Any = None,
     actor: User | None = None,
+    idempotency_key: str | None = None,
 ) -> Expense:
     """File an expense and take the money out of an account, in one transaction.
 
@@ -684,8 +748,17 @@ def record_expense(
     with no cash-book row would be a claim about money that never moved, and a
     movement with no document would be an unexplained withdrawal.  Both are the
     failures this app exists to prevent.
+
+    Idempotent on ``idempotency_key``, which is claimed by the *document*: the
+    expense row is written before the movement, so a retry that loses the race
+    aborts before any money leaves the drawer.
     """
     from core.services import next_number
+
+    if idempotency_key:
+        existing = Expense.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
 
     amount = quantize(amount)
     if amount <= ZERO:
@@ -715,17 +788,26 @@ def record_expense(
             "Pay this from an account held by the branch spending the money."
         )
 
-    expense = Expense.objects.create(
-        number=next_number("expense", prefix="EXP"),
-        branch=branch,
-        category=category_obj,
-        account=account_obj,
-        amount=amount,
-        spent_at=spent_at or timezone.now(),
-        note=note,
-        attachment=attachment or "",
-        created_by=actor,
-    )
+    try:
+        # Savepoint, so a lost race can still answer -- see `record_movement` (D90).
+        with transaction.atomic():
+            expense = Expense.objects.create(
+                number=next_number("expense", prefix="EXP"),
+                branch=branch,
+                category=category_obj,
+                account=account_obj,
+                amount=amount,
+                spent_at=spent_at or timezone.now(),
+                note=note,
+                attachment=attachment or "",
+                created_by=actor,
+                idempotency_key=idempotency_key or None,
+            )
+    except IntegrityError:
+        existing = Expense.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
+        raise
 
     # Raises InsufficientFunds if the drawer cannot cover it, rolling the whole
     # thing back -- so a rejected expense leaves no orphan document behind.
