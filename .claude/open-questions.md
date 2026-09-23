@@ -11,11 +11,11 @@ Last reviewed: **2026-09-19**, against `../docs/roadmap.md` as last updated 2026
 
 Each is implemented with a documented default so the system runs. Each is a
 business call, not a technical one. Full detail in `../docs/business-rules.md`,
-which carries **18** `DECISION REQUIRED` markers. Only one is changeable in the
+which carries **22** `DECISION REQUIRED` markers (re-counted 2026-09-23; this said 18 while the document held 20). Only one is changeable in the
 app: VAT, on `/admin/settings`. The same page lists four more read-only — the
 return window, the discount threshold, reservation expiry and change-of-mind
 shipping — which stay in environment variables on purpose, so that changing them
-is a deployment with a record rather than a click. The other thirteen live only
+is a deployment with a record rather than a click. The other seventeen live only
 in the document.
 
 **Two of the four blocking decisions are now closed by construction.** D-B was settled
@@ -56,10 +56,14 @@ measured, not later.
 | 16 | Supplier credit after returning goods from a paid order (§7b.5) | settled with the supplier off-system | Payables drops a negative outstanding, so the credit shows on the order and nowhere else |
 | 17 | ~~**Does the business sell on credit?**~~ (D-A, §6b.2) | assumed no | **No longer blocking.** Phase 37 shipped 2026-08-31 derived from any order carrying a balance, and a credit sale is exactly that — so the answer changes how the shop is run, not what the code does |
 | 18 | ~~Flat account list or a chart of accounts?~~ (D-B, §6b.1) | **built on the default: flat list** | Settled by construction 2026-08-22. Changing it is now a migration, not a choice — [ADR-0011](../docs/architecture/decisions/0011-append-only-cash-book.md) |
+| 19 | The storefront when **no branch is active** (§1.1a) | every product shows out of stock, silently | Alternatives: a 503, or an empty catalogue. `storefront_branch()` is the one place it changes |
+| 20 | Organisation-wide audit entries (§7, D85) | visible to every audit reader | Includes sign-ins and account changes of staff at other branches |
+| 21 | The staff list (§7.1) | spans branches | A branch manager sees every branch's staff. Found by the 2026-09-23 branch-scope sweep and left as it was, not changed silently |
+| 22 | A non-owner with **no branch** (§7.1) | sees and acts on every branch | Only an owner can create one. Decide before opening a second branch; in a one-branch shop the two answers behave the same |
 | — | Which payment gateway | none — COD only | Blocks prepaid online orders |
 | — | Which courier, and API or manual | manual tracking | Shipping integration |
 
-Rows 1–18 are the `DECISION REQUIRED` markers, in the order the table groups
+Rows 1–22 are the `DECISION REQUIRED` markers, in the order the table groups
 them rather than the document's; the section numbers are business-rules.md's.
 The two unnumbered rows are product choices that block whole features. Ask
 before implementing any of them differently. Do not silently change a default
@@ -87,35 +91,33 @@ with its date, is in `../docs/roadmap.md`.
 
 | Area | State |
 |---|---|
-| E2E against a **production build** | **Not green when last run**, 2026-08-31 — [D40](../docs/roadmap.md#known-defects) and D41. D41 was a race in the spec, not the build, and was fixed 2026-09-09; D40 is still open. No production-build run is recorded since. The CI job runs against `next dev` |
+| ~~E2E against a **production build**~~ | **Settled 2026-09-21.** D41 was a race in the spec (fixed 09-09); [D40](../docs/roadmap.md#known-defects) was worked around — not root-caused, it is upstream — and the suite went 42/42 against a real build. The CI job runs against a production build since that day. 46 specs now |
 | Payment gateway | No live provider; the card option is visibly **disabled**, not faked |
 | Load / performance | Every documented query budget is asserted (§2), but a budget is a query count, not a latency under concurrency. **No load test** |
-| Security | Controls implemented, audits and image scans automated, passing clean as of 2026-09-12; **no independent penetration test** — and 2026-09-21 is the argument for one. Auditing a single control found every rate limit bypassable by a forged `X-Forwarded-For` and the audit trail writable by the caller ([D88](../docs/roadmap.md#known-defects)). Both were listed as implemented, and CI was green throughout. **`DJANGO_TRUSTED_PROXY_HOPS` must be set to match the deployment** — see `security.md` |
+| Security | Controls implemented, audits and image scans automated, passing clean as of 2026-09-12; **no independent penetration test** — and 2026-09-21 is the argument for one. Auditing a single control found every rate limit bypassable by a forged `X-Forwarded-For` and the audit trail writable by the caller ([D88](../docs/roadmap.md#known-defects)). Both were listed as implemented, and CI was green throughout. **`DJANGO_TRUSTED_PROXY_HOPS` must be set to match the deployment** — see `security.md`. Three more rows audited 2026-09-23 found four more (D91–D94): expense receipts public at guessable URLs, sign-out after thirty idle minutes not revoking the session, every report readable for any branch by naming it, and stock transferable out of any branch. **With `USE_S3=1`, the bucket's public-read policy must exclude `expenses/*`** |
 | Deployment | Compose prod stack + green CI; the roadmap records **no live environment and no real order** |
 | Backup automation | The restore was rehearsed for real (2026-08-22), but the dump was taken by hand, stored on one machine, on no schedule and with no retention. The scripts themselves run where the docs say since D14 was fixed (2026-09-09); nothing schedules them |
-| ~~`mypy`~~ | **Settled 2026-09-21 (D6).** It was 271 errors in 41 files, not 98 — the step ran with `\|\| echo` and had never blocked. Clean now, across 152 source files, and the step blocks |
+| ~~`mypy`~~ | **Settled 2026-09-21 (D6).** It was 271 errors in 41 files, not 98 — the step ran with `\|\| echo` and had never blocked. Clean now, across 154 source files, and the step blocks |
 | Two screens from 2026-09-15 | The supplier payment form on `/admin/purchases/[id]`, and the Delivery panel on `/admin/orders/[id]` with the customer's parcel view. Written, typechecked and unit-tested; **nobody has signed in and used either** |
-| `router.refresh()` on the admin | [D77](../docs/roadmap.md#known-defects): after receiving stock the screen showed the un-received state in 3 runs out of 5. **Worked around with a full reload, not root-caused.** Anything else relying on `router.refresh()` is suspect |
+| `router.refresh()` on the admin | [D77](../docs/roadmap.md#known-defects) was [D40](../docs/roadmap.md#known-defects) all along. Every admin write now calls `refreshAfterWrite()`, which reloads only when the refresh is measured not to have landed. **Worked around, not root-caused** — upstream, vercel/next.js#77504, closed as not planned |
 
 ## 4. Known-missing UI
 
-**Four APIs have no screen, and one is deliberately without one.** From the roadmap's "Still
-API-only (no UI)":
+**One API has no screen, deliberately.** Re-checked against the roadmap's "Still API-only (no UI)"
+on 2026-09-23:
 
 | Endpoint | State |
 |---|---|
-| `audit-logs/` | Everything writes audit rows and nothing reads them back. The trail is unreadable without database access |
-| `inventory-transactions/` | The ledger itself. `/admin/inventory` shows the current figure, not the movements behind it |
-| `permissions/` | `/admin/staff` assigns a role; no screen shows what a role can actually do |
-| `auth/password/change/` | An owner or admin can reset anyone's password from `/admin/staff`, so nothing is stuck — but a cashier who suspects theirs is compromised has to ask one |
 | `auth/register/` | **Deliberate.** On 2026-09-15 the owner had the storefront's account surface withdrawn — wishlist, account pages, review form — because no shopper could obtain a login. The endpoints are kept and unadvertised |
+| ~~`audit-logs/`~~ | `/admin/audit`, 2026-09-19 |
+| ~~`inventory-transactions/`~~ | `/admin/inventory/movements`, 2026-09-19 |
+| ~~`auth/password/change/`~~ | `/admin/account`, 2026-09-19 |
+| ~~`permissions/`~~ | The role × permission matrix on `/admin/staff`, 2026-09-23. The old wording — "no screen shows what a role can do" — was half wrong: the page showed each role's raw codes, and what was missing was being able to read them |
 
-This section said **"None"** from 2026-08-31 until 2026-09-15, and it was wrong. The claim was
-made by listing the screens that *had* been built, not by checking every endpoint against what
-calls it. The 2026-09-15 audit that found five uncalled APIs (two now have screens:
-`supplier-payments/` and `shipments/`) swept router registrations, and so missed
-`auth/password/change/` and `permissions/`. Check endpoints against callers, not screens against
-memory.
+This section listed four missing screens for four days after three of them shipped: it was updated
+when screens were *added to the roadmap*, not when they were built. It said **"None"** from
+2026-08-31 to 2026-09-15, also wrongly, the other way round. Check endpoints against callers, not
+screens against memory — and not this file against itself.
 
 ## 5. Deliberately out of scope
 

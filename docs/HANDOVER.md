@@ -92,7 +92,17 @@ trusted proxy hops from the right; `DJANGO_TRUSTED_PROXY_HOPS` must match the de
 retried deposit credited the drawer twice and a retried write-off took the units off the shelf
 twice; and everywhere the header *was* honoured, the race recovery raised
 `TransactionManagementError` instead of returning the winner's row, so a double-tapped POS sale
-answered 500. **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
+answered 500.
+
+Closed on 2026-09-23, from auditing three more rows of `security.md` the same way: **D91** — expense
+receipts were served from `/media/` to anyone, signed in or not, under the uploader's own filename;
+they are served only through an endpoint that checks who is asking now, and new ones get random
+names. **D92** — signing out after thirty idle minutes answered 401 and left the refresh token alive
+for fourteen days. **D93** — every report took `?branch=` at its word, and an unknown id meant every
+branch. **D94** — staff holding `inventory.transfer` at one branch could send another branch's stock
+to their own. **With `USE_S3=1`, the bucket's public-read policy must exclude `expenses/*`.**
+
+**D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
 the new payload and discarded it, so `refreshAfterWrite()` now verifies the server render actually
 changed and reloads when it did not. The root cause is upstream and still unknown.
 
@@ -152,8 +162,8 @@ purchase order or by the import, both of which carry the cost paid.
 
 ## 5. What is deliberately not built
 
-Each row either waits on someone outside the codebase, was declined on the owner's decision, or is an
-API with no screen yet.
+Each row either waits on someone outside the codebase or was declined on the owner's decision. Every
+API has a screen now except the customer-account endpoints, which are without one on purpose.
 
 | Missing | Why it is safe to be missing | Where to look |
 |---|---|---|
@@ -162,7 +172,6 @@ API with no screen yet.
 | Offline POS | **Dropped 2026-09-09, owner's decision** — declined, not deferred. The POS needs connectivity, and an outage is covered by a paper pad and a re-key | `architecture/offline-pos.md` (design notes only) |
 | Quotation and the cheque register | **Dropped 2026-09-09, owner's decision.** Both are wholesale instruments and this shop sells retail. A cheque is still recordable as a payment into a `BANK` account | [roadmap.md](roadmap.md) phase 39 |
 | Customer accounts on the storefront | **Withdrawn 2026-09-15, owner's decision.** No shopper could create an account, so the wishlist, the account pages and the review form were gated on a login nobody could obtain. The endpoints are kept, unadvertised | [api/endpoints.md](api/endpoints.md#the-customer-account-endpoints-have-no-caller-deliberately) |
-| Screen for `permissions/` | Nothing is stuck: `/admin/staff` assigns roles even though no screen lists what each role may do. The audit trail and the stock ledger gained readers on 2026-09-19 — `/admin/audit`, `/admin/inventory/movements` — and password self-service shipped the same day at `/admin/account` | [roadmap.md](roadmap.md#still-api-only-no-ui) |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
 
 ### The UI dead ends
