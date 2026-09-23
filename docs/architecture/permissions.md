@@ -25,6 +25,11 @@ Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` a
 
 `✔` granted · `—` denied
 
+This is what `accounts/permissions.py` seeds. **What is actually in force** is on `/admin/staff`,
+read live from `/roles/` and `/permissions/` — the same table, with each code named in words. The
+two can differ only if a role was edited in the Django admin; the owner's column cannot, because an
+owner holds every permission whatever its row lists (`holds_every_permission` on the role payload).
+
 | Code | OWNER | ADMIN | MANAGER | CASHIER | INVENTORY_MANAGER | ACCOUNTANT | CUSTOMER |
 |---|---|---|---|---|---|---|---|
 | products.view | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | — |

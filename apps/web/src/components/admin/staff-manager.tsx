@@ -122,7 +122,10 @@ export function StaffManager({
       )}
 
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* `relative` keeps the sr-only "Actions" header inside the scroll box;
+            without it the page itself scrolled sideways on a phone (see
+            role-matrix.tsx, which measured the same fault). */}
+        <div className="relative overflow-x-auto">
           <table className="w-full text-body-sm">
             <caption className="sr-only">Staff accounts</caption>
             <thead className="border-b border-border bg-neutral-50 text-left text-caption uppercase text-muted">

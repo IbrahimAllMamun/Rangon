@@ -115,10 +115,24 @@ class RoleSerializer(serializers.ModelSerializer):
     permissions = serializers.SlugRelatedField(
         many=True, slug_field="code", queryset=Permission.objects.all(), required=False
     )
+    # An owner holds every permission whatever its role row lists --
+    # `User.permission_codes` answers `*` for one -- so a screen reading the
+    # rows alone would show gaps that do not exist the moment anyone edited
+    # the Owner role. Said here, so no client has to know which code it is.
+    holds_every_permission = serializers.BooleanField(source="is_owner", read_only=True)
 
     class Meta:
         model = Role
-        fields = ["id", "code", "name", "description", "is_staff_role", "is_system", "permissions"]
+        fields = [
+            "id",
+            "code",
+            "name",
+            "description",
+            "is_staff_role",
+            "is_system",
+            "holds_every_permission",
+            "permissions",
+        ]
         read_only_fields = ["id", "is_system"]
 
 
