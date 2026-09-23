@@ -13,7 +13,11 @@ See docs/architecture/finance.md and ADR-0011.
 
 from __future__ import annotations
 
+import uuid
+from pathlib import PurePosixPath
+
 from django.db import models
+from django.utils import timezone
 
 from core.models import AppendOnlyModel, BaseModel, idempotency_key_field, money_field
 
@@ -247,6 +251,20 @@ class ExpenseCategory(BaseModel):
         return self.name
 
 
+def expense_attachment_path(instance: Expense, filename: str) -> str:
+    """Where a receipt is stored: a random name, never the uploader's own.
+
+    It used to be `expenses/<year>/<month>/<the name on the uploader's phone>`
+    -- `receipt.png`, `IMG_0412.jpg` -- and `/media/` served it to anyone who
+    asked (D91). That route refuses receipts now (`core.media`); this is the
+    second lock, for the deployment where the first is misconfigured -- an S3
+    bucket whose public-read policy covers every key, say. Only the extension
+    survives, because the endpoint that serves the file types it by that.
+    """
+    extension = PurePosixPath(filename).suffix.lower()
+    return f"expenses/{timezone.now():%Y/%m}/{uuid.uuid4().hex}{extension}"
+
+
 class Expense(BaseModel):
     """Money that left the business for something other than stock or a refund.
 
@@ -272,7 +290,9 @@ class Expense(BaseModel):
     )
     note = models.TextField(blank=True)
     attachment = models.FileField(
-        upload_to="expenses/%Y/%m/", blank=True, help_text="A receipt or a bill, if there is one."
+        upload_to=expense_attachment_path,
+        blank=True,
+        help_text="A receipt or a bill, if there is one.",
     )
 
     status = models.CharField(

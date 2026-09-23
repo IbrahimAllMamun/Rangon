@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from accounts.models import Branch
+from accounts.models import Branch, Status
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
@@ -271,13 +271,21 @@ class StockTransferViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = StockTransfer.objects.select_related("source_branch", "target_branch")
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = {
         "list": ["inventory.view"],
         "retrieve": ["inventory.view"],
         "create": ["inventory.transfer"],
     }
+
+    def get_queryset(self) -> Any:
+        # Either end: a transfer is the source's stock leaving and the
+        # target's arriving, and each branch has to see its own half (D94).
+        return branch_queryset(
+            actor(self.request),
+            StockTransfer.objects.select_related("source_branch", "target_branch"),
+            field=("source_branch", "target_branch"),
+        )
 
     def get_serializer_class(self) -> Any:
         from inventory.api.serializers import StockTransferSerializer
@@ -291,9 +299,22 @@ class StockTransferViewSet(
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        # The source is the branch acting -- its stock is what leaves -- so it
+        # passes the same rule as every other stock write. Looked up bare, it
+        # let anyone holding `inventory.transfer` at one branch empty another
+        # branch's shelf into their own (D94). The target is deliberately not
+        # held to that rule: sending stock somewhere else is what a transfer is.
+        source = resolve_branch(actor(request), data["source_branch"])
+        target = Branch.objects.filter(pk=data["target_branch"], status=Status.ACTIVE).first()
+        if target is None:
+            raise ValidationError(
+                "That branch is not available.",
+                details={"target_branch": ["That branch is not available."]},
+            )
+
         transfer = inventory_services.transfer(
-            source_branch=Branch.objects.get(pk=data["source_branch"]),
-            target_branch=Branch.objects.get(pk=data["target_branch"]),
+            source_branch=source,
+            target_branch=target,
             lines=[(line["variant"], line["quantity"]) for line in data["lines"]],
             actor=actor(request),
             notes=data.get("notes", ""),

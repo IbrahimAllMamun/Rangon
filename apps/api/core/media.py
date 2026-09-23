@@ -24,12 +24,34 @@ configurations - which is why this helper deliberately does nothing clever.
 
 from __future__ import annotations
 
+import posixpath
 from typing import Any
 
 from django.conf import settings
-from django.http import FileResponse, HttpRequest
+from django.http import FileResponse, Http404, HttpRequest
 from django.views.static import serve
 from rest_framework import serializers
+
+#: Uploads that are nobody's business but staff's. `/media/` never serves them;
+#: they are reached only through an endpoint that checks who is asking --
+#: `GET /api/v1/expenses/{id}/attachment/` for receipts.
+#:
+#: Until 2026-09-23 this route served receipts to anyone, signed in or not, at
+#: `/media/expenses/<year>/<month>/<the uploader's own filename>` (D91). Nginx
+#: refuses the same prefix, so the lock holds if `/media/` is ever handed to an
+#: `alias` for speed. Add a prefix here *and* there when a new private upload
+#: appears.
+PRIVATE_PREFIXES = ("expenses/",)
+
+
+def is_private(path: str) -> bool:
+    """Whether `path` (relative to MEDIA_ROOT) names a staff-only upload.
+
+    Normalised first: `./expenses/`, `a/../expenses/` and a doubled slash all
+    reach the same file on disk, so they have to reach the same answer.
+    """
+    clean = posixpath.normpath(path).lstrip("/")
+    return clean.startswith(PRIVATE_PREFIXES)
 
 
 def media_url(file: Any) -> str:
@@ -51,7 +73,45 @@ def serve_media(request: HttpRequest, path: str) -> FileResponse:
     override of `MEDIA_ROOT` — a test's `tmp_path`, most obviously — could ever
     take effect.
     """
+    if is_private(path):
+        raise Http404
     return serve(request, path, document_root=str(settings.MEDIA_ROOT))
+
+
+#: What a photograph may arrive as. Pillow decodes about seventy formats --
+#: PostScript among them -- and a model `ImageField` accepts any of them; this
+#: is the four a browser displays, which is what the policy says
+#: (docs/operations/security.md).
+ALLOWED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
+
+
+def validate_image_upload(value: Any) -> Any:
+    """Size and type, server-side, for every image anyone uploads.
+
+    `ImageField` only proves Pillow can decode the file; it caps nothing.
+    Django's `FILE_UPLOAD_MAX_MEMORY_SIZE` is not a limit either -- a larger
+    upload simply spills to a temporary file -- so without this a 200 MB
+    "photograph" would be accepted and then served back forever.
+
+    Product photography had this from the start; category images, brand logos
+    and navigation and banner artwork did not, and took any size in any of
+    Pillow's formats until 2026-09-23. One function now, so a sixth image field
+    cannot be added without it by accident of copying the wrong serializer.
+
+    `content_type` is the type Pillow *detected*, not the one the browser
+    claimed: DRF's `ImageField` overwrites it after decoding.
+    """
+    if not value:
+        return value
+    if value.size > settings.RANGON_MAX_IMAGE_BYTES:
+        limit = settings.RANGON_MAX_IMAGE_BYTES // (1024 * 1024)
+        raise serializers.ValidationError(f"The image must be smaller than {limit} MB.")
+    content_type = (getattr(value, "content_type", "") or "").lower()
+    if content_type and content_type not in settings.RANGON_ALLOWED_IMAGE_TYPES:
+        raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
+    if not str(value.name).lower().endswith(ALLOWED_IMAGE_EXTENSIONS):
+        raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
+    return value
 
 
 class RelativeFileField(serializers.FileField):

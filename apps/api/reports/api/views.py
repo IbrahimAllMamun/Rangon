@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Branch
 from accounts.permissions import RolePermission
+from core.exceptions import NotFound, PermissionDenied
 from core.requests import AuthedRequest
 from reports import services as report_services
 from reports.services import DateRange
@@ -42,14 +43,29 @@ def _json_safe(value: Any) -> Any:
 
 
 def _branch_for(request: AuthedRequest) -> Branch | None:
-    """Which branch to report on: explicit, else the user's own if they are scoped."""
-    branch_id = request.query_params.get("branch")
-    if branch_id:
-        return Branch.objects.filter(pk=branch_id).first()
+    """Which branch to report on. `None` means every branch.
+
+    Explicit is honoured only for a branch the caller may see -- the same rule
+    `accounts.services.resolve_branch` applies to every write. Until 2026-09-23
+    it was honoured for any branch at all, so staff confined to one branch
+    could read another's sales, stock value and expenses by naming it (D93).
+    And an id that matched nothing came back as `None`, which is *every*
+    branch: guessing was not even necessary, any UUID would do.
+
+    A closed branch is still reportable. Its history happened.
+    """
     user = request.user
-    if user.can_cross_branch or user.is_superuser:
-        return None  # all branches
-    return user.branch
+    crosses = user.can_cross_branch or user.is_superuser
+    branch_id = request.query_params.get("branch")
+    if not branch_id:
+        return None if crosses else user.branch
+
+    branch = Branch.objects.filter(pk=branch_id).first()
+    if branch is None:
+        raise NotFound("That branch does not exist.", details={"branch": ["Unknown branch."]})
+    if not crosses and user.branch_id and branch.pk != user.branch_id:
+        raise PermissionDenied("You may only report on your own branch.")
+    return branch
 
 
 def _csv_response(rows: list[dict[str, Any]], filename: str) -> HttpResponse:

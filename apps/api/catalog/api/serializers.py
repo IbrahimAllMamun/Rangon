@@ -5,7 +5,6 @@ import re
 from decimal import Decimal
 from typing import Any, cast
 
-from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -22,7 +21,7 @@ from catalog.models import (
     VariantAttributeValue,
 )
 from catalog.services import spec_payload, unique_slug
-from core.media import RelativeImageField, media_url
+from core.media import RelativeImageField, media_url, validate_image_upload
 
 #: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
 #: emit and everything `background-color` will accept from us.
@@ -195,6 +194,9 @@ class CategorySerializer(serializers.ModelSerializer):
             ).data,
         )
 
+    def validate_image(self, value: Any) -> Any:
+        return validate_image_upload(value)
+
     def validate_tax_rate(self, value: Decimal | None) -> Decimal | None:
         """A category override replaces the organisation's VAT rate, and a
         mixed basket takes the **highest** rate present -- so one impossible
@@ -251,6 +253,9 @@ class BrandSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
         extra_kwargs = {"slug": {"required": False}}
 
+    def validate_logo(self, value: Any) -> Any:
+        return validate_image_upload(value)
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         # Create only -- see the note on CategorySerializer.validate.
         if self.instance is None and not attrs.get("slug") and attrs.get("name"):
@@ -294,11 +299,6 @@ class CategoryAttributeSerializer(serializers.ModelSerializer):
         ]
 
 
-#: Product photography, and nothing that merely looks like it. The admin form
-#: applies the same rules, but the API is what has to refuse (CLAUDE.md section 4).
-ALLOWED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".avif")
-
-
 class ProductImageSerializer(serializers.ModelSerializer):
     # drf-stubs types `instance` to cover a `many=True` serializer too, so
     # every attribute read off it is invisible.  Declaration only: a bare
@@ -339,24 +339,7 @@ class ProductImageSerializer(serializers.ModelSerializer):
         return colour_payload(image.attribute_value if image.attribute_value_id else None)
 
     def validate_image(self, value: Any) -> Any:
-        """Size and type, server-side.
-
-        `ImageField` only proves Pillow can decode the file; it caps nothing.
-        Django's `FILE_UPLOAD_MAX_MEMORY_SIZE` is not a limit either — a larger
-        upload simply spills to a temporary file — so without this a 200 MB
-        "photograph" would be accepted and then served back forever.
-        """
-        if not value:
-            return value
-        if value.size > settings.RANGON_MAX_IMAGE_BYTES:
-            limit = settings.RANGON_MAX_IMAGE_BYTES // (1024 * 1024)
-            raise serializers.ValidationError(f"The image must be smaller than {limit} MB.")
-        content_type = (getattr(value, "content_type", "") or "").lower()
-        if content_type and content_type not in settings.RANGON_ALLOWED_IMAGE_TYPES:
-            raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
-        if not str(value.name).lower().endswith(ALLOWED_IMAGE_EXTENSIONS):
-            raise serializers.ValidationError("Upload a JPEG, PNG, WebP or AVIF image.")
-        return value
+        return validate_image_upload(value)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         # The colour rules live on the model so the Django admin obeys them too.

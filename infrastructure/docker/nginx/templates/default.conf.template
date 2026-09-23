@@ -112,6 +112,15 @@ server {
         proxy_pass http://rangon_api;
     }
 
+    # Receipts are staff-only: they are served by
+    # GET /api/v1/expenses/{id}/attachment/, which checks who is asking.
+    # Django refuses this prefix on /media/ as well (core.media.PRIVATE_PREFIXES,
+    # D91); this is the second lock, and it keeps holding if /media/ is ever
+    # switched to an `alias` for speed. Longest-prefix `^~` wins over /media/.
+    location ^~ /media/expenses/ {
+        return 404;
+    }
+
     # Uploaded product photography. Django owns these bytes (USE_S3=0 keeps them
     # on the API's disk); the app returns them as origin-relative paths, so they
     # must be routed here rather than falling through to Next.

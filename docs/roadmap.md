@@ -407,6 +407,85 @@ is still open and tracked in
 
 ## Verification log
 
+### Three controls audited, four defects fixed (D91–D94), 2026-09-23
+
+Asked for after the D89/D90 pass: take the rest of `security.md`'s control table
+and measure it against the code the same way. Three rows were chosen — uploads,
+the session, branch scoping — and each was probed over HTTP before anything was
+read as settled. Two of the three held up in part and failed in part; the third
+failed outright.
+
+**Uploads — one defect, three overclaims.** The first hypothesis was a stored-XSS
+polyglot: four image fields had no validation of their own. **It was wrong** —
+all four refused a decodable GIF named `.html`, because Django's model-level
+extension validator runs. What they lacked was the size cap (an image over it:
+**201**) and the four-format allow-list (Pillow decodes ~70, PostScript among
+them). The doc also claimed images are re-encoded (nothing re-encodes) and served
+from a separate origin (with `USE_S3=0` they are served by Django from the shop's
+own). Then the real one — **D91**:
+
+```text
+manager uploads receipt.png  ->  stored as expenses/2026/09/receipt.png
+anonymous GET /media/expenses/2026/09/receipt.png  ->  200 image/png
+```
+
+**Session — D92.** Rotation held: a rotated refresh token is refused. Logout did
+not, measured four ways:
+
+```text
+logout, live access token ..... 204   refresh afterwards 401   (works)
+logout, expired access token .. 401   refresh afterwards 200   (new pair issued)
+logout, no access token ....... 401   refresh afterwards 200
+```
+
+**Branch scope — D93 and D94**, found by a sweep rather than by reading
+viewsets: seed branch B with one of everything, sign in at A as a manager and as
+an accountant, and GET all 97 parameter-free routes plainly and with
+`?branch=<B>`. Two leaks by id — the transfer list and the returns report — then
+a second probe by figure, because aggregate reports carry no ids:
+
+```text
+GET reports/<name>/?branch=<B>, as a manager bound to A
+  dashboard ............ 200  B's ৳7,777.77 sales and ৳5,603 stock value
+  sales ................ 200  ৳7,777.77
+  inventory/valuation .. 200  ৳5,603
+  expenses ............. 200  ৳3,333.33
+  ?branch=<random UUID>  200  every branch's figures
+POST stock-transfers/ source=B, target=A, as a manager bound to A
+  201, B on_hand 10 -> 8 (and 8 -> 6 as an inventory manager)
+```
+
+**Every new test was run against the old code before it was believed.** 45
+failed there for the stated reason and 15 controls passed, as controls should.
+**Two passed that should not have**, and were rewritten until they failed:
+`test_it_is_never_throttled` passed because the test settings empty the default
+throttles, so the old view looked unthrottled here while production would have
+throttled it; and a 404 for "expense has no receipt" passed because the route did
+not exist yet. Now the first asserts the view declares its own empty list, and
+the second asserts the endpoint's own message.
+
+```text
+pytest ................................. 1250 passed, 4m11s   (1188 + 62 new)
+mypy . ................................. clean, 154 source files
+ruff check . / format (0.8.4) .......... clean, 216 files
+makemigrations --check --dry-run ....... No changes detected
+vitest ................................. 290 passed
+tsc --noEmit / eslint (changed files) .. clean
+```
+
+Verified live, `next dev` against the API: a JPEG uploaded through the proxy as
+`IMG_0412.jpg` was stored under a random name and **came back byte-identical**
+(same sha256) through `/api/proxy/expenses/{id}/attachment` with `no-store` and
+`nosniff`; 401 signed out; 404 on `/media/` under two spellings. JSON and a CSV
+export still pass through the changed proxy. Signing out through the real web
+route with the access cookie removed left the refresh token dead (401). A report
+asked for a random branch id answered 404.
+
+**Left as decisions, not changed silently** (business-rules §7.1): the staff list
+spans branches; a non-owner created with no branch sees every branch. **Left as
+work** (security.md "Not done"): re-encoding images, and refresh-token reuse
+detection.
+
 ### D89 and D90 fixed: a retry that doubled, and a recovery that never ran, 2026-09-22
 
 The backlog was empty again — Tier 1 done, Tier 2 waiting on photography, three
@@ -2019,6 +2098,10 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D88~~ | ~~**Every rate limit was bypassable with one header, and the audit trail believed it.**~~ **Fixed 2026-09-21.** `X-Forwarded-For` is written by the client and *appended to* by each proxy, so the caller owns a prefix of it. DRF's `BaseThrottle.get_ident` keys on the whole header when `NUM_PROXIES` is unset — it never was — and `AuditContextMiddleware._client_ip` took its left-most entry, commented *"the original client"*, which is precisely the part the client writes. **Measured on `main`: 40 wrong-password posts to `/auth/login/`, each with a different header, none refused** (control: refused at the eleventh), and all 40 logged under addresses of the caller's choosing. That is `auth` at 10/min — the limit between one address and a word list — plus `checkout` 20/hour, `search` 120/min and the general `anon` rate. D87 was **not** reachable this way: `ScopedRateThrottle` keys on `request.user.pk` once authenticated, and a first draft of the tests aimed there and passed against `main`, proving nothing. Anonymous requests are the whole of it. Fixed with one rule and one implementation — `core.ip.client_ip` counts `DJANGO_TRUSTED_PROXY_HOPS` entries from the **right** and falls back to `REMOTE_ADDR` when the header is shorter than that; `core.throttling` keys the three DRF throttles on it and the audit middleware calls it directly, with a test that the two agree. Default 0 (no proxy, ignore the header); `docker-compose.prod.yml` sets 1 beside the Nginx that is the only service publishing a port. Re-measured after: refused at the eleventh, 3 Redis buckets where there were 120, and the trail records the proxy's entry. See [§ D88 fixed](#d88-fixed-the-rate-limits-were-decorative-2026-09-21) | `apps/api/core/ip.py`, `apps/api/core/throttling.py`, `apps/api/core/middleware.py`, `apps/api/config/settings/base.py`, `docker-compose.prod.yml` | Found by auditing a control, not by a complaint. The limits read as present in `security.md` and in CI the whole time |
 | ~~D89~~ | ~~**`Idempotency-Key` was accepted and ignored on every finance and inventory endpoint.**~~ **Fixed 2026-09-22.** CLAUDE.md §7 asks for the header "where a retry could double-charge or double-deduct". `orders` read it in 3 of 3 view modules and `purchasing` in 1 of 1; **`finance` and `inventory` in 0 of 1 each**, and neither app's models carried the column — the header was accepted, never stored, never checked. **Measured on `main`:** the same key posted twice moved a balance **342205.00 → 344205.00** (+2000, not +1000) and took `on_hand` **9 → 7**. Both rows are honest ledger entries, so `verify_accounts` and `verify_inventory` reconcile afterwards and nothing flags it — the same shape as [D88](#known-defects), a control that reads as present. Five operations were exposed: cash movements, account transfers, expenses, write-offs and stock transfers. `adjust` and `stock-counts/apply` need no key (an absolute figure and a status transition) and are asserted rather than argued. **The ordering was the hard part**: the key is re-read *after* the row lock and *before* the business validation, because four retries released together all read nothing up front and the losers then failed the stock check for a write-off they had already made. See [§ D89 and D90](#d89-and-d90-fixed-a-retry-that-doubled-and-a-recovery-that-never-ran-2026-09-22) | `apps/api/finance`, `apps/api/inventory`, `apps/api/core/models.py` | Found by auditing a control, not by a complaint. Third time that has paid |
 | ~~D90~~ | ~~**The idempotency race recovery had never worked.**~~ **Fixed 2026-09-22**, and found by D89's own concurrency test. `except IntegrityError:` sat inside the outer `transaction.atomic()` with **no savepoint**, so the error poisoned the transaction and the lookup meant to return the winner's row raised `TransactionManagementError` instead. Four simultaneous POS sale retries sharing a key: **3 of 4 threads raised it**. A cashier double-tapping "Complete sale" on a slow connection got a 500 rather than the receipt — a till-stopping fault in the same family as [D43a](#known-defects). Three sites had it (POS sale, checkout, refund), one had a pre-check and no recovery at all (purchase return), and **two were already correct** (supplier payment, webhook dedupe) — both the newest, which suggests whoever wrote them knew. All four now wrap the claiming insert in an inner `atomic()`. Proven by running the race against `main` before and after | `apps/api/orders/services/{pos,checkout,payments}.py`, `apps/api/purchasing/services.py` | The catch had been there since each feature was written. Nothing had ever exercised it: the concurrency suite tests oversell, not duplicate keys |
+| ~~D91~~ | ~~**Expense receipts were public, at guessable URLs.**~~ **Fixed 2026-09-23.** A receipt was stored as `expenses/<year>/<month>/<the uploader's own filename>` and `/media/` served it to anyone: a manager attached `receipt.png`, and an **anonymous** GET of `/media/expenses/2026/09/receipt.png` answered **200** with the image. Phone photos are `IMG_0001`…`IMG_9999` and `/media/` has no rate limit, so the folder could be walked. `USE_S3=1` was no better — storage URLs are unsigned (`querystring_auth: False`). Receipts are now served only by `GET /api/v1/expenses/{id}/attachment/`, which runs the viewset's own permission and branch scope and answers `no-store` + `nosniff`; `/media/` refuses the prefix (`core.media.PRIVATE_PREFIXES`), Nginx refuses it too, and new uploads get a random name. The web proxy passed every body through `.text()`, which would have corrupted the file on the way back — it passes bytes now. Verified live: a JPEG uploaded through the proxy came back byte-identical (same sha256) | `apps/api/core/media.py`, `apps/api/finance/{models,api/views,api/serializers}.py`, `apps/web/src/app/api/proxy/[...path]/route.ts`, both Nginx configs | Receipts were built on the same `FileField` as product photography, and product photography *is* public. The upload was validated with care — size, type, extension — and nobody asked who could download it |
+| ~~D92~~ | ~~**Signing out after thirty idle minutes left the session alive for fourteen days.**~~ **Fixed 2026-09-23.** `LogoutView` required a valid access token. The access token and the cookie carrying it both live thirty minutes, so anyone signing out after half an hour away got a **401** — which the web route ignored, clearing the cookies and showing "signed out" while the refresh token stayed good for the rest of its fourteen days. Measured: with a live access token, logout 204 and the refresh token dies; with an expired one or none, logout 401 and the refresh token **mints a new pair**. That is the one case server-side revocation exists for — a token copied off the machine. The refresh token is now the whole credential for signing out: no access token asked for, no throttle (a 429 would leave the token alive), always 204. Verified through the real web route with the access cookie removed: refresh afterwards 401 | `apps/api/accounts/api/views.py` | **No test called `auth/logout/`.** The route's own comment says a cleared cookie alone would leave a usable token in the wild; nothing checked that the call it makes ever succeeded |
+| ~~D93~~ | ~~**Every report took `?branch=` at its word.**~~ **Fixed 2026-09-23.** `reports.api.views._branch_for` returned whatever branch was named, with no check, and backed all eleven reports. A manager or accountant confined to one branch read another's sales (৳7,777.77 in the probe), stock valuation, stock movement, expenses, dashboard and business summary by naming it. Worse, an id that matched nothing came back as `None` — which means *every* branch — so **any random UUID** was enough. Now a branch-bound caller naming another branch gets 403 and an unknown id gets 404; owners and admins still report on any branch, closed ones included. The three `?branch=` readers in `finance` already used `resolve_branch`, which is why the reports were the odd one out rather than the rule | `apps/api/reports/api/views.py` | Without the parameter every report scoped correctly, so every test of report scoping passed — and no screen sends the parameter at all (`/admin/reports` and the dashboard pass only `range`), so nobody ever sent it by accident either. It was reachable by anyone who read the API |
+| ~~D94~~ | ~~**Anyone holding `inventory.transfer` could move stock out of any branch.**~~ **Fixed 2026-09-23.** `POST stock-transfers/` looked the source branch up bare — `Branch.objects.get(pk=...)` — where every other stock write goes through `resolve_branch`. A manager or inventory manager at branch A sent B's stock to A: **201**, and B's shelf went 10 → 8 → 6. The ledger recorded it faithfully, which is the problem: it is the insider-theft path `security.md` listed as closed. The list was unscoped too — every role at A saw a B → C transfer — because `branch_queryset` could filter on one field and a transfer has two. It takes several now, OR-ed, so each branch sees its own transfers from either end. The source must pass `resolve_branch`; the target may be any **active** branch, since sending stock elsewhere is what a transfer is | `apps/api/inventory/api/views.py`, `apps/api/accounts/services.py` | The only stock write that takes two branches, and the one that did not reuse the helper every single-branch write does |
 
 ## Still API-only (no UI)
 

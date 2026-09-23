@@ -136,16 +136,38 @@ class RefreshView(APIView):
 
 
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
+    """End the session a refresh token belongs to.
 
-    def post(self, request: AuthedRequest) -> Response:
+    Holding the refresh token *is* the credential, so no access token is asked
+    for. One used to be (`IsAuthenticated`), and an access token lives thirty
+    minutes -- as does the cookie carrying it. Sign out after half an hour away
+    from the counter and the API answered 401, the web route cleared the
+    cookies regardless, and the refresh token stayed good for the rest of its
+    fourteen days: the one case the route exists for (D92).
+
+    No throttle, deliberately. There is nothing here to guess -- a refresh
+    token is signed -- and a 429 would leave the token alive, which is this
+    defect again by another road.
+
+    Always 204: signing out of a session that is already over is not an error,
+    and the answer does not say whether the token was live.
+    """
+
+    authentication_classes = ()
+    permission_classes = [AllowAny]
+    throttle_classes = ()
+
+    def post(self, request: Request) -> Response:
         token = request.data.get("refresh")
         if token:
             try:
-                RefreshToken(token).blacklist()
+                refresh = RefreshToken(token)
+                user = User.objects.filter(pk=refresh["user_id"]).first()
+                refresh.blacklist()
             except TokenError:
-                pass  # already expired or unknown — logging out is still a success
-        audit.record(action=audit.AuditAction.LOGOUT, entity=request.user, actor=request.user)
+                user = None  # expired, already rotated or signed out, or not ours
+            if user is not None:
+                audit.record(action=audit.AuditAction.LOGOUT, entity=user, actor=user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -16,7 +16,7 @@ from rest_framework import serializers
 
 from content.models import NavigationItem, StorefrontBanner
 from content.selectors import NavNode
-from core.media import RelativeImageField, media_url
+from core.media import RelativeImageField, media_url, validate_image_upload
 
 
 def serialise_node(node: NavNode) -> dict[str, Any]:
@@ -89,6 +89,9 @@ class NavigationItemSerializer(ScheduledContentSerializer):
     display_label = serializers.CharField(read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True, default="")
 
+    def validate_image(self, value: Any) -> Any:
+        return validate_image_upload(value)
+
     class Meta:
         model = NavigationItem
         fields = [
@@ -128,6 +131,9 @@ class NavigationItemSerializer(ScheduledContentSerializer):
 
 class StorefrontBannerSerializer(ScheduledContentSerializer):
     image = RelativeImageField(required=False, allow_null=True)
+
+    def validate_image(self, value: Any) -> Any:
+        return validate_image_upload(value)
 
     class Meta:
         model = StorefrontBanner
