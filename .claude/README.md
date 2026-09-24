@@ -47,20 +47,21 @@ say which.
 ### Last recorded run of each check
 
 Each line is the most recent result the roadmap's verification log records, with its date. These are
-from the 2026-09-21 to 09-23 passes — the defect audit, the D40 workaround, the CI E2E move, the D6
-fix, D88, the password toggle, D89/D90, and the D91–D94 audit with the role matrix — each of which
-ran its checks itself rather than quoting an older entry.
+from the 2026-09-21 to 09-24 passes — the defect audit, the D40 workaround, the CI E2E move, the D6
+fix, D88, the password toggle, D89/D90, the D91–D94 audit with the role matrix, and the D95–D102
+walk-and-audit — each of which ran its checks itself rather than quoting an older entry.
 
 ```text
-pytest ................................. 1260 passed              2026-09-23
-ruff 0.8.4 check + format --check ...... clean, 217 files         2026-09-23
-tsc --noEmit ........................... clean                    2026-09-23
-vitest ................................. 301 passed, 27 files     2026-09-23
+pytest ................................. 1306 passed              2026-09-24
+ruff 0.8.4 check + format --check ...... clean, 221 files         2026-09-24
+tsc --noEmit ........................... clean                    2026-09-24
+vitest ................................. 324 passed, 29 files     2026-09-24
 query budgets + concurrency ............ 38 passed                2026-09-21
-mypy ................................... clean, 154 source files  2026-09-23  <- blocking since
+mypy ................................... clean, 154 source files  2026-09-24  <- blocking since
                                          D6 (2026-09-21)
-playwright, PRODUCTION standalone ...... 42 passed / 42           2026-09-21  <- after the D40
-                                         workaround; 46 specs now, green in CI on 2026-09-22
+playwright, PRODUCTION standalone ...... 46 passed / 46           2026-09-24  <- with the D101
+                                         origin check in place: every real flow sends Origin
+gitleaks, whole history ................ no leaks, 120 commits    2026-09-24  <- blocking in CI
 verify_inventory / verify_accounts ..... consistent               2026-09-21
 migrations from an empty database ...... OK                       2026-09-21
 ```
@@ -133,8 +134,13 @@ race recovery it was supposed to have had never worked anywhere. And **D91–D94
 three more rows of `security.md`: receipts public at guessable URLs, sign-out not revoking after
 thirty idle minutes, every report readable for any branch, and stock transferable out of any
 branch. The same day `permissions/` got its caller — a role × permission matrix on `/admin/staff` —
-so no API is without a screen except the customer-account ones, withdrawn on purpose. The **payment gateway** and the **SMS account** wait on
-provider accounts; COD works today, so only prepaid waits on the gateway.
+so no API is without a screen except the customer-account ones, withdrawn on purpose. And
+**D95–D102** on 09-24, from using the two screens nobody had and measuring five more controls: a
+named account never checked (a sale could fill another branch's drawer), the order-tracking link
+returning the staff record, parcels leaving unpacked orders, and a CSRF token `security.md` listed
+that had never been built. CORS and CSP held as written. Secret scanning now runs in CI, blocking.
+The **payment gateway** and the **SMS account** wait on provider accounts; COD works today, so only
+prepaid waits on the gateway.
 
 Details and the lesson from each session are in `session-history.md`; the decisions the owner still
 owes are in `open-questions.md`.

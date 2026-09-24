@@ -92,8 +92,8 @@ treated as a count of zero.
 | POST | `purchase-orders/{id}/send/` · `cancel/` | `purchases.create` |
 | POST | `purchase-orders/{id}/receive/` | `purchases.receive` — lines received → `PURCHASE` ledger + WAC |
 | GET | `purchase-orders/{id}/receipts/` | `purchases.view` |
-| GET | `supplier-payments/?purchase_order={id}` | `purchases.view` — payment history |
-| POST | `supplier-payments/` | `purchases.pay` — `Idempotency-Key` honoured |
+| GET | `supplier-payments/?purchase_order={id}` | `purchases.view` — payment history. Branch-scoped: the order's branch, or for an advance the paying account's ([D95](../roadmap.md#known-defects)) |
+| POST | `supplier-payments/` | `purchases.pay` — `Idempotency-Key` honoured. Another branch's purchase order is **403** |
 
 `POST supplier-payments/` refuses more than is owed with **422 `PAYMENT_EXCEEDS_OUTSTANDING`**
 (`details` carries `requested`, `outstanding`, `grand_total`, `paid_total`), a `DRAFT` or `CANCELLED`
@@ -161,7 +161,14 @@ Overdrawing an account that does not allow overdraft returns **409 `INSUFFICIENT
 
 Three existing endpoints now accept an optional `account` (omit it and the branch default for the
 method's kind is used): `POST orders/{id}/payments/`, `POST orders/{id}/refunds/` and
-`POST supplier-payments/`. `POST pos/sales/` accepts one per tender line.
+`POST supplier-payments/`. `POST pos/sales/` accepts one per tender line, and
+`POST returns/{id}/complete/` one per refund.
+
+**A named account must be the money's branch's own, open, and of the method's kind** — else
+**400 `VALIDATION_ERROR`** with the reason under `details.account` ("Choose a bank account."). The
+branch is the order's or the purchase order's, never the caller's
+([D95](../roadmap.md#known-defects), [business-rules §6b.1](../business-rules.md#6b1-where-money-is-held)).
+A refund states its `method` too; left out, it goes back the way the payment came.
 
 ## Customers — `/api/v1/customers/`
 
@@ -203,9 +210,11 @@ in hand (business-rules §2.1). A line left out keeps whatever it was raised wit
 applied *before* stock moves, so `DAMAGED` on inspection never reaches sellable stock.
 
 `complete/` accepts an `account`, so a refund can name the drawer the cash leaves from rather than
-falling back to the branch default for the method. It is idempotent on `Idempotency-Key` (and on the
-return itself), so a retried request cannot pay a customer twice.
-| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` (`orders.view` to read). Branch-scoped on `order__branch`. A parcel always starts `PENDING` — `status`, `dispatched_at` and `delivered_at` are read-only and move only through `events/`. See [business-rules §8a.3](../business-rules.md#8a3-shipments-and-tracking) |
+falling back to the branch default for the method, and a `refund_method` — one of the payment methods;
+free text was accepted until 2026-09-24 and, mapping to no kind of account, let any account through
+([D95](../roadmap.md#known-defects)). It is idempotent on `Idempotency-Key` (and on the return itself),
+so a retried request cannot pay a customer twice.
+| GET/POST | `shipments/` · POST `shipments/{id}/events/` | `orders.fulfil` (`orders.view` to read). Branch-scoped on `order__branch`. A parcel always starts `PENDING` — `status`, `dispatched_at` and `delivered_at` are read-only and move only through `events/`. Its first movement is **409** until the order is packed ([D98](../roadmap.md#known-defects)). See [business-rules §8a.3](../business-rules.md#8a3-shipments-and-tracking) |
 
 ## Shipping & promotions — `/api/v1/`
 
@@ -225,12 +234,12 @@ return itself), so a retried request cannot pay a customer twice.
 | GET/POST/PATCH/DELETE | `cart/` · `cart/items/` · `cart/items/{id}/` | server-priced; guest via `X-Cart-Token` |
 | POST | `cart/coupon/` · DELETE `cart/coupon/` | server-computed discount |
 | GET | `shipping-options/` | zone-matched methods + prices for the cart |
-| POST | `checkout/` | **`Idempotency-Key` required** → order (+ payment intent) |
-| GET | `orders/{number}/?token=` | guest order tracking |
+| POST | `checkout/` | **`Idempotency-Key` required** → the customer's order (+ payment intent) and `tracking_token` |
+| GET | `orders/{number}/?token=` | guest order tracking. **The customer's shape** — `CustomerOrderSerializer`, field by field: no staff identities, internal notes, typed reasons or accounts; the timeline written for the customer; parcels without `cost` or `notes`. So do `checkout/` and `account/orders/` ([D97](../roadmap.md#known-defects)) |
 | GET | `account/orders/` · `account/orders/{number}/` | authenticated customer. **No caller** — see below |
 | GET/POST/PATCH/DELETE | `account/addresses/` | authenticated customer. **No caller** — see below |
 | POST | `products/{slug}/reviews/` | verified purchase required, enters moderation. **No caller** since the storefront's account surface was withdrawn — see below |
-| POST | `payments/{provider}/webhook/` | signature-verified, deduplicated, no auth |
+| POST | `payments/{provider}/webhook/` | signature-verified by the provider, deduplicated, no auth. Acts only on a payment made through that provider, and captures only its amount (`result: provider_mismatch` / `amount_mismatch` otherwise — [D100](../roadmap.md#known-defects)). `manual` takes none: 404 |
 | GET | `feed.xml` · `feed.csv` | product feed for Meta / Google. Public, cached 15 min, one row per sellable variant. 503 if `RANGON_PUBLIC_URL` is unset — see [marketing-feeds.md](../operations/marketing-feeds.md) |
 
 ### The customer-account endpoints have no caller, deliberately

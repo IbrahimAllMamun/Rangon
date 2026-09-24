@@ -130,6 +130,13 @@ If there is none, it returns `None` and **nothing is posted**. It does not fall 
 posting card takings into the cash drawer would make the drawer impossible to reconcile, and a
 plausible lie in a cash book is worse than a visible gap.
 
+**A named account is held to the same three rules** — `check_named_account(account, branch=,
+method=)`, called by `record_for_reference` whenever the caller names one: the account belongs to
+the money's branch (the order's or purchase order's, never the caller's choice), it is active, and
+its kind is the method's. A method the ledger does not know is refused rather than waved through,
+since it has no kind to compare. Until 2026-09-24 only `resolve_account` applied them, and every
+screen names an account when a person picks one ([D95](../roadmap.md#known-defects)).
+
 The causing event still succeeds — a shop that has not opened its accounts yet must still be able to
 sell. `verify_accounts` counts every captured payment, completed refund and supplier payment that
 carries no account, so the gap is reported (illustrative output, not a measurement):

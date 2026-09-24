@@ -797,3 +797,38 @@ shipped four days earlier.
 - *`pkill -f` / `pgrep -f` match the calling shell's own command line* when the
   pattern appears anywhere in it — heredocs included. Three times this session it
   killed the shell running it. Put the kill in a script file and call the file.
+
+## 2026-09-24 — D95–D102: two screens used, five controls measured, secret scanning
+
+Asked for as three things: use the two screens nothing had exercised (the
+supplier payment form; the order Delivery panel with the customer's parcel view)
+in a real browser, measure CSRF, CORS, CSP, error leakage and payment webhooks,
+and put secret scanning in CI. Draft PR #54.
+
+- **Both screens worked.** Every defect was in what they were connected to:
+  D95 (named accounts never checked — found from the supplier form's request),
+  D97 (the customer's payload was the staff record — found reading the parcel
+  view's bytes, not its pixels), D98 (a parcel could leave an unpacked order).
+  D96 and D102 were found *setting up* the walk: a second drawer could not be
+  opened, and the walk's own parcels broke `seed_demo --reset`.
+- **Measured controls:** CORS and CSP held exactly as written. CSRF did not —
+  the double-submit token had never existed (D101). One `str(exc)` reached a
+  response (D99). The webhook view was fine today and wrong for tomorrow (D100).
+- One existing test changed on purpose: it refunded cash out of an `OTHER`-kind
+  box, which D95 now refuses; it names a second cash box instead.
+
+Lessons:
+
+- *A default that is checked says nothing about an explicit choice.*
+  `resolve_account` was careful; every screen bypasses it by naming an account.
+  Test the wrong explicit choice, not just the right default.
+- *Read the bytes a screen receives, not the screen.* The tracking page rendered
+  five fields; the payload carried staff emails. `json.dumps(response.data)`
+  chokes on UUIDs — assert on `response.content` instead, which is also what
+  actually left the server.
+- *A readiness probe can be answered by the process you meant to replace.* Next
+  retitles itself `next-server`, so a name-based stop missed it and the "new"
+  build on :4000 was the old one — a working fix measured as broken. Stop by
+  port (`.claude/environment.md` §16).
+- *Every PROTECT reference is a future `--reset` failure* — the fourth one.
+

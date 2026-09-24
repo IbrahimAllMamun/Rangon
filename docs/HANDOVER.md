@@ -102,6 +102,20 @@ for fourteen days. **D93** — every report took `?branch=` at its word, and an 
 branch. **D94** — staff holding `inventory.transfer` at one branch could send another branch's stock
 to their own. **With `USE_S3=1`, the bucket's public-read policy must exclude `expenses/*`.**
 
+Closed on 2026-09-24, from using the two screens nobody had and measuring five more controls:
+**D95** — an account a person *named* was never checked, so a POS sale at one branch could land in
+another's drawer, a refund come out of one, and a cheque be paid out of cash; the screens now state
+a refund method and offer only the order's branch's accounts of that kind. **D96** — a branch could
+not open a second drawer or bank account. **D97** — the order-tracking link, open to anyone holding
+it, returned the staff record: who handled the order, what they typed, which drawer the money went
+into. **D98** — a parcel could be dispatched and delivered while its order sat at CONFIRMED, goods
+still counted on the shelf. **D99** — one error path echoed SQL to the shopper. **D100** — a
+verified webhook would have captured whichever payment the order had pending (latent: no gateway
+yet). **D101** — the CSRF token `security.md` described had never been built; writes now need this
+site's `Origin`, which means **`NEXT_PUBLIC_SITE_URL` must be the address browsers use** when Nginx
+serves a non-default port. **D102** — `seed_demo --reset` died once a parcel existed. Secret scanning
+(gitleaks) runs in CI, blocking.
+
 **D40** and **D77** were the same defect and are worked around: `router.refresh()` fetched
 the new payload and discarded it, so `refreshAfterWrite()` now verifies the server render actually
 changed and reloads when it did not. The root cause is upstream and still unknown.

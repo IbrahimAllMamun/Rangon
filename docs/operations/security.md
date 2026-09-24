@@ -12,17 +12,18 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Authorization | Role → permission codes enforced by DRF permission classes on **every** endpoint; `OWNER` bypass is explicit and audited. **Branch scope**: staff bound to a branch read its rows (`accounts.services.branch_queryset`) and act on it (`resolve_branch`); a row with two branches — a stock transfer — is visible from either end. Deliberate exceptions, each a `DECISION REQUIRED` in business-rules §7.1: the branch directory, the staff list, and organisation-wide audit entries span branches; a non-owner **with no branch assigned** sees every branch. `tests/api/test_branch_scope.py` sweeps every parameter-free GET route for another branch's rows, including routes added after it — it found [D93](../roadmap.md#known-defects) and [D94](../roadmap.md#known-defects), after checking viewsets one at a time had missed them |
 | Brute force | Throttle 10/min on login and register (per IP) and on password change (per account, since 2026-09-19 — [D87](../roadmap.md#known-defects)); failed logins and wrong current passwords audit-logged as `LOGIN_FAILED`. **Per IP means per *trusted* IP** — see the row below; until 2026-09-21 it did not ([D88](../roadmap.md#known-defects)) |
 | Input | DRF serializers validate and coerce everything; the ORM parameterises all SQL; no raw string SQL anywhere |
-| XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP sent by the web app itself (`apps/web/src/middleware.ts`) with a per-request nonce — **not** by Nginx, which would append a second policy and block the nonced scripts |
-| CSRF | Cookie-borne auth on same-origin Next routes uses `SameSite=Lax` + a double-submit token on state-changing routes; the API itself is token-authenticated and CSRF-exempt by construction |
-| CORS | Explicit allow-list (`DJANGO_CORS_ALLOWED_ORIGINS`), credentials allowed only for those origins; wildcard is forbidden in production |
+| XSS | React escapes by default; no `dangerouslySetInnerHTML` outside a sanitised rich-text renderer; CSP sent by the web app itself (`apps/web/src/middleware.ts`) with a per-request nonce — **not** by Nginx, which would append a second policy and block the nonced scripts. **Measured 2026-09-24** on a production build: every document route, a 404 and the redirects included, sends it; every `<script>` carries the nonce; the nonce is new per request; `e2e/csp.spec.ts` checks in a real browser that each page's scripts load under it |
+| CSRF | The session is `httpOnly` `SameSite=Lax` cookies on the shop's origin, used by the Next routes under `/api/proxy` and `/api/auth`. Every state-changing request to those routes must carry this site's `Origin` or none (`apps/web/src/lib/api/same-origin.ts`): a browser always sends it on a cross-origin write and page script cannot forge it, and a request without one is not a browser's. `SameSite=Lax` alone left a **same-site** origin — any subdomain — able to act with the cookies. **This row used to promise a double-submit token; none was ever built** — measured 2026-09-24, a PATCH from `https://blog.shop.example` changed an account with an owner's cookies, and a sign-in from another origin set a session ([D101](../roadmap.md#known-defects)). The Django API is bearer-token authenticated; its session authentication (Django admin only) keeps Django's own CSRF check |
+| CORS | Explicit allow-list (`DJANGO_CORS_ALLOWED_ORIGINS`), credentials allowed only for those origins; `CORS_ALLOW_ALL_ORIGINS = False` is fixed in `prod.py`. **Measured 2026-09-24** against production settings: only an exact listed origin gets `Access-Control-Allow-Origin` (a suffix like `shop.example.evil.com`, the wrong scheme and `null` get nothing); `*` in the list is refused at start by `corsheaders.E013`, and forced past the check it matches nothing. The browser never needs it: it talks only to its own origin (`connect-src 'self'`) |
 | Transport | HTTPS only; HSTS 1 year with preload; `Secure` cookies; HTTP redirected |
 | Headers | `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, CSP with `'nonce-…' 'strict-dynamic'` and no `unsafe-inline`/`unsafe-eval` in `script-src` |
 | Uploads | Every image field — product photos, category images, brand logos, navigation and banner art — goes through `core.media.validate_image_upload`: Pillow must decode it (the magic-byte check), 10 MB cap, JPEG/PNG/WebP/AVIF only by detected type *and* extension. Until 2026-09-23 only product photos had the cap and the four-format list; the other four took any size in any of ~70 formats Pillow decodes, PostScript included. A decodable file named `.html` was refused throughout, by Django's model validator. **Not re-encoded** and **not on a separate origin**: with `USE_S3=0`, the default, Django serves `/media/` from the shop's own origin. Nothing uploadable is a type a browser executes, which is what makes that acceptable. **Receipts are private**: served only by `GET /api/v1/expenses/{id}/attachment/` to staff who may read the expense, refused on `/media/` by Django and Nginx, stored under random names ([D91](../roadmap.md#known-defects)) |
 | Secrets | Environment only; `.env` git-ignored; no secret in an image layer or a frontend bundle; `NEXT_PUBLIC_*` reviewed as public by definition |
-| Payments | No card data stored, logged or forwarded; only provider references; capture requires a verified webhook or a server-side verification call |
+| Payments | No card data stored, logged or forwarded; only provider references. **Today every capture is a staff action**: the only registered provider is `manual`, which takes no webhooks — a forged `payment.success` is a 404 and captures nothing (measured 2026-09-24, `tests/api/test_payment_webhooks.py`). Checking a webhook's signature is each provider's `parse_webhook`; what a verified event may do is decided in one place — it acts only on a payment made through the **same provider**, and captures only the **amount that payment was for**. Until 2026-09-24 it captured the order's first pending payment, whoever it was with and whatever it was for ([D100](../roadmap.md#known-defects)) — latent, and closed before the first gateway |
 | Audit | Actor, action, entity, before/after, reason, IP, user agent, request id for every sensitive action; passwords and tokens never logged |
-| Errors | Uniform error envelope; no stack traces, SQL or settings in responses; `DEBUG=False` enforced in production settings |
-| Dependencies | Pinned; `pip-audit` and `npm audit` in CI; Trivy image scan fails the build on fixed HIGH/CRITICAL |
+| Errors | Uniform error envelope; no stack traces, SQL or settings in responses; `DEBUG=False` fixed in `prod.py`. `core.handlers` turns an unhandled exception into a bare 500 with a request id and an `IntegrityError` into a bare 409 (`tests/api/test_error_leakage.py`). The one path around it — the cart's coupon re-check put `str(exc)` in the response, SQL included for a database error — was closed 2026-09-24 ([D99](../roadmap.md#known-defects)) |
+| Dependencies | Pinned; `pip-audit` and `npm audit` run in CI **as advisories** — both steps end in `\|\| echo "::warning::…"`, so they report and never fail the build; Trivy image scan fails the build on fixed HIGH/CRITICAL |
+| Secrets in the repository | gitleaks over **the whole history** on every push and pull request, pinned and checksum-verified, **blocking** — see **Secret scanning** below |
 | Client address | Every rate limit, and the audit trail's `ip_address`, resolve the caller through `core.ip.client_ip`, which counts `DJANGO_TRUSTED_PROXY_HOPS` entries **from the right** of `X-Forwarded-For` — the entries our own proxies appended. The default is 0: no proxy, ignore the header. See **Deploying behind a proxy** below |
 | Database | Private network only, never published to the internet; least-privilege application user |
 
@@ -39,6 +40,10 @@ Baseline: OWASP ASVS L1 with L2 controls where they are cheap.
 | Financial documents in public media | Expense receipts are not media: a dedicated endpoint, two refusals on `/media/`, random names ([D91](../roadmap.md#known-defects)) |
 | Cashier self-refund | `sales.refund` withheld from `CASHIER`; manager elevation is a separate credential check, logged with both user ids |
 | Enumeration of orders/customers | UUID primary keys; guest order tracking requires a signed token as well as the order number |
+| The tracking link showing the shop's record | The link is open to whoever holds it, so it returns the customer's version of the order, field by field — never staff identities, internal notes, typed reasons or the drawer a payment went into. Until 2026-09-24 it returned the staff serializer, and so did the signed-in account's orders ([D97](../roadmap.md#known-defects)) |
+| Cross-site request forgery | `Origin` checked on every state-changing cookie-authenticated route; `SameSite=Lax` beneath it ([D101](../roadmap.md#known-defects)) |
+| Money moved through the wrong account | A named account must be the money's branch's own, open, and of the method's kind, checked where every sale, refund and supplier payment posts. Until 2026-09-24 only the default was checked: a sale at one branch could fill another's drawer ([D95](../roadmap.md#known-defects)) |
+| A webhook capturing the wrong payment | Only its own provider's payment, only for its amount ([D100](../roadmap.md#known-defects)) |
 | Account takeover | Argon2, throttling, refresh rotation + blacklist, logout everywhere on password change or an owner's reset. The last was listed here before it existed: until 2026-09-19 a changed password left every session open for up to 14 days ([D86](../roadmap.md#known-defects)) |
 | PII exposure in logs | Structured logging with an explicit field allow-list; no request bodies logged on auth endpoints |
 | Rate limits defeated by a forged header | `X-Forwarded-For` is client-supplied. DRF's stock throttles key on the whole of it when `NUM_PROXIES` is unset, so one varying header bought a fresh bucket per request. `core.throttling` keys on the trusted entry instead ([D88](../roadmap.md#known-defects)) |
@@ -69,11 +74,37 @@ Two rules, and getting either wrong is silent:
 Too low is the safe way to be wrong: callers share a bucket, honest traffic
 gets 429s, and somebody notices within the hour. Too high is silent.
 
+## Secret scanning
+
+The `secrets` job in `.github/workflows/ci.yml` runs [gitleaks](https://github.com/gitleaks/gitleaks)
+8.21.2 over **every commit** on every push and pull request — a key committed and deleted a commit
+later is still in the history anyone who can clone reads. The binary is pinned by version and
+verified against its published SHA-256 before it runs. A finding fails the build.
+
+When it fails:
+
+1. **Assume it is real.** Rotate the credential at its source first — revoke the key, change the
+   password — then take it out of the code and read it from the environment. Removing it from the
+   *history* (a rewrite, then a force-push) comes after the rotation, never instead of it: the value
+   has been public since the push.
+2. **If it is not a secret** — a test fixture, a documented example — add its fingerprint to
+   `.gitleaksignore` with the reason on the line above. A fingerprint names one finding in one
+   commit, so nothing else can hide behind the entry. Never skip a rule or a path to get green.
+
+Run it locally before pushing:
+
+```bash
+gitleaks git --redact .    # the history, as CI does
+gitleaks dir --redact .    # the working tree, including what is not committed yet
+```
+
+The first run, 2026-09-24, over 120 commits: one finding, a test fixture's password — the rotation a
+re-seed must leave alone — accepted by fingerprint.
+
 ## Not done
 
 - Independent penetration test (gap #6 in the roadmap).
 - MFA for staff accounts — recommended before multi-branch rollout.
-- Automated secret scanning in CI (`gitleaks`) — recommended, one workflow step.
 - Field-level encryption for customer phone numbers; currently protected by database access control only.
 - **Re-encoding uploaded images.** It would strip EXIF — a phone photo's GPS position among it — and
   any bytes trailing the image. The allow-list keeps executable types out; re-encoding is the

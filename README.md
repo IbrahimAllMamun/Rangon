@@ -25,11 +25,11 @@ Not production-ready; not deployed anywhere; no real order has ever been placed.
 |                  |                                                                                                                                                                   |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | CI               | Five jobs, all blocking — backend (ruff, mypy, migrations, pytest), frontend (lint, typecheck, Vitest, build), E2E (Playwright against a **production build**), dependency audits, image build + Trivy scan |
-| Backend tests    | 1,260 passing, including 20 threaded concurrency tests against real PostgreSQL                                                                                    |
-| Frontend tests   | Vitest 301 passing; Playwright 46 (the four critical flows plus accessibility checks, desktop and mobile) — both run by CI                                       |
+| Backend tests    | 1,306 passing, including 20 threaded concurrency tests against real PostgreSQL                                                                                    |
+| Frontend tests   | Vitest 324 passing; Playwright 46 (the four critical flows plus accessibility checks, desktop and mobile) — both run by CI                                       |
 | Type checking    | `tsc` clean; `mypy` clean across 154 source files and **blocking** in CI since 2026-09-21 ([D6](docs/roadmap.md#known-defects))                               |
-| Verified by hand | A POS sale; a full storefront purchase (cart → COD checkout → confirmed order); a backup restored for real; most admin screens signed in and used — **not** the supplier payment form or the order Delivery panel, both from 2026-09-15 |
-| Known defects    | D1–D94 logged; **two open** — D7 (Playwright cannot run in the Alpine *dev* image) and D9 (no product photography)                                          |
+| Verified by hand | A POS sale; a full storefront purchase (cart → COD checkout → confirmed order); a backup restored for real; most admin screens signed in and used — the supplier payment form and the order Delivery panel with the customer's parcel view since 2026-09-24 |
+| Known defects    | D1–D102 logged; **two open** — D7 (Playwright cannot run in the Alpine *dev* image) and D9 (no product photography)                                          |
 | Biggest gaps     | No live environment, no product photos, VAT not yet decided (the default is a placeholder), no payment gateway (COD works), no load test, no independent penetration test |
 
 Phase-by-phase status, the full verification log and every known defect are in
