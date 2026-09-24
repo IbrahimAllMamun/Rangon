@@ -11,6 +11,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
+import { refuseCrossOrigin } from "@/lib/api/same-origin";
 
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
@@ -50,6 +51,10 @@ function withSession(response: NextResponse, pair: Pair | null): NextResponse {
 }
 
 export async function POST(request: Request) {
+  // It needs the current password too, but the check costs nothing here (D101).
+  const refused = refuseCrossOrigin(request);
+  if (refused) return refused;
+
   const store = await cookies();
   const input = await request.json().catch(() => ({}));
   const body = JSON.stringify({

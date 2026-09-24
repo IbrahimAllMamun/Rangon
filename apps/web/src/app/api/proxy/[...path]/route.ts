@@ -9,6 +9,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
 import { ACCESS_COOKIE, CART_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
+import { refuseCrossOrigin } from "@/lib/api/same-origin";
 
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
@@ -27,6 +28,11 @@ async function refreshAccess(refresh: string): Promise<{ access: string; refresh
 }
 
 async function forward(request: NextRequest, path: string[]) {
+  // A session cookie is only as safe as the check that the request came from
+  // this site (D101).
+  const refused = refuseCrossOrigin(request);
+  if (refused) return refused;
+
   const store = await cookies();
 
   // Next hands the catch-all over as path *segments*, so a trailing slash is

@@ -5,11 +5,17 @@
 import { NextResponse } from "next/server";
 
 import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
+import { refuseCrossOrigin } from "@/lib/api/same-origin";
 
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
 
 export async function POST(request: Request) {
+  // Signing someone in from another site is still CSRF: their browser would
+  // act as whatever account the other site chose (D101).
+  const refused = refuseCrossOrigin(request);
+  if (refused) return refused;
+
   const body = await request.json();
 
   const upstream = await fetch(`${INTERNAL_URL}/auth/login/`, {
