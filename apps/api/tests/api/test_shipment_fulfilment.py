@@ -208,6 +208,93 @@ class TestTheShipmentStartsPending:
         assert ShipmentEvent.objects.filter(shipment=shipment).count() == 1
 
 
+class TestAParcelLeavesAPackedOrder:
+    """A parcel cannot leave the shop before its order is packed (D98).
+
+    Booking one early is allowed -- a packer can get a tracking number while
+    the order is still being prepared. But only PACKED -> SHIPPED and
+    SHIPPED/PACKED -> DELIVERED were wired, so a parcel dispatched for a
+    CONFIRMED order moved and was delivered while the order stayed CONFIRMED.
+    Walked in the browser 2026-09-24: the customer's page read "Your order is
+    confirmed. We will call you before delivery." above a parcel marked
+    Delivered -- and because packing is when the goods leave the stock ledger,
+    delivered goods were still counted on the shelf, reserved.
+    """
+
+    def _booked(self, shop, auth_client, status: str) -> tuple[Shipment, object]:
+        order = _order(shop["branch"], status=status)
+        client = auth_client(shop["manager"])
+        response = client.post("/api/v1/shipments/", {"order": str(order.pk)}, format="json")
+        assert response.status_code == 201, response.data
+        return Shipment.objects.get(pk=response.data["id"]), client
+
+    @pytest.mark.parametrize("first", [ShipmentStatus.DISPATCHED, ShipmentStatus.DELIVERED])
+    @pytest.mark.parametrize("status", [OrderStatus.CONFIRMED, OrderStatus.PROCESSING])
+    def test_an_unpacked_orders_parcel_cannot_move(self, shop, auth_client, status, first) -> None:
+        """Fails on `main`: 201, the parcel moves and the order does not."""
+        shipment, client = self._booked(shop, auth_client, status)
+
+        response = client.post(
+            f"/api/v1/shipments/{shipment.pk}/events/", {"status": first}, format="json"
+        )
+
+        assert response.status_code == 409, response.data
+        assert "pack" in response.data["error"]["message"].lower()
+        shipment.refresh_from_db()
+        assert shipment.status == ShipmentStatus.PENDING
+        assert not ShipmentEvent.objects.filter(shipment=shipment).exists()
+
+    def test_a_parcel_booked_before_a_cancellation_stays_in_the_shop(
+        self, shop, auth_client
+    ) -> None:
+        """Fails on `main`: a cancelled order's goods, back on the shelf, went out."""
+        shipment, client = self._booked(shop, auth_client, OrderStatus.CONFIRMED)
+        Order.objects.filter(pk=shipment.order_id).update(status=OrderStatus.CANCELLED)
+
+        response = client.post(
+            f"/api/v1/shipments/{shipment.pk}/events/",
+            {"status": ShipmentStatus.DISPATCHED},
+            format="json",
+        )
+
+        assert response.status_code == 409
+        shipment.refresh_from_db()
+        assert shipment.status == ShipmentStatus.PENDING
+
+    def test_once_packed_it_leaves(self, shop, auth_client) -> None:
+        """The control: the booking made early is the one that goes."""
+        shipment, client = self._booked(shop, auth_client, OrderStatus.CONFIRMED)
+        Order.objects.filter(pk=shipment.order_id).update(status=OrderStatus.PACKED)
+
+        response = client.post(
+            f"/api/v1/shipments/{shipment.pk}/events/",
+            {"status": ShipmentStatus.DISPATCHED},
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        shipment.order.refresh_from_db()
+        assert shipment.order.status == OrderStatus.SHIPPED
+
+    def test_a_parcel_already_on_its_way_takes_every_update(self, shop, auth_client) -> None:
+        """What the courier did happened: only the parcel leaving is the shop's to refuse."""
+        shipment, client = self._booked(shop, auth_client, OrderStatus.PACKED)
+        client.post(
+            f"/api/v1/shipments/{shipment.pk}/events/",
+            {"status": ShipmentStatus.DISPATCHED},
+            format="json",
+        )
+        Order.objects.filter(pk=shipment.order_id).update(status=OrderStatus.RETURN_REQUESTED)
+
+        response = client.post(
+            f"/api/v1/shipments/{shipment.pk}/events/",
+            {"status": ShipmentStatus.RETURNED, "message": "Refused at the door"},
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+
+
 class TestTrackingNumbers:
     """One courier cannot give one number to two parcels."""
 

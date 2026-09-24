@@ -50,6 +50,17 @@ SHIPPABLE_ORDER_STATUSES = frozenset(
 #: event on the same parcel.
 FINISHED_SHIPMENT_STATUSES = frozenset({ShipmentStatus.DELIVERED, ShipmentStatus.RETURNED})
 
+#: Orders whose parcel may leave the shop. Booking one earlier is fine -- a
+#: packer can have the tracking number ready -- but packing is when the goods
+#: leave the stock ledger, and it is the step that moves on to SHIPPED. A parcel
+#: that left a CONFIRMED order was delivered while the order stayed CONFIRMED
+#: and its goods stayed on the shelf, reserved (D98). DELIVERED is here for a
+#: split delivery: the first parcel home moves the order on before the second
+#: has left.
+DISPATCHABLE_ORDER_STATUSES = frozenset(
+    {OrderStatus.PACKED, OrderStatus.SHIPPED, OrderStatus.DELIVERED}
+)
+
 
 @transaction.atomic
 def create_shipment(
@@ -147,7 +158,15 @@ def record_event(
     has already been delivered or returned cannot be taken back. It is refused
     instead: the order has moved on by then, and the event would have rewound
     the parcel's status while leaving the order where it was.
+
+    A parcel's first movement needs its order packed (D98). Later updates to a
+    parcel already on its way are always recorded: they report what the courier
+    did, which happened whatever the order says now.
     """
+    # The order before the parcel: the lock order every fulfilment and money
+    # path takes, and the order's status is what the parcel leaving is decided
+    # on -- a cancellation committing in between must not slip past the check.
+    order = Order.objects.select_for_update().get(pk=shipment.order_id)
     locked = Shipment.objects.select_for_update().get(pk=shipment.pk)
 
     if locked.status in FINISHED_SHIPMENT_STATUSES:
@@ -158,6 +177,14 @@ def record_event(
         )
 
     new_status = status or ShipmentStatus.IN_TRANSIT
+    leaving = locked.status == ShipmentStatus.PENDING and new_status != ShipmentStatus.PENDING
+    if leaving and order.status not in DISPATCHABLE_ORDER_STATUSES:
+        raise Conflict(
+            f"Pack {order.number} before its parcel leaves: the order is still"
+            f" {order.get_status_display().lower()}.",
+            details={"order": order.number, "status": order.status},
+        )
+
     event = ShipmentEvent.objects.create(
         shipment=locked,
         status=new_status,
@@ -174,7 +201,6 @@ def record_event(
         locked.delivered_at = timezone.now()
     locked.save(update_fields=["status", "dispatched_at", "delivered_at", "updated_at"])
 
-    order = locked.order
     log_event(
         order,
         OrderEventType.SHIPMENT_EVENT,
