@@ -403,6 +403,7 @@ class Command(BaseCommand):
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
         from purchasing.models import PurchaseOrder, PurchaseReceipt, SupplierPayment
+        from shipping.models import Shipment
 
         self.stdout.write(self.style.WARNING("Deleting existing data…"))
         # Order matters: financial rows reference catalogue rows with PROTECT.
@@ -424,6 +425,9 @@ class Command(BaseCommand):
             CouponRedemption,
             HeldSale,
             Cart,
+            # Before Order, which it PROTECTs: the Delivery panel books parcels,
+            # and the first one broke --reset. Its events cascade with it.
+            Shipment,
             Order,
             PurchaseReceipt,
             PurchaseOrder,
