@@ -38,9 +38,13 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
 
   // Allowed to fail on its own: a user without `finance.view` still gets the
   // order, just without the choice of which account the money moves through.
+  // The order's branch only: an owner's list spans every branch, and the API
+  // refuses another branch's account (D95).
   let accounts: Account[] = [];
   try {
-    const page = await apiServer<Paginated<Account>>("/accounts/?is_active=true&page_size=50");
+    const page = await apiServer<Paginated<Account>>(
+      `/accounts/?is_active=true&branch=${order.branch}&page_size=50`,
+    );
     accounts = page.results;
   } catch {
     accounts = [];

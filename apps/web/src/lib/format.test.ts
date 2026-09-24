@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { calendarDate, dateOnly, dateTime, humanise, money, moneyCompact, percent } from "./format";
+import {
+  calendarDate,
+  dateOnly,
+  dateTime,
+  humanise,
+  money,
+  moneyCompact,
+  paymentMethodLabel,
+  percent,
+} from "./format";
 
 describe("money", () => {
   it("formats the taka symbol and thousands separators", () => {
@@ -101,5 +110,17 @@ describe("calendarDate", () => {
 
   it("renders an em dash for nothing", () => {
     expect(calendarDate("")).toBe("—");
+  });
+});
+
+describe("paymentMethodLabel", () => {
+  it("names the methods the way a customer says them", () => {
+    expect(paymentMethodLabel("COD")).toBe("Cash on delivery");
+    expect(paymentMethodLabel("MOBILE_MFS")).toBe("bKash / Nagad");
+  });
+
+  it("falls back to humanise for anything else", () => {
+    expect(paymentMethodLabel("SOMETHING_NEW")).toBe("Something new");
+    expect(paymentMethodLabel(null)).toBe("—");
   });
 });

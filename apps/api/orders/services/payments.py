@@ -181,7 +181,14 @@ def record_payment(
         order,
         OrderEventType.PAYMENT_RECORDED,
         f"{method} {amount}",
-        data={"payment_id": str(payment.pk), "method": method, "amount": str(amount)},
+        # The status says whether any money moved: a cash-on-delivery payment
+        # is recorded PENDING at checkout, and is not "payment received" (D97).
+        data={
+            "payment_id": str(payment.pk),
+            "method": method,
+            "amount": str(amount),
+            "status": status,
+        },
         actor=actor,
     )
     audit.record(
@@ -324,8 +331,18 @@ def refund_order(
 
     # Refund the money out of the account it came in through, unless the caller
     # names another one.  Paying a card refund out of the cash drawer would
-    # leave both accounts wrong.
-    refund_account = account or (source_payment.account if source_payment else None)
+    # leave both accounts wrong -- and so, the other way round, would paying a
+    # *cash* refund of a card sale out of the bank: the notes leave the drawer.
+    # So the payment's account is the default only when the refund goes back
+    # the way the money came; otherwise the method's own account is resolved
+    # (D95). Until 2026-09-24 a card sale refunded in cash was posted out of
+    # the bank account, which the named-account check now refuses outright.
+    refund_account = account
+    if refund_account is None and source_payment is not None and source_payment.account:
+        from finance.models import METHOD_TO_KIND
+
+        if METHOD_TO_KIND.get(str(refund_method).upper()) == source_payment.account.kind:
+            refund_account = source_payment.account
 
     try:
         # Savepoint: without it the IntegrityError poisons the transaction
@@ -390,11 +407,18 @@ def handle_provider_event(
     payload: dict[str, Any],
     order: Order | None = None,
     payment: Payment | None = None,
+    amount: Decimal | None = None,
 ) -> PaymentEvent:
     """Store a provider webhook exactly once and act on it.
 
     A replayed webhook is recorded and ignored — the unique constraint on
     (provider, provider_event_id) is what makes that safe under concurrency.
+
+    Verifying the signature is the provider class's job; this decides what a
+    verified event may do. It acts only on a payment made through the same
+    provider, and captures only the amount that payment was for: a verified
+    event for ৳1 is still not ৳1,000 (D100). `amount` is what the provider says
+    it took; a provider that cannot say leaves it None.
     """
     try:
         with transaction.atomic():
@@ -410,9 +434,14 @@ def handle_provider_event(
         duplicate = PaymentEvent.objects.get(provider=provider, provider_event_id=provider_event_id)
         return duplicate
 
-    if payment is not None and event_type in {"payment.captured", "payment.success"}:
-        capture_payment(payment=payment, provider_reference=provider_event_id, payload=payload)
-        event.result = "captured"
+    if payment is not None and payment.provider != provider:
+        event.result = "provider_mismatch"
+    elif payment is not None and event_type in {"payment.captured", "payment.success"}:
+        if amount is not None and quantize(amount) != quantize(payment.amount):
+            event.result = "amount_mismatch"
+        else:
+            capture_payment(payment=payment, provider_reference=provider_event_id, payload=payload)
+            event.result = "captured"
     elif payment is not None and event_type in {"payment.failed", "payment.cancelled"}:
         fail_payment(payment=payment, reason=event_type)
         event.result = "failed"

@@ -17,22 +17,10 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Account, AccountKind } from "@/lib/api/types";
+import type { Account } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { accountsFor } from "@/lib/money-accounts";
 import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
-
-/**
- * Which kind of account each supplier-payment method comes out of.
- * Mirrors `finance.models.METHOD_TO_KIND` — a cheque clears through the bank,
- * so paying one out of the cash drawer would make the drawer unreconcilable.
- */
-const METHOD_KIND: Record<string, AccountKind> = {
-  CASH: "CASH",
-  BANK: "BANK",
-  CHEQUE: "BANK",
-  MOBILE_MFS: "MFS",
-  OTHER: "OTHER",
-};
 
 const METHODS: { value: string; label: string }[] = [
   { value: "CASH", label: "Cash" },
@@ -92,9 +80,9 @@ export function SupplierPaymentForm({
   const [key, setKey] = useState(newKey);
 
   const owed = Number(outstanding);
-  const candidates = accounts.filter(
-    (row) => row.is_active && row.kind === METHOD_KIND[method],
-  );
+  // A cheque clears through the bank, so paying one out of the cash drawer
+  // would make the drawer unreconcilable; the API refuses it (D95).
+  const candidates = accountsFor(accounts, method);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();

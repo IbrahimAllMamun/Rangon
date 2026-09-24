@@ -811,5 +811,9 @@ def record_supplier_payment(
         actor=actor,
         new_values={"supplier": supplier.name, "amount": amount, "method": method},
         reason=notes,
+        # The branch whose money it was. Without it the entry was
+        # organisation-wide, and every branch's auditors read who this one
+        # paid and how much (D95).
+        branch=source_branch,
     )
     return payment

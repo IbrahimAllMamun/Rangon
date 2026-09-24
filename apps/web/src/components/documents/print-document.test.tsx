@@ -32,6 +32,7 @@ function order(taxTotal: string): Order {
     channel: "ONLINE",
     status: "DELIVERED",
     payment_status: "PAID",
+    branch: "branch-1",
     branch_code: "BR001",
     customer: "",
     customer_name: "Walk-in",

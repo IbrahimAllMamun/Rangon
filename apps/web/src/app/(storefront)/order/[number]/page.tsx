@@ -3,8 +3,8 @@ import Link from "next/link";
 
 import { Badge, Card } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
-import type { Order, OrderStatus, ShipmentStatus } from "@/lib/api/types";
-import { dateTime, humanise, money } from "@/lib/format";
+import type { CustomerOrder, OrderStatus, ShipmentStatus } from "@/lib/api/types";
+import { dateTime, humanise, money, paymentMethodLabel } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Your order",
@@ -73,9 +73,9 @@ export default async function OrderPage({
   const { number } = await params;
   const { token } = await searchParams;
 
-  let order: Order | null = null;
+  let order: CustomerOrder | null = null;
   try {
-    order = await apiServer<Order>(
+    order = await apiServer<CustomerOrder>(
       `/shop/orders/${number}/${token ? `?token=${encodeURIComponent(token)}` : ""}`,
       { auth: true },
     );
@@ -281,7 +281,7 @@ export default async function OrderPage({
               </Badge>
               {order.payments?.map((payment) => (
                 <p key={payment.id} className="text-body-sm text-neutral-700">
-                  {humanise(payment.method)} · {money(payment.amount)}
+                  {paymentMethodLabel(payment.method)} · {money(payment.amount)}
                 </p>
               ))}
             </div>

@@ -17,8 +17,22 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Account, RestockDecision, ReturnItem, ReturnRequest } from "@/lib/api/types";
+import type {
+  Account,
+  Payment,
+  RestockDecision,
+  ReturnItem,
+  ReturnRequest,
+} from "@/lib/api/types";
 import { money } from "@/lib/format";
+import {
+  METHOD_KIND,
+  REFUND_METHODS,
+  accountsFor,
+  defaultRefundMethod,
+  sourcePayment,
+  suggestedAccount,
+} from "@/lib/money-accounts";
 
 type FieldError = { field: string; message: string };
 
@@ -57,10 +71,16 @@ function apiError(caught: unknown, field: string): FieldError[] {
 export function ReturnActions({
   request,
   accounts,
+  payments,
+  branch,
   canAct,
 }: {
   request: ReturnRequest;
+  /** The order's branch's accounts. */
   accounts: Account[];
+  /** The order's payments: how the money came in, so how it goes back. */
+  payments?: Payment[];
+  branch?: string;
   canAct: boolean;
 }) {
   const router = useRouter();
@@ -74,9 +94,13 @@ export function ReturnActions({
     Object.fromEntries(request.items.map((item) => [item.id, item.condition_note])),
   );
   const [amount, setAmount] = useState(request.refund_amount);
-  const [account, setAccount] = useState(
-    accounts.find((row) => row.is_default && row.kind === "CASH")?.id ?? accounts[0]?.id ?? "",
-  );
+  // How the money goes back, stated rather than left to the server to infer:
+  // a card sale refunded in cash is a cash refund, and the account offered is
+  // one of that kind at the order's branch — the API refuses any other (D95).
+  const cameInto = sourcePayment(payments)?.account;
+  const [method, setMethod] = useState(() => defaultRefundMethod(payments));
+  const candidates = accountsFor(accounts, method, branch);
+  const [account, setAccount] = useState(() => suggestedAccount(candidates, cameInto));
 
   async function act(path: string, body: Record<string, unknown>, field: string) {
     setBusy(true);
@@ -122,7 +146,10 @@ export function ReturnActions({
   }
 
   const errorFor = (field: string) => errors.find((error) => error.field === field)?.message;
-  const chosenAccount = accounts.find((row) => row.id === account);
+  const chosenAccount = candidates.find((row) => row.id === account);
+  const kindWord = { CASH: "cash", BANK: "bank", MFS: "mobile wallet", OTHER: "other" }[
+    METHOD_KIND[method] ?? "OTHER"
+  ];
 
   return (
     <Card>
@@ -278,12 +305,35 @@ export function ReturnActions({
                   />
                 </Field>
                 <Field
+                  label="Refund as"
+                  htmlFor="rt-method"
+                  error={errorFor("refund_method")}
+                >
+                  <Select
+                    id="rt-method"
+                    value={method}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setMethod(next);
+                      setAccount(suggestedAccount(accountsFor(accounts, next, branch), cameInto));
+                    }}
+                  >
+                    {REFUND_METHODS.map((row) => (
+                      <option key={row.value} value={row.value}>
+                        {row.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field
                   label="Refund from"
                   htmlFor="rt-account"
                   hint={
                     chosenAccount
                       ? `${money(chosenAccount.balance)} available.`
-                      : "No account: the refund still completes and is reported by verify_accounts."
+                      : candidates.length === 0
+                        ? `This branch has no ${kindWord} account: the refund still completes, and verify_accounts reports it.`
+                        : `The account the payment came into, or the branch's ${kindWord} account.`
                   }
                   error={errorFor("account")}
                 >
@@ -291,15 +341,14 @@ export function ReturnActions({
                     id="rt-account"
                     value={account}
                     onChange={(event) => setAccount(event.target.value)}
+                    disabled={candidates.length === 0}
                   >
                     <option value="">Default for the method</option>
-                    {accounts
-                      .filter((row) => row.is_active)
-                      .map((row) => (
-                        <option key={row.id} value={row.id}>
-                          {row.name} — {money(row.balance)}
-                        </option>
-                      ))}
+                    {candidates.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name} — {money(row.balance)}
+                      </option>
+                    ))}
                   </Select>
                 </Field>
               </div>
@@ -315,7 +364,11 @@ export function ReturnActions({
                   }
                   act(
                     "complete",
-                    { refund_amount: amount, ...(account ? { account } : {}) },
+                    {
+                      refund_amount: amount,
+                      refund_method: method,
+                      ...(account ? { account } : {}),
+                    },
                     "rt-amount",
                   );
                 }}
