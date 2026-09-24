@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { PageHeader } from "@/components/admin/shell";
 import { StartStockCount } from "@/components/admin/stock-count-actions";
+import { RowLink } from "@/components/admin/row-link";
 import { Badge, Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
@@ -47,12 +47,12 @@ export default async function StockCountsPage({ searchParams }: { searchParams: 
     {
       header: "Count",
       cell: (row) => (
-        <Link
+        <RowLink
           href={`/admin/inventory/counts/${row.id}`}
-          className="font-mono font-medium text-brand-600 hover:underline"
+          className="font-mono font-medium text-brand-600"
         >
           {row.number}
-        </Link>
+        </RowLink>
       ),
     },
     { header: "Branch", cell: (row) => row.branch_code },

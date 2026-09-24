@@ -80,13 +80,8 @@ export default async function AccountCashBookPage({
             ? `${account.kind_display} at ${account.branch_code}. Every row below is immutable — a correction is a new entry, never an edit.`
             : undefined
         }
+        back={{ href: "/admin/finance", label: "Back to finance" }}
       />
-
-      <p className="mb-4 text-body-sm text-muted">
-        <Link href="/admin/finance" className="text-brand-600 hover:underline">
-          ← All accounts
-        </Link>
-      </p>
 
       {error && !account ? (
         <Card>

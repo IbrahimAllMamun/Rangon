@@ -1,11 +1,11 @@
 "use client";
 
 import { ArrowRightLeft, Banknote, Landmark, Pencil, PencilLine, Plus, Smartphone, Wallet } from "lucide-react";
-import Link from "next/link";
 import { useState } from "react";
 
 import { AccountForm } from "@/components/admin/account-form";
 import { MovementForm, TransferForm } from "@/components/admin/money-forms";
+import { ROW_LINK_ABOVE, ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import type { Account, AccountKind } from "@/lib/api/types";
 import { money } from "@/lib/format";
@@ -122,14 +122,9 @@ export function AccountManager({
                   const Icon = KIND_ICON[account.kind] ?? Wallet;
                   const negative = Number(account.balance) < 0;
                   return (
-                    <tr key={account.id} className="hover:bg-neutral-50">
+                    <tr key={account.id} className={ROW_LINK_ROW}>
                       <td className="px-4 py-2.5">
-                        <Link
-                          href={`/admin/finance/${account.id}`}
-                          className="font-medium text-brand-600 hover:underline"
-                        >
-                          {account.name}
-                        </Link>
+                        <RowLink href={`/admin/finance/${account.id}`}>{account.name}</RowLink>
                         {(account.bank_name || account.account_number) && (
                           <span className="block text-caption text-muted">
                             {[account.bank_name, account.account_number]
@@ -168,6 +163,7 @@ export function AccountManager({
                           <Button
                             variant="ghost"
                             size="sm"
+                            className={ROW_LINK_ABOVE}
                             onClick={() => setPanel({ kind: "edit", account })}
                           >
                             <Pencil className="size-4" aria-hidden />

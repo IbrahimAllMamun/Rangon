@@ -72,6 +72,7 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
     <>
       <PageHeader
         title="Business summary"
+        back={{ href: `/admin/reports?range=${range}`, label: "Back to reports" }}
         description="Revenue through to net profit. Costs come from the price frozen on each order line at sale time, so history does not move when today's prices do."
         actions={
           <DateRangeTabs basePath="/admin/reports/business" active={range} />

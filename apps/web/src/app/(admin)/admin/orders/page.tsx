@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Pagination } from "@/components/admin/pagination";
+import { ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Card, EmptyState } from "@/components/ui/primitives";
@@ -99,14 +100,9 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
               </thead>
               <tbody className="divide-y divide-border">
                 {orders.results.map((order) => (
-                  <tr key={order.id} className="hover:bg-neutral-50">
+                  <tr key={order.id} className={ROW_LINK_ROW}>
                     <td className="px-4 py-2.5">
-                      <Link
-                        href={`/admin/orders/${order.id}`}
-                        className="font-medium text-brand-600 hover:underline"
-                      >
-                        {order.number}
-                      </Link>
+                      <RowLink href={`/admin/orders/${order.id}`}>{order.number}</RowLink>
                       <span className="block text-caption text-muted">
                         {order.item_count} item(s)
                       </span>

@@ -70,7 +70,8 @@ export default async function PartyLedgerPage() {
   return (
     <>
       <PageHeader
-        title="Receivable &amp; payable"
+        title="Receivable & payable"
+        back={{ href: "/admin/finance", label: "Back to finance" }}
         description="Both sides are worked out from the orders and purchase orders themselves every time this page loads. Nothing here is a stored balance, so nothing can drift from the documents behind it."
       />
 

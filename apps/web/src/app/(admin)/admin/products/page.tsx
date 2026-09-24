@@ -1,7 +1,8 @@
-import { Plus, Upload } from "lucide-react";
+import { ExternalLink, Plus, Upload } from "lucide-react";
 import Link from "next/link";
 
 import { Pagination } from "@/components/admin/pagination";
+import { ROW_LINK_ABOVE, ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
@@ -214,26 +215,23 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                   <th scope="col" className="px-4 py-2.5 text-right font-medium">Price</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Status</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Created</th>
+                  <th scope="col" className="w-12 px-2 py-2.5">
+                    <span className="sr-only">Storefront</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {products.results.map((product) => (
-                  <tr key={product.id} className="hover:bg-neutral-50">
+                  <tr key={product.id} className={ROW_LINK_ROW}>
                     <td className="px-4 py-2.5">
-                      {/* The name is the way in to editing; the storefront link
-                          stays as a secondary action. */}
-                      <Link
+                      {/* The whole row opens the product for editing; the
+                          storefront link sits above it in the last cell. */}
+                      <RowLink
                         href={`/admin/products/${product.id}`}
-                        className="block font-medium hover:text-brand-600 hover:underline"
+                        className="font-medium group-hover/row:text-brand-600"
                       >
                         {product.name}
-                      </Link>
-                      <Link
-                        href={`/product/${product.slug}`}
-                        className="text-caption text-brand-600 hover:underline"
-                      >
-                        View on storefront
-                      </Link>
+                      </RowLink>
                     </td>
                     <td className="px-4 py-2.5">{product.category_name}</td>
                     <td className="px-4 py-2.5 text-muted">{product.brand_name || "—"}</td>
@@ -255,6 +253,22 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-muted">{dateOnly(product.created_at)}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      {/* Only a live product has a storefront page; linking a
+                          draft or counter-only product would open a 404. */}
+                      {product.status === "ACTIVE" && product.published && (
+                        <Link
+                          href={`/product/${product.slug}`}
+                          target="_blank"
+                          rel="noopener"
+                          title="View on storefront"
+                          aria-label={`View ${product.name} on the storefront (opens in a new tab)`}
+                          className={`${ROW_LINK_ABOVE} inline-flex size-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]`}
+                        >
+                          <ExternalLink className="size-4" aria-hidden />
+                        </Link>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

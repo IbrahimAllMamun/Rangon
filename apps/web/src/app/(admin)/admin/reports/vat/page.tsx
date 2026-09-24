@@ -97,6 +97,7 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
     <>
       <PageHeader
         title="VAT return"
+        back={{ href: `/admin/reports?range=${range}`, label: "Back to reports" }}
         description="Output VAT less credits on returns, less input VAT paid to suppliers. Every figure reads the rate and treatment frozen on the order, so a filed period keeps its answer after the setting changes."
         actions={<DateRangeTabs basePath="/admin/reports/vat" active={range} />}
       />

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
+import { RowLink } from "@/components/admin/row-link";
 import { Badge, Button } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
@@ -56,12 +57,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
       header: "Customer",
       cell: (row) => (
         <>
-          <Link
+          <RowLink
             href={`/admin/customers/${row.id}`}
-            className="block font-medium text-brand-600 hover:underline"
+            className="block font-medium text-brand-600"
           >
             {row.name}
-          </Link>
+          </RowLink>
           <span className="block text-caption text-muted">{humanise(row.customer_type)}</span>
         </>
       ),

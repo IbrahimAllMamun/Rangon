@@ -1,7 +1,7 @@
-import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
+import { RowLink } from "@/components/admin/row-link";
 import { Badge } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
@@ -50,12 +50,12 @@ export default async function ReturnsPage({ searchParams }: { searchParams: Sear
       header: "Return",
       cell: (row) => (
         <>
-          <Link
+          <RowLink
             href={`/admin/returns/${row.id}`}
-            className="block font-medium text-brand-600 hover:underline"
+            className="block font-medium text-brand-600"
           >
             {row.number}
-          </Link>
+          </RowLink>
           <span className="block text-caption text-muted">Order {row.order_number}</span>
         </>
       ),

@@ -1,4 +1,5 @@
 import { Pagination } from "@/components/admin/pagination";
+import { ROW_LINK_ROW } from "@/components/admin/row-link";
 import { Card, EmptyState } from "@/components/ui/primitives";
 
 /** What a list screen has to hand over for the footer to page itself. */
@@ -87,7 +88,8 @@ export function ResourceTable<T>({
           </thead>
           <tbody className="divide-y divide-border">
             {rows.map((row) => (
-              <tr key={rowKey(row)} className="hover:bg-neutral-50">
+              // Positioned so a <RowLink> in any cell can cover the whole row.
+              <tr key={rowKey(row)} className={ROW_LINK_ROW}>
                 {columns.map((column) => (
                   <td
                     key={column.header}
