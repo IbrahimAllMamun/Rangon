@@ -338,6 +338,35 @@ jobs:
         working-directory: apps/web
         run: npm audit --audit-level=high || echo "::warning::npm audit found advisories"
 
+  # --------------------------------------------------------------- secrets --
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Every commit, not only the tip: a key committed and deleted in the
+          # next commit is still in the history anyone who can clone reads.
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, checksum-verified)
+        env:
+          GITLEAKS_VERSION: "8.21.2"
+          GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check --strict
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks version
+
+      # Blocking, unlike the audits above: a finding fails the build. A false
+      # positive is accepted by adding its fingerprint to .gitleaksignore with
+      # the reason; a real secret is rotated first, then removed from history
+      # (docs/operations/security.md, "Secret scanning").
+      - name: Scan the whole history
+        run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
   # ---------------------------------------------------------------- images --
   images:
     name: Build & scan images
