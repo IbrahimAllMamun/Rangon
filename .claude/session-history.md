@@ -831,4 +831,8 @@ Lessons:
   build on :4000 was the old one — a working fix measured as broken. Stop by
   port (`.claude/environment.md` §16).
 - *Every PROTECT reference is a future `--reset` failure* — the fourth one.
+- *Check what CI will check, over what CI will see.* The gitleaks run before the
+  push was clean over this clone's refs; CI's `fetch-depth: 0` fetches all 33
+  branches, and the fixture sat in a second commit on one of them. The first CI
+  run of the new job failed on it. Fetch every branch before scanning locally.
 

@@ -91,15 +91,19 @@ When it fails:
    `.gitleaksignore` with the reason on the line above. A fingerprint names one finding in one
    commit, so nothing else can hide behind the entry. Never skip a rule or a path to get green.
 
-Run it locally before pushing:
+Run it locally before pushing — and fetch every branch first, because CI's checkout does and
+gitleaks walks every ref it can see:
 
 ```bash
-gitleaks git --redact .    # the history, as CI does
+git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+gitleaks git --redact .    # every commit on every branch, as CI does
 gitleaks dir --redact .    # the working tree, including what is not committed yet
 ```
 
-The first run, 2026-09-24, over 120 commits: one finding, a test fixture's password — the rotation a
-re-seed must leave alone — accepted by fingerprint.
+The first run, 2026-09-24: one finding, a test fixture's password — the rotation a re-seed must
+leave alone — in **two** commits, the one on `main` and its first copy on another branch. Both are
+accepted by fingerprint. The local check before that push had seen only this clone's branches and
+passed; CI saw all 33 and failed. Hence the fetch above.
 
 ## Not done
 

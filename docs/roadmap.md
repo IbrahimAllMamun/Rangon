@@ -500,11 +500,15 @@ and SVGs get the policy too — harmless, and for an SVG useful. And the depende
 audits in CI are advisory: both end in `|| echo "::warning::…"`, so they have
 never failed a build; `security.md` now says so.
 
-**Secret scanning.** gitleaks 8.21.2, pinned and checksum-verified, over all 120
-non-merge commits: one finding — a test fixture's password, the rotation a
-re-seed must leave alone — accepted by fingerprint in `.gitleaksignore` with its
-reason. The working tree, scanned separately, finds the same and nothing else.
-CI runs it on every push and pull request, and a finding fails the build.
+**Secret scanning.** gitleaks 8.21.2, pinned and checksum-verified, over every
+commit on every branch — 133 non-merge commits across 33 branches: one finding,
+a test fixture's password (the rotation a re-seed must leave alone), in two
+commits — the one on `main` and its first copy on a feature branch. Both are
+accepted by fingerprint in `.gitleaksignore` with the reason. The working tree,
+scanned separately, finds the same line and nothing else. CI runs it on every
+push and pull request, and a finding fails the build — as it did on its first
+run here, because the check before that push had scanned only this clone's
+branches and CI's checkout fetches them all.
 
 **Every new test was run against the old code before it was believed.** 28
 failed there for the stated reason and 15 controls passed. D101 lives in the web
@@ -520,7 +524,7 @@ mypy . ................................. clean, 154 source files
 ruff check . / format (0.8.4) .......... clean
 vitest ................................. 324 passed         (23 new)
 Playwright, production build ........... 46 passed
-gitleaks, full history ................. no leaks (1 fixture accepted by fingerprint)
+gitleaks, every branch ................. no leaks (1 fixture, 2 commits, by fingerprint)
 ```
 
 ### Three controls audited, four defects fixed (D91–D94), 2026-09-23

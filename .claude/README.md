@@ -61,7 +61,8 @@ mypy ................................... clean, 154 source files  2026-09-24  <-
                                          D6 (2026-09-21)
 playwright, PRODUCTION standalone ...... 46 passed / 46           2026-09-24  <- with the D101
                                          origin check in place: every real flow sends Origin
-gitleaks, whole history ................ no leaks, 120 commits    2026-09-24  <- blocking in CI
+gitleaks, every branch ................. no leaks, 133 commits    2026-09-24  <- blocking in CI;
+                                         fetch all branches first, as CI does
 verify_inventory / verify_accounts ..... consistent               2026-09-21
 migrations from an empty database ...... OK                       2026-09-21
 ```
