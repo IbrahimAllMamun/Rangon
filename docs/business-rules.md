@@ -94,6 +94,15 @@ present at the destination.
 *`DECISION REQUIRED` — a formal in-transit holding location was not requested; with one branch in V1
 this is adequate.*
 
+**A transfer is sent by the branch whose stock leaves.** The source must be the caller's own branch
+unless they may cross branches (`OWNER`/`ADMIN`) — the same rule as every other stock write. The
+target may be any **active** branch, because sending stock elsewhere is what a transfer is for. Each
+branch sees its own transfers from either end, and no others. A **closed** branch can neither send
+nor receive — the same as it cannot adjust or write off — so **move a branch's stock out before
+closing it**. Until 2026-09-23 the source was not
+checked at all, and staff holding `inventory.transfer` at one branch could send another branch's
+stock to their own ([D94](roadmap.md#known-defects)).
+
 Cost travels with the goods: each line carries the source's weighted average cost at the moment of
 the move (ADR-0006), so neither branch's margin is distorted by relocating stock. Cost is therefore
 never an input to a transfer — a box for it would let someone change what stock is worth by moving
@@ -797,6 +806,12 @@ nothing behind.
 **An expense is paid from its own branch's account.** Spending recorded at one branch cannot be
 drawn from another branch's drawer; the money would leave a balance nobody there authorised.
 
+**A receipt is seen by whoever may see the expense, and nobody else.** It is served only through
+`GET /expenses/{id}/attachment/`, under the expense's own permission (`finance.view`) and branch
+scope — so a cashier at the branch can open it, as they can open the expense. It is never public
+media. Until 2026-09-23 it was: stored under the uploader's own filename and served from `/media/`
+to anyone who asked ([D91](roadmap.md#known-defects)).
+
 **Posted figures are frozen.** `amount`, `account` and `spent_at` reach the ledger, so they are never
 edited afterwards. The category may be corrected (it re-labels, it does not re-post). Everything else
 is corrected by **voiding**: `void_expense()` posts a compensating `ADJUSTMENT` that puts the money
@@ -896,7 +911,9 @@ Permission codes and the default role → permission matrix live in
 
 Rules:
 - `OWNER` implicitly holds every permission.
-- Staff are scoped to their branch; only `OWNER`/`ADMIN` may act across branches.
+- Staff are scoped to their branch; only `OWNER`/`ADMIN` may act across branches. That includes
+  **naming** a branch: a report asked for another branch is refused, and one asked for a branch that
+  does not exist is a 404 rather than every branch ([D93](roadmap.md#known-defects)).
 - A cashier can create a sale, but a refund needs `sales.refund`; the POS asks for a manager login when
   the cashier lacks it (elevation is audit-logged).
 - `CUSTOMER` accounts can only ever reach `/api/v1/shop/*` and their own resources.
@@ -920,6 +937,19 @@ serializer, because two guards and one audit entry hang off it:
 
 Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
 has to keep pointing at a real row. Customers never appear in the staff list.
+
+> **DECISION REQUIRED — default chosen: the staff list spans branches.** A manager bound to one
+> branch sees every branch's staff, names and emails included — consistent with the audit log,
+> which already treats staff accounts as organisation-wide (§ on the audit trail, D85). The stricter
+> alternative lists only the manager's own branch. Found by the 2026-09-23 branch-scope sweep and
+> left as it was, rather than changed silently.
+
+> **DECISION REQUIRED — default chosen: a non-owner with no branch sees every branch.** A branch is
+> optional when an owner creates a staff account, and `branch_queryset` treats "no branch" as "no
+> restriction" — so a `MANAGER` created without one reads and acts like an `ADMIN` on branch data.
+> Only an owner can create such an account, so it is a configuration hazard rather than something
+> staff can do to themselves. The stricter alternative requires a branch for every role but
+> `OWNER`/`ADMIN`. In a one-branch shop the two behave identically; decide before opening a second.
 
 ### 7.1a Your own password, and your sessions
 

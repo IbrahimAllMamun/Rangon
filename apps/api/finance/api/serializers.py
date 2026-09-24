@@ -4,11 +4,11 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import Branch
-from core.media import RelativeFileField, media_url
 from finance.models import (
     Account,
     AccountKind,
@@ -220,9 +220,12 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
-    # Alongside `attachment_url`, and origin-relative like it: DRF would
-    # otherwise absolutise this one against the request (`core.media`).
-    attachment = RelativeFileField(read_only=True)
+    # Both name the endpoint that serves the receipt to staff, never the file's
+    # storage URL: `/media/` refuses receipts, and handing out a direct S3 URL
+    # would route around the check the endpoint makes (D91). `attachment` is
+    # kept, as the same string or null, so its shape does not change for any
+    # client that already read it.
+    attachment = serializers.SerializerMethodField()
     category_name = serializers.CharField(source="category.name", read_only=True)
     category_code = serializers.CharField(source="category.code", read_only=True)
     account_name = serializers.CharField(source="account.name", read_only=True)
@@ -261,8 +264,13 @@ class ExpenseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def get_attachment(self, expense: Expense) -> str | None:
+        return self.get_attachment_url(expense) or None
+
     def get_attachment_url(self, expense: Expense) -> str:
-        return media_url(expense.attachment)
+        if not expense.attachment:
+            return ""
+        return reverse("expense-attachment", kwargs={"pk": expense.pk})
 
 
 #: A receipt is a photo or a scanned bill. Anything executable is refused

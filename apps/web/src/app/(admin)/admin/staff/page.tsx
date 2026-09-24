@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { Pagination } from "@/components/admin/pagination";
+import { RoleMatrix } from "@/components/admin/role-matrix";
 import { PageHeader } from "@/components/admin/shell";
 import {
   type BranchOption,
@@ -8,20 +9,18 @@ import {
   StaffManager,
   type StaffRow,
 } from "@/components/admin/staff-manager";
-import { Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
+import { Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated, apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import { applyPaging, readPaging } from "@/lib/paging";
+import { type MatrixPermission, type MatrixRole, buildRoleMatrix } from "@/lib/role-matrix";
 
 export const metadata = { title: "Staff & roles" };
 
-interface RoleDetail extends RoleOption {
-  description: string;
-  /** `RoleSerializer` uses SlugRelatedField(slug_field="code"), so these are
-   *  permission *codes*, not objects. Typing them as objects rendered a row of
-   *  empty chips with duplicate React keys. */
-  permissions: string[];
-}
+/** `RoleSerializer` uses SlugRelatedField(slug_field="code"), so `permissions`
+ *  are *codes*, not objects. Typing them as objects once rendered a row of
+ *  empty chips with duplicate React keys. */
+type RoleDetail = RoleOption & MatrixRole & { description: string };
 
 type MaybePaged<T> = T[] | Paginated<T>;
 
@@ -51,21 +50,26 @@ export default async function StaffPage({ searchParams }: { searchParams: Search
   let staff: StaffRow[] = [];
   let staffTotal = 0;
   let roles: RoleDetail[] = [];
+  let catalogue: MatrixPermission[] | null = null;
   let branches: BranchOption[] = [];
   let error: string | null = null;
 
   try {
     const staffQuery = applyPaging(new URLSearchParams(), paging);
-    const [staffPayload, rolePayload, organization] = await Promise.all([
+    const [staffPayload, rolePayload, permissionPayload, organization] = await Promise.all([
       apiServer<MaybePaged<StaffRow>>(`/users/?${staffQuery.toString()}`),
       // Roles are a short fixed set and the whole list is needed for the
-      // permission cards below, so this one stays unpaginated.
+      // matrix below, so this one stays unpaginated.
       apiServer<MaybePaged<RoleDetail>>("/roles/"),
+      // What each code means. Optional: without it the matrix falls back to
+      // the codes themselves, which is plainer but hides nothing.
+      apiServer<MaybePaged<MatrixPermission>>("/permissions/").catch(() => null),
       apiServer<{ branches: BranchOption[] }>("/organization/").catch(() => null),
     ]);
     staff = rows(staffPayload);
     staffTotal = total(staffPayload);
     roles = rows(rolePayload);
+    catalogue = permissionPayload ? rows(permissionPayload) : null;
     branches = organization?.branches ?? [];
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load staff accounts.";
@@ -108,47 +112,14 @@ export default async function StaffPage({ searchParams }: { searchParams: Search
           </section>
 
           <section aria-labelledby="roles">
-            <h2 id="roles" className="mb-3 text-h4 font-semibold">
+            <h2 id="roles" className="text-h4 font-semibold">
               What each role can do
             </h2>
-            <div className="grid gap-4 lg:grid-cols-2">
-              {roles
-                .filter((role) => role.is_staff_role)
-                .map((role) => (
-                  <Card key={role.id}>
-                    <CardHeader>
-                      <CardTitle>{role.name}</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      {role.description && (
-                        <p className="mb-3 text-body-sm text-muted">{role.description}</p>
-                      )}
-                      {role.code === "OWNER" ? (
-                        <p className="text-body-sm text-neutral-700">
-                          Holds every permission, including the ones that are never granted
-                          individually.
-                        </p>
-                      ) : (
-                        <ul className="flex flex-wrap gap-1.5">
-                          {role.permissions.map((permission) => (
-                            <li
-                              key={permission}
-                              className="rounded bg-neutral-100 px-2 py-0.5 font-mono text-caption text-neutral-700"
-                            >
-                              {permission}
-                            </li>
-                          ))}
-                          {role.permissions.length === 0 && (
-                            <li key="none" className="text-caption text-muted">
-                              No permissions
-                            </li>
-                          )}
-                        </ul>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-            </div>
+            <p className="mb-3 mt-1 max-w-prose text-body-sm text-muted">
+              One row per permission, one column per role. Read across a row to see who may do
+              something — refund a sale, adjust stock, pay a supplier.
+            </p>
+            <RoleMatrix matrix={buildRoleMatrix(roles, catalogue)} />
             <p className="mt-3 text-caption text-muted">
               Roles are seeded from <code>accounts/permissions.py</code> and are read-only here:
               changing what a role means would silently re-scope everyone already holding it. Move a

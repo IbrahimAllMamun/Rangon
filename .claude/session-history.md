@@ -737,3 +737,63 @@ been there since each feature was written and had never worked once.**
   sequential tests and had survived every suite since the feature shipped,
   because the concurrency suite tests oversell, not duplicate keys.
 - *An empty backlog is not an idle session* — for the third time.
+
+## 2026-09-23 — D91–D94, the role matrix, and the docs that had drifted
+
+Asked for as three things: audit three more rows of `security.md` the way D88
+and D89 were found, give `permissions/` a screen, and refresh the docs that had
+gone stale (the root README said 167 backend tests; there were 1,188).
+
+**The audit — four defects, each measured over HTTP before it was fixed:**
+
+- **D91** — an expense receipt uploaded as `receipt.png` was stored as
+  `expenses/2026/09/receipt.png` and an anonymous GET of that path answered 200.
+  Now served only by `GET /expenses/{id}/attachment/`; refused on `/media/` by
+  Django and Nginx; random names. The web proxy decoded every body with
+  `.text()`, which would have corrupted the file — it passes bytes now, and a
+  JPEG came back byte-identical.
+- **D92** — logout required a live access token, which expires with its cookie
+  at thirty minutes; after that it answered 401 and the refresh token kept
+  minting sessions. No test had ever called `auth/logout/`.
+- **D93** — every report honoured `?branch=` for any branch, and an unknown id
+  meant *every* branch. No screen sends the parameter, so nothing had ever
+  exercised it.
+- **D94** — a transfer's source branch was looked up bare: staff at A could
+  send B's stock to A (201, B's shelf 10 → 8). The list was unscoped too.
+
+**Four things found by doing it:**
+
+1. **The first hypothesis was wrong, and measuring said so in one run.** Four
+   image fields had no validation of their own, so a stored-XSS polyglot looked
+   likely. All four refused `.html` — Django's model validator runs. What they
+   lacked was the size cap and the format list: real, but a smaller finding.
+2. **A sweep found what reading viewsets had not.** Seed branch B with one of
+   everything, sign in at A, GET every parameter-free route with and without
+   `?branch=<B>`. It is kept as a test, so a new endpoint that forgets
+   `branch_queryset` fails without anyone remembering to test it. It saw only
+   ids, though — the aggregate reports needed a second probe by *figure*.
+3. **Two tests passed against the old code and should not have.** One because
+   the test settings empty the default throttles, so the old logout view looked
+   unthrottled here while production would throttle it; one because a 404 was
+   what a missing route answers too. Both rewritten until they failed there.
+4. **The browser found two things the tests could not.** The Owner column read
+   "42 of 42" — the API process predated the serializer change, `--noreload`.
+   And on a 390px phone the page scrolled sideways to 747px: `sr-only` text is
+   absolutely positioned, and in a scroll box with no positioned ancestor it
+   escapes the clip. The staff table above had done the same since it was
+   written. `relative` on both; the rule is in `design-system.md`.
+
+**Also:** the `permissions/` "no screen" claim was half wrong — the staff page
+showed each role's raw codes. The gap was legibility, and a matrix closed it.
+`.claude/open-questions.md` §4 listed four missing screens, three of which had
+shipped four days earlier.
+
+**The lessons:**
+
+- *Measure the hypothesis before building on it*, even a plausible one. The
+  polyglot would have been a confident, wrong report.
+- *Look for a test of the thing, not a test near it.* Logout had none; the
+  report parameter had none; each was a working-looking control.
+- *`pkill -f` / `pgrep -f` match the calling shell's own command line* when the
+  pattern appears anywhere in it — heredocs included. Three times this session it
+  killed the shell running it. Put the kill in a script file and call the file.

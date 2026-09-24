@@ -20,18 +20,19 @@ database and order system.
 
 ## Status
 
-Not production-ready; not deployed anywhere. As of **2026-08-18** (commit `423cdf4`):
+Not production-ready; not deployed anywhere; no real order has ever been placed. As of **2026-09-23**:
 
 |                  |                                                                                                                                                                   |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CI               | Green on all four jobs — backend lint/format/migrations/tests, frontend lint/typecheck/**build**, dependency audits, image build + Trivy scan              |
-| Backend tests    | 167 passing, including 7 threaded concurrency tests against real PostgreSQL                                                                                       |
-| Frontend tests   | Vitest 17 passing —**not run by CI**. Playwright specs exist but [cannot run in the dev image](docs/roadmap.md#known-defects)                               |
-| Verified by hand | Migrations from empty, seeded demo data, ledger integrity, a POS sale, and a full browser purchase (add to cart → COD checkout → confirmed order)               |
-| Type checking    | `tsc` clean; `mypy` clean across 152 source files and **blocking** in CI since 2026-09-21 ([D6](docs/roadmap.md#known-defects))                               |
-| Biggest gaps     | No payment gateway, no live environment, most admin**write** screens are still API-only, and the wishlist/reviews/notifications features have no working UI |
+| CI               | Five jobs, all blocking — backend (ruff, mypy, migrations, pytest), frontend (lint, typecheck, Vitest, build), E2E (Playwright against a **production build**), dependency audits, image build + Trivy scan |
+| Backend tests    | 1,260 passing, including 20 threaded concurrency tests against real PostgreSQL                                                                                    |
+| Frontend tests   | Vitest 301 passing; Playwright 46 (the four critical flows plus accessibility checks, desktop and mobile) — both run by CI                                       |
+| Type checking    | `tsc` clean; `mypy` clean across 154 source files and **blocking** in CI since 2026-09-21 ([D6](docs/roadmap.md#known-defects))                               |
+| Verified by hand | A POS sale; a full storefront purchase (cart → COD checkout → confirmed order); a backup restored for real; most admin screens signed in and used — **not** the supplier payment form or the order Delivery panel, both from 2026-09-15 |
+| Known defects    | D1–D94 logged; **two open** — D7 (Playwright cannot run in the Alpine *dev* image) and D9 (no product photography)                                          |
+| Biggest gaps     | No live environment, no product photos, VAT not yet decided (the default is a placeholder), no payment gateway (COD works), no load test, no independent penetration test |
 
-Phase-by-phase status, the full verification log, and the known defects (D1–D9) are in
+Phase-by-phase status, the full verification log and every known defect are in
 [docs/roadmap.md](docs/roadmap.md). Read it before claiming any part of this works.
 
 ## Repository layout
@@ -155,19 +156,16 @@ Frontend:
 docker compose exec web npm run dev
 docker compose exec web npm run lint
 docker compose exec web npm run typecheck
-docker compose exec web npm run test                  # Vitest unit/component (17 tests, ~25 s)
+docker compose exec web npm run test                  # Vitest unit/component (301 tests, ~10 s)
 docker compose exec web npm run build
 docker compose exec web npm run test:e2e              # Playwright — see the warning below
 ```
 
-> **`npm run test:e2e` does not work in the dev container.** `apps/web/Dockerfile.dev` is
-> `node:22-alpine`, and Playwright publishes no musl browser builds, so `npx playwright install`
-> has nothing to install. Run the specs from a glibc image (`mcr.microsoft.com/playwright`) or from
-> the host against a seeded stack, pointing `E2E_BASE_URL` at the storefront origin. Until that is
-> set up, the four critical flows are only covered by hand.
-
-> **CI runs neither frontend test suite.** The frontend job is `npm ci` → lint → typecheck → build.
-> Vitest and Playwright are not wired in; adding Vitest is a two-line change and it already passes.
+> **`npm run test:e2e` does not work in the dev container** ([D7](docs/roadmap.md#known-defects)).
+> `apps/web/Dockerfile.dev` is `node:22-alpine`, and Playwright publishes no musl browser builds. Run
+> the specs from a glibc image (`mcr.microsoft.com/playwright`) or from the host against a seeded
+> stack, pointing `E2E_BASE_URL` at the storefront origin — which is what CI does, against a
+> production build.
 
 ### The dev server is not the app. Do not judge speed by it.
 

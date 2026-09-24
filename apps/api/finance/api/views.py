@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import mimetypes
+from pathlib import PurePosixPath
 from typing import Any
 
 from django.db.models import Count, Q
+from django.http import FileResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -16,6 +19,7 @@ from rest_framework.views import APIView
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
+from core.exceptions import NotFound
 from core.requests import AuthedRequest, actor
 from finance import selectors
 from finance import services as finance_services
@@ -351,6 +355,7 @@ class ExpenseViewSet(
         "create": ["finance.expense"],
         "void": ["finance.expense"],
         "summary": ["finance.view"],
+        "attachment": ["finance.view"],
     }
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
@@ -397,6 +402,35 @@ class ExpenseViewSet(
             ExpenseSerializer(expense, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["get"])
+    def attachment(self, request: AuthedRequest, pk: str | None = None) -> FileResponse:
+        """The receipt, to someone allowed to read the expense it belongs to.
+
+        `get_object` runs the viewset's own queryset, so this is branch-scoped
+        and permission-checked exactly as reading the expense is. Before this
+        existed the file was served from `/media/` to anyone at all (D91).
+
+        `no-store` because a receipt is a financial document and a shared
+        counter PC is a shared browser cache. `nosniff` because the type is
+        taken from the extension -- which upload validation limited to images
+        and PDF -- and the browser must not second-guess it.
+        """
+        expense = self.get_object()
+        if not expense.attachment:
+            raise NotFound("This expense has no receipt.")
+        try:
+            handle = expense.attachment.open("rb")
+        except FileNotFoundError as error:
+            raise NotFound("The receipt file is missing.") from error
+
+        extension = PurePosixPath(expense.attachment.name).suffix.lower()
+        content_type = mimetypes.guess_type(f"receipt{extension}")[0] or "application/octet-stream"
+        response = FileResponse(handle, content_type=content_type)
+        response["Content-Disposition"] = f'inline; filename="{expense.number}{extension}"'
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @action(detail=True, methods=["post"])
     def void(self, request: AuthedRequest, pk: str | None = None) -> Response:

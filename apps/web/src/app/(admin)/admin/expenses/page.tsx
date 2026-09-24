@@ -144,8 +144,10 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
       header: "Receipt",
       cell: (row) =>
         row.attachment_url ? (
+          // Through the proxy, which carries the session: the API serves a
+          // receipt only to staff who may read the expense (D91).
           <a
-            href={row.attachment_url}
+            href={`/api/proxy/expenses/${row.id}/attachment`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-brand-600 hover:underline"

@@ -664,6 +664,12 @@ export interface Expense {
   amount: string;
   spent_at: string;
   note: string;
+  /**
+   * Both name the API endpoint that serves the receipt to staff
+   * (`/api/v1/expenses/{id}/attachment/`), never a `/media/` URL — which
+   * refuses receipts (D91). Empty / null when there is no receipt. The browser
+   * reaches it through `/api/proxy`, which carries the session.
+   */
   attachment: string | null;
   attachment_url: string;
   status: ExpenseStatus;

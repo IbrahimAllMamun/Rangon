@@ -66,6 +66,16 @@ Anything that needs an absolute URL — JSON-LD, for one — resolves it client-
 URL. See `apps/api/core/media.py` and
 [product-media.md §8](../architecture/product-media.md#8-serving-the-bytes).
 
+**Private files are not media.** An expense receipt is served only by
+`GET /api/v1/expenses/{id}/attachment/`, which applies the expense's own permission
+(`finance.view`) and branch scope, and answers `Cache-Control: private, no-store`. The payload's
+`attachment_url` names that endpoint, never a storage URL — handing out a direct S3 URL would route
+around the check. `/media/expenses/` is refused by Django (`core.media.PRIVATE_PREFIXES`) and by
+Nginx. The browser reaches it through `/api/proxy/expenses/{id}/attachment`, which carries the
+session and passes the bytes through untouched ([D91](../roadmap.md#known-defects)).
+**With `USE_S3=1`, the bucket's public-read policy must not cover `expenses/*`**: new receipts get
+random names, but a public object is still public.
+
 ## Errors
 
 Always the same envelope:

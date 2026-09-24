@@ -13,6 +13,7 @@ import { ACCESS_COOKIE, CART_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
 const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
 const FORWARD_HEADERS = ["content-type", "x-cart-token", "idempotency-key", "accept"];
+const PASS_BACK_HEADERS = ["content-disposition", "cache-control", "x-content-type-options"];
 
 async function refreshAccess(refresh: string): Promise<{ access: string; refresh: string } | null> {
   const response = await fetch(`${INTERNAL_URL}/auth/refresh/`, {
@@ -77,17 +78,26 @@ async function forward(request: NextRequest, path: string[]) {
     }
   }
 
-  const text = await upstream.text();
+  // Bytes, not text, for the same reason the request body above is: a receipt
+  // is a JPEG or a PDF, and decoding it as UTF-8 corrupts every byte outside
+  // ASCII. JSON and CSV pass through bytes unchanged.
+  const payload = await upstream.arrayBuffer();
 
   // A 204/205/304 must be constructed with a null body: the Response
   // constructor throws `Invalid response status code` on anything else, even
   // the empty string, which turned every successful DELETE - deleting a product
   // image, for one - into a 500 *after* the API had already done the work.
   const empty = upstream.status === 204 || upstream.status === 205 || upstream.status === 304;
-  const response = new NextResponse(empty ? null : text, {
+  const response = new NextResponse(empty ? null : payload, {
     status: upstream.status,
     headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json" },
   });
+  // What a file download needs to behave: its name, and -- for a receipt --
+  // that no shared counter browser keeps a copy (D91).
+  for (const name of PASS_BACK_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) response.headers.set(name, value);
+  }
 
   // A guest cart token is minted by the API; persist it so the basket survives
   // a page reload.

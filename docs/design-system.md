@@ -206,6 +206,18 @@ WCAG 2.2 AA: visible focus ring on every interactive element, 4.5:1 text contras
 text and UI components), semantic landmarks, labelled icon-only buttons, dialogs with focus trap and
 `Esc`, full keyboard operation of the POS, `৳` and Bengali text verified in every numeric component.
 
+**A horizontal scroll box that holds `sr-only` text must be `relative`.** `sr-only` is absolutely
+positioned; with no positioned ancestor inside the scroll box, it resolves against one outside, escapes
+the clip, and widens the whole page from wherever its cell sits. Measured on `/admin/staff` at 390 px:
+747 px of page for a 390 px screen. Write `relative overflow-x-auto`, not `overflow-x-auto` alone.
+
+**Tables are tables.** A lookup across two axes — the role matrix on `/admin/staff` — is a `<table>`
+with `scope="col"` on its column headers, `scope="row"` on each row's name and `scope="rowgroup"` on a
+group's heading, so a screen reader can make the same lookup a sighted reader makes. A mark that means
+yes or no carries the word in `sr-only` text too, and differs by **shape** (tick vs dash), never by
+colour alone; a dash that carries meaning needs 3:1 against its background (`text-muted`, not
+`neutral-300`).
+
 ## Logo
 
 Official vectors live in `public/brand/logo/`; `src/components/brand/logo.tsx` is the only component

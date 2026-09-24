@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -112,11 +112,23 @@ def resolve_branch(user: User, branch_id: Any = None) -> Branch:
     return branch
 
 
-def branch_queryset(user: User, queryset: QuerySet, field: str = "branch") -> QuerySet:
-    """Narrow any branch-bearing queryset to what the user may see."""
+def branch_queryset(
+    user: User, queryset: QuerySet, field: str | tuple[str, ...] = "branch"
+) -> QuerySet:
+    """Narrow any branch-bearing queryset to what the user may see.
+
+    A row that belongs to two branches -- a stock transfer has a source and a
+    target -- is visible from either end: name every field, and a row matching
+    any of them is kept. The one-field filter this used to be is why the
+    transfer list was not scoped at all (D94): there was no way to say it.
+    """
     if user.is_superuser or user.can_cross_branch or not user.branch_id:
         return queryset
-    return queryset.filter(**{field: user.branch_id})
+    fields = (field,) if isinstance(field, str) else field
+    visible = Q()
+    for name in fields:
+        visible |= Q(**{name: user.branch_id})
+    return queryset.filter(visible)
 
 
 @transaction.atomic

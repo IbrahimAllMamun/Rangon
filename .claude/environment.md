@@ -486,6 +486,26 @@ Wait out the hour, or flush the throttle counters from Redis.
 
 ---
 
+## 16. `pkill -f` and `pgrep -f` can kill the shell that runs them
+
+Added 2026-09-23, after it happened three times in one session. `-f` matches the
+*whole command line*, and the tool runs each command as `bash -c '<everything you
+typed>'`. So `pkill -f "manage.py runserver"` — or a `pgrep` whose pattern
+appears anywhere else in the same command, a heredoc included — matches the
+calling shell and kills it (exit 144). The bracket trick (`[m]anage.py`) does not
+help if the plain spelling appears later in the same command.
+
+Put the restart in a script file, then run the file from a command that does
+not contain the pattern:
+
+```bash
+# once: write <scratch>/restart-api.sh containing the pgrep/kill + runserver lines
+<scratch>/restart-api.sh
+```
+
+`runserver --noreload` does not pick up code changes either — restart it after
+editing the API, or a browser check reads the old serializer.
+
 ## Commands that actually work here
 
 ```bash
