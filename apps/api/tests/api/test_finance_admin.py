@@ -69,6 +69,53 @@ class TestAccountEndpoints:
         entry = AccountTransaction.objects.get(account=account)
         assert entry.transaction_type == AccountTransactionType.OPENING
 
+    def test_a_branch_can_open_a_second_account_of_a_kind(
+        self, owner: Any, branch: Any, auth_client: Any
+    ) -> None:
+        """Fails on `main` (D96): 400 "The fields branch, kind must make a unique set."
+
+        Only one *default* per branch and kind is unique -- the constraint is
+        conditional. DRF 3.15.2 builds a validator from it that ignores the
+        condition, so the screen could never open a second drawer or bank
+        account at a branch, default or not.
+        """
+        main = factories.account(branch, opening_balance="100.00")
+        client = auth_client(owner)
+
+        second = client.post(
+            "/api/v1/accounts/",
+            {"branch": str(branch.pk), "name": "Back Office Cash", "kind": "CASH"},
+            format="json",
+        )
+        assert second.status_code == 201, second.data
+
+        # Opened as the default, it takes over -- the service demotes the old one.
+        third = client.post(
+            "/api/v1/accounts/",
+            {"branch": str(branch.pk), "name": "Till 2", "kind": "CASH", "is_default": True},
+            format="json",
+        )
+        assert third.status_code == 201, third.data
+        main.refresh_from_db()
+        assert not main.is_default
+        defaults = Account.objects.filter(branch=branch, kind="CASH", is_default=True)
+        assert [row.name for row in defaults] == ["Till 2"]
+
+    def test_two_accounts_at_a_branch_cannot_share_a_name(
+        self, owner: Any, branch: Any, auth_client: Any
+    ) -> None:
+        """The control: the unconditional constraint is still checked up front."""
+        factories.account(branch, name="Main Drawer", opening_balance="100.00")
+
+        response = auth_client(owner).post(
+            "/api/v1/accounts/",
+            {"branch": str(branch.pk), "name": "Main Drawer", "kind": "BANK"},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert Account.objects.filter(branch=branch, name="Main Drawer").count() == 1
+
     def test_the_balance_field_is_read_only(
         self, owner: Any, branch: Any, auth_client: Any
     ) -> None:
