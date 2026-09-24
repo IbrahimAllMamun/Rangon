@@ -7,6 +7,7 @@ re-checks stock (docs/business-rules.md §3.1).
 
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass
 from decimal import Decimal
@@ -21,7 +22,7 @@ from accounts.services import default_branch
 from catalog.models import ProductVariant, PublishStatus
 from core import audit
 from core import phone as phone_utils
-from core.exceptions import Conflict, PriceChanged, ValidationError
+from core.exceptions import BusinessError, Conflict, PriceChanged, ValidationError
 from core.money import ZERO, quantize
 from core.services import next_number
 from customers.models import Customer, CustomerType
@@ -42,6 +43,8 @@ from orders.services import pricing
 from orders.services.lifecycle import log_event
 from promotions import services as promotion_services
 from shipping.models import ShippingMethod, ShippingZone
+
+logger = logging.getLogger("rangon.orders")
 
 
 @dataclass
@@ -173,8 +176,18 @@ def price_cart(*, cart: Cart, shipping_method: ShippingMethod | None = None) -> 
             coupon_discount = result.discount
             free_shipping = result.free_shipping
         except Exception as exc:  # coupon became invalid since it was applied
+            # A refusal is written for the shopper and says why. Anything else
+            # -- a database error, a bug -- is written for a developer, and its
+            # text carried the SQL to the shopper's cart until 2026-09-24. The
+            # coupon is still dropped: a cart that cannot be priced with it must
+            # not be priced as if it applied.
+            if isinstance(exc, BusinessError):
+                message = exc.message
+            else:
+                logger.exception("Coupon %s could not be re-validated", cart.coupon.code)
+                message = "This coupon could not be applied, so it has been removed."
             issues.append(
-                {"code": "COUPON_INVALID", "message": str(exc), "coupon": cart.coupon.code}
+                {"code": "COUPON_INVALID", "message": message, "coupon": cart.coupon.code}
             )
             cart.coupon = None
             cart.save(update_fields=["coupon", "updated_at"])

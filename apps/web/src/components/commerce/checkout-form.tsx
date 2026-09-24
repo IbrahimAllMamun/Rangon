@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/primitives";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Order, ShippingOption } from "@/lib/api/types";
+import type { CustomerOrder, ShippingOption } from "@/lib/api/types";
 import { money } from "@/lib/format";
 import { INVALID_MESSAGE, isValidPhone, toCanonical } from "@/lib/phone";
 import { useCart } from "@/lib/store/cart";
@@ -149,7 +149,7 @@ export function CheckoutForm() {
 
     setSubmitting(true);
     try {
-      const response = await apiClient<{ order: Order; tracking_token: string }>(
+      const response = await apiClient<{ order: CustomerOrder; tracking_token: string }>(
         "/shop/checkout/",
         {
           method: "POST",

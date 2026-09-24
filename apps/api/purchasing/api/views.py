@@ -238,16 +238,32 @@ class PurchaseOrderViewSet(
 class SupplierPaymentViewSet(
     mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet
 ):
-    queryset = SupplierPayment.objects.select_related("supplier", "purchase_order")
     serializer_class = SupplierPaymentSerializer
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = {"list": ["purchases.view"], "create": ["purchases.pay"]}
     filterset_fields = ["supplier", "purchase_order", "method"]
 
+    def get_queryset(self) -> Any:
+        # A payment belongs to the branch whose order it settles, or -- for an
+        # advance against no order -- whose account it came out of. Unscoped
+        # until 2026-09-24: every branch read every other's payments (D95).
+        return branch_queryset(
+            actor(self.request),
+            SupplierPayment.objects.select_related("supplier", "purchase_order"),
+            field=("purchase_order__branch", "account__branch"),
+        )
+
     def create(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+
+        # Paying an order is acting on its branch: the same rule as receiving
+        # it. Unchecked until 2026-09-24, so staff at one branch could settle
+        # another's invoices (D95). The account is checked where the money
+        # moves -- `finance.services.check_named_account` -- for every caller.
+        if data.get("purchase_order") is not None:
+            resolve_branch(actor(request), data["purchase_order"].branch_id)
 
         payment = purchasing_services.record_supplier_payment(
             supplier=data["supplier"],

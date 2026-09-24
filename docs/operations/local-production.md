@@ -334,6 +334,14 @@ keep saying `localhost:4100`. Fine for a demo; wrong for anything that will be i
 means rebuilding the web image against the public hostname — §4 above, and
 [cloudflare-local-setup.md §7.1](cloudflare-local-setup.md).
 
+**`NEXT_PUBLIC_SITE_URL` is also the origin writes are accepted from.** Every sign-in, save and sale
+must come from this site's own origin ([D101](../roadmap.md#known-defects)): the one compiled in,
+or the host the request arrived on. Through the tunnel the second one matches — Nginx passes the
+tunnel's `https` and hostname through. On `localhost:4100` only the first can, because Nginx
+forwards `Host $host`, which drops the port. So an image built for the tunnel's hostname and then
+used at `http://localhost:4100` refuses writes with **403 `CROSS_ORIGIN_REFUSED`** — build it for the
+address you use (§4), or browse through the tunnel.
+
 Nginx already treats any `*.trycloudflare.com` host as public and returns **403** for
 `/django-admin/`. That is deliberate: the Django admin is the last thing that should face the world.
 

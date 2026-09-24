@@ -135,4 +135,19 @@ describe("OrderFulfilment", () => {
     expect(screen.queryByRole("button", { name: /book a parcel/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /record an update/i })).toBeNull();
   });
+
+  it("holds a parcel booked for an unpacked order until the order is packed", () => {
+    // D98: the server refuses the parcel's first movement; the screen says why.
+    renderPanel({ orderStatus: "CONFIRMED", shipments: [parcel({ status: "PENDING" })] });
+
+    expect(screen.queryByRole("button", { name: /record an update/i })).toBeNull();
+    expect(screen.getByText(/leaves once the order is packed/i)).toBeTruthy();
+  });
+
+  it("lets the same parcel leave once the order is packed", () => {
+    renderPanel({ orderStatus: "PACKED", shipments: [parcel({ status: "PENDING" })] });
+
+    expect(screen.getByRole("button", { name: /record an update/i })).toBeTruthy();
+    expect(screen.queryByText(/leaves once the order is packed/i)).toBeNull();
+  });
 });

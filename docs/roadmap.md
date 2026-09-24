@@ -9,7 +9,18 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-21**.
+Last updated: **2026-09-24**.
+
+**[D95–D102](#known-defects): walking two screens nobody had used, and measuring five more security
+controls, found eight defects — three of them the kind a customer or a till would notice.** An
+account a person *named* was never checked, so a POS sale at one branch could land in another
+branch's drawer and a cheque could be paid out of cash (D95). The order-tracking link, open to
+anyone holding it, returned the shop's own record — staff emails, the reasons they typed, the
+drawer each payment went into (D97). A parcel could be dispatched and delivered while its order
+sat at CONFIRMED with the goods still counted on the shelf (D98). And `security.md`'s CSRF
+double-submit token had never been built: with an owner's cookies, a request from another origin
+changed an account (D101). CORS and CSP held exactly as documented. Details in
+[§ Two screens walked, five controls audited](#two-screens-walked-five-controls-audited-eight-defects-fixed-d95d102-2026-09-24).
 
 **[D89](#known-defects) and [D90](#known-defects): `Idempotency-Key` was accepted and ignored on
 every finance and inventory endpoint, and where it *was* honoured the race recovery had never
@@ -406,6 +417,115 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Two screens walked, five controls audited, eight defects fixed (D95–D102), 2026-09-24
+
+Asked for after D91–D94: use the two screens nothing had exercised — the supplier
+payment form, and an order's Delivery panel with the customer's parcel view — in
+a real browser; measure the next five rows of `security.md`; put secret scanning
+in CI. Both screens worked as screens. What they were connected to did not.
+
+**The supplier payment form** passed every path in Chromium: a comma amount and a
+three-decimal one refused at the field, more cash than the drawer holds refused
+with the balance, a ৳1,000 bank payment recorded with Paid, Outstanding and the
+history updated, a double click making one payment. What it *sends* led to D95 —
+the account it names was never checked, by it or by anything else:
+
+```text
+as staff bound to branch A, naming an account         before        after
+  POS sale, takings into B's drawer ................  201           400
+  POS sale, card takings into A's cash drawer ......  201           400
+  refund out of B's drawer .........................  201           400
+  card sale refunded in cash, account left blank ...  out of bank   out of drawer
+  supplier payment for B's purchase order ..........  201           403
+  supplier payment out of B's drawer ...............  201           400
+  cheque paid out of a cash drawer .................  201           400
+  GET supplier-payments/ ...........................  every branch  own branch
+```
+
+The order and return screens were then walked again as the fix changed them: a
+৳10 cash refund of a card sale left the drawer (48,227.66 → 48,217.66) with the
+bank untouched; a return refunded from a second cash box (5,000 → 4,110); a COD
+remittance landed in the drawer chosen (4,110 → 5,070). The second cash box is
+how D96 surfaced — the Accounts screen could not open one.
+
+**The Delivery panel** worked on a packed order: booked with a courier and a
+tracking number, the same number refused a second time at the form, dispatch
+moving the order to SHIPPED and delivery to DELIVERED, the customer's phone view
+showing the parcel, the courier's link and every update. Around it:
+
+```text
+parcel on a CONFIRMED order: dispatched, in transit, delivered
+  order status ........... CONFIRMED throughout            (D98 -> 409, "pack it first")
+  customer's page ........ "We will call you before delivery" over a Delivered parcel
+  stock .................. still on the shelf, reserved
+GET /shop/orders/RGN-WEB-000003/?token=…  anonymous       (D97)
+  events[].actor_email ... manager@rangon.test, owner@rangon.test
+  events[].data .......... the typed reason, payment and parcel ids
+  also ................... internal_note, created_by_email, payments[].account_name,
+                           register, stock_committed
+  timeline ............... "PENDING → CONFIRMED", "COD 960.00", "DISPATCHED: …"
+after: named keys only; "Order placed · Order confirmed · Being prepared · Packed ·
+       Parcel booked with the courier · On its way · Delivered"
+```
+
+The walk booked three parcels, and the next `seed_demo --reset` died on them (D102).
+
+**Five controls, measured against a production build and a production-settings API:**
+
+```text
+CSRF      "SameSite=Lax + a double-submit token"              no token existed (D101)
+            PATCH with the owner's cookies, Origin blog.shop.example ... 200 -> 403
+            sign-in, sign-out, password change from another origin ..... 200 -> 403
+            same origin, no Origin, any read ........................... unchanged
+CORS      "allow-list; wildcard forbidden in production"      holds
+            Origin evil / shop.example.evil.com / http:// / null ........ no ACAO
+            Origin on the list ....................................... ACAO + credentials
+            DJANGO_CORS_ALLOWED_ORIGINS='*' ............ refused at start (corsheaders.E013);
+                                                         forced past it, matches nothing
+CSP       "nonce + strict-dynamic, no unsafe-inline"          holds
+            9 routes incl. a 404 and two redirects: script-src 'self' 'nonce-…'
+            'strict-dynamic'; every <script> carries the nonce; a new nonce per request
+Errors    "no traces, SQL or settings"                        one path around it (D99)
+            unhandled exception -> 500 + request id; IntegrityError -> bare 409
+            coupon re-check -> the SQL, in the shopper's cart ............ fixed
+Webhooks  "capture needs a verified webhook"                  holds today; latent flaw (D100)
+            forged payment.success, manual or unknown provider ....... 404, nothing captured
+            verified event for another provider's payment / for ৳1 of ৳1,000 ... captured -> refused
+```
+
+Two smaller notes, neither a defect. The CSP matcher's "skip files with an
+extension" pattern loses its backslashes inside a plain string, so `robots.txt`
+and SVGs get the policy too — harmless, and for an SVG useful. And the dependency
+audits in CI are advisory: both end in `|| echo "::warning::…"`, so they have
+never failed a build; `security.md` now says so.
+
+**Secret scanning.** gitleaks 8.21.2, pinned and checksum-verified, over every
+commit on every branch — 133 non-merge commits across 33 branches: one finding,
+a test fixture's password (the rotation a re-seed must leave alone), in two
+commits — the one on `main` and its first copy on a feature branch. Both are
+accepted by fingerprint in `.gitleaksignore` with the reason. The working tree,
+scanned separately, finds the same line and nothing else. CI runs it on every
+push and pull request, and a finding fails the build — as it did on its first
+run here, because the check before that push had scanned only this clone's
+branches and CI's checkout fetches them all.
+
+**Every new test was run against the old code before it was believed.** 28
+failed there for the stated reason and 15 controls passed. D101 lives in the web
+server, so its proof is the HTTP table above, before and after, plus 46/46 E2E
+against the fixed build — every real flow sends `Origin`. One existing test
+changed: `test_the_refund_can_name_the_account_it_leaves_from` refunded cash out
+of an `OTHER`-kind box, which D95 refuses; it names a second cash box now, which
+is what it was about, and a new test pins the refusal.
+
+```text
+pytest ................................. 1306 passed        (46 new)
+mypy . ................................. clean, 154 source files
+ruff check . / format (0.8.4) .......... clean
+vitest ................................. 324 passed         (23 new)
+Playwright, production build ........... 46 passed
+gitleaks, every branch ................. no leaks (1 fixture, 2 commits, by fingerprint)
+```
 
 ### Three controls audited, four defects fixed (D91–D94), 2026-09-23
 
@@ -1980,7 +2100,7 @@ Do not describe any of these as working.
 | Payment gateway                         | No live provider; the card option is visibly**disabled**, not faked                                                                         |
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets **are** asserted — `tests/test_performance.py` and `tests/test_concurrency.py` ran 38 passed on 2026-09-21. What is still missing is a **load test**: a budget is a query count, not a latency under concurrency, and nothing has driven listing, checkout or POS search at peak |
-| Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**. 2026-09-21 is the argument for one: auditing a single control found every rate limit bypassable by a header and the audit trail writable by the caller ([D88](#known-defects)), both of which this table and `security.md` had listed as present. **2026-09-23 made the same argument three more times**: auditing uploads, the session and branch scope found receipts public, sign-out not revoking after thirty idle minutes, every report readable for any branch, and stock transferable out of any branch ([D91–D94](#known-defects)) — all four listed as controlled |
+| Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**. 2026-09-21 is the argument for one: auditing a single control found every rate limit bypassable by a header and the audit trail writable by the caller ([D88](#known-defects)), both of which this table and `security.md` had listed as present. **2026-09-23 made the same argument three more times**: auditing uploads, the session and branch scope found receipts public, sign-out not revoking after thirty idle minutes, every report readable for any branch, and stock transferable out of any branch ([D91–D94](#known-defects)) — all four listed as controlled. **2026-09-24 once more**: of five more controls measured, CORS and CSP held, but the CSRF token `security.md` listed had never been built ([D101](#known-defects)), one error path echoed SQL ([D99](#known-defects)), and the order-tracking link returned the staff record ([D97](#known-defects)) |
 | Deployment                              | Compose prod stack + green CI;**no live environment** — nothing has ever been deployed                                                     |
 
 ## Known defects
@@ -2102,6 +2222,14 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D92~~ | ~~**Signing out after thirty idle minutes left the session alive for fourteen days.**~~ **Fixed 2026-09-23.** `LogoutView` required a valid access token. The access token and the cookie carrying it both live thirty minutes, so anyone signing out after half an hour away got a **401** — which the web route ignored, clearing the cookies and showing "signed out" while the refresh token stayed good for the rest of its fourteen days. Measured: with a live access token, logout 204 and the refresh token dies; with an expired one or none, logout 401 and the refresh token **mints a new pair**. That is the one case server-side revocation exists for — a token copied off the machine. The refresh token is now the whole credential for signing out: no access token asked for, no throttle (a 429 would leave the token alive), always 204. Verified through the real web route with the access cookie removed: refresh afterwards 401 | `apps/api/accounts/api/views.py` | **No test called `auth/logout/`.** The route's own comment says a cleared cookie alone would leave a usable token in the wild; nothing checked that the call it makes ever succeeded |
 | ~~D93~~ | ~~**Every report took `?branch=` at its word.**~~ **Fixed 2026-09-23.** `reports.api.views._branch_for` returned whatever branch was named, with no check, and backed all eleven reports. A manager or accountant confined to one branch read another's sales (৳7,777.77 in the probe), stock valuation, stock movement, expenses, dashboard and business summary by naming it. Worse, an id that matched nothing came back as `None` — which means *every* branch — so **any random UUID** was enough. Now a branch-bound caller naming another branch gets 403 and an unknown id gets 404; owners and admins still report on any branch, closed ones included. The three `?branch=` readers in `finance` already used `resolve_branch`, which is why the reports were the odd one out rather than the rule | `apps/api/reports/api/views.py` | Without the parameter every report scoped correctly, so every test of report scoping passed — and no screen sends the parameter at all (`/admin/reports` and the dashboard pass only `range`), so nobody ever sent it by accident either. It was reachable by anyone who read the API |
 | ~~D94~~ | ~~**Anyone holding `inventory.transfer` could move stock out of any branch.**~~ **Fixed 2026-09-23.** `POST stock-transfers/` looked the source branch up bare — `Branch.objects.get(pk=...)` — where every other stock write goes through `resolve_branch`. A manager or inventory manager at branch A sent B's stock to A: **201**, and B's shelf went 10 → 8 → 6. The ledger recorded it faithfully, which is the problem: it is the insider-theft path `security.md` listed as closed. The list was unscoped too — every role at A saw a B → C transfer — because `branch_queryset` could filter on one field and a transfer has two. It takes several now, OR-ed, so each branch sees its own transfers from either end. The source must pass `resolve_branch`; the target may be any **active** branch, since sending stock elsewhere is what a transfer is | `apps/api/inventory/api/views.py`, `apps/api/accounts/services.py` | The only stock write that takes two branches, and the one that did not reuse the helper every single-branch write does |
+| ~~D95~~ | ~~**An account the caller named was never checked.**~~ **Fixed 2026-09-24.** `resolve_account` picks the branch's own account of the kind the method implies — but only when nobody names one, and every screen names one when a person picks it. Measured through the API, each **201**: a POS sale at branch A put its takings in **B's** drawer (B 5,000 → 6,000, A's drawer short by the same at the count); a refund came out of B's drawer; a supplier payment for A's order came out of B's drawer; a cheque was paid out of a cash drawer. The supplier payment list was unscoped, and another branch's purchase order could be paid. `finance.check_named_account` now runs in `record_for_reference`, the one choke point sales, refunds and supplier payments share: the account must be the money's branch's, open, and of the method's kind. A cash refund of a card sale now defaults to the drawer, not the bank the card money went into. The screens followed: the order and return screens state how a refund goes back ("Refund as") and offer only the order's branch's accounts of that kind. Three more of the family turned up on the way — supplier payments, discount overrides and manager overrides were audited with no branch, so every branch's auditors read them — and `refund_method` on a return was free text, which mapped to no kind and let any account through | `apps/api/finance/services.py`, `apps/api/orders/services/{payments,pos}.py`, `apps/api/purchasing/{services,api/views}.py`, `apps/api/orders/api/serializers.py`, `apps/web/src/lib/money-accounts.ts`, the order, return and purchase screens | The default path was careful and tested; the explicit path is the one every screen uses, and nothing tested a *wrong* explicit choice. The POS and supplier forms filtered by kind in the browser, which made the rule look enforced |
+| ~~D96~~ | ~~**A branch could not open a second account of any kind.**~~ **Fixed 2026-09-24.** `POST /accounts/` answered **400** "The fields branch, kind must make a unique set" for a second drawer, bank account or wallet at a branch that already had a default one — whether the new one was a default or not. The constraint is *conditional*, one default per branch and kind; DRF 3.15.2 builds a validator from it that filters on the condition and never asks whether the new row meets it. The serializer now states its validators; the services already kept the default single | `apps/api/finance/api/serializers.py` | Tests create accounts through the service, never the endpoint, and the demo seed has one account per kind — nobody had opened a second one through the screen until a walk needed one |
+| ~~D97~~ | ~~**The customer's order was the shop's own record.**~~ **Fixed 2026-09-24.** `GET /shop/orders/{number}/?token=` — the link in the confirmation message, open to anyone holding it — returned the **staff** serializer. Measured anonymously on a delivered order: every timeline entry named the member of staff who acted (`manager@rangon.test`) and carried its internal `data` — the reason typed on a status change, payment and parcel ids — and the order carried `internal_note`, `created_by_email` and the drawer each payment went into. The signed-in customer's own order was worse: it did not even drop private entries ("Stock reserved"). The checkout confirmation had the same shape. Customer serializers now name every field a customer sees; the timeline is written for the customer from an allow-list of entry types ("Order placed", "On its way", "Delivered") and never repeats what staff typed | `apps/api/orders/api/{serializers,shop_views}.py`, `apps/web/src/lib/api/types.ts` (`CustomerOrder`) | The storefront page read a handful of fields and rendered them, so the page looked right. The leak was in the bytes, which nobody read |
+| ~~D98~~ | ~~**A parcel could leave before its order was packed.**~~ **Fixed 2026-09-24.** Booking a parcel early is allowed; dispatching or delivering one moved the order only from PACKED or SHIPPED. Walked in the browser: a CONFIRMED order's parcel was dispatched, moved and delivered while the order stayed **CONFIRMED** — the customer read "We will call you before delivery" above a parcel marked Delivered — and since packing is when goods leave the stock ledger, the delivered goods were still on the shelf, reserved. A parcel booked before a cancellation could leave too. A parcel's first movement now needs the order packed (shipped or delivered, for a split delivery); later updates always record. The Delivery panel says to mark the order packed first | `apps/api/shipping/services.py`, `apps/web/src/components/admin/order-fulfilment.tsx` | Every shipment test used a PACKED order, because that is the order a packer ships. Nothing asked what an earlier one did |
+| ~~D99~~ | ~~**A coupon check that failed inside the server showed the shopper why.**~~ **Fixed 2026-09-24.** `price_cart` re-validates the cart's coupon on every read and caught *every* exception into the cart's `issues` as `str(exc)`. A refusal is written for the shopper; a database error is written for a developer — with a forced `ProgrammingError`, the cart carried `SELECT "promotions_coupon"."id"`. A refusal keeps its message; anything else is logged, and the shopper reads that the coupon was removed | `apps/api/orders/services/checkout.py` | The only `str(exc)` in the codebase that reached a response. The handler that keeps internals out of every other response never saw this one: it was caught first |
+| ~~D100~~ | ~~**A verified webhook captured whatever the order had pending.**~~ **Fixed 2026-09-24; latent.** Checking the signature is each provider's `parse_webhook`; the view then captured the order's *first* pending payment — whichever provider it was with, whatever amount it was for. With a gateway registered, its event could capture a cash-on-delivery payment, and an event for ৳1 captured ৳1,000 (measured with a stub gateway). Latent because the only registered provider refuses webhooks: a forged one gets **404**, measured. The view now picks the payment made through that provider, and capture needs the amount to match | `apps/api/orders/api/shop_views.py`, `apps/api/orders/services/payments.py` | Written ahead of the first gateway ([gap #2](#gaps-to-close-before-go-live)), with nothing to exercise it |
+| ~~D101~~ | ~~**Nothing checked that a write came from the shop's own pages.**~~ **Fixed 2026-09-24.** `security.md` claimed `SameSite=Lax` plus a double-submit token on the cookie-authenticated routes; the token was never built. Measured against a production build with the owner's cookies: a PATCH to `/api/proxy/accounts/{id}` carrying `Origin: https://blog.shop.example` **changed the account (200)**, a sign-in from another origin set a session (login CSRF), and a sign-out from one ended it. `SameSite=Lax` keeps the cookies off a cross-*site* request in a modern browser — but a same-site origin, any subdomain, gets them. Every state-changing route under `/api/proxy` and `/api/auth` now refuses a foreign `Origin` with 403; same-origin writes, reads and requests with no `Origin` are unaffected, and the E2E suite passes against the build | `apps/web/src/lib/api/same-origin.ts`, the proxy and the three auth routes | The claim was written with the design and never measured. The API is token-authenticated, so its tests could not see a gap that lives in the web server |
+| ~~D102~~ | ~~**`seed_demo --reset` died once a parcel had been booked.**~~ **Fixed 2026-09-24.** `Shipment` PROTECTs `Order`, and `_reset` did not delete shipments, because nothing created one until the Delivery panel did. The walk that found D98 booked three, and the next reset raised `ProtectedError` | `apps/api/core/management/commands/seed_demo.py` | The fourth time a PROTECT reference has broken the reset — `tests/test_seed_reset.py` records the other three. The reset lists models by hand |
 
 ## Still API-only (no UI)
 
@@ -2286,6 +2414,9 @@ Ordered by value per day of work.
 | 5 | ~~**[D6](#known-defects) — mypy's 271 errors**~~ | **Fixed 2026-09-21** — 271 in 41 files to 0 in 152, and `mypy .` blocks now that the `\|\| echo` is gone, so the count cannot drift again. It was bulk work rather than hard work, as billed: `core.requests.AuthedRequest` covered 81 of the errors in one sentence and one annotation covered 80 more. The argument for doing it turned out to be the two real defects it surfaced, not the count |
 | 6 | ~~**Audit three more security controls**~~ | **Done 2026-09-23** — uploads, the session and branch scope, measured over HTTP. Four defects ([D91–D94](#known-defects)), each fixed with tests proven red first; `tests/api/test_branch_scope.py` now sweeps every GET route for another branch's rows |
 | 7 | ~~**A screen for `permissions/`**~~ | **Done 2026-09-23** — the role × permission matrix on `/admin/staff`. The last API without a caller, bar the customer-account endpoints withdrawn on purpose |
+| 8 | ~~**Use the two screens nothing had exercised**~~ | **Done 2026-09-24** — the supplier payment form, and the Delivery panel with the customer's parcel view, driven in Chromium. Both screens worked; what they were connected to did not: named accounts never checked ([D95](#known-defects)), a second account impossible to open ([D96](#known-defects)), the customer's payload the staff record ([D97](#known-defects)), parcels leaving unpacked orders ([D98](#known-defects)), and a reset the walk itself broke ([D102](#known-defects)) |
+| 9 | ~~**Audit five more security controls**~~ | **Done 2026-09-24** — CSRF, CORS, CSP, error leakage, payment webhooks, against a production build. CORS and CSP held as written. The CSRF token had never existed ([D101](#known-defects)), one error path echoed SQL ([D99](#known-defects)), and the webhook view would have captured the wrong payment once a gateway exists ([D100](#known-defects)) |
+| 10 | ~~**Secret scanning in CI**~~ | **Done 2026-09-24** — gitleaks, pinned and checksum-verified, over the whole history, blocking. One fixture accepted by fingerprint in `.gitleaksignore` |
 
 Shipped from this list on 2026-09-15:
 

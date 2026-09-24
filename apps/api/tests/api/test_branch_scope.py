@@ -38,6 +38,8 @@ from inventory import services as inventory_services
 from inventory.models import Inventory, StockCount
 from notifications.models import Notification, NotificationType
 from orders.models import AbandonedCheckout, HeldSale, ReturnReason, ReturnRequest
+from orders.services import pos
+from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
 from purchasing import services as purchasing_services
 from tests import factories
 
@@ -245,6 +247,111 @@ class TestReports:
         assert "7777.77" in response.content.decode()
 
 
+class TestAuditTrail:
+    """An entry about something one branch did belongs to that branch (D85, D95).
+
+    `audit.record` names a branch only when the caller passes one, and a row
+    with none is organisation-wide -- shown to every branch's auditors. Three
+    callers acting at one branch passed none. Measured 2026-09-24 with an
+    accountant bound to Alpha: Bravo's supplier payments (supplier, amount,
+    method), its discount overrides at the till, and its manager overrides were
+    all in Alpha's audit log.
+    """
+
+    @staticmethod
+    def _actions(client: Any, action: str) -> list[dict[str, Any]]:
+        listed = client.get(f"/api/v1/audit-logs/?action={action}").data
+        return listed["results"] if isinstance(listed, dict) else listed
+
+    @pytest.fixture
+    def auditors(self, shops: dict[str, Any], auth_client: Any) -> dict[str, Any]:
+        return {
+            "alpha": auth_client(factories.user(RoleCode.ACCOUNTANT, branch_obj=shops["alpha"])),
+            "owner": auth_client(shops["owner"]),
+        }
+
+    def test_a_supplier_payment_belongs_to_the_branch_that_paid(
+        self, shops: dict[str, Any], auditors: dict[str, Any]
+    ) -> None:
+        """Fails on `main`: Alpha's accountant reads Bravo's payment."""
+        factories.account(shops["bravo"], kind=AccountKind.CASH, opening_balance="5000.00")
+        purchase = purchasing_services.create_purchase_order(
+            supplier=factories.supplier(),
+            branch=shops["bravo"],
+            lines=[
+                purchasing_services.PurchaseLine(
+                    variant_id=shops["variant"].pk, quantity=1, unit_cost=Decimal("100.00")
+                )
+            ],
+            actor=shops["owner"],
+        )
+        purchasing_services.send_purchase_order(purchase_order=purchase, actor=shops["owner"])
+        purchasing_services.record_supplier_payment(
+            supplier=purchase.supplier,
+            purchase_order=purchase,
+            amount=Decimal("10.00"),
+            method="CASH",
+            actor=shops["owner"],
+        )
+
+        payment = "PAYMENT_RECORDED&entity_type=SupplierPayment"
+        assert self._actions(auditors["alpha"], payment) == []
+        [entry] = self._actions(auditors["owner"], payment)
+        assert entry["branch_code"] == "BRAVO"
+
+    def test_a_discount_override_belongs_to_the_till_it_was_given_at(
+        self, shops: dict[str, Any], auditors: dict[str, Any]
+    ) -> None:
+        """Fails on `main`: Alpha's accountant reads Bravo's 50% discount."""
+        factories.account(shops["bravo"], kind=AccountKind.CASH, opening_balance="0.00")
+        pos.create_pos_sale(
+            branch=shops["bravo"],
+            actor=factories.user(RoleCode.CASHIER, branch_obj=shops["bravo"]),
+            data=SaleInput(
+                lines=[
+                    SaleLineInput(
+                        variant_id=shops["variant"].pk,
+                        quantity=2,
+                        line_discount=Decimal("1000.00"),
+                    )
+                ],
+                payments=[PaymentInput(method="CASH", amount=Decimal("1000.00"))],
+                elevated_by=factories.user(RoleCode.MANAGER, branch_obj=shops["bravo"]),
+            ),
+        )
+
+        assert self._actions(auditors["alpha"], "DISCOUNT_OVERRIDE") == []
+        [entry] = self._actions(auditors["owner"], "DISCOUNT_OVERRIDE")
+        assert entry["branch_code"] == "BRAVO"
+
+    def test_a_manager_override_belongs_to_the_cashiers_branch(
+        self, shops: dict[str, Any], auditors: dict[str, Any]
+    ) -> None:
+        """Fails on `main`: Alpha's accountant reads Bravo's override."""
+        manager = factories.user(RoleCode.MANAGER, branch_obj=shops["bravo"])
+        pos.elevate(
+            email=manager.email,
+            password="test-password-123",
+            permission="sales.refund",
+            requested_by=factories.user(RoleCode.CASHIER, branch_obj=shops["bravo"]),
+        )
+
+        assert self._actions(auditors["alpha"], "PERMISSION_ELEVATION") == []
+        [entry] = self._actions(auditors["owner"], "PERMISSION_ELEVATION")
+        assert entry["branch_code"] == "BRAVO"
+
+    def test_an_organisation_wide_entry_is_still_everyones(
+        self, shops: dict[str, Any], auditors: dict[str, Any]
+    ) -> None:
+        """The control: D85 keeps entries with no branch visible to every reader."""
+        audit.record(
+            action=audit.AuditAction.SETTINGS_CHANGED, entity=shops["org"], actor=shops["owner"]
+        )
+
+        [entry] = self._actions(auditors["alpha"], "SETTINGS_CHANGED")
+        assert entry["branch_code"] is None
+
+
 # --------------------------------------------------------------------------- sweep
 
 
@@ -284,6 +391,8 @@ def test_no_route_shows_one_branch_anothers_rows(auth_client: Any) -> None:
     """Every GET route, asked by staff at Alpha, for anything that exists only at Bravo.
 
     Fails on `main` at `stock-transfers/` and at `reports/returns/?branch=`.
+    With the supplier payments added on 2026-09-24 it failed again, at
+    `supplier-payments/` and `audit-logs/` (D95).
     Aggregate reports leak figures rather than ids, which this cannot see --
     `TestReports` covers those by status code.
     """
@@ -307,6 +416,23 @@ def test_no_route_shows_one_branch_anothers_rows(auth_client: Any) -> None:
                 variant_id=variant.pk, quantity=1, unit_cost=Decimal("100.00")
             )
         ],
+        actor=owner,
+    )
+    purchasing_services.send_purchase_order(purchase_order=purchase, actor=owner)
+    supplier_payment = purchasing_services.record_supplier_payment(
+        supplier=purchase.supplier,
+        purchase_order=purchase,
+        amount=Decimal("10.00"),
+        method="CASH",
+        actor=owner,
+    )
+    # An advance against no order belongs to the branch whose drawer paid it.
+    supplier_advance = purchasing_services.record_supplier_payment(
+        supplier=purchase.supplier,
+        amount=Decimal("7.00"),
+        method="CASH",
+        account=cash,
+        branch=bravo,
         actor=owner,
     )
     only_at_bravo: dict[str, str] = {
@@ -342,6 +468,8 @@ def test_no_route_shows_one_branch_anothers_rows(auth_client: Any) -> None:
         ),
         "stock count": str(StockCount.objects.create(number="SC-BRAVO-1", branch=bravo).pk),
         "purchase order": str(purchase.pk),
+        "supplier payment": str(supplier_payment.pk),
+        "supplier advance": str(supplier_advance.pk),
         "return": str(
             ReturnRequest.objects.create(
                 number="RR-BRAVO-1", order=order, reason=ReturnReason.choices[0][0]

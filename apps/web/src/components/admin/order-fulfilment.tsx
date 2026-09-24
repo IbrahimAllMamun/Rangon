@@ -45,6 +45,12 @@ const SHIPPABLE: OrderStatus[] = ["CONFIRMED", "PROCESSING", "PACKED", "SHIPPED"
 const FINISHED: ShipmentStatus[] = ["DELIVERED", "RETURNED"];
 
 /**
+ * Mirrors `shipping.services.DISPATCHABLE_ORDER_STATUSES`: a parcel can be
+ * booked early, but it leaves only once the order is packed (D98).
+ */
+const DISPATCHABLE: OrderStatus[] = ["PACKED", "SHIPPED", "DELIVERED"];
+
+/**
  * The updates a person types by hand, in the order a parcel meets them.
  * `PENDING` is not offered: it is where a parcel starts, not somewhere it
  * returns to.
@@ -156,6 +162,7 @@ export function OrderFulfilment({
               <Parcel
                 key={shipment.id}
                 shipment={shipment}
+                orderStatus={orderStatus}
                 canFulfil={canFulfil}
                 onChanged={() => void refreshAfterWrite(router)}
               />
@@ -245,10 +252,12 @@ export function OrderFulfilment({
 
 function Parcel({
   shipment,
+  orderStatus,
   canFulfil,
   onChanged,
 }: {
   shipment: Shipment;
+  orderStatus: OrderStatus;
   canFulfil: boolean;
   onChanged: () => void;
 }) {
@@ -260,6 +269,8 @@ function Parcel({
   const [open, setOpen] = useState(false);
 
   const finished = FINISHED.includes(shipment.status);
+  // Booked, but the order is not packed: nothing may leave yet.
+  const waiting = shipment.status === "PENDING" && !DISPATCHABLE.includes(orderStatus);
   const field = `ship-update-${shipment.id}`;
 
   async function update(event: React.FormEvent) {
@@ -323,7 +334,14 @@ function Parcel({
         </ol>
       )}
 
-      {canFulfil && !finished && (
+      {canFulfil && waiting && (
+        <p className="mt-3 text-caption text-muted">
+          Booked. It leaves once the order is packed — mark it packed first, so its goods leave the
+          stock ledger with it.
+        </p>
+      )}
+
+      {canFulfil && !finished && !waiting && (
         <div className="mt-3">
           <ErrorSummary errors={errors} title="Could not record this update" />
           {open ? (

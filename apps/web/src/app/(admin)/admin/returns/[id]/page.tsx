@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/admin/shell";
 import { Badge, Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
 import { ApiError, type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
-import type { Account, ReturnRequest, ReturnStatus, SessionUser } from "@/lib/api/types";
+import type { Account, Order, ReturnRequest, ReturnStatus, SessionUser } from "@/lib/api/types";
 import { dateTime, humanise, money } from "@/lib/format";
 
 const STATUS_TONE: Record<ReturnStatus, "warning" | "info" | "success" | "error"> = {
@@ -31,17 +31,30 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
   const canAct = user.permissions.includes("*") || user.permissions.includes("sales.refund");
 
   let request: ReturnRequest | null = null;
-  let accounts: Account[] = [];
   let error: string | null = null;
   try {
     request = await apiServer<ReturnRequest>(`/returns/${id}/`);
-    if (canAct) {
-      const page = await apiServer<Paginated<Account>>("/accounts/?page_size=100");
-      accounts = page.results;
-    }
   } catch (caught) {
     if (caught instanceof ApiError && caught.status === 404) notFound();
     error = caught instanceof Error ? caught.message : "Could not load this return.";
+  }
+
+  // The refund's choices come from the order: its payments say how the money
+  // came in (business-rules.md §2.4) and its branch owns the accounts it may
+  // leave by — the API refuses any other (D95). Each is allowed to fail on its
+  // own, as on the order screen: without them the refund still completes on
+  // the server's defaults, and the return itself must not fail to load.
+  let order: Order | null = null;
+  let accounts: Account[] = [];
+  if (canAct && request) {
+    order = await apiServer<Order>(`/orders/${request.order}/`).catch(() => null);
+    if (order) {
+      accounts = await apiServer<Paginated<Account>>(
+        `/accounts/?is_active=true&branch=${order.branch}&page_size=100`,
+      )
+        .then((page) => page.results)
+        .catch(() => [] as Account[]);
+    }
   }
 
   if (error || !request) {
@@ -150,7 +163,13 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
           </CardContent>
         </Card>
 
-        <ReturnActions request={request} accounts={accounts} canAct={canAct} />
+        <ReturnActions
+          request={request}
+          accounts={accounts}
+          payments={order?.payments}
+          branch={order?.branch}
+          canAct={canAct}
+        />
       </div>
     </>
   );

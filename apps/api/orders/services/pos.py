@@ -93,7 +93,12 @@ def walk_in_customer(branch: Branch) -> Customer:
 
 
 def _check_discount_permission(
-    *, actor: User, discount: Decimal, subtotal: Decimal, elevated_by: User | None
+    *,
+    actor: User,
+    discount: Decimal,
+    subtotal: Decimal,
+    elevated_by: User | None,
+    branch: Branch | None = None,
 ) -> None:
     """Large discounts need manager approval (docs/business-rules.md §3.3)."""
     if discount <= ZERO:
@@ -125,6 +130,9 @@ def _check_discount_permission(
             "approved_by": approver.email,
         },
         reason="Discount above threshold approved",
+        # The till's branch: an override is that shop's business, not every
+        # shop's -- with no branch the entry reached every auditor (D95).
+        branch=branch,
     )
 
 
@@ -168,6 +176,7 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
         discount=quantize(line_discounts + data.manual_discount),
         subtotal=gross_subtotal,
         elevated_by=data.elevated_by,
+        branch=branch,
     )
 
     priced = pricing.calculate(priced_lines, manual_discount=quantize(data.manual_discount))
@@ -429,6 +438,8 @@ def elevate(*, email: str, password: str, permission: str, requested_by: User) -
         actor=requested_by,
         new_values={"permission": permission, "approved_by": approver.email},
         reason="POS manager override",
+        # The counter it happened at is the cashier's (D95).
+        branch=requested_by.branch,
     )
     return approver
 

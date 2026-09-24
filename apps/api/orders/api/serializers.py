@@ -16,9 +16,12 @@ from orders.models import (
     HeldSale,
     Order,
     OrderEvent,
+    OrderEventType,
     OrderItem,
+    OrderStatus,
     Payment,
     PaymentMethod,
+    PaymentState,
     Refund,
     RestockDecision,
     ReturnItem,
@@ -196,6 +199,158 @@ class OrderDetailSerializer(OrderListSerializer):
         ]
 
 
+# --- what the customer is shown ---------------------------------------------
+#
+# The storefront's own shapes. The staff serializers above carry who did what
+# (`actor_email`, `created_by_email`), what they typed for colleagues (a status
+# change's reason in `data`, `internal_note`) and where the money went (the
+# drawer a payment landed in). Until 2026-09-24 the tracking link -- open to
+# anyone holding it -- and the signed-in customer's own orders returned them
+# whole (D97). Nothing here is filtered out of a staff shape: each field a
+# customer sees is named, so a field added for staff stays with staff.
+
+#: What a customer reads for each status an order moves to. The staff
+#: timeline's "PACKED → SHIPPED" is written for the people moving the order.
+CUSTOMER_STATUS_TEXT: dict[str, str] = {
+    OrderStatus.CONFIRMED: "Order confirmed",
+    OrderStatus.PROCESSING: "Being prepared",
+    OrderStatus.PACKED: "Packed",
+    OrderStatus.SHIPPED: "On its way",
+    OrderStatus.DELIVERED: "Delivered",
+    OrderStatus.CANCELLED: "Order cancelled",
+    OrderStatus.RETURN_REQUESTED: "Return requested",
+    OrderStatus.RETURNED: "Returned",
+    OrderStatus.REFUNDED: "Refunded",
+}
+
+_RETURN_STEPS = ("approved", "rejected", "received")
+
+
+def customer_event_text(event: OrderEvent) -> str | None:
+    """What a customer reads for one timeline entry, or None to leave it out.
+
+    An allow-list by entry type, so a staff-only entry added later stays
+    staff-only even if it forgets `customer_visible=False`. No text a member of
+    staff typed is repeated: reasons, comments and notes were written for
+    colleagues. Parcel updates are left to the parcel's own panel, which shows
+    them properly, rather than repeated here as "IN_TRANSIT: At the hub".
+    """
+    if not event.is_customer_visible:
+        return None
+    data = event.data or {}
+    kind = event.event_type
+    if kind == OrderEventType.CREATED:
+        return "Order placed"
+    if kind == OrderEventType.CANCELLED:
+        return CUSTOMER_STATUS_TEXT[OrderStatus.CANCELLED]
+    if kind == OrderEventType.STATUS_CHANGED:
+        return CUSTOMER_STATUS_TEXT.get(str(data.get("to", "")))
+    if kind == OrderEventType.PAYMENT_CAPTURED:
+        return "Payment received"
+    if kind == OrderEventType.PAYMENT_RECORDED:
+        # Recording a cash-on-delivery payment at checkout moves no money; only
+        # a payment recorded as already taken is news to the customer.
+        return "Payment received" if data.get("status") == PaymentState.CAPTURED else None
+    if kind == OrderEventType.PAYMENT_FAILED:
+        return "A payment did not go through"
+    if kind == OrderEventType.REFUND_ISSUED:
+        return "Refund issued"
+    if kind == OrderEventType.SHIPMENT_CREATED:
+        return "Parcel booked with the courier"
+    if kind == OrderEventType.RETURN_REQUESTED:
+        return "Return requested"
+    if kind == OrderEventType.RETURN_UPDATED:
+        # "Return RET-000003 rejected: <what staff wrote>" -- the step, not the comment.
+        step = next((word for word in _RETURN_STEPS if f" {word}" in event.message), None)
+        return f"Return {step}" if step else "Return updated"
+    return None
+
+
+class CustomerPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = ["id", "method", "status", "amount", "captured_at", "created_at"]
+        read_only_fields = fields
+
+
+class CustomerOrderListSerializer(serializers.ModelSerializer):
+    item_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            "number",
+            "channel",
+            "status",
+            "payment_status",
+            "item_count",
+            "grand_total",
+            "currency",
+            "placed_at",
+        ]
+        read_only_fields = fields
+
+
+class CustomerOrderSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source="customer.name", read_only=True)
+    shipping_method_name = serializers.CharField(
+        source="shipping_method.name", read_only=True, default=""
+    )
+    items = OrderItemSerializer(many=True, read_only=True)
+    payments = CustomerPaymentSerializer(many=True, read_only=True)
+    events = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Order
+        fields = [
+            "number",
+            "channel",
+            "status",
+            "payment_status",
+            "currency",
+            "placed_at",
+            "delivered_at",
+            # Shown under "This order was cancelled": written to the customer.
+            "cancel_reason",
+            "customer_name",
+            "subtotal",
+            "discount_total",
+            "coupon_discount",
+            "tax_total",
+            "shipping_total",
+            "grand_total",
+            "paid_total",
+            "refunded_total",
+            "shipping_method_name",
+            "shipping_address",
+            "customer_note",
+            "items",
+            "payments",
+            "events",
+        ]
+        read_only_fields = fields
+
+    def get_events(self, order: Order) -> list[dict[str, Any]]:
+        shown = []
+        for event in sorted(order.events.all(), key=lambda row: row.created_at):
+            text = customer_event_text(event)
+            if text is not None:
+                shown.append(
+                    {
+                        "id": str(event.pk),
+                        "event_type": event.event_type,
+                        "message": text,
+                        "created_at": serializers.DateTimeField().to_representation(
+                            event.created_at
+                        ),
+                    }
+                )
+        # Checkout logs the payment and the confirmation before the order's own
+        # "placed" entry; the customer's story starts with placing it.
+        shown.sort(key=lambda row: row["event_type"] != OrderEventType.CREATED)
+        return shown
+
+
 # --- POS -------------------------------------------------------------------
 
 
@@ -350,7 +505,12 @@ class CompleteReturnSerializer(serializers.Serializer):
     refund_amount = serializers.DecimalField(
         max_digits=14, decimal_places=2, required=False, allow_null=True, min_value=Decimal("0.01")
     )
-    refund_method = serializers.CharField(required=False, allow_blank=True)
+    #: A choice, not free text: a method the ledger does not know maps to no
+    #: kind of account, so the named-account check had nothing to hold it to
+    #: and "BITCOIN" out of the bank went through (D95).
+    refund_method = serializers.ChoiceField(
+        choices=PaymentMethod.choices, required=False, allow_blank=True
+    )
     account = serializers.PrimaryKeyRelatedField(
         queryset=Account.objects.all(), required=False, allow_null=True
     )

@@ -104,3 +104,19 @@ export function humanise(value: string | null | undefined): string {
   const lower = value.replace(/_/g, " ").toLowerCase();
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
+
+/** How a customer names each way of paying. `humanise("COD")` reads "Cod". */
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  CASH: "Cash",
+  COD: "Cash on delivery",
+  CARD: "Card",
+  BANK: "Bank transfer",
+  MOBILE_MFS: "bKash / Nagad",
+  ONLINE_GATEWAY: "Online payment",
+  STORE_CREDIT: "Store credit",
+  CHEQUE: "Cheque",
+};
+
+export function paymentMethodLabel(method: string | null | undefined): string {
+  return (method && PAYMENT_METHOD_LABEL[method]) || humanise(method);
+}

@@ -71,3 +71,23 @@ def test_reset_survives_every_document_that_protects_the_catalogue(shop: Any) ->
     from finance.models import ExpenseCategory
 
     assert ExpenseCategory.objects.filter(code="RENT").exists()
+
+
+def test_reset_survives_a_booked_parcel(shop: Any) -> None:
+    """The fourth time: `Shipment` PROTECTs `Order`.
+
+    Nothing created shipments until the order screen's Delivery panel did, so
+    `_reset` never had to delete one. Walking that panel on 2026-09-24 booked
+    three parcels in the demo data, and the next `--reset` died with
+    ProtectedError on `Shipment.order`.
+    """
+    from shipping import services as shipping_services
+    from shipping.models import Shipment, ShipmentStatus
+
+    order = factories.order(branch=shop["branch"], status="PACKED")
+    parcel = shipping_services.create_shipment(order=order, notes="booked by the walk")
+    shipping_services.record_event(shipment=parcel, status=ShipmentStatus.DISPATCHED)
+
+    call_command("seed_demo", "--reset", "--orders", "1", verbosity=0)
+
+    assert not Shipment.objects.filter(pk=parcel.pk).exists()

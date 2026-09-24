@@ -7,6 +7,7 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.validators import UniqueTogetherValidator
 
 from accounts.models import Branch
 from finance.models import (
@@ -55,6 +56,20 @@ class AccountSerializer(serializers.ModelSerializer):
         # `balance` is a cache over the ledger. Exposing it as writable would
         # invite exactly the bug this app exists to prevent.
         read_only_fields = ["id", "balance", "created_at", "updated_at"]
+        # Stated rather than generated. DRF 3.15.2 turns the *conditional*
+        # "one default per branch and kind" constraint into an unconditional
+        # validator -- it filters on the condition but never asks whether the
+        # new row meets it -- so every second account of a kind was refused,
+        # default or not (D96). Only the name is unique outright; the default
+        # is kept single by `create_account`/`update_account`, which demote the
+        # old one in the same transaction, and by the index underneath.
+        validators = [
+            UniqueTogetherValidator(
+                queryset=Account.objects.all(),
+                fields=["branch", "name"],
+                message="This branch already has an account with that name.",
+            )
+        ]
 
 
 class AccountTransactionSerializer(serializers.ModelSerializer):

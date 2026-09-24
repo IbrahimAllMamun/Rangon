@@ -127,7 +127,12 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
 
   let accounts: Account[] = [];
   try {
-    const page = await apiServer<Paginated<Account>>("/accounts/?is_active=true&page_size=50");
+    // The order's own branch only: its goods are what the money pays for, and
+    // the server refuses any other branch's account (D95). Unfiltered, an
+    // owner was offered every branch's drawer for every branch's order.
+    const page = await apiServer<Paginated<Account>>(
+      `/accounts/?is_active=true&branch=${order.branch}&page_size=50`,
+    );
     accounts = page.results;
   } catch {
     accounts = [];

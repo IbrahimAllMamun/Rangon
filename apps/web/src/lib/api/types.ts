@@ -260,6 +260,9 @@ export interface Payment {
   reference: string;
   captured_at: string | null;
   created_at: string;
+  /** The account the money went into; null for a payment not yet captured. */
+  account: string | null;
+  account_name: string;
 }
 
 export interface OrderEvent {
@@ -278,6 +281,7 @@ export interface Order {
   channel: Channel;
   status: OrderStatus;
   payment_status: PaymentStatus;
+  branch: string;
   branch_code: string;
   customer: string;
   customer_name: string;
@@ -308,6 +312,42 @@ export interface Order {
    *  does not carry parcels, `/shipments/?order=` does. */
   shipments?: CustomerShipment[];
 }
+
+/**
+ * An order as its customer sees it: `GET /shop/orders/{number}/`, the signed-in
+ * account's orders and the checkout confirmation. Named field by field on the
+ * server (`CustomerOrderSerializer`) — the staff `Order` carries who did what,
+ * what they typed for each other and which drawer the money went into (D97).
+ */
+export type CustomerOrder = Pick<
+  Order,
+  | "number"
+  | "channel"
+  | "status"
+  | "payment_status"
+  | "currency"
+  | "placed_at"
+  | "delivered_at"
+  | "cancel_reason"
+  | "customer_name"
+  | "subtotal"
+  | "discount_total"
+  | "coupon_discount"
+  | "tax_total"
+  | "shipping_total"
+  | "grand_total"
+  | "paid_total"
+  | "refunded_total"
+  | "shipping_address"
+  | "customer_note"
+  | "items"
+  | "shipments"
+> & {
+  shipping_method_name: string;
+  payments: Pick<Payment, "id" | "method" | "status" | "amount" | "captured_at" | "created_at">[];
+  /** Written for the customer by the server; never the staff log's text. */
+  events: { id: string; event_type: string; message: string; created_at: string }[];
+};
 
 export type ShipmentStatus =
   | "PENDING"

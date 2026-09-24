@@ -6,8 +6,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, Input, Label, Select } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { AccountKind, Order, PaymentMethod, PosSession } from "@/lib/api/types";
+import type { Order, PaymentMethod, PosSession } from "@/lib/api/types";
 import { money } from "@/lib/format";
+import { METHOD_KIND } from "@/lib/money-accounts";
 import { usePos } from "@/lib/store/pos";
 
 interface Tender {
@@ -19,18 +20,6 @@ interface Tender {
   account?: string;
   accountName?: string;
 }
-
-/**
- * Where each tender's money goes.
- *
- * Cash into a drawer, card settlements into a bank, bKash into the wallet —
- * so a split payment does not dump the card takings into the till.
- */
-const METHOD_KIND: Record<string, AccountKind> = {
-  CASH: "CASH",
-  CARD: "BANK",
-  MOBILE_MFS: "MFS",
-};
 
 const METHODS: { method: PaymentMethod; label: string; icon: React.ReactNode }[] = [
   { method: "CASH", label: "Cash", icon: <Banknote className="size-5" aria-hidden /> },

@@ -1,0 +1,14 @@
+# Secret-scan findings reviewed and judged not to be secrets.
+#
+# One fingerprint per line, each with the reason above it. A fingerprint names
+# one finding in one commit, so nothing new can hide behind an entry here --
+# which is why findings are accepted this way and never by skipping a rule or a
+# path. A real secret is never listed: it is rotated, then removed from the
+# history (docs/operations/security.md, "Secret scanning").
+
+# A test fixture: the password a member of staff is imagined to have rotated to
+# by hand, which re-seeding must leave alone. Never a credential anywhere. Two
+# commits carry the same line -- the one on main, and the first copy of it on
+# feat/purchasing-origin-of-goods -- and CI scans every branch, so both are here.
+c83d087811de295cf178e7d01ab16694d17a80a6:apps/api/tests/test_seed_demo_guard.py:generic-api-key:127
+c8877b789c585cb3abb186376c0558607281ee9a:apps/api/tests/test_seed_demo_guard.py:generic-api-key:127

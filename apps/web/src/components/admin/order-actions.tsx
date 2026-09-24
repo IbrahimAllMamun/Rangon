@@ -16,6 +16,13 @@ import {
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Account, Order, OrderStatus } from "@/lib/api/types";
 import { humanise, money } from "@/lib/format";
+import {
+  METHOD_KIND,
+  REFUND_METHODS,
+  accountsFor,
+  defaultRefundMethod,
+  sourcePayment,
+} from "@/lib/money-accounts";
 import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
 /**
@@ -50,11 +57,28 @@ export function OrderActions({
   const [refundReason, setRefundReason] = useState("");
   const [captureAccount, setCaptureAccount] = useState("");
   const [refundAccount, setRefundAccount] = useState("");
+  const [refundMethod, setRefundMethod] = useState(() => defaultRefundMethod(order.payments));
 
   const can = (code: string) => permissions.includes("*") || permissions.includes(code);
   const transitions = NEXT_STATUS[order.status] ?? [];
   const outstanding = Number(order.grand_total) - Number(order.paid_total);
   const refundable = Number(order.paid_total) - Number(order.refunded_total);
+
+  // Only this order's branch's accounts, of the kind the money is: the API
+  // refuses anything else (D95), and an owner's list spans every branch.
+  const captureMethod = order.payments?.[0]?.method ?? "CASH";
+  const captureCandidates = accountsFor(accounts, captureMethod, order.branch);
+  const refundCandidates = accountsFor(accounts, refundMethod, order.branch);
+  // Left blank, the refund leaves the account the payment came into when it
+  // goes back the same way, and the branch's account for the method otherwise.
+  const source = sourcePayment(order.payments);
+  const sourceKind =
+    accounts.find((row) => row.id === source?.account)?.kind ??
+    (source ? METHOD_KIND[source.method] : undefined);
+  const refundDefault =
+    source?.account && sourceKind === METHOD_KIND[refundMethod]
+      ? `Where it came in — ${source.account_name}`
+      : "The branch's account for this method";
 
   async function run(label: string, work: () => Promise<unknown>) {
     setBusy(label);
@@ -82,7 +106,7 @@ export function OrderActions({
       apiClient(`/orders/${order.id}/payments/`, {
         method: "POST",
         body: {
-          method: order.payments?.[0]?.method ?? "CASH",
+          method: captureMethod,
           amount: outstanding.toFixed(2),
           // Blank lets the server pick the branch default for this method.
           account: captureAccount || null,
@@ -98,7 +122,9 @@ export function OrderActions({
         body: {
           amount: Number(refundAmount).toFixed(2),
           reason: refundReason,
-          // Blank refunds out of the account the payment came in through.
+          // Always stated: a card sale refunded in cash is a cash refund, and
+          // it is the drawer the notes leave (business-rules.md §2.4).
+          method: refundMethod,
           account: refundAccount || null,
         },
       }),
@@ -141,7 +167,7 @@ export function OrderActions({
             <p className="text-body-sm">
               Outstanding: <span className="tabular font-semibold">{money(outstanding)}</span>
             </p>
-            {accounts.length > 1 && (
+            {captureCandidates.length > 1 && (
               <Field label="Money goes into" htmlFor="capture-account" className="mt-2">
                 <Select
                   id="capture-account"
@@ -149,7 +175,7 @@ export function OrderActions({
                   onChange={(event) => setCaptureAccount(event.target.value)}
                 >
                   <option value="">Branch default for this method</option>
-                  {accounts.map((account) => (
+                  {captureCandidates.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.name}
                     </option>
@@ -201,15 +227,31 @@ export function OrderActions({
                 <option value="Goodwill">Goodwill</option>
               </Select>
             </Field>
-            {accounts.length > 1 && (
+            <Field label="Refund as" htmlFor="refund-method">
+              <Select
+                id="refund-method"
+                value={refundMethod}
+                onChange={(event) => {
+                  setRefundMethod(event.target.value);
+                  setRefundAccount("");
+                }}
+              >
+                {REFUND_METHODS.map((row) => (
+                  <option key={row.value} value={row.value}>
+                    {row.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {refundCandidates.length > 0 && (
               <Field label="Money comes out of" htmlFor="refund-account">
                 <Select
                   id="refund-account"
                   value={refundAccount}
                   onChange={(event) => setRefundAccount(event.target.value)}
                 >
-                  <option value="">The account the payment came into</option>
-                  {accounts.map((account) => (
+                  <option value="">{refundDefault}</option>
+                  {refundCandidates.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.name}
                     </option>

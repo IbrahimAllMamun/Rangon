@@ -41,7 +41,12 @@ from customers.api.serializers import CustomerAddressSerializer
 from customers.models import Customer, CustomerAddress
 from engagement.models import Review, ReviewStatus
 from inventory import services as inventory_services
-from orders.api.serializers import CartSerializer, CheckoutSerializer, OrderDetailSerializer
+from orders.api.serializers import (
+    CartSerializer,
+    CheckoutSerializer,
+    CustomerOrderListSerializer,
+    CustomerOrderSerializer,
+)
 from orders.models import Order
 from orders.services import checkout as checkout_services
 from orders.services import leads
@@ -795,7 +800,7 @@ class CheckoutView(APIView):
         )
         return Response(
             {
-                "order": OrderDetailSerializer(order).data,
+                "order": CustomerOrderSerializer(order).data,
                 "tracking_token": order.guest_token,
             },
             status=status.HTTP_201_CREATED,
@@ -817,14 +822,23 @@ class OrderTrackingView(APIView):
         if not (customer and order.customer_id == customer.pk) and token != order.guest_token:
             raise NotFound("Order not found.")
 
-        data = OrderDetailSerializer(order).data
-        data["events"] = [event for event in data["events"] if event["is_customer_visible"]]
-        # The answer to "where is my parcel", which this endpoint could not give
-        # until something started creating shipments. Narrower than the admin
-        # payload on purpose -- see `CustomerShipmentSerializer`.
-        parcels = order.shipments.select_related("courier").prefetch_related("events")
-        data["shipments"] = CustomerShipmentSerializer(parcels, many=True).data
-        return Response(data)
+        return Response(_customer_order(order))
+
+
+def _customer_order(order: Order) -> dict[str, Any]:
+    """One order as its customer sees it -- the storefront's shape, not staff's (D97).
+
+    The tracking link and the signed-in account answer with the same thing, so
+    a customer who signs in sees no more of the shop's own record than the link
+    showed them, and the link shows no more than the customer's.
+    """
+    data = dict(CustomerOrderSerializer(order).data)
+    # The answer to "where is my parcel", which this endpoint could not give
+    # until something started creating shipments. Narrower than the admin
+    # payload on purpose -- see `CustomerShipmentSerializer`.
+    parcels = order.shipments.select_related("courier").prefetch_related("events")
+    data["shipments"] = CustomerShipmentSerializer(parcels, many=True).data
+    return data
 
 
 class AccountOrdersView(APIView):
@@ -837,16 +851,14 @@ class AccountOrdersView(APIView):
 
         if number:
             order = get_object_or_404(Order, number=number, customer=customer)
-            return Response(OrderDetailSerializer(order).data)
+            return Response(_customer_order(order))
 
         orders = (
             Order.objects.filter(customer=customer)
             .prefetch_related("items")
             .order_by("-placed_at")[:50]
         )
-        from orders.api.serializers import OrderListSerializer
-
-        return Response({"results": OrderListSerializer(orders, many=True).data})
+        return Response({"results": CustomerOrderListSerializer(orders, many=True).data})
 
 
 class AccountAddressView(APIView):
@@ -920,8 +932,13 @@ class PaymentWebhookView(APIView):
             raise NotFound("This provider does not send webhooks.") from None
 
         order = Order.objects.filter(number=event.order_number).first()
+        # The payment this provider was asked to take -- not the order's first
+        # pending one, which could be the cash-on-delivery payment a courier is
+        # still carrying (D100).
         payment = (
-            order.payments.filter(status__in=["PENDING", "AUTHORIZED"]).first() if order else None
+            order.payments.filter(status__in=["PENDING", "AUTHORIZED"], provider=provider).first()
+            if order
+            else None
         )
         stored = payment_services.handle_provider_event(
             provider=provider,
@@ -930,5 +947,6 @@ class PaymentWebhookView(APIView):
             payload=event.raw,
             order=order,
             payment=payment,
+            amount=event.amount,
         )
         return Response({"received": True, "result": stored.result})

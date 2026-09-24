@@ -212,6 +212,12 @@ stock even if it was raised as `RESTOCK`.
 - Refund method defaults to the original payment method. Cash sales refund cash from the register;
   gateway payments refund through the provider; COD orders refund by cash or mobile transfer recorded
   manually.
+- **The method is stated at the refund, and the account follows it** (§6b.1). A card sale refunded
+  in cash is a *cash* refund and comes out of the drawer — the notes leave the drawer, whatever the
+  sale went through. Left blank, the account is the one the payment came into when the refund goes
+  back the same way, and the branch's account for the method otherwise. Until 2026-09-24 the order
+  and return screens could not state a method, and a cash refund of a card sale came out of the bank
+  ([D95](roadmap.md#known-defects)). Store credit is not offered: nothing records the credit yet.
 - Shipping is **not** refunded when the customer changed their mind; it **is** refunded when the item
   was defective, wrong, or damaged in transit.
   *`DECISION REQUIRED` — assumed.*
@@ -750,6 +756,11 @@ by replaying the ledger, exactly as `Inventory.on_hand` sits over `InventoryTran
 flat list is sufficient for a retailer; a chart of accounts is an accounting product and changes the
 schema materially. Roadmap decision D-B. **Built on this default.***
 
+**Several accounts of one kind, one default.** A branch may hold two drawers or two bank accounts;
+only one per kind is the default the money lands in when nobody says otherwise, and making another
+the default demotes the old one in the same transaction. Until 2026-09-24 the Accounts screen could
+open only the first of each kind ([D96](roadmap.md#known-defects)).
+
 **Money moves on capture, never on record.** A payment that is `PENDING` or `AUTHORIZED` has put
 money nowhere: an authorised card payment has not settled, and a COD order's cash arrives when the
 courier remits. `capture_payment()` is what posts to the cash book.
@@ -759,6 +770,20 @@ method implies: cash and COD → `CASH`, card, bank transfer and gateway → `BA
 store credit and anything else → `OTHER`. If the branch has no active account of that kind, the
 service posts **nothing** and returns `None` rather than guessing — card takings dropped into the
 cash drawer would make the drawer impossible to reconcile.
+
+**Which account, when the caller names one** ([D95](roadmap.md#known-defects)). The same three
+things the default guarantees, checked for every caller in `finance.check_named_account`: the
+account is **the money's branch's own** — the branch of the order, return or purchase order, never
+the caller's choice — it is **open**, and it is **of the kind the method implies**. A sale's takings
+cannot land in another branch's drawer, a refund cannot come out of one, and a cheque is not paid
+out of cash. Until 2026-09-24 only the default was checked, and every screen names an account when
+a person picks one.
+
+*`DECISION REQUIRED` — the kind rule is assumed **strict**. It is §6b.1's own reason (card takings
+in the drawer make the drawer uncountable) applied to a named account, and it is what the POS and
+supplier payment screens already offered. The alternative — allow a mismatch with a reason — was not
+built: a mismatch is nearly always the wrong method recorded, and the fix for that is to record the
+right one.*
 
 **A missing account never blocks a sale.** A shop that has not set its accounts up must still be
 able to trade. The sale, refund or supplier payment completes; `manage.py verify_accounts` reports
@@ -877,6 +902,12 @@ silently is what CLAUDE.md §13 forbids.*
 applies. There is deliberately no undo in this release; correcting one needs a compensating
 instrument (a reversal row or a supplier credit note) that has not been designed yet, so the screen
 says so rather than implying a delete exists.
+
+**A payment belongs to the branch whose order it settles** — or, for an advance against no order,
+whose account paid it. Staff confined to one branch see only their branch's payments and cannot pay
+another branch's purchase order (403), the same rule as receiving it. Until 2026-09-24 the list
+showed every branch's payments to every branch, and any branch could settle another's invoices
+([D95](roadmap.md#known-defects)).
 
 *Recording a payment needs `purchases.pay`; reading the history needs `purchases.view`.*
 
@@ -1256,6 +1287,11 @@ payments and stock adjustments in full.
 > alternative scopes them by the actor's branch, which would also hide who changed a setting every
 > branch shares. Revisit if a branch-bound reader should not see other branches' sign-ins.
 
+**An entry about something one branch did names that branch.** Three did not until 2026-09-24,
+and so were organisation-wide — read by every branch's auditors: a supplier payment (who was paid,
+how much), a discount override at a till, and a manager override at a till
+([D95](roadmap.md#known-defects)). They carry the paying branch, or the till's, now.
+
 What the screen offers: a search over who, what and why (a staff email, an order number, a reason),
 the action, a date window in the shop's days, and one record's whole history (`entity_id`) — reached
 from any entry through *Its whole history*. Each entry opens its before/after values on demand. A
@@ -1330,6 +1366,15 @@ confirmed, and `CANCELLED` / `REFUNDED` / `RETURNED` / `RETURN_REQUESTED` are
 orders that must not leave the shop. Recording a shipment against one of those
 is the kind of mistake that ends with goods gone and no money owed for them.
 
+**A parcel leaves only once its order is packed** ([D98](roadmap.md#known-defects)). Booking one
+earlier is fine — a packer can have the tracking number ready while the order is prepared — but its
+first movement (`DISPATCHED`, or any later status recorded first) needs the order `PACKED`, `SHIPPED`
+or — for a split delivery — `DELIVERED`. Packing is when the goods leave the stock ledger and the step
+that moves on to `SHIPPED`; a parcel that left a `CONFIRMED` order was delivered while the order stayed
+`CONFIRMED`, its goods still counted on the shelf. A parcel booked before a cancellation stays put for
+the same reason. Once a parcel is on its way, every later update is recorded, whatever the order says:
+it reports what the courier did.
+
 **A parcel always starts `PENDING`.** Its status is the tail of its event log
 and nothing else; `status`, `dispatched_at` and `delivered_at` are read-only on
 the API and move only through a `ShipmentEvent`. Allowing them to be set at
@@ -1359,6 +1404,17 @@ parcels with courier, tracking number, tracking link, status and the visible
 events — but **not `cost` and not `notes`**. What we pay the courier is our
 margin, and the notes are written for the packing bench; the customer has
 already paid the shipping line on their own order.
+
+**The order itself is the customer's version, not the shop's** ([D97](roadmap.md#known-defects)).
+The tracking link, the signed-in account's orders and the checkout confirmation name each field a
+customer sees — totals, status, items, the delivery address, the payments' method and amount — and
+nothing else: no staff identity, no internal note, no account a payment went into. The timeline is
+written *for* the customer from an allow-list of entry types ("Order placed", "Being prepared", "On
+its way", "Delivered", "Payment received", "Return rejected") and never repeats text staff typed —
+a status change's reason, a return comment. Parcel updates appear once, under the parcel. **The
+cancel reason is shown** under "This order was cancelled": write it to the customer. Until
+2026-09-24 all three returned the staff record, including the name of every member of staff who
+touched the order.
 
 ---
 

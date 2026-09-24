@@ -398,6 +398,68 @@ def record_movement(
     return entry
 
 
+def check_named_account(account: Account, *, branch: Branch, method: str | None) -> None:
+    """Refuse an account the caller named that this money cannot move through.
+
+    `resolve_account` picks the right one when the caller says nothing: the
+    branch's own, of the kind the method implies. A caller who *names* one used
+    to skip both of those rules -- a sale, a refund and a supplier payment each
+    took any account id at all (D95). Measured: a POS sale at one branch put its
+    takings in another branch's drawer, so the cashier's own drawer reconciled
+    to the taka with the cash in their pocket; a refund came out of another
+    branch's drawer; a cheque was paid out of a cash drawer.
+
+    The branch is not the caller's to choose -- it is the branch of the order or
+    purchase order the money belongs to -- so neither is the account's.
+    """
+    if account.branch_id != branch.pk:
+        raise ValidationError(
+            "That account belongs to another branch.",
+            details={"account": [f"Choose one of {branch.code}'s accounts."]},
+        )
+    if not account.is_active:
+        raise ValidationError(
+            "That account is closed.", details={"account": ["That account is closed."]}
+        )
+    if not method:
+        return
+    kind = METHOD_TO_KIND.get(str(method).upper())
+    if kind is None:
+        # A method the ledger does not know has no kind to hold the account
+        # to, so it would let any account through. Every endpoint validates
+        # the method first; this is for the caller that does not.
+        raise ValidationError(
+            f"{method} is not a payment method.", details={"method": ["Unknown method."]}
+        )
+    if account.kind != kind:
+        wanted = f"{'an' if kind == AccountKind.OTHER else 'a'} {_KIND_WORDS[kind]} account"
+        raise ValidationError(
+            f"{_METHOD_WORDS.get(str(method).upper(), str(method))} money moves through"
+            f" {wanted}, not {account.name}.",
+            details={"account": [f"Choose {wanted}."]},
+        )
+
+
+#: How `check_named_account` names things to the person at the screen.
+_METHOD_WORDS: dict[str, str] = {
+    "CASH": "Cash",
+    "COD": "Cash-on-delivery",
+    "CARD": "Card",
+    "BANK": "Bank transfer",
+    "ONLINE_GATEWAY": "Online gateway",
+    "CHEQUE": "Cheque",
+    "MOBILE_MFS": "bKash / Nagad",
+    "STORE_CREDIT": "Store credit",
+    "OTHER": "Other",
+}
+_KIND_WORDS: dict[str, str] = {
+    AccountKind.CASH: "cash",
+    AccountKind.BANK: "bank",
+    AccountKind.MFS: "mobile wallet",
+    AccountKind.OTHER: "other",
+}
+
+
 def record_for_reference(
     *,
     branch: Branch,
@@ -423,6 +485,8 @@ def record_for_reference(
     sell.  ``verify_accounts`` lists every event that posted nothing, so the
     gap is reported rather than hidden.
     """
+    if account is not None:
+        check_named_account(account, branch=branch, method=method)
     resolved = account or resolve_account(branch=branch, method=method)
     if resolved is None:
         return None

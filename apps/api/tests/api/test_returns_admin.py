@@ -254,11 +254,15 @@ class TestCompletingTheRefund:
         assert order.refunded_total == Decimal("2000.00")
 
     def test_the_refund_can_name_the_account_it_leaves_from(self, shop, auth_client):
-        """An order refund could always name an account; a return refund could not."""
+        """An order refund could always name an account; a return refund could not.
+
+        The second box was `kind="OTHER"` until D95: a cash refund out of a
+        non-cash account, which is now refused (the next test). A second cash
+        box is what this test is about -- naming an account that is not the
+        default -- so that is what it uses.
+        """
         drawer = factories.account(shop["branch"], opening_balance="50000.00")
-        petty = factories.account(
-            shop["branch"], kind="OTHER", opening_balance="9000.00", is_default=False
-        )
+        petty = factories.account(shop["branch"], opening_balance="9000.00", is_default=False)
         order, request, client = self._received(shop, auth_client, account=drawer)
 
         response = client.post(
@@ -274,6 +278,67 @@ class TestCompletingTheRefund:
         assert entry.amount == Decimal("-2000.00")
         petty.refresh_from_db()
         assert petty.balance == Decimal("7000.00")
+
+    def test_a_cash_refund_cannot_come_out_of_a_non_cash_account(self, shop, auth_client):
+        """D95: the notes leave the drawer, so the cash book must say the drawer."""
+        drawer = factories.account(shop["branch"], opening_balance="50000.00")
+        petty = factories.account(
+            shop["branch"], kind="OTHER", opening_balance="9000.00", is_default=False
+        )
+        order, request, client = self._received(shop, auth_client, account=drawer)
+
+        response = client.post(
+            f"/api/v1/returns/{request.pk}/complete/",
+            {"account": str(petty.pk)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "account" in response.data["error"]["details"]
+        petty.refresh_from_db()
+        assert petty.balance == Decimal("9000.00")
+        request.refresh_from_db()
+        assert request.status == ReturnStatus.RECEIVED
+
+    def test_the_refund_method_can_be_named(self, shop, auth_client):
+        """A cash sale refunded to the customer's bKash leaves the wallet, not the drawer."""
+        drawer = factories.account(shop["branch"], opening_balance="50000.00")
+        wallet = factories.account(shop["branch"], kind="MFS", opening_balance="9000.00")
+        order, request, client = self._received(shop, auth_client, account=drawer)
+
+        response = client.post(
+            f"/api/v1/returns/{request.pk}/complete/",
+            {"refund_method": "MOBILE_MFS", "account": str(wallet.pk)},
+            format="json",
+        )
+
+        assert response.status_code == 200, response.data
+        wallet.refresh_from_db()
+        drawer.refresh_from_db()
+        assert wallet.balance == Decimal("7000.00")
+        assert drawer.balance == Decimal("52000.00")  # the takings stay in the drawer
+        assert order.refunds.get().method == PaymentMethod.MOBILE_MFS
+
+    def test_an_unknown_refund_method_is_refused(self, shop, auth_client):
+        """Fails on `main`: 200, and the refund recorded as paid by "BITCOIN".
+
+        A method the ledger does not know maps to no kind of account, so the
+        named-account check had nothing to hold it to -- any account passed.
+        """
+        drawer = factories.account(shop["branch"], opening_balance="50000.00")
+        bank = factories.account(shop["branch"], kind="BANK", opening_balance="9000.00")
+        order, request, client = self._received(shop, auth_client, account=drawer)
+
+        response = client.post(
+            f"/api/v1/returns/{request.pk}/complete/",
+            {"refund_method": "BITCOIN", "account": str(bank.pk)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "refund_method" in response.data["error"]["details"]
+        bank.refresh_from_db()
+        assert bank.balance == Decimal("9000.00")
 
     def test_completing_before_receipt_is_refused(self, shop, auth_client):
         _, request = _requested(shop)

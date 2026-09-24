@@ -506,6 +506,16 @@ not contain the pattern:
 `runserver --noreload` does not pick up code changes either — restart it after
 editing the API, or a browser check reads the old serializer.
 
+**The standalone web server cannot be found by name at all.** Next retitles its
+process `next-server (v15…)`, so `pgrep -f "node server.js"` matches nothing, the
+old server keeps port 4000, and the new one dies with `EADDRINUSE` into its log —
+while a readiness probe on :4000 answers 200 from the *old* build. Measured
+2026-09-24: a CSRF fix "did not work" for exactly this reason. Stop it by port:
+
+```bash
+fuser -k -n tcp 4000    # then check `ps -eo lstart,args | grep next-server`
+```
+
 ## Commands that actually work here
 
 ```bash
