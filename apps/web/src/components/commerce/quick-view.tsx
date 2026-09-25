@@ -20,7 +20,7 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2, X } from "lucide-react";
+import { ImageIcon, Loader2, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -109,8 +109,9 @@ export function QuickView({
                   className="object-cover"
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-caption text-neutral-400">
-                  No image
+                // Same placeholder as the product card: an icon, not grey text.
+                <div className="flex h-full items-center justify-center text-neutral-300">
+                  <ImageIcon className="size-12" strokeWidth={1.25} aria-hidden />
                 </div>
               )}
             </div>
