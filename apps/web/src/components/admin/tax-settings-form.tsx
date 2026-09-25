@@ -128,7 +128,7 @@ export function TaxSettingsForm({
       <CardContent>
         {!settled && (
           <p className="mb-4 flex gap-2 rounded-md border border-[var(--warning)]/30 bg-[var(--warning)]/5 p-3 text-body-sm">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
             <span>
               Settle this before the first real sale. Every order records the treatment it was
               priced under, so deciding late leaves reports spanning two different meanings of the
@@ -228,7 +228,7 @@ export function TaxSettingsForm({
               className="space-y-3 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-4"
             >
               <p className="flex gap-2 text-body-sm font-medium">
-                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
                 <span>
                   {confirming.count} order{confirming.count === 1 ? "" : "s"} already priced under
                   the current treatment
@@ -262,7 +262,7 @@ export function TaxSettingsForm({
               {saved && (
                 <span
                   role="status"
-                  className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success)]"
+                  className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success-text)]"
                 >
                   <Check className="size-4" aria-hidden /> Saved
                 </span>

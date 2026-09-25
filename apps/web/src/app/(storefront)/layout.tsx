@@ -96,7 +96,7 @@ export default async function StorefrontLayout({ children }: { children: React.R
             ]}
           />
           <FooterColumn
-            title="Rangon"
+            title="Company"
             links={[
               { label: "About", href: "/about" },
               { label: "Privacy", href: "/policies/privacy" },
@@ -106,7 +106,8 @@ export default async function StorefrontLayout({ children }: { children: React.R
         </div>
 
         <div className="border-t border-neutral-800">
-          <div className="container-rangon flex flex-col gap-2 py-6 text-caption text-neutral-500 sm:flex-row sm:items-center sm:justify-between">
+          {/* neutral-400, not 500: #737373 on the footer's #0A0A0A is 4.17:1. */}
+          <div className="container-rangon flex flex-col gap-2 py-6 text-caption text-neutral-400 sm:flex-row sm:items-center sm:justify-between">
             <p>© {new Date().getFullYear()} Rangon Fashion. All rights reserved.</p>
             <p>Cash on delivery available across Bangladesh.</p>
           </div>

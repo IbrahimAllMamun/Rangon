@@ -445,7 +445,7 @@ export function PurchaseOrderForm({
                             )
                           )}
                           {belowMinimum && (
-                            <span className="block text-caption text-[var(--warning)]">
+                            <span className="block text-caption text-[var(--warning-text)]">
                               {belowMinimum}
                             </span>
                           )}

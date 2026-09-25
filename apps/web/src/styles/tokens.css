@@ -44,6 +44,12 @@
   --success-bg: #f0fdf4;
   --warning: #d97706;
   --warning-bg: #fffbeb;
+  /* Text in the semantic colours. #16a34a and #d97706 are 3.3:1 and 3.2:1 even
+     on white, so they fail WCAG 1.4.3 as text anywhere; they stay for icons,
+     fills and borders (3:1). These are the -700 shades: 5.0:1 on white and
+     4.8:1 on their own -bg tints. */
+  --success-text: #15803d;
+  --warning-text: #b45309;
   --error: #dc2626;
   --error-bg: #fef2f2;
   --info: #2563eb;

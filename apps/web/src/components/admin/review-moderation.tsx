@@ -50,7 +50,7 @@ function Rating({ value }: { value: number }) {
           <Star
             key={index}
             className={
-              index < value ? "size-3.5 fill-[var(--warning)] text-[var(--warning)]" : "size-3.5 text-neutral-300"
+              index < value ? "size-3.5 fill-[var(--warning)] text-[var(--warning-text)]" : "size-3.5 text-neutral-300"
             }
           />
         ))}

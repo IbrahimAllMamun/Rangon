@@ -20,7 +20,7 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2, X } from "lucide-react";
+import { ImageIcon, Loader2, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -109,8 +109,9 @@ export function QuickView({
                   className="object-cover"
                 />
               ) : (
-                <div className="flex h-full items-center justify-center text-caption text-neutral-400">
-                  No image
+                // Same placeholder as the product card: an icon, not grey text.
+                <div className="flex h-full items-center justify-center text-neutral-300">
+                  <ImageIcon className="size-12" strokeWidth={1.25} aria-hidden />
                 </div>
               )}
             </div>
@@ -189,7 +190,7 @@ export function QuickView({
               </div>
 
               {selected && selected.available > 0 && selected.available <= 5 && (
-                <p className="mt-3 text-caption text-[var(--warning)]">
+                <p className="mt-3 text-caption text-[var(--warning-text)]">
                   Only {selected.available} left
                 </p>
               )}
@@ -214,7 +215,7 @@ export function QuickView({
                 </Button>
                 <Link
                   href={`/product/${product.slug}`}
-                  className="text-body-sm font-medium text-brand-600 hover:underline"
+                  className="text-body-sm font-medium text-brand-700 hover:underline"
                 >
                   Full details
                 </Link>

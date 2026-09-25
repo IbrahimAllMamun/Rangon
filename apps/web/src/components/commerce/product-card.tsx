@@ -7,6 +7,7 @@
  * Stays a server component: only the Quick View trigger needs the browser, so
  * it is the one part hydrated as a client island rather than the whole grid.
  */
+import { ImageIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -61,8 +62,11 @@ export function ProductCard({
               className="object-cover transition-transform duration-slow ease-rangon group-hover:scale-[1.03]"
             />
           ) : (
-            <div className="flex h-full items-center justify-center text-caption text-neutral-400">
-              No image
+            // A quiet picture icon rather than the words "No image" in grey
+            // (2.3:1, WCAG 1.4.3), which read as broken across a whole grid.
+            // Decorative: the product's name is right below.
+            <div className="flex h-full items-center justify-center text-neutral-300">
+              <ImageIcon className="size-10" strokeWidth={1.25} aria-hidden />
             </div>
           )}
 
@@ -105,21 +109,26 @@ export function ProductCard({
           reader. Positioned against the card, which shares the image's box. */}
       <QuickViewTrigger product={product} />
 
+      {/* Which colours exist, not a picker: nothing here is selectable, so
+          there is no "active" dot to mark. The count says so in words; the
+          colour is chosen on the product page. */}
       {colours.length > 1 && (
-        <ul className="mt-2 flex items-center gap-1.5" aria-label="Available colours">
-          {colours.slice(0, 5).map((colour) => (
-            <li key={colour.label} title={colour.label}>
-              <span
-                className="block size-3.5 rounded-full border border-neutral-300"
-                style={{ backgroundColor: colour.swatch || "var(--neutral-200)" }}
-              />
-              <span className="sr-only">{colour.label}</span>
-            </li>
-          ))}
-          {colours.length > 5 && (
-            <li className="text-caption text-muted">+{colours.length - 5}</li>
-          )}
-        </ul>
+        <div className="mt-2 flex items-center gap-2">
+          <ul className="flex items-center gap-1.5" aria-label="Available colours">
+            {colours.slice(0, 5).map((colour) => (
+              <li key={colour.label} title={colour.label}>
+                <span
+                  className="block size-3.5 rounded-full border border-neutral-300"
+                  style={{ backgroundColor: colour.swatch || "var(--neutral-200)" }}
+                />
+                <span className="sr-only">{colour.label}</span>
+              </li>
+            ))}
+          </ul>
+          <span className="text-caption text-muted" aria-hidden>
+            {colours.length} colours
+          </span>
+        </div>
       )}
     </article>
   );

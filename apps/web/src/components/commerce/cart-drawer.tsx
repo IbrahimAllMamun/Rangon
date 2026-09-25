@@ -40,7 +40,7 @@ export function CartDrawer() {
             <div role="alert" className="border-b border-border bg-[var(--warning-bg)] px-5 py-3">
               <ul className="space-y-1">
                 {cart.issues.map((issue, index) => (
-                  <li key={index} className="text-body-sm text-[var(--warning)]">
+                  <li key={index} className="text-body-sm text-[var(--warning-text)]">
                     {issue.message}
                   </li>
                 ))}
@@ -205,7 +205,7 @@ function Row({
   return (
     <div className="flex justify-between">
       <dt className="text-muted">{label}</dt>
-      <dd className={`tabular ${tone === "success" ? "text-[var(--success)]" : ""}`}>{value}</dd>
+      <dd className={`tabular ${tone === "success" ? "text-[var(--success-text)]" : ""}`}>{value}</dd>
     </div>
   );
 }

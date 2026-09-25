@@ -391,7 +391,7 @@ function StatementRow({ line }: { line: Line }) {
       <td
         className={`tabular px-4 py-2.5 text-right ${
           isTotal ? "text-body font-bold" : line.emphasis ? "font-semibold" : ""
-        } ${isTotal && isReclaim ? "text-[var(--success)]" : ""}`}
+        } ${isTotal && isReclaim ? "text-[var(--success-text)]" : ""}`}
       >
         {/* Parentheses, not colour alone, carry "this is taken away" — the
             statement has to read correctly in greyscale (WCAG 1.4.1). */}

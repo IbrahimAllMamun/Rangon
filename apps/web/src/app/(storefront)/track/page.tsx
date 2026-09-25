@@ -68,7 +68,7 @@ export default async function TrackPage({
 
       <p className="mt-6 text-body-sm text-muted">
         Lost your tracking code?{" "}
-        <a href="/contact" className="text-brand-600 underline">
+        <a href="/contact" className="text-brand-700 underline">
           Contact us
         </a>{" "}
         with your phone number and we will look it up.

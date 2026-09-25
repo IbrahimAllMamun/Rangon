@@ -56,7 +56,7 @@ export function CartPageContent() {
       <div>
         {cart.issues.length > 0 && (
           <div role="alert" className="mb-4 rounded-md border border-[var(--warning)] bg-[var(--warning-bg)] p-4">
-            <h2 className="text-body-sm font-semibold text-[var(--warning)]">
+            <h2 className="text-body-sm font-semibold text-[var(--warning-text)]">
               Some items need your attention
             </h2>
             <ul className="mt-1 space-y-1">
@@ -160,7 +160,7 @@ export function CartPageContent() {
             )}
             {cart.coupon_code && (
               <p className="mt-2 flex items-center justify-between rounded-md bg-[var(--success-bg)] px-3 py-2 text-body-sm">
-                <span className="font-medium text-[var(--success)]">{cart.coupon_code} applied</span>
+                <span className="font-medium text-[var(--success-text)]">{cart.coupon_code} applied</span>
                 <button
                   type="button"
                   onClick={() => void removeCoupon()}
@@ -178,7 +178,7 @@ export function CartPageContent() {
               <dd className="tabular">{money(cart.totals.subtotal)}</dd>
             </div>
             {Number(cart.totals.discount_total) > 0 && (
-              <div className="flex justify-between text-[var(--success)]">
+              <div className="flex justify-between text-[var(--success-text)]">
                 <dt>Discount</dt>
                 <dd className="tabular">− {money(cart.totals.discount_total)}</dd>
               </div>

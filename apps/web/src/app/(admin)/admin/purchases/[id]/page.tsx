@@ -236,7 +236,7 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
                     <td className="tabular px-4 py-2.5 text-right">{item.quantity_received}</td>
                     <td className="tabular px-4 py-2.5 text-right">
                       {item.quantity_outstanding > 0 ? (
-                        <span className="font-medium text-[var(--warning)]">
+                        <span className="font-medium text-[var(--warning-text)]">
                           {item.quantity_outstanding}
                         </span>
                       ) : (

@@ -124,7 +124,7 @@ export function WriteOffForm({ branchId, branchLabel }: { branchId: string; bran
             className="flex items-start gap-2 rounded-md border border-[var(--warning)] bg-[var(--warning-bg)] p-3 text-body-sm"
             role="note"
           >
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
             <p>
               This permanently reduces stock at <strong>{branchLabel}</strong> and writes a ledger
               row that cannot be deleted. To correct a mistake, receive the stock back in — the
@@ -211,7 +211,7 @@ export function WriteOffForm({ branchId, branchLabel }: { branchId: string; bran
             {done && (
               <span
                 role="status"
-                className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success)]"
+                className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success-text)]"
               >
                 <Check className="size-4" aria-hidden /> {done}
               </span>

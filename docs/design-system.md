@@ -213,6 +213,15 @@ item and the unread-notifications badge use `brand-600` for this reason (2026-09
 way. CLAUDE.md names `#FD3807` as the one primary action colour, so moving every CTA to `brand-600` is a
 brand decision and has not been made silently.
 
+**Semantic colours as text use their `-text` tokens.** `--success` (`#16A34A`) and `--warning`
+(`#D97706`) are 3.3:1 and 3.2:1 even on white, so as text they fail 1.4.3 everywhere. They stay for
+icons, fills and borders (3:1); text uses `--success-text` (`#15803D`) and `--warning-text`
+(`#B45309`): 5.0:1 on white, 4.8:1 on their own `-bg` tints. Write `text-[var(--success-text)]`,
+never `text-[var(--success)]`.
+
+**Brand-coloured text links are `brand-700`.** `brand-600` text is 4.55:1 on white but 4.36:1 on the
+storefront ground (`neutral-50`); `brand-700` is 5.6:1 on both. The `Button` `link` variant uses it.
+
 **Muted text on the admin ground is `#6b6b6b`.** `neutral-500` (`#737373`) is 4.35:1 on the admin
 background (`neutral-100`) and fails; the admin surface overrides `--muted` (4.89:1 there, 5.33:1 on a
 card). The storefront keeps `neutral-500`, which passes on its lighter ground (4.54:1 on `neutral-50`).

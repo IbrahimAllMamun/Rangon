@@ -176,7 +176,7 @@ export function PaymentPanel({
                 {money(due)}
               </p>
               {change > 0 && (
-                <p className="tabular mt-2 text-body font-semibold text-[var(--success)]">
+                <p className="tabular mt-2 text-body font-semibold text-[var(--success-text)]">
                   Change: {money(change)}
                 </p>
               )}

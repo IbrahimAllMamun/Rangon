@@ -40,13 +40,22 @@ export default async function HomePage() {
   // (docs/architecture/navigation.md §2).
   const hero = data?.hero ?? null;
   const heroImage = hero?.image ?? data?.new_arrivals?.[0]?.images?.[0]?.url ?? "";
+  const categoryPhotos = Boolean(data?.featured_categories?.some((category) => category.image));
 
   return (
     <>
       {/* Hero: photography-led, concise copy, one clear CTA in brand red. */}
       <section className="relative isolate overflow-hidden bg-neutral-950">
-        <div className="container-rangon grid items-center gap-10 py-16 sm:py-24 lg:grid-cols-2 lg:py-28">
-          <div className="max-w-xl">
+        {/* Two columns only when there is a photograph to fill the second.
+            Without one the right half used to render an empty near-black box,
+            a hole in the most important area of the page; the copy is centred
+            instead so the band stays balanced. */}
+        <div
+          className={`container-rangon grid items-center gap-10 py-16 sm:py-24 lg:py-28 ${
+            heroImage ? "lg:grid-cols-2" : ""
+          }`}
+        >
+          <div className={heroImage ? "max-w-xl" : "mx-auto max-w-2xl text-center"}>
             {/* Hero stagger: 60ms apart, 320ms each. Pure CSS so it needs no JS
                 and cannot strand text invisible; `both` fill-mode holds the
                 from-state through the delay. Reduced motion zeroes both. */}
@@ -63,23 +72,28 @@ export default async function HomePage() {
               {hero?.subtitle ||
                 "Clothing, shoes, bags and cosmetics — chosen for how Dhaka actually dresses."}
             </p>
-            <div style={{ animationDelay: "180ms" }} className="motion-safe:animate-rise-in mt-8 flex flex-wrap gap-3">
+            <div
+              style={{ animationDelay: "180ms" }}
+              className={`motion-safe:animate-rise-in mt-8 flex flex-wrap gap-3 ${
+                heroImage ? "" : "justify-center"
+              }`}
+            >
               <Button asChild size="lg">
                 <Link href={hero?.url || "/shop"}>
                   {hero?.cta_label || "Shop now"} <ArrowRight className="size-4" aria-hidden />
                 </Link>
               </Button>
               <Button asChild size="lg" variant="secondary" className="border-neutral-700 bg-transparent text-white hover:bg-neutral-800">
-                <Link href="/shop?sort=newest">New arrivals</Link>
+                <Link href="/shop?sort=newest">See what&apos;s new</Link>
               </Button>
             </div>
           </div>
 
-          <div
-            style={{ animationDelay: "120ms" }}
-            className="motion-safe:animate-rise-in relative hidden aspect-[4/3] overflow-hidden rounded-xl lg:block"
-          >
-            {heroImage ? (
+          {heroImage && (
+            <div
+              style={{ animationDelay: "120ms" }}
+              className="motion-safe:animate-rise-in relative hidden aspect-[4/3] overflow-hidden rounded-xl lg:block"
+            >
               <Image
                 src={heroImage}
                 alt=""
@@ -88,10 +102,8 @@ export default async function HomePage() {
                 sizes="(max-width: 1024px) 0px, 50vw"
                 className="object-cover"
               />
-            ) : (
-              <div className="h-full w-full bg-neutral-900" />
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -111,20 +123,42 @@ export default async function HomePage() {
               <Link
                 key={category.slug}
                 href={`/category/${category.path ?? category.slug}`}
-                className="group relative aspect-square overflow-hidden rounded-xl bg-neutral-200"
+                // The same card as "Shop by brand": white, bordered, brand
+                // border on hover, a focus ring. It used to be a flat grey box
+                // that read as a disabled placeholder whenever it had no photo.
+                // Square only when there are photographs to fill the squares;
+                // otherwise as compact as the brand cards.
+                className={`${NAV_CARD} group relative flex flex-col items-center justify-center gap-2 overflow-hidden ${
+                  categoryPhotos ? "aspect-square" : "h-24"
+                }`}
               >
-                {category.image && (
-                  <Image
-                    src={category.image}
-                    alt=""
-                    fill
-                    sizes="(max-width: 768px) 50vw, 16vw"
-                    className="object-cover transition-transform duration-slow ease-rangon group-hover:scale-105"
-                  />
+                {category.image ? (
+                  <>
+                    <Image
+                      src={category.image}
+                      alt=""
+                      fill
+                      sizes="(max-width: 768px) 50vw, 16vw"
+                      className="object-cover transition-transform duration-slow ease-rangon group-hover:scale-105"
+                    />
+                    {/* A solid band, not a gradient into transparency: white
+                        text keeps at least 10:1 over any photograph, where the
+                        gradient's top half let a light image through. */}
+                    <span className="absolute inset-x-0 bottom-0 bg-neutral-950/75 px-3 py-2 text-body-sm font-semibold text-white">
+                      {category.name}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-body font-semibold text-neutral-900">
+                      {category.name}
+                    </span>
+                    <ArrowRight
+                      className="size-4 text-brand-700 transition-transform duration-fast ease-rangon motion-safe:group-hover:translate-x-1"
+                      aria-hidden
+                    />
+                  </>
                 )}
-                <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950/80 to-transparent p-3 text-body-sm font-semibold text-white">
-                  {category.name}
-                </span>
               </Link>
             ))}
           </div>
@@ -167,7 +201,7 @@ export default async function HomePage() {
               <li key={brand.slug}>
                 <Link
                   href={`/brand/${brand.slug}`}
-                  className="flex h-24 flex-col items-center justify-center gap-2 rounded-xl border border-border bg-surface p-3 transition-colors duration-fast hover:border-brand-500 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
+                  className={`${NAV_CARD} flex h-24 flex-col items-center justify-center gap-2 p-3`}
                 >
                   {brand.logo ? (
                     <Image
@@ -198,6 +232,11 @@ export default async function HomePage() {
   );
 }
 
+/** One look for every "Shop by …" card, so categories and brands match. */
+const NAV_CARD =
+  "rounded-xl border border-border bg-surface transition-colors duration-fast hover:border-brand-500 " +
+  "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]";
+
 function Section({
   title,
   href,
@@ -215,11 +254,19 @@ function Section({
       <Reveal className="mb-6 flex items-end justify-between gap-4">
         <h2 className="font-display text-h2">{title}</h2>
         {href && (
+          // brand-700, not brand-600: #E22D04 on the page ground is 4.36:1 and
+          // fails WCAG 1.4.3; #C42503 is 5.57:1. Semibold with an arrow gives
+          // it the weight of a secondary CTA, and the hidden section name
+          // tells a screen reader which "View all" this one is.
           <Link
             href={href}
-            className="shrink-0 text-body-sm font-medium text-brand-600 hover:underline"
+            className="group inline-flex shrink-0 items-center gap-1 text-body font-semibold text-brand-700 underline-offset-4 hover:underline"
           >
-            View all
+            View all<span className="sr-only"> {title.toLowerCase()}</span>
+            <ArrowRight
+              className="size-4 transition-transform duration-fast ease-rangon motion-safe:group-hover:translate-x-0.5"
+              aria-hidden
+            />
           </Link>
         )}
       </Reveal>

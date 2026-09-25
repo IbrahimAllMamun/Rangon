@@ -294,7 +294,7 @@ export function ExpenseForm({
             {saved && (
               <span
                 role="status"
-                className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success)]"
+                className="inline-flex items-center gap-1.5 text-body-sm font-medium text-[var(--success-text)]"
               >
                 <Check className="size-4" aria-hidden /> Recorded
               </span>

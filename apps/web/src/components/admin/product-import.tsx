@@ -186,7 +186,7 @@ function Preview({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="size-4 text-[var(--warning)]" aria-hidden />
+            <AlertTriangle className="size-4 text-[var(--warning-text)]" aria-hidden />
             {result.errors.length} problem{result.errors.length === 1 ? "" : "s"} to fix first
           </CardTitle>
         </CardHeader>
@@ -296,7 +296,7 @@ function Imported({ result, onAgain }: { result: ImportResult; onAgain: () => vo
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Check className="size-4 text-[var(--success)]" aria-hidden />
+          <Check className="size-4 text-[var(--success-text)]" aria-hidden />
           Catalogue imported
         </CardTitle>
       </CardHeader>

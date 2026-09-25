@@ -176,7 +176,7 @@ export default async function ProductPage({ params }: { params: Params }) {
             {product.care_instructions && (
               <SpecRow term="Care" value={product.care_instructions} />
             )}
-            <SpecRow term="SKU" value={product.variants.map((v) => v.sku).join(", ")} />
+            <SpecRow term="SKU" value={product.variants.map((v) => v.sku).join(", ")} mono />
           </dl>
         </section>
 
@@ -215,7 +215,7 @@ export default async function ProductPage({ params }: { params: Params }) {
                 <div className="flex items-center gap-3">
                   <Stars rating={review.rating} />
                   {review.verified && (
-                    <span className="text-caption font-medium text-[var(--success)]">
+                    <span className="text-caption font-medium text-[var(--success-text)]">
                       Verified purchase
                     </span>
                   )}
@@ -237,7 +237,7 @@ export default async function ProductPage({ params }: { params: Params }) {
             We only publish reviews from shoppers who have received the item, so
             every one of them is a real delivery. Bought this and want to say
             something?{" "}
-            <Link href="/contact" className="text-brand-600 underline">
+            <Link href="/contact" className="text-brand-700 underline">
               Tell us
             </Link>{" "}
             and we will add it.
@@ -257,11 +257,11 @@ export default async function ProductPage({ params }: { params: Params }) {
   );
 }
 
-function SpecRow({ term, value }: { term: string; value: string }) {
+function SpecRow({ term, value, mono = false }: { term: string; value: string; mono?: boolean }) {
   return (
     <div className="grid grid-cols-3 gap-4 py-3">
       <dt className="text-body-sm text-muted">{term}</dt>
-      <dd className="col-span-2 text-body-sm">{value}</dd>
+      <dd className={`col-span-2 text-body-sm ${mono ? "font-mono" : ""}`}>{value}</dd>
     </div>
   );
 }

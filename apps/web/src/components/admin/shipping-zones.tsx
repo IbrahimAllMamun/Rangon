@@ -306,7 +306,7 @@ export function ShippingZones({
       {!hasDefault && zones.length > 0 && (
         <Card>
           <CardContent className="pt-6">
-            <p role="alert" className="text-body-sm text-[var(--warning)]">
+            <p role="alert" className="text-body-sm text-[var(--warning-text)]">
               <strong>No default zone.</strong> A shopper in a city none of these zones lists is
               offered no delivery options and cannot check out. Mark one zone as the fallback.
             </p>

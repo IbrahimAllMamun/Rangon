@@ -21,8 +21,8 @@ const LEVEL_ICON = {
 
 const LEVEL_TONE = {
   INFO: "text-[var(--info)]",
-  SUCCESS: "text-[var(--success)]",
-  WARNING: "text-[var(--warning)]",
+  SUCCESS: "text-[var(--success-text)]",
+  WARNING: "text-[var(--warning-text)]",
   ERROR: "text-[var(--error)]",
 } as const;
 

@@ -134,7 +134,7 @@ export function ArrivedProducts({
                 )
               ) : (
                 <span className="flex items-center gap-1.5 text-body-sm text-muted">
-                  <TriangleAlert className="size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+                  <TriangleAlert className="size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
                   Priced at zero —{" "}
                   <Link
                     href={`/admin/products/${product.id}`}
