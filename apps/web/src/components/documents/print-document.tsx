@@ -7,7 +7,7 @@ import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/primitives";
 import type { Order } from "@/lib/api/types";
 import { memoShowsVat } from "@/lib/commerce/memo";
-import { dateTime, humanise, money } from "@/lib/format";
+import { channelLabel, dateTime, money } from "@/lib/format";
 
 /**
  * A4 invoice / packing slip.
@@ -168,7 +168,7 @@ export function PrintDocument({
             <p className="font-semibold">Packed by ____________________</p>
             <p className="mt-3 font-semibold">Checked by ____________________</p>
             <p className="mt-3 text-neutral-600">
-              {order.item_count} item{order.item_count === 1 ? "" : "s"} · {humanise(order.channel)}
+              {order.item_count} item{order.item_count === 1 ? "" : "s"} · {channelLabel(order.channel)}
             </p>
           </div>
         )}

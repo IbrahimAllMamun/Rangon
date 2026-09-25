@@ -407,8 +407,13 @@ export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDiv
   return <div className={cn("flex flex-col gap-1 border-b border-border p-4", className)} {...props} />;
 }
 
+/**
+ * An `h2`, not an `h3`: nearly every card sits straight under a page's `h1`,
+ * and an `h3` there skips a level (WCAG 1.3.1, axe `heading-order`). An `h2`
+ * after any heading is valid, so this cannot introduce a skip anywhere.
+ */
 export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn("text-h4 font-semibold", className)} {...props} />;
+  return <h2 className={cn("text-h4 font-semibold", className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
@@ -462,7 +467,8 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       {icon && <div className="text-neutral-400">{icon}</div>}
-      <h3 className="text-h4 font-semibold">{title}</h3>
+      {/* h2 for the same reason as CardTitle: it usually follows the h1. */}
+      <h2 className="text-h4 font-semibold">{title}</h2>
       {description && <p className="max-w-md text-body-sm text-muted">{description}</p>}
       {action}
     </div>
@@ -480,7 +486,7 @@ export function ErrorState({
 }) {
   return (
     <div role="alert" className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <h3 className="text-h4 font-semibold text-[var(--error)]">{title}</h3>
+      <h2 className="text-h4 font-semibold text-[var(--error)]">{title}</h2>
       {description && <p className="max-w-md text-body-sm text-muted">{description}</p>}
       {onRetry && (
         <Button variant="secondary" onClick={onRetry}>

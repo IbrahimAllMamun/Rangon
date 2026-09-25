@@ -79,6 +79,9 @@
 [data-surface="admin"] {
   --background: var(--neutral-100);
   --foreground: #171717;
+  /* neutral-500 (#737373) is 4.35:1 on this ground and fails WCAG 1.4.3 for
+     every page description; #6b6b6b is 4.89:1 here and 5.33:1 on a card. */
+  --muted: #6b6b6b;
 }
 
 /**

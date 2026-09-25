@@ -19,7 +19,7 @@ import {
 import { ApiError } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { Order, SessionUser } from "@/lib/api/types";
-import { dateOnly, dateTime, humanise, money } from "@/lib/format";
+import { channelLabel, dateOnly, dateTime, humanise, money } from "@/lib/format";
 
 export const metadata = { title: "Customer" };
 
@@ -198,7 +198,7 @@ export default async function CustomerDetailPage({
                           <td className="px-2 py-2">
                             <RowLink href={`/admin/orders/${order.id}`}>{order.number}</RowLink>
                             <span className="block text-caption text-muted">
-                              {humanise(order.channel)}
+                              {channelLabel(order.channel)}
                             </span>
                           </td>
                           <td className="px-2 py-2 text-muted">{dateTime(order.placed_at)}</td>

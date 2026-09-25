@@ -61,10 +61,14 @@ export function DateRangeTabs({
           key={option.value}
           href={`${basePath}?range=${option.value}`}
           aria-current={active === option.value ? "true" : undefined}
-          className={`rounded px-3 py-1.5 text-body-sm font-medium focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] ${
+          // The active tab was solid black, the heaviest thing on the page and
+          // heavier than its own heading. A brand tint with a brand outline
+          // marks it as emphasis instead: text 5.4:1, outline 3.4:1 (WCAG
+          // 1.4.11), and the weight change means colour is not the only cue.
+          className={`rounded px-3 py-1.5 text-body-sm focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] ${
             active === option.value
-              ? "bg-neutral-900 text-white"
-              : "text-neutral-600 hover:bg-neutral-100"
+              ? "bg-brand-50 font-semibold text-brand-700 ring-1 ring-inset ring-brand-500"
+              : "font-medium text-neutral-600 hover:bg-neutral-100"
           }`}
         >
           {option.label}

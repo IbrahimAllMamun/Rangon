@@ -120,3 +120,16 @@ const PAYMENT_METHOD_LABEL: Record<string, string> = {
 export function paymentMethodLabel(method: string | null | undefined): string {
   return (method && PAYMENT_METHOD_LABEL[method]) || humanise(method);
 }
+
+/** Sales channels. `humanise("POS")` reads "Pos". */
+const CHANNEL_LABEL: Record<string, string> = {
+  POS: "POS",
+  ONLINE: "Online",
+  PHONE: "Phone",
+  SOCIAL: "Social",
+  OTHER: "Other",
+};
+
+export function channelLabel(channel: string | null | undefined): string {
+  return (channel && CHANNEL_LABEL[channel]) || humanise(channel);
+}
