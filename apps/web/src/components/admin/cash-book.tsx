@@ -119,7 +119,7 @@ export function CashBook({
                   </td>
                   <td
                     className={`tabular whitespace-nowrap px-4 py-2.5 text-right font-medium ${
-                      isIn ? "text-[var(--success)]" : "text-[var(--error)]"
+                      isIn ? "text-[var(--success-text)]" : "text-[var(--error)]"
                     }`}
                   >
                     {/* The sign is spelled out, never left to colour alone. */}

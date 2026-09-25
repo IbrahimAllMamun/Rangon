@@ -141,7 +141,7 @@ export default async function ShopPage({ searchParams }: { searchParams: SearchP
               title="Nothing matches those filters"
               description="Try removing a filter, or search for something else."
               action={
-                <Link href="/shop" className="text-body-sm font-medium text-brand-600 hover:underline">
+                <Link href="/shop" className="text-body-sm font-medium text-brand-700 hover:underline">
                   Clear all filters
                 </Link>
               }

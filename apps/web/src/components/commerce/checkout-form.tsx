@@ -430,7 +430,7 @@ export function CheckoutForm() {
               <dd className="tabular">{money(cart?.totals.subtotal)}</dd>
             </div>
             {Number(cart?.totals.discount_total ?? 0) > 0 && (
-              <div className="flex justify-between text-[var(--success)]">
+              <div className="flex justify-between text-[var(--success-text)]">
                 <dt>Discount</dt>
                 <dd className="tabular">− {money(cart?.totals.discount_total)}</dd>
               </div>

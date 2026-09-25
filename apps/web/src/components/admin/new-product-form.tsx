@@ -327,7 +327,7 @@ export function NewProductForm({
 
           {draft.price.trim() === "" && rowCount > 0 && (
             <p className="flex items-start gap-2 rounded-md bg-[var(--warning)]/10 p-3 text-body-sm">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
               <span>
                 No retail price yet, so this stays unpublished until one is set. That is deliberate —
                 a product priced at zero would be sold for nothing.

@@ -345,7 +345,7 @@ export function CategoryManager({
                   </td>
                   <td className="px-4 py-2.5">
                     {row.show_in_navigation ? (
-                      <Check className="size-4 text-[var(--success)]" aria-label="In the menu" />
+                      <Check className="size-4 text-[var(--success-text)]" aria-label="In the menu" />
                     ) : (
                       <X className="size-4 text-neutral-400" aria-label="Hidden from the menu" />
                     )}
@@ -528,7 +528,7 @@ export function BrandManager({
                   <td className="px-4 py-2.5 font-mono text-caption text-muted">{row.slug}</td>
                   <td className="px-4 py-2.5">
                     {row.is_featured ? (
-                      <Check className="size-4 text-[var(--success)]" aria-label="Featured" />
+                      <Check className="size-4 text-[var(--success-text)]" aria-label="Featured" />
                     ) : (
                       <span className="text-muted">—</span>
                     )}

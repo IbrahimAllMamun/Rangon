@@ -241,7 +241,7 @@ export default async function StockMovementsPage({ searchParams }: { searchParam
                             reserved
                               ? "text-muted"
                               : row.quantity >= 0
-                                ? "text-[var(--success)]"
+                                ? "text-[var(--success-text)]"
                                 : "text-[var(--error)]"
                           }`}
                         >

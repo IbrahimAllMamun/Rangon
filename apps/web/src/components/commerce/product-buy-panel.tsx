@@ -196,11 +196,11 @@ export function ProductBuyPanel({
         {!selected ? null : selected.available <= 0 ? (
           <p className="font-medium text-[var(--error)]">Out of stock</p>
         ) : selected.available <= 5 ? (
-          <p className="font-medium text-[var(--warning)]">
+          <p className="font-medium text-[var(--warning-text)]">
             Only {selected.available} left in stock
           </p>
         ) : (
-          <p className="text-[var(--success)]">In stock</p>
+          <p className="text-[var(--success-text)]">In stock</p>
         )}
       </div>
 
@@ -224,7 +224,13 @@ export function ProductBuyPanel({
         </Button>
       </div>
 
-      {selected && <p className="mt-3 text-caption text-muted">SKU: {selected.sku}</p>}
+      {/* A SKU is an identifier, so its capitals stay; monospace marks it as
+          a code rather than a sentence set in all-caps. */}
+      {selected && (
+        <p className="mt-3 text-caption text-muted">
+          SKU: <span className="font-mono">{selected.sku}</span>
+        </p>
+      )}
     </div>
   );
 }

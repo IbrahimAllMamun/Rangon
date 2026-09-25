@@ -165,7 +165,7 @@ export default async function CategoryPage({
               action={
                 <Link
                   href={canonicalFor(canonicalSegments)}
-                  className="text-body-sm font-medium text-brand-600 hover:underline"
+                  className="text-body-sm font-medium text-brand-700 hover:underline"
                 >
                   Clear all filters
                 </Link>

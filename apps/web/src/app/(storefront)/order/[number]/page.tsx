@@ -97,7 +97,7 @@ export default async function OrderPage({
   return (
     <div className="container-rangon max-w-4xl py-10">
       <div className="rounded-xl border border-border bg-surface p-6 sm:p-8">
-        <p className="text-caption font-semibold uppercase tracking-wide text-[var(--success)]">
+        <p className="text-caption font-semibold uppercase tracking-wide text-[var(--success-text)]">
           {greeting.eyebrow}
         </p>
         <h1 className="font-display mt-2 text-h1">{greeting.heading}</h1>

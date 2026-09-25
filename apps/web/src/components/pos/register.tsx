@@ -365,7 +365,7 @@ export function PosRegister({ session }: { session: PosSession }) {
                           variant.available <= 0
                             ? "text-[var(--error)]"
                             : variant.available <= 5
-                              ? "text-[var(--warning)]"
+                              ? "text-[var(--warning-text)]"
                               : "text-muted"
                         }`}
                       >
@@ -527,7 +527,7 @@ export function PosRegister({ session }: { session: PosSession }) {
               <span className="tabular text-body">{money(pos.subtotal())}</span>
             </div>
             {pos.discountTotal() > 0 && (
-              <div className="mt-1 flex items-baseline justify-between text-[var(--success)]">
+              <div className="mt-1 flex items-baseline justify-between text-[var(--success-text)]">
                 <span className="text-body-sm">Discount</span>
                 <span className="tabular text-body">− {money(pos.discountTotal())}</span>
               </div>

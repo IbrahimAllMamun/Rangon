@@ -40,7 +40,8 @@ const buttonVariants = cva(
         ghost: "text-neutral-700 hover:bg-neutral-100 active:bg-neutral-200",
         // Semantic error red — deliberately NOT the brand red.
         destructive: "bg-[var(--error)] text-white hover:brightness-95 active:brightness-90",
-        link: "text-brand-600 underline-offset-4 hover:underline",
+        // brand-700: brand-600 text is 4.36:1 on the storefront ground.
+        link: "text-brand-700 underline-offset-4 hover:underline",
         dark: "bg-neutral-900 text-white hover:bg-neutral-800",
       },
       size: {
@@ -371,8 +372,8 @@ const badgeVariants = cva(
     variants: {
       tone: {
         neutral: "bg-neutral-100 text-neutral-700",
-        success: "bg-[var(--success-bg)] text-[var(--success)]",
-        warning: "bg-[var(--warning-bg)] text-[var(--warning)]",
+        success: "bg-[var(--success-bg)] text-[var(--success-text)]",
+        warning: "bg-[var(--warning-bg)] text-[var(--warning-text)]",
         error: "bg-[var(--error-bg)] text-[var(--error)]",
         info: "bg-[var(--info-bg)] text-[var(--info)]",
         brand: "bg-brand-100 text-brand-700",

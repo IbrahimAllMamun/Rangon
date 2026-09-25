@@ -87,7 +87,7 @@ export function VariantMatrixEditor({
     <div className="space-y-3">
       {truncated && (
         <p role="alert" className="flex items-start gap-2 rounded-md bg-[var(--warning)]/10 p-3 text-body-sm">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
           <span>
             That many ticks would generate thousands of SKUs, so the table is capped. Narrow the
             selection before saving.
@@ -317,7 +317,7 @@ function MatrixRowView({
                 )}
               </span>
               {adjusted && (
-                <Check className="size-4 text-[var(--success)]" aria-label="Stock adjusted" />
+                <Check className="size-4 text-[var(--success-text)]" aria-label="Stock adjusted" />
               )}
               <Button
                 type="button"

@@ -399,7 +399,7 @@ export function ReturnProgress({ request }: { request: ReturnRequest }) {
       {stages.map((stage) => (
         <li key={stage.label} className="flex items-center gap-1.5">
           {stage.at ? (
-            <Check className="size-4 text-[var(--success)]" aria-hidden />
+            <Check className="size-4 text-[var(--success-text)]" aria-hidden />
           ) : rejected ? (
             <X className="size-4 text-muted" aria-hidden />
           ) : (

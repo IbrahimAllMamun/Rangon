@@ -412,7 +412,7 @@ export function StaffForm({
       <CardContent>
         {roleLocked && (
           <p className="mb-4 flex gap-2 rounded-md border border-[var(--warning)]/30 bg-[var(--warning)]/5 p-3 text-body-sm">
-            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" aria-hidden />
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning-text)]" aria-hidden />
             <span>
               {isSelf
                 ? "This is your own account, so the role cannot be changed here — demoting yourself would remove the permission you need to undo it."

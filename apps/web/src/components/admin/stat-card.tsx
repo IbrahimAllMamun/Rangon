@@ -4,8 +4,8 @@ import { cn } from "@/lib/cn";
 
 const TONES = {
   neutral: "text-neutral-900",
-  success: "text-[var(--success)]",
-  warning: "text-[var(--warning)]",
+  success: "text-[var(--success-text)]",
+  warning: "text-[var(--warning-text)]",
   error: "text-[var(--error)]",
 } as const;
 

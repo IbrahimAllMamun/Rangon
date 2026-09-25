@@ -97,7 +97,7 @@ export function PasswordChangeForm() {
           role="status"
           className="flex items-start gap-2 rounded-md border border-[var(--success)] bg-[var(--success-bg)] p-3 text-body-sm"
         >
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--success)]" aria-hidden />
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--success-text)]" aria-hidden />
           <span>
             Password changed. Anywhere else you were signed in — another browser, the counter, a
             phone — has been signed out. This window stays signed in.

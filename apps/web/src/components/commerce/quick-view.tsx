@@ -190,7 +190,7 @@ export function QuickView({
               </div>
 
               {selected && selected.available > 0 && selected.available <= 5 && (
-                <p className="mt-3 text-caption text-[var(--warning)]">
+                <p className="mt-3 text-caption text-[var(--warning-text)]">
                   Only {selected.available} left
                 </p>
               )}
@@ -215,7 +215,7 @@ export function QuickView({
                 </Button>
                 <Link
                   href={`/product/${product.slug}`}
-                  className="text-body-sm font-medium text-brand-600 hover:underline"
+                  className="text-body-sm font-medium text-brand-700 hover:underline"
                 >
                   Full details
                 </Link>

@@ -271,13 +271,13 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
             </CardHeader>
             <CardContent className="text-body-sm">
               {order.stock_committed ? (
-                <p className="text-[var(--success)]">
+                <p className="text-[var(--success-text)]">
                   Deducted — the goods have left the shelf.
                 </p>
               ) : order.status === "CANCELLED" ? (
                 <p className="text-muted">Released back to available stock.</p>
               ) : (
-                <p className="text-[var(--warning)]">
+                <p className="text-[var(--warning-text)]">
                   Reserved — held for this order, not yet deducted.
                 </p>
               )}
