@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   calendarDate,
+  channelLabel,
   dateOnly,
   dateTime,
   humanise,
@@ -122,5 +123,18 @@ describe("paymentMethodLabel", () => {
   it("falls back to humanise for anything else", () => {
     expect(paymentMethodLabel("SOMETHING_NEW")).toBe("Something new");
     expect(paymentMethodLabel(null)).toBe("—");
+  });
+});
+
+describe("channelLabel", () => {
+  it("keeps POS an acronym, where humanise would write Pos", () => {
+    expect(humanise("POS")).toBe("Pos");
+    expect(channelLabel("POS")).toBe("POS");
+    expect(channelLabel("ONLINE")).toBe("Online");
+  });
+
+  it("falls back to humanise for anything else", () => {
+    expect(channelLabel("MARKETPLACE")).toBe("Marketplace");
+    expect(channelLabel(undefined)).toBe("—");
   });
 });

@@ -514,8 +514,10 @@ function NavLink({
         "flex items-center gap-3 rounded-md px-3 py-2 text-body-sm font-medium",
         "transition-colors duration-fast",
         "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]",
+        // brand-600, not brand-500: white 14px text on #FD3807 is 3.66:1 and
+        // fails WCAG 1.4.3; on #E22D04 it is 4.55:1.
         active
-          ? "bg-brand-500 text-white"
+          ? "bg-brand-600 text-white"
           : "text-neutral-300 hover:bg-neutral-800 hover:text-white",
       )}
     >

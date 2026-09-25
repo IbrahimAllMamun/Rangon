@@ -9,7 +9,7 @@ import { Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import type { Order } from "@/lib/api/types";
-import { dateTime, humanise, money } from "@/lib/format";
+import { channelLabel, dateTime, money } from "@/lib/format";
 import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Orders" };
@@ -153,7 +153,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
                       <span className="block">{order.customer_name}</span>
                       <span className="block text-caption text-muted">{order.customer_phone}</span>
                     </td>
-                    <td className="px-4 py-2.5">{humanise(order.channel)}</td>
+                    <td className="px-4 py-2.5">{channelLabel(order.channel)}</td>
                     <td className="px-4 py-2.5">
                       <OrderStatusBadge status={order.status} />
                     </td>

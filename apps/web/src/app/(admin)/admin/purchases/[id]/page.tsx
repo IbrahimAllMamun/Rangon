@@ -10,7 +10,7 @@ import { ApiError } from "@/lib/api/client";
 import { apiServer, currentUser, type Paginated } from "@/lib/api/server";
 import type { Account, SessionUser } from "@/lib/api/types";
 import type { OrderItem } from "@/lib/commerce/purchase-order";
-import { dateOnly, dateTime, humanise, money } from "@/lib/format";
+import { dateOnly, dateTime, humanise, money, paymentMethodLabel } from "@/lib/format";
 
 interface Receipt {
   id: string;
@@ -340,7 +340,7 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
                   >
                     <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="tabular font-medium">{money(payment.amount)}</span>
-                      <Badge tone="neutral">{humanise(payment.method)}</Badge>
+                      <Badge tone="neutral">{paymentMethodLabel(payment.method)}</Badge>
                       {payment.account_name && (
                         <span className="text-body-sm text-muted">
                           from {payment.account_name}

@@ -118,13 +118,18 @@ export function NotificationBell() {
           type="button"
           className="relative rounded-md p-2 text-neutral-700 transition-colors duration-fast hover:bg-neutral-100 data-[state=open]:bg-neutral-100"
           aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"}
+          // Radix points aria-controls at the panel even while it is closed and
+          // not in the DOM, which is a reference to nothing. Leave Radix's value
+          // in place only while the panel exists.
+          {...(open ? {} : { "aria-controls": undefined })}
         >
           <Bell className="size-5" aria-hidden />
           {unread > 0 && (
             <span
               // Red here is emphasis, not error: an unread badge is the same
-              // class of mark as the active nav item (CLAUDE.md §10).
-              className="absolute -right-0.5 -top-0.5 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-brand-500 px-1 text-[0.65rem] font-semibold leading-[1.15rem] text-white"
+              // class of mark as the active nav item (CLAUDE.md §10). brand-600
+              // for the same contrast reason as that item: 4.55:1, not 3.66:1.
+              className="absolute -right-0.5 -top-0.5 inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-brand-600 px-1 text-[0.65rem] font-semibold leading-[1.15rem] text-white"
               aria-hidden
             >
               {unread > 99 ? "99+" : unread}

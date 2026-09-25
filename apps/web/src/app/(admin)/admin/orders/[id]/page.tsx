@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primit
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { Account, Order, SessionUser, Shipment } from "@/lib/api/types";
-import { dateTime, humanise, money } from "@/lib/format";
+import { channelLabel, dateTime, humanise, money, paymentMethodLabel } from "@/lib/format";
 
 type Params = Promise<{ id: string }>;
 
@@ -75,7 +75,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
         <div>
           <h1 className="text-h2">{order.number}</h1>
           <p className="mt-1 text-body-sm text-muted">
-            {humanise(order.channel)} · {dateTime(order.placed_at)}
+            {channelLabel(order.channel)} · {dateTime(order.placed_at)}
             {order.created_by_email ? ` · ${order.created_by_email}` : ""}
           </p>
         </div>
@@ -232,7 +232,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
                 order.payments.map((payment) => (
                   <div key={payment.id} className="flex justify-between">
                     <span>
-                      {humanise(payment.method)}
+                      {paymentMethodLabel(payment.method)}
                       <span className="block text-caption text-muted">
                         {humanise(payment.status)}
                         {payment.reference ? ` · ${payment.reference}` : ""}

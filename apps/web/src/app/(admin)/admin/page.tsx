@@ -1,4 +1,18 @@
-import { AlertTriangle, Landmark, Package, ShoppingCart, TrendingUp, Undo2, Wallet } from "lucide-react";
+import {
+  AlertTriangle,
+  Banknote,
+  Clock,
+  Coins,
+  HandCoins,
+  Landmark,
+  type LucideIcon,
+  Package,
+  ShoppingCart,
+  Smartphone,
+  TrendingUp,
+  Undo2,
+  Wallet,
+} from "lucide-react";
 
 import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
@@ -7,16 +21,23 @@ import { StatCard } from "@/components/admin/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
 import type { AccountKind, CashPosition, DashboardData } from "@/lib/api/types";
-import { humanise, money, moneyCompact, percent } from "@/lib/format";
+import {
+  channelLabel,
+  dateTime,
+  money,
+  moneyCompact,
+  paymentMethodLabel,
+  percent,
+} from "@/lib/format";
 
 type Search = Promise<{ range?: string }>;
 
 // `humanise("MFS")` gives "Mfs", which reads as a typo on a money tile.
-const KIND_LABEL: Record<AccountKind, string> = {
-  CASH: "Cash",
-  BANK: "Bank",
-  MFS: "Mobile money",
-  OTHER: "Other",
+const KIND_META: Record<AccountKind, { label: string; icon: LucideIcon }> = {
+  CASH: { label: "Cash", icon: Banknote },
+  BANK: { label: "Bank", icon: Landmark },
+  MFS: { label: "Mobile money", icon: Smartphone },
+  OTHER: { label: "Other", icon: Wallet },
 };
 
 export default async function DashboardPage({ searchParams }: { searchParams: Search }) {
@@ -61,94 +82,105 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
     <>
       <PageHeader
         title="Dashboard"
-        description="Everything below is aggregated in the database, not in the browser."
+        // When the figures were read, not how: the page is rendered per
+        // request, so this is also how fresh everything below is.
+        description={`Figures as of ${dateTime(new Date())}`}
         actions={
           <DateRangeTabs basePath="/admin" active={range} />
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Revenue"
-          value={money(kpis.revenue)}
-          context={`${kpis.orders} order${kpis.orders === 1 ? "" : "s"}`}
-          icon={<Wallet className="size-4" aria-hidden />}
-        />
-        <StatCard
-          label="Gross profit"
-          value={money(kpis.gross_profit)}
-          context={`${percent(kpis.margin_percent)} margin`}
-          icon={<TrendingUp className="size-4" aria-hidden />}
-          tone="success"
-        />
-        <StatCard
-          label="Items sold"
-          value={String(kpis.units_sold)}
-          context={`Avg order ${moneyCompact(kpis.average_order_value)}`}
-          icon={<ShoppingCart className="size-4" aria-hidden />}
-        />
-        <StatCard
-          label="Stock value"
-          value={money(kpis.inventory_value)}
-          context={`${kpis.inventory_units} units at cost`}
-          icon={<Package className="size-4" aria-hidden />}
-        />
-      </div>
-
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Pending online orders"
-          value={String(kpis.pending_online_orders)}
-          context="Awaiting fulfilment"
-          href="/admin/orders?status=CONFIRMED"
-          tone={kpis.pending_online_orders > 0 ? "warning" : "neutral"}
-        />
-        <StatCard
-          label="Low stock"
-          value={String(kpis.low_stock_products)}
-          context="At or below reorder point"
-          href="/admin/inventory?filter=low-stock"
-          icon={<AlertTriangle className="size-4" aria-hidden />}
-          tone={kpis.low_stock_products > 0 ? "warning" : "neutral"}
-        />
-        <StatCard
-          label="Returns"
-          value={String(kpis.returns)}
-          context="In this period"
-          href="/admin/returns"
-          icon={<Undo2 className="size-4" aria-hidden />}
-        />
-        <StatCard
-          label="Refunded"
-          value={money(kpis.refunded_total)}
-          context={`Discounts ${moneyCompact(kpis.discount_total)}`}
-        />
-      </div>
-
-      {cash && (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="space-y-6">
+        <KpiGroup id="kpi-sales" title="Sales">
           <StatCard
-            label="Cash position"
-            value={money(cash.total)}
-            context={`Held across ${cash.accounts.length} account${
-              cash.accounts.length === 1 ? "" : "s"
-            }`}
-            href="/admin/finance"
-            icon={<Landmark className="size-4" aria-hidden />}
-            tone={Number(cash.total) < 0 ? "error" : "neutral"}
+            label="Revenue"
+            value={money(kpis.revenue)}
+            context={`${kpis.orders} order${kpis.orders === 1 ? "" : "s"}`}
+            icon={<Wallet className="size-4" aria-hidden />}
           />
-          {cash.by_kind.slice(0, 3).map((row) => (
+          <StatCard
+            label="Gross profit"
+            value={money(kpis.gross_profit)}
+            context={`${percent(kpis.margin_percent)} margin`}
+            icon={<TrendingUp className="size-4" aria-hidden />}
+            tone="success"
+          />
+          <StatCard
+            label="Items sold"
+            value={String(kpis.units_sold)}
+            context={`Avg order ${moneyCompact(kpis.average_order_value)}`}
+            icon={<ShoppingCart className="size-4" aria-hidden />}
+          />
+          <StatCard
+            label="Refunded"
+            value={money(kpis.refunded_total)}
+            context={`Discounts ${moneyCompact(kpis.discount_total)}`}
+            icon={<HandCoins className="size-4" aria-hidden />}
+          />
+        </KpiGroup>
+
+        <KpiGroup id="kpi-operations" title="Operations">
+          <StatCard
+            label="Pending online orders"
+            value={String(kpis.pending_online_orders)}
+            context="Awaiting fulfilment"
+            href="/admin/orders?status=CONFIRMED"
+            icon={<Clock className="size-4" aria-hidden />}
+            tone={kpis.pending_online_orders > 0 ? "warning" : "neutral"}
+          />
+          <StatCard
+            label="Low stock"
+            value={String(kpis.low_stock_products)}
+            context="At or below reorder point"
+            href="/admin/inventory?filter=low-stock"
+            icon={<AlertTriangle className="size-4" aria-hidden />}
+            tone={kpis.low_stock_products > 0 ? "warning" : "neutral"}
+          />
+          <StatCard
+            label="Returns"
+            value={String(kpis.returns)}
+            context="In this period"
+            href="/admin/returns"
+            icon={<Undo2 className="size-4" aria-hidden />}
+          />
+          <StatCard
+            label="Stock value"
+            value={money(kpis.inventory_value)}
+            context={`${kpis.inventory_units} units at cost`}
+            icon={<Package className="size-4" aria-hidden />}
+          />
+        </KpiGroup>
+
+        {cash && (
+          <KpiGroup id="kpi-cash" title="Cash">
             <StatCard
-              key={row.kind}
-              label={KIND_LABEL[row.kind] ?? row.kind}
-              value={money(row.total)}
-              context="On hand now"
+              label="Cash position"
+              value={money(cash.total)}
+              context={`Held across ${cash.accounts.length} account${
+                cash.accounts.length === 1 ? "" : "s"
+              }`}
               href="/admin/finance"
-              tone={Number(row.total) < 0 ? "error" : "neutral"}
+              icon={<Coins className="size-4" aria-hidden />}
+              tone={Number(cash.total) < 0 ? "error" : "neutral"}
             />
-          ))}
-        </div>
-      )}
+            {cash.by_kind.slice(0, 3).map((row) => {
+              const meta = KIND_META[row.kind] ?? KIND_META.OTHER;
+              const Icon = meta.icon;
+              return (
+                <StatCard
+                  key={row.kind}
+                  label={meta.label}
+                  value={money(row.total)}
+                  context="On hand now"
+                  href="/admin/finance"
+                  icon={<Icon className="size-4" aria-hidden />}
+                  tone={Number(row.total) < 0 ? "error" : "neutral"}
+                />
+              );
+            })}
+          </KpiGroup>
+        )}
+      </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
@@ -172,7 +204,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               return (
                 <div key={row.channel}>
                   <div className="flex items-baseline justify-between text-body-sm">
-                    <span className="font-medium">{humanise(row.channel)}</span>
+                    <span className="font-medium">{channelLabel(row.channel)}</span>
                     <span className="tabular">{money(row.revenue)}</span>
                   </div>
                   <div className="mt-1 h-2 overflow-hidden rounded-full bg-neutral-100">
@@ -244,7 +276,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               <tbody className="divide-y divide-border">
                 {data.payment_methods.map((row) => (
                   <tr key={row.method}>
-                    <td className="px-4 py-2">{humanise(row.method)}</td>
+                    <td className="px-4 py-2">{paymentMethodLabel(row.method)}</td>
                     <td className="tabular px-4 py-2 text-right">{row.count}</td>
                     <td className="tabular px-4 py-2 text-right">{money(row.amount)}</td>
                   </tr>
@@ -262,5 +294,29 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         </Card>
       </div>
     </>
+  );
+}
+
+/**
+ * One labelled row of figures. The dashboard's twelve cards used to be one
+ * undivided block; a heading per business area lets the eye (and a screen
+ * reader's heading list) find sales, operations or cash directly.
+ */
+function KpiGroup({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id}>
+      <h2 id={id} className="mb-2 text-caption font-semibold uppercase tracking-wide text-muted">
+        {title}
+      </h2>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
+    </section>
   );
 }

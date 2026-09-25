@@ -206,6 +206,20 @@ WCAG 2.2 AA: visible focus ring on every interactive element, 4.5:1 text contras
 text and UI components), semantic landmarks, labelled icon-only buttons, dialogs with focus trap and
 `Esc`, full keyboard operation of the POS, `৳` and Bengali text verified in every numeric component.
 
+**Small white text on a brand fill takes `brand-600`, not `brand-500`.** White on `#FD3807` is 3.66:1,
+which passes only for large text (24px, or 18.66px bold). On `#E22D04` it is 4.55:1. The active admin nav
+item and the unread-notifications badge use `brand-600` for this reason (2026-09-25 audit).
+*Open:* the primary `Button` still fills `brand-500` behind 14–16px text, so it fails 1.4.3 in the same
+way. CLAUDE.md names `#FD3807` as the one primary action colour, so moving every CTA to `brand-600` is a
+brand decision and has not been made silently.
+
+**Muted text on the admin ground is `#6b6b6b`.** `neutral-500` (`#737373`) is 4.35:1 on the admin
+background (`neutral-100`) and fails; the admin surface overrides `--muted` (4.89:1 there, 5.33:1 on a
+card). The storefront keeps `neutral-500`, which passes on its lighter ground (4.54:1 on `neutral-50`).
+
+**Headings never skip a level.** `CardTitle`, `EmptyState` and `ErrorState` render `h2`: they almost
+always sit straight under a page's `h1`, and an `h2` after any heading is valid.
+
 **A horizontal scroll box that holds `sr-only` text must be `relative`.** `sr-only` is absolutely
 positioned; with no positioned ancestor inside the scroll box, it resolves against one outside, escapes
 the clip, and widens the whole page from wherever its cell sits. Measured on `/admin/staff` at 390 px:
