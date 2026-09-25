@@ -78,7 +78,7 @@ export default async function StaffPage({ searchParams }: { searchParams: Search
   return (
     <>
       <PageHeader
-        title="Staff &amp; roles"
+        title="Staff & roles"
         description="Who can sign in, and what each of them may do. A role change decides who may refund, discount and adjust stock, so every one is written to the audit log."
       />
 

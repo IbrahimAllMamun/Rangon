@@ -45,15 +45,28 @@ export class ApiError extends Error {
    *
    * Returning nothing for those codes is what makes callers fall back to
    * `error.message`, which is the sentence the service actually wrote.
+   *
+   * A nested serializer's errors arrive nested (`{profile: {national_id:
+   * [...]}}`) and come out with a dotted field, `profile.national_id`.
    */
   fieldErrors(): { field: string; message: string }[] {
     if (this.code !== "VALIDATION_ERROR") return [];
     if (!this.details || typeof this.details !== "object") return [];
-    return Object.entries(this.details as Record<string, unknown>).map(([field, value]) => ({
-      field,
-      message: Array.isArray(value) ? String(value[0]) : String(value),
-    }));
+    return flattenFieldErrors(this.details as Record<string, unknown>, "");
   }
+}
+
+function flattenFieldErrors(
+  details: Record<string, unknown>,
+  prefix: string,
+): { field: string; message: string }[] {
+  return Object.entries(details).flatMap(([key, value]) => {
+    const field = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return flattenFieldErrors(value as Record<string, unknown>, field);
+    }
+    return [{ field, message: Array.isArray(value) ? String(value[0]) : String(value) }];
+  });
 }
 
 export interface Paginated<T> {

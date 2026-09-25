@@ -35,6 +35,25 @@ describe("ApiError.fieldErrors", () => {
     ]);
   });
 
+  it("gives a nested serializer's errors a dotted field name", () => {
+    const error = new ApiError(400, "VALIDATION_ERROR", "Invalid input.", {
+      phone: ["Enter a valid number."],
+      profile: {
+        national_id: ["Another member of staff already has this ID number."],
+        date_of_birth: ["A date of birth cannot be in the future."],
+      },
+    });
+
+    expect(error.fieldErrors()).toEqual([
+      { field: "phone", message: "Enter a valid number." },
+      {
+        field: "profile.national_id",
+        message: "Another member of staff already has this ID number.",
+      },
+      { field: "profile.date_of_birth", message: "A date of birth cannot be in the future." },
+    ]);
+  });
+
   it("returns nothing for a business error, so callers fall back to the message", () => {
     const error = new ApiError(
       409,

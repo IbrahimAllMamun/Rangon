@@ -369,7 +369,9 @@ class BranchViewSet(viewsets.ModelViewSet):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.select_related("role", "branch").exclude(role__code=RoleCode.CUSTOMER)
+    queryset = User.objects.select_related("role", "branch", "staff_profile").exclude(
+        role__code=RoleCode.CUSTOMER
+    )
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = {
         "list": ["users.view"],

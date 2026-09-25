@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Any
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
+from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import (
@@ -13,11 +15,12 @@ from accounts.models import (
     Permission,
     Role,
     RoleCode,
+    StaffProfile,
     Status,
     TaxMode,
     User,
 )
-from accounts.services import mint_refresh_token
+from accounts.services import PROFILE_FIELDS, mint_refresh_token
 from core.fields import BangladeshiPhoneField, ContactPhoneField
 from core.models import AuditLog
 
@@ -136,11 +139,54 @@ class RoleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_system"]
 
 
+_NATIONAL_ID = re.compile(r"^[A-Za-z0-9 -]*$")
+
+
+class StaffProfileSerializer(serializers.ModelSerializer):
+    """A member of staff's personal and employment details (every field optional)."""
+
+    emergency_contact_phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
+
+    class Meta:
+        model = StaffProfile
+        fields = list(PROFILE_FIELDS)
+
+    def validate_date_of_birth(self, value: Any) -> Any:
+        if value and value > timezone.localdate():
+            raise serializers.ValidationError("A date of birth cannot be in the future.")
+        return value
+
+    def validate_national_id(self, value: str) -> str:
+        if not _NATIONAL_ID.match(value):
+            raise serializers.ValidationError("Use only letters, digits, spaces and hyphens.")
+        return value
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        born, joined = attrs.get("date_of_birth"), attrs.get("joined_on")
+        if born and joined and joined < born:
+            raise serializers.ValidationError(
+                {"joined_on": ["The joining date is before the date of birth."]}
+            )
+        return attrs
+
+
+def can_see_staff_profiles(context: dict[str, Any]) -> bool:
+    """Only `users.manage` reads a profile (business-rules §7.1b).
+
+    Without a request in the context the answer is no, so a serializer built
+    somewhere new leaves the profile out rather than handing it over.
+    """
+    request = context.get("request")
+    user = getattr(request, "user", None)
+    return bool(user and user.is_authenticated and user.has_perm_code("users.manage"))
+
+
 class UserSerializer(serializers.ModelSerializer):
     role_code = serializers.CharField(source="role.code", read_only=True)
     role_name = serializers.CharField(source="role.name", read_only=True)
     branch_name = serializers.CharField(source="branch.name", read_only=True, default="")
     full_name = serializers.CharField(read_only=True)
+    profile = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -159,14 +205,32 @@ class UserSerializer(serializers.ModelSerializer):
             "branch_name",
             "date_joined",
             "last_login",
+            "profile",
         ]
         read_only_fields = ["id", "date_joined", "last_login"]
+
+    def get_profile(self, user: User) -> dict[str, Any]:
+        try:
+            profile = user.staff_profile
+        except StaffProfile.DoesNotExist:
+            # Nobody has filled one in yet: the same shape, every field blank.
+            profile = StaffProfile(user=user)
+        return dict(StaffProfileSerializer(profile).data)
+
+    def to_representation(self, instance: User) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if not can_see_staff_profiles(self.context):
+            # Absent, not null: a manager's response should not even say
+            # whether a profile exists.
+            data.pop("profile", None)
+        return data
 
 
 class UserWriteSerializer(serializers.ModelSerializer):
     phone = ContactPhoneField(max_length=32, required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, required=False, min_length=10)
     role_code = serializers.ChoiceField(choices=RoleCode.choices, write_only=True, required=False)
+    profile = StaffProfileSerializer(required=False)
 
     class Meta:
         model = User
@@ -180,7 +244,12 @@ class UserWriteSerializer(serializers.ModelSerializer):
             "branch",
             "password",
             "role_code",
+            "profile",
         ]
+
+    def to_representation(self, instance: User) -> dict[str, Any]:
+        # Answer a write with the same shape a read gives.
+        return UserSerializer(instance, context=self.context).data
 
     def validate_password(self, value: str) -> str:
         validate_password(value)
@@ -201,6 +270,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
+            profile=validated_data.get("profile"),
             actor=self.context["request"].user,
         )
 
@@ -216,6 +286,7 @@ class UserWriteSerializer(serializers.ModelSerializer):
             actor=self.context["request"].user,
             role_code=validated_data.pop("role_code", None),
             password=validated_data.pop("password", None),
+            profile=validated_data.pop("profile", None),
             fields=validated_data,
         )
 

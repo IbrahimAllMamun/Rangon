@@ -982,6 +982,32 @@ has to keep pointing at a real row. Customers never appear in the staff list.
 > staff can do to themselves. The stricter alternative requires a branch for every role but
 > `OWNER`/`ADMIN`. In a one-branch shop the two behave identically; decide before opening a second.
 
+### 7.1b Personal details
+
+An owner can keep, for each member of staff: designation and joining date; date of birth, national
+ID (NID, birth registration or passport number) and blood group; present and permanent address; an
+emergency contact (name, relation, phone); and free-text notes. Every field is optional, and the
+phone number stays on the account itself. They live in `StaffProfile`, a table of their own, because
+customers share the user table and have none of this.
+
+- **Only `users.manage` reads or writes them.** The API leaves `profile` out of the response for
+  anyone else, on the list and on the detail alike, so a manager sees names, phones and roles but no
+  addresses or ID numbers.
+- **The audit log names the fields, never the values.** A change records
+  `profile_updated: ["national_id", "present_address"]`. An address or an ID number written into the
+  log would be readable by everyone holding `audit.view`, a wider circle than `users.manage`.
+- **One ID number belongs to one person.** A second profile with the same national ID is refused;
+  blank IDs never collide.
+- **An account and its details are saved together.** A request whose profile half is refused changes
+  nothing on the account either.
+- Refused as input: a date of birth in the future, and a joining date before the date of birth.
+
+> **DECISION REQUIRED — default chosen: only owners see personal details.** A branch manager
+> arguably needs their own team's emergency contacts. The alternative gives `users.view` the
+> emergency contact alone, or the whole profile for their own branch. Since the staff list already
+> spans branches (§7.1), widening this without branch scoping would show every branch's home
+> addresses to every manager, so it was left at the stricter setting.
+
 ### 7.1a Your own password, and your sessions
 
 Every staff role can change its own password at `/admin/account`, reached from the name in the admin

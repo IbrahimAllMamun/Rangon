@@ -10,6 +10,7 @@ from typing import Any, ClassVar
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 from core import phone as phone_utils
@@ -304,3 +305,74 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     def has_perm_code(self, code: str) -> bool:
         codes = self.permission_codes()
         return "*" in codes or code in codes
+
+
+class BloodGroup(models.TextChoices):
+    A_POS = "A_POS", "A+"
+    A_NEG = "A_NEG", "A-"
+    B_POS = "B_POS", "B+"
+    B_NEG = "B_NEG", "B-"
+    AB_POS = "AB_POS", "AB+"
+    AB_NEG = "AB_NEG", "AB-"
+    O_POS = "O_POS", "O+"
+    O_NEG = "O_NEG", "O-"
+
+
+class StaffProfile(BaseModel):
+    """Personal and employment details kept for a member of staff.
+
+    A table of its own rather than more columns on `User`, for two reasons.
+    `User` is shared with customers, who have none of this. And this is the
+    most personal data the system holds, so it is read and written through
+    one place: only `users.manage` sees it (business-rules §7.1b), and the
+    audit log records *which* fields changed, never their values.
+
+    Every field is optional. A shop fills in what it has, and a staff account
+    must not become impossible to create because an address is unknown.
+    """
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="staff_profile")
+
+    designation = models.CharField(
+        max_length=80, blank=True, help_text="Job title, e.g. Senior cashier"
+    )
+    joined_on = models.DateField(null=True, blank=True, help_text="First day of employment")
+
+    date_of_birth = models.DateField(null=True, blank=True)
+    national_id = models.CharField(
+        max_length=32, blank=True, help_text="NID, birth registration or passport number"
+    )
+    blood_group = models.CharField(max_length=8, choices=BloodGroup.choices, blank=True)
+
+    present_address = models.TextField(blank=True)
+    permanent_address = models.TextField(blank=True)
+
+    emergency_contact_name = models.CharField(max_length=120, blank=True)
+    emergency_contact_relation = models.CharField(max_length=60, blank=True)
+    emergency_contact_phone = models.CharField(max_length=32, blank=True)
+
+    notes = models.TextField(blank=True)
+
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "accounts_staffprofile"
+        constraints = [
+            # One identity document belongs to one person. A second profile
+            # with the same number is a duplicate account or a typo.
+            models.UniqueConstraint(
+                fields=["national_id"],
+                condition=~Q(national_id=""),
+                name="accounts_staffprofile_national_id_uniq",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Profile of {self.user}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        self.national_id = self.national_id.strip()
+        self.emergency_contact_phone = phone_utils.normalize_if_mobile(self.emergency_contact_phone)
+        super().save(*args, **kwargs)
