@@ -418,6 +418,55 @@ is still open and tracked in
 
 ## Verification log
 
+### Staff personal details, and order search on the screen, 2026-09-25
+
+Asked for: keep more about each member of staff (phone, present and permanent
+address, "other important information"), and let the orders list be searched
+by order number and narrowed by date.
+
+**Staff.** `StaffProfile` (migration `accounts.0003`) holds designation, joining
+date, date of birth, national ID, blood group, both addresses, an emergency
+contact and notes; the phone was already on the account and is now a column in
+the list. What else counts as "important" was not specified: that set is the
+documented default. The rules are [business-rules §7.1b](business-rules.md#71b-personal-details),
+with one `DECISION REQUIRED`: only owners (`users.manage`) see any of it, so a
+branch manager cannot read their own team's emergency contacts. Clicking a row
+on `/admin/staff` now opens `/admin/staff/{id}`, where the account and the
+details are read and edited; the list keeps create and activate/deactivate.
+
+Two things were built in because they are easy to get wrong later:
+- the audit log records **which** profile fields changed, never their values —
+  `audit.view` is a wider circle than `users.manage`, and an address or an ID
+  written into the log would have been readable by it;
+- the API leaves the `profile` key out for anyone without `users.manage`, and
+  the form sends no profile when it received none, so a save cannot erase
+  details the person saving could not see.
+
+**Orders.** The API has accepted `search` (number, customer, phone) and
+`date_from`/`date_to` since the orders screen was built; the screen sent
+neither. It now has the shared filter bar. The new tests pin the date edge that
+matters here: an order placed at 00:30 in Dhaka is the 24th, although it is
+still the 23rd in UTC.
+
+**Verified by tests, not in a browser.** Nothing had a signed-in admin session
+to drive the new staff page. The form's own logic — empty dates sent as null,
+the "same as present" copy, no profile sent when none was received, a nested
+server error landing under its field — is covered by `staff-form.test.tsx`.
+`fieldErrors()` now flattens nested details (`profile.national_id`); it used to
+render them as "[object Object]".
+
+```text
+backend  tests/api/test_staff_profiles.py        14 new
+         tests/api/test_order_list_filters.py     6 new
+         full suite                               1326 passed
+web      staff-form.test.tsx                      5 new
+         client.test.ts                           1 new
+         full vitest (TZ=UTC)                     334 passed
+gates    ruff, ruff format, makemigrations --check, mypy, tsc, next lint: clean
+```
+
+Deploying needs `manage.py migrate` for `accounts.0003_staffprofile`.
+
 ### Two screens walked, five controls audited, eight defects fixed (D95–D102), 2026-09-24
 
 Asked for after D91–D94: use the two screens nothing had exercised — the supplier

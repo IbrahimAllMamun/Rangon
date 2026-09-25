@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -18,6 +18,7 @@ from accounts.models import (
     Permission,
     Role,
     RoleCode,
+    StaffProfile,
     Status,
     TaxMode,
     User,
@@ -141,6 +142,7 @@ def create_staff_user(
     first_name: str = "",
     last_name: str = "",
     phone: str = "",
+    profile: dict[str, Any] | None = None,
     actor: User | None = None,
 ) -> User:
     role = Role.objects.get(code=role_code)
@@ -156,14 +158,102 @@ def create_staff_user(
         organization=organization,
         status=Status.ACTIVE,
     )
+    new_values: dict[str, Any] = {
+        "email": email,
+        "role": role_code,
+        "branch": str(branch) if branch else None,
+    }
+    if profile:
+        recorded = save_staff_profile(user=user, values=profile, actor=actor)
+        if recorded:
+            new_values["profile_recorded"] = recorded
     audit.record(
         action=audit.AuditAction.USER_CHANGED,
         entity=user,
         actor=actor,
-        new_values={"email": email, "role": role_code, "branch": str(branch) if branch else None},
+        new_values=new_values,
         reason="User created",
     )
     return user
+
+
+#: What a staff profile holds. Only the *names* of these ever reach the audit
+#: log: an address or an ID number written there would be readable by anyone
+#: holding `audit.view`, which is a wider circle than `users.manage`.
+PROFILE_FIELDS: tuple[str, ...] = (
+    "designation",
+    "joined_on",
+    "date_of_birth",
+    "national_id",
+    "blood_group",
+    "present_address",
+    "permanent_address",
+    "emergency_contact_name",
+    "emergency_contact_relation",
+    "emergency_contact_phone",
+    "notes",
+)
+
+
+def save_staff_profile(
+    *, user: User, values: dict[str, Any], actor: User | None = None
+) -> list[str]:
+    """Create or update a member of staff's profile.
+
+    Returns the names of the fields that actually changed, for the caller's
+    audit entry. A payload that changes nothing writes nothing -- including
+    not creating an empty profile row.
+
+    Runs inside the caller's transaction (`create_staff_user` and
+    `update_staff_user` are both atomic), so an account and its profile are
+    saved together or not at all.
+    """
+    unknown = set(values) - set(PROFILE_FIELDS)
+    if unknown:
+        raise ValueError(f"Not a staff profile field: {', '.join(sorted(unknown))}")
+
+    profile = StaffProfile.objects.select_for_update().filter(user=user).first()
+    if profile is None:
+        profile = StaffProfile(user=user, created_by=actor)
+
+    changed = [field for field, value in values.items() if getattr(profile, field) != value]
+    if not changed:
+        return []
+    for field in changed:
+        setattr(profile, field, values[field])
+
+    if _national_id_taken(profile.national_id.strip(), user):
+        raise _national_id_error()
+    try:
+        # A savepoint, so losing a race leaves the caller's transaction usable
+        # for the error response rather than aborted.
+        with transaction.atomic():
+            profile.save()
+    except IntegrityError as exc:
+        if "national_id" in str(exc):
+            raise _national_id_error() from exc
+        # Two first saves of the same profile at once: the other one won.
+        raise Conflict(
+            "This profile was saved by someone else just now. Reload and try again."
+        ) from exc
+    # The caller's `user` may hold the profile it read before this save.
+    user.staff_profile = profile
+    return sorted(changed)
+
+
+def _national_id_taken(national_id: str, user: User) -> bool:
+    if not national_id:
+        return False
+    return StaffProfile.objects.filter(national_id=national_id).exclude(user=user).exists()
+
+
+def _national_id_error() -> ValidationError:
+    return ValidationError(
+        "Another member of staff already has this ID number.",
+        details={
+            "profile": {"national_id": ["Another member of staff already has this ID number."]}
+        },
+    )
 
 
 @transaction.atomic
@@ -278,6 +368,7 @@ def update_staff_user(
     role_code: str | None = None,
     password: str | None = None,
     fields: dict[str, Any] | None = None,
+    profile: dict[str, Any] | None = None,
 ) -> User:
     """Edit a staff account, with the two guards and the audit entry.
 
@@ -312,6 +403,7 @@ def update_staff_user(
     # A reset is what an owner does when an account may be in the wrong hands,
     # so it signs that account out everywhere, not only at the next sign-in.
     sessions_ended = end_sessions(user) if password else 0
+    profile_changed = save_staff_profile(user=user, values=profile, actor=actor) if profile else []
 
     after = {
         "role": user.role.code if user.role else None,
@@ -324,6 +416,9 @@ def update_staff_user(
         # The value never goes near the log -- only the fact of the reset.
         changed_after["password_reset"] = True
         changed_after["sessions_ended"] = sessions_ended
+    if profile_changed:
+        # Which fields, never what they now say (see PROFILE_FIELDS).
+        changed_after["profile_updated"] = profile_changed
     if changed_before or changed_after:
         audit.record(
             action=audit.AuditAction.USER_CHANGED,

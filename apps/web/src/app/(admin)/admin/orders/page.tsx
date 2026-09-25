@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { FilterField, FilterForm } from "@/components/admin/filter-form";
 import { Pagination } from "@/components/admin/pagination";
 import { ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
@@ -35,7 +36,9 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
   const params = await searchParams;
   const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["status", "channel", "search"]) {
+  // `search` matches the order number, the customer's name or their phone;
+  // the dates are whole days in the shop's timezone, both ends included.
+  for (const key of ["status", "channel", "search", "date_from", "date_to"]) {
     if (params[key]) query.set(key, params[key]!);
   }
   applyPaging(query, paging);
@@ -74,6 +77,45 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
           />
         ))}
       </div>
+
+      <FilterForm
+        action="/admin/orders"
+        label="Search and filter orders"
+        keep={{ status: params.status, channel: params.channel }}
+        clearHref={buildHref(params, {
+          search: undefined,
+          date_from: undefined,
+          date_to: undefined,
+          page: undefined,
+        })}
+        active={Boolean(params.search || params.date_from || params.date_to)}
+      >
+        <FilterField
+          id="order-search"
+          name="search"
+          type="search"
+          label="Order number, customer or phone"
+          defaultValue={params.search ?? ""}
+          placeholder="e.g. RGN-0042 or 01712…"
+          className="min-w-[14rem] flex-1"
+        />
+        <FilterField
+          id="order-from"
+          name="date_from"
+          type="date"
+          label="Placed from"
+          defaultValue={params.date_from ?? ""}
+          max={params.date_to || undefined}
+        />
+        <FilterField
+          id="order-to"
+          name="date_to"
+          type="date"
+          label="Placed to"
+          defaultValue={params.date_to ?? ""}
+          min={params.date_from || undefined}
+        />
+      </FilterForm>
 
       <Card className="overflow-hidden">
         {error ? (

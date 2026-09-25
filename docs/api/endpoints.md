@@ -20,7 +20,7 @@ Authoritative machine-readable version: `/api/schema/` (drf-spectacular). This i
 |---|---|---|
 | GET/PATCH | `organization/` | `settings.view` / `settings.manage` |
 | GET/POST/PATCH | `branches/` | `settings.view` / `settings.manage` |
-| GET/POST/PATCH | `users/` | `users.view` / `users.manage` |
+| GET/POST/PATCH | `users/` | `users.view` / `users.manage`. Each row carries `profile` (designation, joining date, date of birth, national ID, blood group, present and permanent address, emergency contact, notes) **only for `users.manage`** — the key is absent for anyone else, not null. POST/PATCH accept `profile` as a nested object, saved with the account in one transaction; a PATCH changes only the profile fields it names ([business-rules §7.1b](../business-rules.md#71b-personal-details)) |
 | GET | `roles/`, `permissions/` | `users.view` |
 | GET | `audit-logs/` | `audit.view` — newest first. Branch-scoped: a reader confined to a branch sees that branch's entries and the organisation-wide ones (no branch) — [D85](../roadmap.md#known-defects). Filters: `action`, `entity_type`, `entity_id` (one record's history), `actor`, `branch`, `search` (entity label, reason, actor), `date_from`/`date_to` (shop days). Rows carry `action_label` and `branch_code` |
 
@@ -193,7 +193,7 @@ CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
 
 | Method | Path | Perm |
 |---|---|---|
-| GET | `` · `{id}/` | `orders.view` — filters: channel, status, payment status, branch, date, customer |
+| GET | `` · `{id}/` | `orders.view` — filters: `channel`, `status`, `payment_status`, `branch`, `customer`, `search` (order number, customer name, or phone as typed locally), `date_from`/`date_to` (`YYYY-MM-DD`, days in the shop's timezone, both ends included; an unreadable date is a 400) |
 | POST | `{id}/status/` | `orders.update_status` — `{to_status, reason}` |
 | POST | `{id}/cancel/` | `sales.cancel` |
 | POST | `{id}/payments/` | `sales.payment_record` — record cash/COD/bank capture |
