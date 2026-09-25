@@ -1,10 +1,10 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import Link from "next/link";
 import { useState } from "react";
 
 import type { Party, PartySide } from "@/app/(admin)/admin/finance/parties/page";
+import { ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { dateOnly, humanise, money } from "@/lib/format";
 
@@ -215,14 +215,11 @@ function PartyRows({
               </thead>
               <tbody className="divide-y divide-border">
                 {party.documents.map((document) => (
-                  <tr key={document.id}>
+                  <tr key={document.id} className={ROW_LINK_ROW}>
                     <td className="py-2">
-                      <Link
-                        href={`${documentHrefPrefix}/${document.id}`}
-                        className="font-medium text-brand-600 hover:underline"
-                      >
+                      <RowLink href={`${documentHrefPrefix}/${document.id}`}>
                         {document.number}
-                      </Link>
+                      </RowLink>
                     </td>
                     <td className="py-2 text-muted">
                       {dateOnly(document.dated)}

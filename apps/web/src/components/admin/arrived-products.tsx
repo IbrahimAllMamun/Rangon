@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { ROW_LINK_ABOVE, ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 
@@ -96,14 +97,17 @@ export function ArrivedProducts({
 
         <ul className="divide-y divide-border rounded-lg border border-border">
           {remaining.map((product) => (
-            <li key={product.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+            <li
+              key={product.id}
+              className={`${ROW_LINK_ROW} flex flex-wrap items-center gap-3 px-4 py-3`}
+            >
               <span className="min-w-0 flex-1">
-                <Link
+                <RowLink
                   href={`/admin/products/${product.id}`}
-                  className="block font-medium hover:text-brand-600 hover:underline"
+                  className="block font-medium group-hover/row:text-brand-600"
                 >
                   {product.name}
-                </Link>
+                </RowLink>
                 <span className="flex flex-wrap items-center gap-1.5 pt-1">
                   <Badge tone={product.status === "DRAFT" ? "warning" : "neutral"}>
                     {product.status === "DRAFT" ? "Draft" : "Hidden"}
@@ -120,6 +124,7 @@ export function ArrivedProducts({
                     type="button"
                     variant="secondary"
                     size="sm"
+                    className={ROW_LINK_ABOVE}
                     onClick={() => publish(product)}
                     loading={busy === product.id}
                   >

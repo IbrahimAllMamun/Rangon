@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { CustomerAddresses } from "@/components/admin/customer-addresses";
 import { CustomerForm, type CustomerRow } from "@/components/admin/customer-form";
 import { CustomerNotes, type CustomerNoteRow } from "@/components/admin/customer-notes";
+import { ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
 import { OrderStatusBadge } from "@/components/admin/status-badge";
 import {
@@ -193,14 +194,9 @@ export default async function CustomerDetailPage({
                     </thead>
                     <tbody className="divide-y divide-border">
                       {orders.map((order) => (
-                        <tr key={order.id}>
+                        <tr key={order.id} className={ROW_LINK_ROW}>
                           <td className="px-2 py-2">
-                            <Link
-                              href={`/admin/orders/${order.id}`}
-                              className="font-medium text-brand-600 hover:underline"
-                            >
-                              {order.number}
-                            </Link>
+                            <RowLink href={`/admin/orders/${order.id}`}>{order.number}</RowLink>
                             <span className="block text-caption text-muted">
                               {humanise(order.channel)}
                             </span>

@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
+import { RowLink } from "@/components/admin/row-link";
 import { Badge, Button } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
@@ -65,12 +66,12 @@ export default async function PurchasesPage({ searchParams }: { searchParams: Se
       header: "Purchase",
       cell: (row) => (
         <>
-          <Link
+          <RowLink
             href={`/admin/purchases/${row.id}`}
-            className="block font-medium hover:text-brand-600 hover:underline"
+            className="block font-medium group-hover/row:text-brand-600"
           >
             {row.number}
-          </Link>
+          </RowLink>
           {row.invoice_number && (
             <span className="block text-caption text-muted">Invoice {row.invoice_number}</span>
           )}

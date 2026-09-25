@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowLeft,
   ArrowRightLeft,
   BarChart3,
   Barcode,
@@ -528,18 +529,31 @@ export function PageHeader({
   title,
   description,
   actions,
+  back,
 }: {
   title: string;
   description?: string;
   actions?: React.ReactNode;
+  /** A screen reached from inside a section, not from the sidebar, needs a way back up. */
+  back?: { href: string; label: string };
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h1 className="text-h2">{title}</h1>
-        {description && <p className="mt-1 text-body-sm text-muted">{description}</p>}
+    <>
+      {back && (
+        <Link
+          href={back.href}
+          className="mb-4 inline-flex items-center gap-1.5 text-body-sm text-muted hover:text-brand-600"
+        >
+          <ArrowLeft className="size-4" aria-hidden /> {back.label}
+        </Link>
+      )}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-h2">{title}</h1>
+          {description && <p className="mt-1 text-body-sm text-muted">{description}</p>}
+        </div>
+        {actions && <div className="flex gap-2">{actions}</div>}
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
-    </div>
+    </>
   );
 }
