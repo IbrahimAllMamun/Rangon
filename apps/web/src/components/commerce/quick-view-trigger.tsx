@@ -48,22 +48,26 @@ export function QuickViewTrigger({ product }: { product: ShopProduct }) {
   return (
     <>
       {/*
-        The box mirrors the image's geometry exactly — `inset-x-0 top-0` plus
-        the same `aspect-product` — so the pill sits along the bottom of the
-        photograph rather than at the bottom of the whole card, where it would
-        cover the price. `pointer-events-none` on the frame keeps the card's
-        link clickable everywhere the button is not.
+        The box mirrors the image's geometry exactly — `inset-x-2 top-2` (the
+        card's `p-2`) plus the same `aspect-product` — so the pill sits along
+        the bottom of the photograph rather than at the bottom of the whole
+        card, where it would cover the price. `pointer-events-none` on the
+        frame keeps the card's link clickable everywhere the button is not.
 
         Revealed on hover on a pointer device, always visible on touch: there
         is no hover on a phone, and a control that only appears on hover is a
         control a phone shopper never finds.
+
+        The fill is `brand-600`, not `brand-500`: white 14px text on #FD3807
+        is 3.66:1 and fails WCAG 1.4.3, on #E22D04 it passes (design-system.md,
+        "Small white text on a brand fill"). Hover darkens to `brand-700`.
       */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex aspect-product items-end p-2 opacity-100 transition-opacity duration-fast motion-reduce:transition-none sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+      <div className="pointer-events-none absolute inset-x-2 top-2 flex aspect-product items-end p-2 opacity-100 transition-opacity duration-fast motion-reduce:transition-none sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
         <button
           type="button"
           onClick={single ? addSingle : () => setOpen(true)}
           disabled={adding}
-          className="pointer-events-auto flex w-full items-center justify-center gap-2 rounded-md bg-neutral-900/95 px-3 py-2.5 text-body-sm font-semibold text-white shadow-sm hover:bg-neutral-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] disabled:opacity-60"
+          className="pointer-events-auto flex w-full items-center justify-center gap-2 rounded-md bg-brand-600 px-3 py-2.5 text-body-sm font-semibold text-white shadow-sm transition-colors duration-fast hover:bg-brand-700 active:bg-brand-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] disabled:opacity-60"
         >
           {adding ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />

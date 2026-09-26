@@ -128,7 +128,7 @@ twenty read as a demo reel.
 |---|---|---|---|
 | Hero | `rise-in`, 320 ms, staggered 0/60/120/180 ms | Page load | The one place personality is worth paying for. Eyebrow → headline → copy → buttons is the reading order |
 | Buttons | `active:scale-[0.97]`, 140 ms | Press | Acknowledges the tap before the network can. Cheapest reassurance on a slow connection |
-| Product card | Lift 4 px + shadow, 200 ms; photo `scale-1.03`, 320 ms | Hover | Says "this is one clickable object" — the card rises while the photo pushes in behind it |
+| Product card | Lift 4 px + shadow on a white surface, 200 ms; photo `scale-1.03`, 320 ms | Hover | Says "this is one clickable object" — the card rises while the photo pushes in behind it. The raised card has 8 px of padding taken from the grid gap (`-m-2 p-2`), so nothing moves at rest and the photo stays aligned with the heading above |
 | Section headings | Fade + 12 px rise | Scroll into view, once | Paces a long home page instead of dumping it all at once |
 | Product grid | Same, staggered 50 ms, **capped at 400 ms** | Scroll into view, once | The cap matters: a 40-product page must not make the last card wait four seconds |
 
