@@ -29,7 +29,7 @@ An unconfigured install renders a correct navbar. Nothing has to be set up for t
 
 ```text
 NavigationItem
-  type        CATEGORY | LINK | PROMO
+  type        CATEGORY | LINK | PROMO | PAGE | GROUP* | CATEGORY_LIST*   (* footer only, §10)
   category    FK -> catalog.Category   CATEGORY only; supplies name, slug, children
   label       override; blank = the category's own name
   url         LINK only
@@ -257,3 +257,35 @@ container ([roadmap D7](../roadmap.md#known-defects)):
 
 Browser verification at 375 / 768 / 1280: the menu opens by keyboard, `Escape` closes it, the drawer
 traps focus, there is no horizontal overflow, and no layout shift on scroll.
+
+## 10. Footer
+
+Added 2026-09-26 ([ADR-0012](decisions/0012-storefront-footer-and-site-pages.md)). Edited in
+**Admin → Storefront → Footer & pages**; served whole by `GET /api/v1/shop/site/`.
+
+```text
+footer  =  brand block (SiteSettings: logo, tagline, full address, phone, email, hours, social row)
+        +  up to 4 columns (NavigationItem, placement=FOOTER, type=GROUP)
+             each column's links = its children:
+               LINK           any site path or https:// address
+               CATEGORY       one category (hidden while the category is inactive)
+               PAGE           a SitePage (hidden while the page is unpublished)
+               CATEGORY_LIST  the live top-level categories, up to 8, expanded when served
+        +  bottom bar (copyright line with {year}, note)
+```
+
+### Rules
+
+1. **Two levels, always.** A footer row is either a top-level `GROUP` (a column) or a link inside one.
+   `GROUP` and `CATEGORY_LIST` are refused in the header. At most four columns (`MAX_FOOTER_COLUMNS`).
+2. **Links resolve when served, never when saved.** Unpublishing a page or hiding a category removes
+   its footer links without anyone editing the footer; a column left with no live links is dropped.
+3. **Every link is checked** (`content.validators.validate_link_url`) — site paths, `http(s)://`,
+   `mailto:`, `tel:`. `javascript:`, `data:`, `//host` and `/\host` are refused. This applies to
+   header links too.
+4. **Constant cost.** The payload is five queries however many columns and links there are, guarded
+   by `tests/api/test_site_content.py::TestFooterColumns::test_the_payload_does_not_grow_with_the_footer`.
+5. **Three layers of degradation**, like the navbar: the configured footer, then — if the API is
+   unreachable — `FALLBACK_SITE` in `lib/site/site.ts` (the footer's links as they were before it
+   became data, with no contact details, because stale ones are worse than none).
+6. `/shop/navigation/`'s `footer` key carries the same columns, for callers that only fetch the navbar.

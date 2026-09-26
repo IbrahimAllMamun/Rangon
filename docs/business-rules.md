@@ -1444,6 +1444,54 @@ touched the order.
 
 ---
 
+## 8b. The footer and site pages
+
+Edited in Admin → Storefront → Footer & pages
+([ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)).
+
+### 8b.1 Contact details
+
+The footer and the Contact page show the **storefront's** address, phone and email. Each one left
+blank shows the organisation's (Settings → Organisation, the details receipts print). The address
+can be hidden altogether. Opening hours are free text, up to seven rows.
+
+### 8b.2 Who may change it
+
+Owners, admins and managers (`content.site_manage`) — including the privacy policy and terms of sale.
+The owner decided this on 2026-09-26. The footer's link columns are navigation
+(`content.navigation_manage`), held by the same roles. Anyone with `settings.view` can read it all.
+Every change is audited with its before and after values; a page's audit entry carries the whole of
+the old and new text.
+
+### 8b.3 Pages
+
+- About, Contact, Shipping, Returns, Privacy and Terms are **standard pages**: they keep their
+  addresses and cannot be deleted. Pages the shop adds live at `/pages/<address>`, start unpublished,
+  and can be deleted (their footer links go with them).
+- An unpublished page answers "not found", and every footer link to it disappears until it is
+  published again.
+- Page text is cleaned when it is saved: anything the editor cannot produce — scripts, styles,
+  images, embedded frames, colours and fonts pasted from elsewhere — is removed.
+
+*`DECISION REQUIRED` — the privacy policy and terms can be unpublished like any other page. Assumed
+**yes**: the owner may need to withdraw a policy while it is rewritten. The alternative is to refuse
+unpublishing those two, since a shop taking orders is expected to publish both.*
+
+### 8b.4 Social profiles and the chat button
+
+Every supported platform has a row; a profile shows only when it is ticked **and** has an address,
+in the order the shop sets. An address must be on that platform's own site. A WhatsApp number becomes
+a chat link, and also drives the floating chat button, which has its own on/off switch. The
+build-time `NEXT_PUBLIC_WHATSAPP_NUMBER` is used only when no WhatsApp link is set up at all.
+
+### 8b.5 The map
+
+Only Google Maps' own embed is accepted (Share → Embed a map). Nothing else can be framed on the shop's
+pages. With no map, the Contact page offers an "Open in Google Maps" link that searches for the
+address.
+
+---
+
 ## 9. Currency and formatting
 
 Default currency **BDT**, symbol `৳`, 2 decimal places, `1,290.00` grouping, symbol before the amount.

@@ -9,7 +9,23 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-24**.
+Last updated: **2026-09-26**.
+
+**The storefront footer and site pages are now edited in the admin** (Storefront → Footer & pages,
+[ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)). The footer shows the
+full address under the logo, contact details, opening hours, the shop's social profiles in its chosen
+order, and up to four link columns (a "Top categories" entry follows the catalogue by itself). About,
+Contact and the four policies are written in a rich-text editor (TipTap), sanitised server-side with
+`nh3`; the shop can add its own pages under `/pages/`. The Contact page embeds Google Maps (CSP
+`frame-src` allows that origin only). A migration writes today's footer and page copy, so nothing
+changes visually until someone edits it. Verified: pytest 1441 passed; vitest 362; tsc and lint
+clean; and a browser pass as owner — social links saved, normalised and reordered by keyboard,
+map generated and previewed, a policy edited in the editor and seen on the storefront, footer checked
+at 1280 and 375. Two bugs were found and fixed in that browser pass, neither visible to a type check:
+a constant exported from a `"use client"` module arrived in a server page as a client reference, and
+the editor waited on toolbar state that TipTap only reports after the editor has mounted. Not yet
+verified: tag-based revalidation end to end (the preview had no `WEB_REVALIDATE_URL`; the signals
+and allow-list are unit-tested).
 
 **[D95–D102](#known-defects): walking two screens nobody had used, and measuring five more security
 controls, found eight defects — three of them the kind a customer or a till would notice.** An
