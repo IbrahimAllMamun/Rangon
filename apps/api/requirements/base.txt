@@ -7,7 +7,7 @@ django-filter==24.3
 drf-spectacular==0.28.0
 
 # Database
-psycopg[binary]==3.2.3
+psycopg[binary]==3.3.6
 dj-database-url==2.3.0
 
 # Async / background
