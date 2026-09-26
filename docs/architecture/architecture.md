@@ -47,6 +47,7 @@ database, one inventory ledger, one order table.
 | `engagement` | wishlist, review | catalog, customers, orders |
 | `reports` | dashboard + report aggregation (no models) | everything (read-only) |
 | `notifications` | notification model, dispatch tasks | core, accounts |
+| `content` | the storefront's navbar overrides, banners, footer (settings, social links, link columns) and site pages; HTML sanitising for page bodies; cache revalidation pings to the web app — [navigation.md](navigation.md), [ADR-0012](decisions/0012-storefront-footer-and-site-pages.md) | core, catalog (categories drive the navbar and the footer's "Top categories"), accounts (the organisation's contact details are the footer's fallback) |
 
 Dependency direction is one-way: `orders` may import from `inventory`; `inventory` must never import
 from `orders`. Cross-domain coupling that would create a cycle goes through a service argument or a

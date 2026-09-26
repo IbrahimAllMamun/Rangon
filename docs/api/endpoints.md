@@ -222,6 +222,20 @@ so a retried request cannot pay a customer twice.
 `coupons/` CRUD + `coupons/{id}/redemptions/` (`content.coupons_manage`);
 `reviews/` moderation queue + `{id}/{approve,reject}/` (`content.review_moderate`).
 
+## Storefront content — `/api/v1/`
+
+The navbar, the footer and the site pages ([navigation.md](../architecture/navigation.md),
+[ADR-0012](../architecture/decisions/0012-storefront-footer-and-site-pages.md)). Reads need
+`settings.view`; each write needs the code shown. Every write is audited with before/after values.
+
+| Method | Path | Perm | Notes |
+|---|---|---|---|
+| GET/POST/PATCH/DELETE | `navigation-items/` · POST `navigation-items/{id}/move/` | `content.navigation_manage` | Navbar overrides **and the footer's columns**: `placement=FOOTER`, where a `GROUP` row is a column (at most 4) and its children are the links — `LINK`, `CATEGORY`, `PAGE` (a `SitePage` by slug; hidden while unpublished) or `CATEGORY_LIST` (the live top-level categories). A footer link must sit in a column; `GROUP` and `CATEGORY_LIST` are refused in the header. Every `url` is validated: a site path, `http(s)://`, `mailto:` or `tel:`. Filter `?placement=`. `move/` takes `{"direction": "up"\|"down"}` and renumbers the siblings |
+| GET/POST/PATCH/DELETE | `storefront-banners/` | `content.navigation_manage` | Announcement bar and homepage hero |
+| GET/PATCH | `site-settings/` | `content.site_manage` | The one row: tagline, the storefront's `address`/`phone`/`email` (blank falls back to the organisation's — the response's `fallbacks` says what to), `opening_hours` (≤ 7 rows of `{days, hours}`), `show_address`, `map_embed_url`, `map_link_url`, `copyright_text` (`{year}` kept for the storefront), `bottom_note`, `whatsapp_float`. `map_embed_url` accepts Google's `<iframe>` code and stores only its `src`, which must be `https://www.google.com/maps/embed…` or `/maps?…&output=embed`; anything else is 400 |
+| GET/PATCH | `social-links/` · POST `social-links/{id}/move/` | `content.site_manage` | One row per platform, made by migration — **no create or delete** (405). PATCH `{url, is_visible}`: the URL must be `https://` on that platform's own domain (normalised: `facebook.com/x` → `https://facebook.com/x`); a WhatsApp number becomes `https://wa.me/<digits>`. Showing a row with no URL is 400 |
+| GET/POST/PATCH/DELETE | `site-pages/` · `site-pages/{slug}/` | `content.site_manage` | Addressed by **slug**. `body` is HTML, **sanitised on write** (`content.rich_text`, nh3) to `p br h2 h3 strong em u s a ul ol li blockquote hr`, `href` only. POST creates a page under `/pages/<slug>` (slug from the title if blank; a standard slug is 400, a taken one 409). The six standard pages — about, contact, shipping, returns, privacy, terms — can be unpublished but not deleted (400) |
+
 ## Storefront (public) — `/api/v1/shop/`
 
 | Method | Path | Notes |
@@ -241,6 +255,9 @@ so a retried request cannot pay a customer twice.
 | POST | `products/{slug}/reviews/` | verified purchase required, enters moderation. **No caller** since the storefront's account surface was withdrawn — see below |
 | POST | `payments/{provider}/webhook/` | signature-verified by the provider, deduplicated, no auth. Acts only on a payment made through that provider, and captures only its amount (`result: provider_mismatch` / `amount_mismatch` otherwise — [D100](../roadmap.md#known-defects)). `manual` takes none: 404 |
 | GET | `feed.xml` · `feed.csv` | product feed for Meta / Google. Public, cached 15 min, one row per sellable variant. 503 if `RANGON_PUBLIC_URL` is unset — see [marketing-feeds.md](../operations/marketing-feeds.md) |
+| GET | `navigation/` | the whole navbar in one request: `announcement`, `items` (overrides, else the category tree) and `footer` (the footer's columns, as `site/` serves them) |
+| GET | `site/` | the whole footer in one request, a constant five queries: `brand` (name, tagline, address — already resolved against the organisation's, `""` when hidden — phone, email, opening hours), `map` (`embed_url`, `link_url`, which defaults to a Maps search for the address), `social` (visible rows with a URL, in order), `columns` (live links only), `bottom` (`copyright` with `{year}` left in, `note`), `whatsapp` (`null` when no WhatsApp link exists; otherwise `{number, show_float}`) |
+| GET | `pages/` · `pages/{slug}/` | published site pages only: the list (`slug`, `path`, `updated_at`, for the sitemap) and one page with its sanitised `body`. Unpublished or unknown is 404 |
 
 ### The customer-account endpoints have no caller, deliberately
 

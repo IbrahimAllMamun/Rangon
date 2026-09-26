@@ -26,6 +26,9 @@ Created by the `core` migration `0002_extensions`.
 | `customers_customer` | `phone` unique (nullable), `email` unique (nullable) | phone-first identity |
 | `engagement_review` | `(product, customer, order)` | one review per purchase |
 | `core_numbersequence` | `key` | sequence identity |
+| `content_sitesettings` | `key` unique (always `"default"`) | enforces the single settings row |
+| `content_sociallink` | `platform` unique | a platform cannot be listed twice |
+| `content_sitepage` | `slug` unique | the page's URL; a second page with a taken slug is a 409 |
 
 ## Check constraints (invariants in the database, not only in Python)
 
@@ -71,6 +74,7 @@ engagement_review:        rating BETWEEN 1 AND 5
 | `customers_customer (phone)`, GIN trgm on `name` | POS customer attach |
 | `core_auditlog (entity_type, entity_id, created_at DESC)`, `(actor, created_at DESC)` | audit views |
 | `notifications_notification (user, read_at, created_at DESC)` | notification bell |
+| `content_navigationitem (placement, position)` — `content_navitem_place_idx` | the navbar's overrides and the footer's columns, one query each (`/shop/navigation/`, `/shop/site/`) |
 
 ## Reporting strategy
 
@@ -96,6 +100,15 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /reports/dashboard/` | 20 | **yes** | 11 | 14 · 0.07 s |
 | `POST /pos/sales/` (2 lines) | 75, and 13 per extra line | **yes** (+ per-line) | 63; 53 for one line, +10 a line | — |
 | `GET /shop/feed.csv` (whole catalogue) | 12 | **yes** (+ growth) | 9 for 9 products / 27 variants | — |
+| `GET /shop/navigation/` | 8 | **yes** (+ growth) | one query per tree level | — |
+| `GET /shop/site/` (the footer) | 6 | **yes** (+ growth) | 5: settings, organisation, social links, footer rows, top categories | new 2026-09-26 |
+
+The last two are asserted beside the feature they guard rather than in `test_performance.py`:
+`tests/api/test_navigation.py::TestQueryBudget` and
+`tests/api/test_site_content.py::TestFooterColumns::test_the_payload_does_not_grow_with_the_footer`.
+The footer's stays five however many columns, links, categories and social profiles there are,
+because every footer row comes back in one query and a "Top categories" entry is expanded by one
+more, not one per link.
 
 Product detail went 13 → 14 on 2026-09-14, when it gained the specification list
 (`ProductAttributeValue`). One query, and it stays one however many specifications a product
