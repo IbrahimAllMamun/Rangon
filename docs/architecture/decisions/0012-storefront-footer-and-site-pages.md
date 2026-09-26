@@ -93,5 +93,5 @@ full address under the logo. Four decisions were taken with the owner (2026-09-2
   build: showing stale legal text is worse than showing none.
 - Brand marks are inlined SVG paths from Simple Icons (CC0), not a runtime dependency. LinkedIn
   withdrew its mark from Simple Icons, so LinkedIn uses Lucide's glyph.
-- A new permission code reaches an existing database's roles only when `sync_permissions()` runs
-  (see the note in [permissions.md](../permissions.md)).
+- A new permission code reaches an existing database's roles when `sync_permissions()` runs. Since
+  2026-09-26, `migrate` runs it ([permissions.md](../permissions.md)), so deploying is enough.

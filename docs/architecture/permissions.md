@@ -1,13 +1,15 @@
 # Roles and Permissions
 
 Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` and synced into the
-`Permission` table by `accounts.services.sync_permissions()` (idempotent, run by `seed_demo` and by
-the test fixtures).
+`Permission` table by `accounts.services.sync_permissions()`. It is idempotent and runs on every
+`migrate`, through a `post_migrate` receiver in `accounts.apps.AccountsConfig`. That includes a
+migrate with nothing to apply, so adding a code here and deploying is enough: the deploy's migrate
+job grants it to the roles in the matrix below. `seed_demo` and the test fixtures also call it.
 
-> **`migrate` does not run it** — this line used to say it did, and nothing hooks `post_migrate`.
-> A new code (such as `content.site_manage`, 2026-09-26) reaches an existing database's roles only
-> when `seed_demo` or `sync_permissions()` runs. Owners are unaffected: they hold every permission
-> implicitly.
+The receiver skips two cases. It skips when accounts is not migrated (`migrate accounts zero`),
+because the tables are gone. It also skips a rollback, because the schema may be behind the code;
+the next forward migrate syncs. Codes removed from `PERMISSIONS` are deleted, and so is every grant
+of them.
 
 ## Permission codes
 
