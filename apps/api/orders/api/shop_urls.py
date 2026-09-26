@@ -1,7 +1,7 @@
 from django.urls import path
 
 from catalog.api.feed_views import ProductFeedCSVView, ProductFeedXMLView
-from content.api.views import ShopNavigationView
+from content.api.views import ShopNavigationView, ShopPageListView, ShopPageView, ShopSiteView
 from orders.api.shop_views import (
     AbandonedCheckoutCaptureView,
     AccountAddressView,
@@ -35,6 +35,9 @@ urlpatterns = [
     path("feed.xml", ProductFeedXMLView.as_view(), name="shop-product-feed-xml"),
     path("feed.csv", ProductFeedCSVView.as_view(), name="shop-product-feed-csv"),
     path("navigation/", ShopNavigationView.as_view(), name="shop-navigation"),
+    path("site/", ShopSiteView.as_view(), name="shop-site"),
+    path("pages/", ShopPageListView.as_view(), name="shop-pages"),
+    path("pages/<slug:slug>/", ShopPageView.as_view(), name="shop-page"),
     path("brands/", ShopBrandView.as_view(), name="shop-brands"),
     path("brands/<slug:slug>/", ShopBrandView.as_view(), name="shop-brand-detail"),
     path("categories/", ShopCategoryView.as_view(), name="shop-categories"),

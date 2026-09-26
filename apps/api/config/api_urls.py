@@ -28,7 +28,13 @@ from catalog.api.views import (
     ProductVariantViewSet,
     ProductViewSet,
 )
-from content.api.views import NavigationItemViewSet, StorefrontBannerViewSet
+from content.api.views import (
+    NavigationItemViewSet,
+    SitePageViewSet,
+    SiteSettingsView,
+    SocialLinkViewSet,
+    StorefrontBannerViewSet,
+)
 from customers.api.views import CustomerViewSet
 from engagement.api.views import ReviewModerationViewSet
 from finance.api.views import (
@@ -116,10 +122,13 @@ router.register("coupons", CouponViewSet, basename="coupon")
 router.register("reviews", ReviewModerationViewSet, basename="review-moderation")
 router.register("navigation-items", NavigationItemViewSet, basename="navigationitem")
 router.register("storefront-banners", StorefrontBannerViewSet, basename="storefrontbanner")
+router.register("social-links", SocialLinkViewSet, basename="sociallink")
+router.register("site-pages", SitePageViewSet, basename="sitepage")
 
 urlpatterns = [
     path("auth/", include("accounts.api.urls")),
     path("organization/", OrganizationView.as_view(), name="organization"),
+    path("site-settings/", SiteSettingsView.as_view(), name="site-settings"),
     path("organization/tax/", OrganizationTaxView.as_view(), name="organization-tax"),
     path("party-ledger/", PartyLedgerView.as_view(), name="party-ledger"),
     path("shop/", include("orders.api.shop_urls")),

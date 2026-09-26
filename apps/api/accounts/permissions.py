@@ -55,6 +55,7 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "content.review_moderate": ("content", "Moderate reviews"),
     "content.coupons_manage": ("content", "Manage coupons"),
     "content.navigation_manage": ("content", "Manage navigation and banners"),
+    "content.site_manage": ("content", "Manage the footer, social links and site pages"),
     "audit.view": ("audit", "View the audit log"),
 }
 
@@ -100,6 +101,9 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "content.review_moderate",
         "content.coupons_manage",
         "content.navigation_manage",
+        # Privacy and terms are legal copy, but the owner's decision
+        # (2026-09-26) is that managers edit them alongside the navbar.
+        "content.site_manage",
     ],
     RoleCode.CASHIER: [
         "products.view",
