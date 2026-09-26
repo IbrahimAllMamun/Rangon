@@ -18,6 +18,9 @@ Distilled from [rangon_fashion_build_plan.md](../rangon_fashion_build_plan.md). 
   COD, guest checkout, customer accounts, order tracking, address book, return request, policy pages,
   responsive mobile-first UI, SEO (metadata, sitemap, structured data).
 - V1.1: online payment gateway, coupons ✅(built), wishlist ✅, reviews ✅, email notifications.
+- Added 2026-09-26 (owner's request) ✅: a footer the shop edits itself — the full address under the
+  logo, contact details and opening hours, social profiles with a show/hide choice and an order,
+  and link columns — and About, Contact (with a Google map) and policy pages written in the admin.
 - V2: loyalty, recommendations, marketplace integrations.
 
 ### Back office

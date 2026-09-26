@@ -45,10 +45,12 @@ Nothing here is newer than the log; the list of things still unproven is in
 [roadmap.md](roadmap.md#still-unproven).
 
 ```text
-pytest ................................ 1097 passed                        2026-09-18
-ruff 0.8.4 check + format --check ..... clean, 201 files                   2026-09-18
-frontend tsc --noEmit / next lint ..... clean                              2026-09-18
-vitest ................................ 260 passed                         2026-09-18
+pytest ................................ 1446 passed                        2026-09-26
+ruff 0.8.4 check + format --check ..... clean, 230 files                   2026-09-26
+mypy .................................. clean, 158 files                   2026-09-26
+frontend tsc --noEmit / next lint ..... clean                              2026-09-26
+vitest ................................ 362 passed                         2026-09-26
+footer & site pages, in a browser ..... admin + storefront, 1280 and 375   2026-09-26
 storefront VAT notes, in a browser .... 8 of 8 checks, 0 CSP refusals      2026-09-18
 query budgets ......................... 20/20 pass                         2026-09-14
 seed_demo --reset ..................... 12 products, 72 variants           2026-09-14
@@ -73,13 +75,19 @@ Two real bugs were found early by the backend tests and fixed:
 2. A checked-out cart token **collided with its unique index** when the same browser started a second
    cart.
 
-The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D87. **Two are open, and
-neither of them is a money or data-integrity bug:**
+The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D104. **Three are open,
+and none of them is a money or data-integrity bug:**
 
 | # | Defect |
 |---|---|
 | D7 | Playwright cannot run in the Alpine *dev container*. The defect is that image alone — a glibc Chromium runs the suite |
 | D9 | The seed has no product images, so every card shows a placeholder |
+| D104 | `seed_demo` with a small `--orders` can roll back: its demo returns pick delivered orders that the backdating has moved outside the 14-day window. The default 40 orders is fine |
+
+Closed on 2026-09-26: **D103** — `migrate` had never granted a new permission code to any role,
+although `permissions.md` said it did, so a production database that was migrated but not reseeded
+would never have given managers `content.site_manage`. A `post_migrate` receiver syncs on every
+migrate now (#61). Found while building the footer and site pages (phase 40, #60).
 
 Closed on 2026-09-21: **D6** — mypy was 271 errors in 41 files, not the 98 this table used to quote,
 because the CI step ran with `|| echo` and had never blocked. It is 0 errors now and the step
@@ -187,6 +195,7 @@ API has a screen now except the customer-account endpoints, which are without on
 | Quotation and the cheque register | **Dropped 2026-09-09, owner's decision.** Both are wholesale instruments and this shop sells retail. A cheque is still recordable as a payment into a `BANK` account | [roadmap.md](roadmap.md) phase 39 |
 | Customer accounts on the storefront | **Withdrawn 2026-09-15, owner's decision.** No shopper could create an account, so the wishlist, the account pages and the review form were gated on a login nobody could obtain. The endpoints are kept, unadvertised | [api/endpoints.md](api/endpoints.md#the-customer-account-endpoints-have-no-caller-deliberately) |
 | ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
+| Images inside site pages | About, Contact and the policies are text: headings, lists, emphasis and links. The editor offers only what the server's sanitiser keeps, and an image would also need an upload path | `content/rich_text.py`, [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md) |
 
 ### The UI dead ends
 
@@ -203,8 +212,9 @@ and does nothing does not.** "The API is tested" and "the feature works" are dif
 
 ## 6. Decisions someone must confirm
 
-[business-rules.md](business-rules.md) carries **18** `DECISION REQUIRED` markers. A sensible default
-is implemented so the system runs; each one is a business call, not a technical one. The headline six
+[business-rules.md](business-rules.md) carries **25** `DECISION REQUIRED` markers (re-counted
+2026-09-26; this said 18). A sensible default is implemented so the system runs; each one is a
+business call, not a technical one. The headline six
 (the last of which is not a marker but blocks prepaid orders and shipping integration):
 
 1. **VAT: inclusive or exclusive, and at what rate.** Currently exclusive at 0%, which is a
@@ -218,7 +228,7 @@ is implemented so the system runs; each one is a business call, not a technical 
 5. Shipping refunded on a change-of-mind return — assumed no.
 6. Which payment gateway and which courier.
 
-The other thirteen markers are narrower but still open:
+The other twenty markers are narrower but still open. Among them:
 
 - **Stock and orders:** stock is deducted at `PACKED`, transfers have no formal in-transit location,
   there is no restocking fee, and one coupon per order.
@@ -228,6 +238,11 @@ The other thirteen markers are narrower but still open:
 - **Paying suppliers:** no overpaying an order, no paying a draft or cancelled one, no advance
   without a purchase order from that screen, and a credit from returning goods on a paid order is
   settled with the supplier off-system.
+- **Staff and audit:** the staff list spans branches, a non-owner with no branch sees every branch,
+  only owners see personal details, and organisation-wide audit entries are visible to every reader.
+- **Storefront content:** the privacy policy and terms can be unpublished like any other page
+  (assumed yes, §8b.3). Before launch the owner still has to sign off the policy text itself — the
+  seeded copy states the software's defaults, not the shop's own terms.
 - **Settled by construction:** selling on credit (D-A) no longer blocks any code, and the cash book
   was built on a flat account list (D-B).
 
@@ -241,9 +256,10 @@ each lives in, is in [.claude/open-questions.md](../.claude/open-questions.md).
 | What are the rules of this codebase? | `CLAUDE.md` |
 | How does stock actually work? | `docs/architecture/inventory.md` |
 | How does money actually work? | `docs/architecture/finance.md` |
-| Why is it built this way? | `docs/architecture/decisions/` (11 ADRs) |
+| Why is it built this way? | `docs/architecture/decisions/` (12 ADRs) |
 | What does the business do in case X? | `docs/business-rules.md` |
 | What endpoints exist? | `docs/api/endpoints.md` + `/api/docs` |
+| How are the navbar, footer and About/Contact/policy pages edited? | Admin → Storefront → Navigation, and → Footer & pages; `docs/architecture/navigation.md` (§10 for the footer) and ADR-0012 |
 | It is 2 a.m. and it is broken | `docs/operations/disaster-recovery.md` |
 | Can we launch? | `docs/operations/go-live-checklist.md` |
 

@@ -11,21 +11,17 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 
 Last updated: **2026-09-26**.
 
-**The storefront footer and site pages are now edited in the admin** (Storefront → Footer & pages,
-[ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)). The footer shows the
-full address under the logo, contact details, opening hours, the shop's social profiles in its chosen
-order, and up to four link columns (a "Top categories" entry follows the catalogue by itself). About,
-Contact and the four policies are written in a rich-text editor (TipTap), sanitised server-side with
-`nh3`; the shop can add its own pages under `/pages/`. The Contact page embeds Google Maps (CSP
-`frame-src` allows that origin only). A migration writes today's footer and page copy, so nothing
-changes visually until someone edits it. Verified: pytest 1441 passed; vitest 362; tsc and lint
-clean; and a browser pass as owner — social links saved, normalised and reordered by keyboard,
-map generated and previewed, a policy edited in the editor and seen on the storefront, footer checked
-at 1280 and 375. Two bugs were found and fixed in that browser pass, neither visible to a type check:
-a constant exported from a `"use client"` module arrived in a server page as a client reference, and
-the editor waited on toolbar state that TipTap only reports after the editor has mounted. Not yet
-verified: tag-based revalidation end to end (the preview had no `WEB_REVALIDATE_URL`; the signals
-and allow-list are unit-tested).
+**The storefront footer and site pages are now edited in the admin** (phase 40, merged as #60;
+Storefront → Footer & pages, [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)).
+The footer shows the full address under the logo, contact details, opening hours, the shop's social
+profiles in its chosen order, and up to four link columns (a "Top categories" entry follows the
+catalogue by itself). About, Contact and the four policies are written in a rich-text editor
+(TipTap), sanitised server-side with `nh3`; the shop can add its own pages under `/pages/`. The
+Contact page embeds Google Maps (CSP `frame-src` allows that origin only). A migration writes today's
+footer and page copy, so nothing changes visually until someone edits it. Building it found
+[D103](#known-defects) — **`migrate` had never granted a new permission code to any role**, so a
+production database would never have given managers the new one — fixed the same day in #61.
+Details in [§ Footer, social links, map and site pages](#footer-social-links-map-and-site-pages-2026-09-26).
 
 **[D95–D102](#known-defects): walking two screens nobody had used, and measuring five more security
 controls, found eight defects — three of them the kind a customer or a till would notice.** An
@@ -410,6 +406,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 37  | Party ledger — receivable / payable  | ✅      | ✅       | **F3 shipped 2026-08-31.** `finance.selectors.party_ledger`, `GET /party-ledger/` and `/admin/finance/parties`: both sides derived from orders and purchase orders, ageing buckets, a net position, and every party expandable to the documents behind its balance. **No balance column on `Customer` or `Supplier`** — a stored balance drifts from the documents it summarises. Needed no answer to D-A: a credit sale is already an order with a balance |
 | 38  | Business report → net profit         | ✅      | ✅       | **F4 shipped 2026-08-31**, unblocked by settling VAT. `reports.services.business_summary`, `GET /reports/business-summary/` and `/admin/reports/business`: revenue net of VAT, less refunds, less COGS plus the cost recovered from restocked returns, less expenses, to net profit — with a CSV of the statement |
 | 39  | Trade documents                       | ✅      | ✅       | **Damage, stock count and transfer shipped 2026-08-27.** `/admin/inventory` gains a write-off panel and a Branch column; `/admin/inventory/transfers` and `/admin/inventory/counts` are new, with a count sheet that shows variance live. The count was **not** the form work this row promised — `counted_quantity` had no write path at all, so `apply` was a no-op; `record/` and `cancel/` were added and `apply/` now refuses an empty or already-applied sheet. Barcode label sheets shipped 2026-09-04 (`/admin/labels`), as the phase 24 row says. **Quotation and the cheque register were dropped 2026-09-09 on the owner's decision** — both are wholesale instruments, and this shop sells retail: a quotation is how you sell to a business customer, and a cheque register only earns its keep when suppliers are paid by cheque. A cheque can still be recorded today as a payment into a `BANK` account; what is declined is the Pending → Deposited → Cleared / Bounced lifecycle around it. Revisit if the trade changes |
+| 40  | Footer & site pages                   | ✅      | ✅       | **Shipped 2026-09-26 (#60).** `/admin/footer`: the footer's text, the storefront's address, phone, email and opening hours (blank falls back to the organisation's), a Google map, eleven social platforms with a show/hide tick and a custom order, up to four link columns (pages, categories, any address, or a self-updating "Top categories"), and About, Contact, the four policies and the shop's own `/pages/*` in a TipTap editor, sanitised server-side with `nh3`. The storefront footer, About, Contact and the policies read from the API with static fallbacks. [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md) · [navigation.md §10](architecture/navigation.md#10-footer). Found [D103](#known-defects) on the way |
 
 Phases 35–39 come from a signed-in, read-only walk of all 56 screens of the **Bseba ERP**
 (`erp.bseba.com`, Dostishop tenant) on 2026-08-21 — written up with a have-it / build-it / decline-it
@@ -433,6 +430,66 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Footer, social links, map and site pages, 2026-09-26
+
+Asked for: a dedicated admin page to customise the footer — edit the About, privacy and terms copy,
+a Contact page with a Google map, every social network with a keep/hide tick and a custom order,
+more useful links, and the full address under the logo. The owner settled four questions first:
+the address is the **storefront's** (blank falls back to the organisation's), official brand marks
+may be used, **owners and managers** edit the pages, and pages use a **rich-text editor**. Design and
+rules: [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md),
+[navigation.md §10](architecture/navigation.md#10-footer),
+[business-rules §8b](business-rules.md#8b-the-footer-and-site-pages).
+
+**What shipped (#60).** `SiteSettings`, `SocialLink` and `SitePage` in the `content` app; the
+footer's columns as `NavigationItem` rows under `placement=FOOTER`; `GET /shop/site/` and
+`/shop/pages/`; `/admin/footer` with four tabs and a TipTap page editor; the storefront footer,
+About, Contact, the policies and `/pages/<slug>` reading from the API; CSP `frame-src
+https://www.google.com`. Page bodies are sanitised on write with `nh3`. New permission
+`content.site_manage`.
+
+**The browser found four bugs the gates could not.** Driven as the owner against a seeded API, with
+`next dev` on the host:
+- a constant exported from a `"use client"` module reached the server page as a client
+  *reference*, so `/admin/footer` answered 500 — `tsc` was clean;
+- the page editor never left its loading skeleton: TipTap's `useEditorState` answers `null` until
+  the editor's first transaction, and the component waited on it before mounting the editor, so
+  that transaction could never happen;
+- every up/down move dropped keyboard focus, because the buttons were disabled while the request
+  ran and a disabled button loses focus; and a helper component declared inside the render
+  remounted the buttons on every render;
+- a new footer link saved (201) and did not appear — [D40](#known-defects) again, so the column
+  editor uses `refreshAfterWrite()`.
+
+All four were fixed before merge; none reached `main`, so none has a defect number.
+
+**And one that had been on `main` all along: [D103](#known-defects).** Adding the permission showed
+that `sync_permissions()` never ran on `migrate`, whatever `permissions.md` said — so managers on a
+migrated-but-not-reseeded database would never have been granted it. Fixed the same day (#61) with a
+`post_migrate` receiver. Starting the preview also found [D104](#known-defects): `seed_demo --orders 5`
+rolls back in `_returns`. Open.
+
+```text
+backend  tests/api/test_site_content.py              53 new
+         tests/unit/test_site_content_rules.py       62 new
+         tests/api/test_navigation.py                1 changed (footer is columns now)
+         full suite, main after #60 and #61          1446 passed
+web      site-footer.test.tsx                        9 new
+         lib/site/format.test.ts                     17 new
+         full vitest (TZ=UTC)                        362 passed
+gates    ruff (230 files), ruff format, mypy (158), makemigrations --check, tsc, next lint: clean
+browser  social links saved, normalised and reordered by keyboard; map generated and previewed
+         (no CSP refusals, admin and storefront); Privacy edited in the editor and read on
+         /policies/privacy; a javascript: link refused; a footer link added and moved;
+         footer at 1280 and 375 (no horizontal scroll, 44px social targets)
+```
+
+**Not proven:** the storefront's cache refresh on save. The preview had no `WEB_REVALIDATE_URL`,
+so the round trip was never exercised; see [§ Still unproven](#still-unproven).
+
+Deploying needs `manage.py migrate` (`content.0002`, `content.0003`); since #61 that also grants the
+new permission.
 
 ### Staff personal details, and order search on the screen, 2026-09-25
 
@@ -2388,8 +2445,10 @@ cancel, partial receive and supplier create/edit (`/admin/purchases/new`, `/admi
 8. **An SMS account.** The layer itself shipped 2026-09-10 — provider interface, message log, segment counting, allowlist, and the three messages that earn their cost (confirmed, shipped, refunded). What is left is not code: choose a Bangladeshi aggregator, get a masked sender ID approved (days to weeks), and set `SMS_PROVIDER`. Writing the provider class is an afternoon. [operations/sms.md](operations/sms.md) says what to ask them for.
 9. **Favicon raster + OG image** from the official symbol (the SVG favicon is wired), and real
    product photography for the seed (D9).
-10. **Eleven owner decisions** are still open — `docs/business-rules.md` carries 11 `DECISION REQUIRED`
-    markers — plus the payment-gateway and courier choices. **VAT (D-C) is now settleable in the app**
+10. **Owner decisions are still open** — `docs/business-rules.md` carries **25** `DECISION REQUIRED`
+    markers (re-counted 2026-09-26; this line said 11 long after it was true, and the newest is
+    whether the privacy policy and terms may be unpublished, §8b.3) — plus the payment-gateway and
+    courier choices. **VAT (D-C) is now settleable in the app**
     at `/admin/settings`, and both treatments are implemented, audited and guarded; the default is
     still exclusive at 0%, which is a placeholder rather than an answer, so it must still be decided
     before the first real sale. **D-A (credit sales) no longer blocks anything** — phase 37 is built
