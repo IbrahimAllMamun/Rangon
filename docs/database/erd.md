@@ -69,7 +69,18 @@ erDiagram
     CUSTOMER ||--o{ REVIEW : writes
     USER ||--o{ AUDIT_LOG : performs
     USER ||--o{ NOTIFICATION : receives
+
+    NAVIGATION_ITEM ||--o{ NAVIGATION_ITEM : parent_of
+    CATEGORY ||--o{ NAVIGATION_ITEM : linked_by
+    SITE_PAGE ||--o{ NAVIGATION_ITEM : linked_by
+    USER ||--o{ SITE_PAGE : last_edited
+    USER ||--o{ SITE_SETTINGS : last_edited
 ```
+
+`SITE_SETTINGS` is a single row and `SOCIAL_LINK` one row per platform; neither references anything
+else. `STOREFRONT_BANNER` stands alone too. In the footer, a `NAVIGATION_ITEM` of type `GROUP` is a
+column and its children are the links in it
+([navigation.md §10](../architecture/navigation.md#10-footer)).
 
 ## Table count by app
 
@@ -86,3 +97,4 @@ erDiagram
 | promotions | `coupon`, `couponredemption` |
 | engagement | `wishlist`, `wishlistitem`, `review` |
 | notifications | `notification` |
+| content | `navigationitem`, `storefrontbanner`, `sitesettings`, `sociallink`, `sitepage` |

@@ -15,6 +15,10 @@ Run these manually against a seeded environment before each release
 | O6 | View gross profit | uses frozen `unit_cost`; changing a price now does not change yesterday's profit |
 | O7 | Create a cashier, then deactivate them | new cashier can log in; deactivated one cannot, immediately |
 | O8 | Try to delete a paid order | refused; only cancel/refund is offered |
+| O9 | In Footer & pages, tick Facebook and WhatsApp with addresses, move WhatsApp first, save | the storefront footer and the Contact page show WhatsApp then Facebook; the floating chat button opens that number; an address on another site is refused |
+| O10 | Set the shop address and paste Google's "Embed a map" code | the address sits in full under the footer logo; the Contact page shows the map and an "Open in Google Maps" link |
+| O11 | Edit the privacy policy with a heading, a list and a link, then unpublish it | the text reads the same on `/policies/privacy`; once unpublished that page is not found and its footer link is gone |
+| O12 | Add a column and a link to the footer as a manager, then try as a cashier | the manager's change appears on the storefront; the cashier cannot open Footer & pages |
 
 ## Cashier
 
