@@ -30,10 +30,10 @@ consciously waived in writing.
       Footer & pages → Contact & map), and the Contact page map points at the shop
 - [ ] Social profiles filled in and ticked, in the order wanted; WhatsApp number set if the floating
       chat button should appear
-- [ ] Roles synced after deploying, so managers hold `content.site_manage` —
-      `python manage.py shell -c "from accounts.services import sync_permissions; sync_permissions()"`
-      (`migrate` alone does not grant new permission codes, and `seed_demo` writes demo data —
-      docs/architecture/permissions.md)
+- [ ] Managers hold `content.site_manage` (Admin → Staff, role matrix). `migrate` grants new
+      permission codes, so this is only missing if the deploy skipped its migrate job; running
+      `python manage.py migrate` fixes it. Do not use `seed_demo` for this, because it writes demo
+      data (docs/architecture/permissions.md)
 - [ ] Currency, phone format and address format verified for Bangladesh
 
 ## Brand
