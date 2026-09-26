@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 const SECRET = process.env.REVALIDATE_SECRET ?? "";
 
 /** Only tags the storefront actually uses; an arbitrary tag is a typo, not a request. */
-const ALLOWED_TAGS = new Set(["navigation", "categories", "home", "products"]);
+const ALLOWED_TAGS = new Set(["navigation", "categories", "home", "products", "site", "pages"]);
 
 /**
  * One product page, by slug.
@@ -33,8 +33,14 @@ const ALLOWED_TAGS = new Set(["navigation", "categories", "home", "products"]);
  */
 const PRODUCT_TAG = /^product:[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * One site page (About, a policy, a page the shop added), bounded the same way.
+ * Django's `slugify` keeps underscores, so they are allowed here too.
+ */
+const PAGE_TAG = /^page:[a-z0-9_]+(?:-[a-z0-9_]+)*$/;
+
 function isAllowed(tag: string): boolean {
-  return ALLOWED_TAGS.has(tag) || PRODUCT_TAG.test(tag);
+  return ALLOWED_TAGS.has(tag) || PRODUCT_TAG.test(tag) || PAGE_TAG.test(tag);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

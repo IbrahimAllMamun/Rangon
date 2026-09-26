@@ -162,19 +162,26 @@ class TestOverrides:
         assert payload["items"][0]["children"] == []
 
     def test_footer_placement_is_separate_from_the_header(self, api):
+        """The footer is columns of links (ADR-0012); neither leaks into the other."""
         NavigationItem.objects.create(
             type=NavigationItemType.LINK, label="Header link", url="/shop"
+        )
+        help_column = NavigationItem.objects.get(
+            placement=Placement.FOOTER, type=NavigationItemType.GROUP, label="Help"
         )
         NavigationItem.objects.create(
             type=NavigationItemType.LINK,
             label="Size guide",
-            url="/policies/sizing",
+            url="/pages/size-guide",
             placement=Placement.FOOTER,
+            parent=help_column,
+            position=99,
         )
 
         payload = api.get(URL).data
         assert _labels(payload) == ["Header link"]
-        assert [item["label"] for item in payload["footer"]] == ["Size guide"]
+        footer = {column["label"]: column for column in payload["footer"]}
+        assert "Size guide" in [link["label"] for link in footer["Help"]["children"]]
 
 
 class TestAnnouncement:

@@ -23,7 +23,17 @@ consciously waived in writing.
 - [ ] VAT decision made and applied (see `docs/requirements.md` ❓1) **before** the first real sale
 - [ ] Return window, restocking fee, discount-approval threshold and reservation expiry confirmed
 - [ ] Branch details, register names and receipt footer text set
-- [ ] Policy pages written: shipping, returns, privacy, terms
+- [ ] Policy pages written and signed off by the owner: shipping, returns, privacy, terms
+      (Admin → Footer & pages → Pages; the seeded copy states the software's defaults, not the shop's
+      own terms)
+- [ ] Footer checked: the storefront address, phone, email and opening hours are right (Admin →
+      Footer & pages → Contact & map), and the Contact page map points at the shop
+- [ ] Social profiles filled in and ticked, in the order wanted; WhatsApp number set if the floating
+      chat button should appear
+- [ ] Roles synced after deploying, so managers hold `content.site_manage` —
+      `python manage.py shell -c "from accounts.services import sync_permissions; sync_permissions()"`
+      (`migrate` alone does not grant new permission codes, and `seed_demo` writes demo data —
+      docs/architecture/permissions.md)
 - [ ] Currency, phone format and address format verified for Bangladesh
 
 ## Brand

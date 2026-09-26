@@ -22,7 +22,7 @@ interface CategoryOption {
  */
 export default async function NavigationPage() {
   const [items, banners, categories] = await Promise.all([
-    apiServer<NavigationItemRow[]>("/navigation-items/").catch(() => null),
+    apiServer<NavigationItemRow[]>("/navigation-items/?placement=HEADER").catch(() => null),
     apiServer<BannerRow[]>("/storefront-banners/").catch(() => null),
     apiServer<CategoryOption[]>("/categories/").catch(() => []),
   ]);
@@ -46,7 +46,7 @@ export default async function NavigationPage() {
     <>
       <PageHeader
         title="Navigation"
-        description="Overrides for the storefront navbar, plus the announcement bar and homepage hero. An empty navbar section means the category tree drives it — the documented default."
+        description="Overrides for the storefront navbar, plus the announcement bar and homepage hero. An empty navbar section means the category tree drives it — the documented default. The footer has its own screen: Footer & pages."
       />
 
       <div className="space-y-6">

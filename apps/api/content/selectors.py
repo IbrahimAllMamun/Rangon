@@ -20,7 +20,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from catalog.models import Category
-from content.models import NavigationItem, NavigationItemType, NavigationLayout, Placement
+from content.models import (
+    NavigationItem,
+    NavigationItemType,
+    NavigationLayout,
+    Placement,
+    SitePage,
+    SiteSettings,
+    SocialLink,
+)
 
 #: Root + child + grandchild.  The catalogue is two deep today, so this yields
 #: dropdowns; a third level starts producing mega menus with no frontend change
@@ -160,3 +168,107 @@ def navigation(*, placement: str = Placement.HEADER, now=None) -> list[NavNode]:
     if override:
         return override
     return category_navigation() if placement == Placement.HEADER else []
+
+
+# --- footer & site -----------------------------------------------------------
+
+#: How many categories a "Top categories" footer entry expands to.  A footer
+#: column is a short list; the navbar is where the whole tree lives.
+FOOTER_CATEGORY_LIMIT = 8
+
+
+def site_settings() -> SiteSettings:
+    """The one settings row, created on first read if a migration never made it."""
+    settings, _ = SiteSettings.objects.get_or_create(key="default")
+    return settings
+
+
+def _top_categories() -> list[NavNode]:
+    roots = Category.objects.filter(
+        parent__isnull=True, is_active=True, show_in_navigation=True
+    ).order_by("position", "name")[:FOOTER_CATEGORY_LIMIT]
+    return [
+        NavNode(id=str(root.pk), label=root.name, url=category_url(root.slug)) for root in roots
+    ]
+
+
+def _footer_links(item: NavigationItem, top_categories: list[NavNode]) -> list[NavNode]:
+    """What one footer entry renders as: zero, one or (for a category list) several links."""
+    kind = item.type
+    if kind == NavigationItemType.CATEGORY_LIST:
+        return top_categories
+    if kind == NavigationItemType.CATEGORY:
+        if item.category is None or not item.category.is_active:
+            return []
+        url = category_url(category_path(item.category))
+    elif kind == NavigationItemType.PAGE:
+        # An unpublished page 404s, so a link to it would too.
+        if item.page is None or not item.page.is_published:
+            return []
+        url = item.page.path
+    elif kind in (NavigationItemType.LINK, NavigationItemType.PROMO) and item.url:
+        url = item.url
+    else:
+        return []
+    return [NavNode(id=str(item.pk), label=item.display_label, url=url, type=kind)]
+
+
+def footer_columns(*, now=None) -> list[NavNode]:
+    """The footer's link columns: live `GROUP` rows, each with its live links.
+
+    Two queries however long the footer gets -- the rows, and the category
+    list only when some column asks for it.  A column whose links all resolve
+    to nothing is left out: a heading over an empty list is noise.
+    """
+    items = list(
+        NavigationItem.objects.live(now=now)
+        .filter(placement=Placement.FOOTER)
+        .select_related("category__parent__parent", "page")
+        .order_by("position", "label")
+    )
+    top_categories = (
+        _top_categories()
+        if any(item.type == NavigationItemType.CATEGORY_LIST for item in items)
+        else []
+    )
+
+    children: dict[Any, list[NavigationItem]] = {}
+    for item in items:
+        if item.parent_id is not None:
+            children.setdefault(item.parent_id, []).append(item)
+
+    columns: list[NavNode] = []
+    for item in items:
+        if item.parent_id is not None or item.type != NavigationItemType.GROUP:
+            continue
+        links = [
+            link
+            for child in children.get(item.pk, [])
+            for link in _footer_links(child, top_categories)
+        ]
+        if links:
+            columns.append(
+                NavNode(
+                    id=str(item.pk),
+                    label=item.label,
+                    url="",
+                    type=NavigationItemType.GROUP,
+                    children=links,
+                )
+            )
+    return columns
+
+
+def live_social_links() -> list[SocialLink]:
+    """Visible profiles with a URL, in the shop's chosen order."""
+    return list(
+        SocialLink.objects.filter(is_visible=True).exclude(url="").order_by("position", "platform")
+    )
+
+
+def published_page(slug: str) -> SitePage | None:
+    return SitePage.objects.filter(slug=slug, is_published=True).first()
+
+
+def published_pages() -> list[SitePage]:
+    return list(SitePage.objects.filter(is_published=True).order_by("-is_system", "title"))

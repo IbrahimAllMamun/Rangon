@@ -41,6 +41,10 @@ function policy(nonce: string): string {
     // The browser only ever talks to its own origin: /api/proxy/* forwards to
     // the API over the private network (ADR-0005).
     `connect-src 'self'${DEV ? " ws: wss:" : ""}`,
+    // The Contact page's map is Google's embed and the only frame we show.
+    // Must match `MAP_EMBED_ORIGIN` in apps/api/content/validators.py, which is
+    // the only origin a map URL may be saved with (ADR-0012).
+    "frame-src https://www.google.com",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",

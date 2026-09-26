@@ -253,6 +253,16 @@ allowed to render them.
 | Admin sidebar, POS header (near-black) | `full-on-dark`     | `logo_full_light.svg`     |
 | Browser tab, app icon                  | `symbol`           | `logo.svg`                |
 
+### Other brands' marks
+
+Icons are Lucide, with **one** exception: a social link shows the platform's own mark
+(`components/commerce/social-icons.tsx`). Those are logos, not UI icons, and Lucide has none for
+TikTok, WhatsApp, Pinterest, Messenger, Threads or Telegram. They are the official paths from Simple
+Icons (CC0), inlined, drawn in `currentColor` so they take the surface's neutral tone — never recoloured
+to brand red, never used for anything but a link to that platform. LinkedIn uses Lucide's glyph
+because LinkedIn withdrew its mark from Simple Icons. Owner decision, 2026-09-26
+([ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)).
+
 Naming reads as *the colour of the wordmark*, so `_dark` goes on white and `_light` goes on black.
 `Logo` takes a **height** and derives the width from the asset's own aspect ratio, so the mark cannot
 be stretched. Clear space ≥ 0.25 × symbol height. Never rotate, recolour, shadow, gradient, place on

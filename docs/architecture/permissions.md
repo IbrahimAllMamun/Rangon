@@ -1,8 +1,13 @@
 # Roles and Permissions
 
 Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` and synced into the
-`Permission` table by `accounts.services.sync_permissions()` (idempotent, run by `migrate` and by
-`seed_demo`).
+`Permission` table by `accounts.services.sync_permissions()` (idempotent, run by `seed_demo` and by
+the test fixtures).
+
+> **`migrate` does not run it** — this line used to say it did, and nothing hooks `post_migrate`.
+> A new code (such as `content.site_manage`, 2026-09-26) reaches an existing database's roles only
+> when `seed_demo` or `sync_permissions()` runs. Owners are unaffected: they hold every permission
+> implicitly.
 
 ## Permission codes
 
@@ -18,7 +23,7 @@ Permission codes are plain strings owned by `accounts.permissions.PERMISSIONS` a
 | Reports | `reports.view` `reports.financial` `reports.export` |
 | Users | `users.view` `users.manage` |
 | Settings | `settings.view` `settings.manage` |
-| Content | `content.review_moderate` `content.coupons_manage` |
+| Content | `content.review_moderate` `content.coupons_manage` `content.navigation_manage` `content.site_manage` |
 | Audit | `audit.view` |
 
 ## Default role matrix
@@ -67,7 +72,15 @@ owner holds every permission whatever its row lists (`holds_every_permission` on
 | settings.manage | ✔ | ✔ | — | — | — | — | — |
 | content.review_moderate | ✔ | ✔ | ✔ | — | — | — | — |
 | content.coupons_manage | ✔ | ✔ | ✔ | — | — | — | — |
+| content.navigation_manage | ✔ | ✔ | ✔ | — | — | — | — |
+| content.site_manage | ✔ | ✔ | ✔ | — | — | — | — |
 | audit.view | ✔ | ✔ | — | — | — | ✔ | — |
+
+`content.site_manage` covers the footer's text and contact details, the social links, and the site
+pages — About, Contact, and the shipping, returns, privacy and terms policies. The owner decided on
+2026-09-26 that managers edit the legal pages alongside the navbar. The footer's link *columns* are
+navigation items, so they stay under `content.navigation_manage`. Reading any of it is
+`settings.view`.
 
 `CUSTOMER` holds no staff permission. Customer-facing endpoints authorise on ownership
 (`obj.customer.user == request.user`), not on permission codes.
