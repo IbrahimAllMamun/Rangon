@@ -131,7 +131,13 @@ export interface ShopProduct {
 
 /* ------------------------------------------------------- navigation ------ */
 
-export type NavigationItemType = "CATEGORY" | "LINK" | "PROMO";
+export type NavigationItemType =
+  | "CATEGORY"
+  | "LINK"
+  | "PROMO"
+  | "PAGE"
+  | "GROUP"
+  | "CATEGORY_LIST";
 export type NavigationLayout = "AUTO" | "DROPDOWN" | "MEGA";
 
 /**
@@ -165,7 +171,72 @@ export interface StorefrontBanner {
 export interface NavigationPayload {
   announcement: StorefrontBanner | null;
   items: NavigationNode[];
+  /** Footer columns (`GROUP` nodes with their links); `/shop/site/` is the full footer. */
   footer: NavigationNode[];
+}
+
+/* ------------------------------------------------------------ footer ------ */
+
+export interface SiteLink {
+  label: string;
+  url: string;
+  /** Absolute http(s) — opens in a new tab. */
+  external: boolean;
+}
+
+export interface SiteColumn {
+  id: string;
+  label: string;
+  links: SiteLink[];
+}
+
+export interface SiteSocialLink {
+  platform: string;
+  label: string;
+  url: string;
+}
+
+export interface OpeningHours {
+  days: string;
+  hours: string;
+}
+
+/**
+ * `GET /shop/site/` — the whole footer, resolved server-side (ADR-0012).
+ * Blank storefront contact fields have already fallen back to the
+ * organisation's; the frontend never picks between the two.
+ */
+export interface SitePayload {
+  brand: {
+    name: string;
+    tagline: string;
+    /** "" when the shop has chosen not to show it. */
+    address: string;
+    phone: string;
+    email: string;
+    opening_hours: OpeningHours[];
+  };
+  map: { embed_url: string; link_url: string };
+  social: SiteSocialLink[];
+  columns: SiteColumn[];
+  /** `copyright` may contain `{year}`, filled in at render time. */
+  bottom: { copyright: string; note: string };
+  /**
+   * `null`: no WhatsApp link is set up, so the build-time number may be used.
+   * Otherwise the shop's own choice, including an explicit "no button".
+   */
+  whatsapp: { number: string; show_float: boolean } | null;
+}
+
+/** `GET /shop/pages/<slug>/` — `body` is HTML the API has already sanitised. */
+export interface SitePage {
+  slug: string;
+  title: string;
+  meta_description: string;
+  body: string;
+  path: string;
+  is_system: boolean;
+  updated_at: string | null;
 }
 
 export interface ShopCategory {

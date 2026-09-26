@@ -2,21 +2,37 @@ import type { MetadataRoute } from "next";
 
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
+import { listSitePages } from "@/lib/site/site";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
 export const revalidate = 3600;
 
+/** Used only if `/shop/pages/` cannot be reached: the pages every install has. */
+const STANDARD_PAGES = [
+  "/about",
+  "/contact",
+  "/policies/shipping",
+  "/policies/returns",
+  "/policies/privacy",
+  "/policies/terms",
+].map((path) => ({ path, updated_at: undefined as string | undefined }));
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  // Published pages only: an unpublished one 404s, and a sitemap must never
+  // advertise a URL that does not resolve.
+  const listed = await listSitePages();
+  const pages = listed.length ? listed : STANDARD_PAGES;
+
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: `${SITE}/`, changeFrequency: "daily", priority: 1 },
     { url: `${SITE}/shop`, changeFrequency: "daily", priority: 0.9 },
-    { url: `${SITE}/about`, changeFrequency: "monthly", priority: 0.4 },
-    { url: `${SITE}/contact`, changeFrequency: "monthly", priority: 0.4 },
-    { url: `${SITE}/policies/shipping`, changeFrequency: "yearly", priority: 0.3 },
-    { url: `${SITE}/policies/returns`, changeFrequency: "yearly", priority: 0.3 },
-    { url: `${SITE}/policies/privacy`, changeFrequency: "yearly", priority: 0.3 },
-    { url: `${SITE}/policies/terms`, changeFrequency: "yearly", priority: 0.3 },
+    ...pages.map((page) => ({
+      url: `${SITE}${page.path}`,
+      lastModified: page.updated_at,
+      changeFrequency: page.path.startsWith("/policies/") ? ("yearly" as const) : ("monthly" as const),
+      priority: page.path.startsWith("/policies/") ? 0.3 : 0.4,
+    })),
   ];
 
   try {

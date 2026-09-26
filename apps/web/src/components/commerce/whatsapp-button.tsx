@@ -1,18 +1,23 @@
 import { MessageCircle } from "lucide-react";
 
 /**
- * Float-over WhatsApp contact, environment-gated.
+ * Float-over WhatsApp contact.
  *
  * Close to mandatory for retail in Bangladesh: a shopper who is unsure about a
  * size asks on WhatsApp rather than emailing, and a shop that does not answer
  * there loses the sale to one that does.
  *
- * It renders nothing at all when `NEXT_PUBLIC_WHATSAPP_NUMBER` is unset, so a
- * deployment that has no number does not advertise a channel nobody is
- * watching — which is worse than not offering it.
+ * The number comes from the WhatsApp link in Admin → Footer & pages
+ * (`/shop/site/`), whose "show the chat button" switch can also turn it off.
+ * Only when no WhatsApp link is set up at all does the build-time
+ * `NEXT_PUBLIC_WHATSAPP_NUMBER` apply, so deployments configured before the
+ * footer became data keep their button.
  *
- * A server component: the number is baked in at build time and there is no
- * state, so this ships no JavaScript.
+ * It renders nothing when there is no number, so a deployment that has none
+ * does not advertise a channel nobody is watching — which is worse than not
+ * offering it.
+ *
+ * A server component: there is no state, so this ships no JavaScript.
  */
 
 /** Digits only, as wa.me requires: `8801712000111`, not `+880 1712-000111`. */
@@ -20,8 +25,16 @@ function waDigits(raw: string): string {
   return raw.replace(/\D/g, "");
 }
 
-export function WhatsAppButton() {
-  const number = waDigits(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "");
+export function WhatsAppButton({
+  whatsapp,
+}: {
+  whatsapp: { number: string; show_float: boolean } | null;
+}) {
+  const number = whatsapp
+    ? whatsapp.show_float
+      ? waDigits(whatsapp.number)
+      : ""
+    : waDigits(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "");
   if (!number) return null;
 
   const greeting = process.env.NEXT_PUBLIC_WHATSAPP_GREETING ?? "Hello! I have a question about";

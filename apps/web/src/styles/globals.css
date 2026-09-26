@@ -151,6 +151,47 @@
       filter var(--duration-normal) var(--ease);
   }
 
+  /* Site-page copy from the rich-text editor (About, policies, custom pages).
+     The same class styles the admin editor, so what a manager types is what a
+     shopper reads. Only the tags `content.rich_text` allows need rules here;
+     the page title is the only h1, so headings start at h2. */
+  .rich-text {
+    @apply text-body text-neutral-700;
+  }
+  .rich-text > * + * {
+    @apply mt-3;
+  }
+  .rich-text h2 {
+    @apply mt-10 text-h3 text-neutral-900;
+  }
+  .rich-text h3 {
+    @apply mt-8 text-h4 text-neutral-900;
+  }
+  .rich-text > :first-child {
+    @apply mt-0;
+  }
+  .rich-text a {
+    @apply font-medium text-brand-700 underline underline-offset-4 hover:text-brand-600;
+  }
+  .rich-text ul {
+    @apply list-disc space-y-1 pl-6;
+  }
+  .rich-text ol {
+    @apply list-decimal space-y-1 pl-6;
+  }
+  .rich-text blockquote {
+    @apply border-l-4 border-neutral-300 pl-4 italic;
+  }
+  .rich-text hr {
+    @apply my-8 border-neutral-200;
+  }
+  .rich-text strong {
+    @apply font-semibold text-neutral-900;
+  }
+  /* An opening paragraph reads as the page's standfirst. */
+  .rich-text-lead > p:first-child {
+    @apply text-body-lg;
+  }
 }
 
 /* --- brand loader -----------------------------------------------------

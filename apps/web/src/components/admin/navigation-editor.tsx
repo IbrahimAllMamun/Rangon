@@ -22,7 +22,8 @@ import { ApiError, apiClient } from "@/lib/api/client";
 export interface NavigationItemRow {
   id: string;
   placement: "HEADER" | "FOOTER";
-  type: "CATEGORY" | "LINK" | "PROMO";
+  /** The last three only appear in the footer, which has its own editor. */
+  type: "CATEGORY" | "LINK" | "PROMO" | "PAGE" | "GROUP" | "CATEGORY_LIST";
   parent: string | null;
   category: string | null;
   category_name: string;
@@ -133,7 +134,8 @@ export function NavigationEditor({
   function startEdit(item: NavigationItemRow) {
     setDraft({
       placement: item.placement,
-      type: item.type,
+      // Header rows are only ever these three; the footer-only types never reach here.
+      type: item.type as Draft["type"],
       parent: item.parent ?? "",
       category: item.category ?? "",
       label: item.label,
@@ -228,19 +230,6 @@ export function NavigationEditor({
             <option value="LINK">Link</option>
             <option value="CATEGORY">Category</option>
             <option value="PROMO">Promo card</option>
-          </Select>
-        </Field>
-
-        <Field label="Placement" htmlFor="ni-placement">
-          <Select
-            id="ni-placement"
-            value={draft.placement}
-            onChange={(event) =>
-              setDraft({ ...draft, placement: event.target.value as Draft["placement"] })
-            }
-          >
-            <option value="HEADER">Header</option>
-            <option value="FOOTER">Footer</option>
           </Select>
         </Field>
 
@@ -448,10 +437,6 @@ export function NavigationEditor({
     );
   }
 
-  return (
-    <div className="space-y-6">
-      {section("HEADER", "Header navigation", "The main navbar. Empty means categories drive it.")}
-      {section("FOOTER", "Footer navigation", "The 'Shop' column in the footer.")}
-    </div>
-  );
+  // The footer's columns are edited in Admin → Footer & pages (ADR-0012).
+  return section("HEADER", "Header navigation", "The main navbar. Empty means categories drive it.");
 }
