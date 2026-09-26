@@ -39,11 +39,18 @@ export function ProductCard({
   return (
     <article
       className={cn(
-        // Lift on hover: transform + shadow only, so the grid never reflows and
-        // neighbouring cards do not move. Pairs with the image zoom below —
-        // the card rises, the photo pushes in slightly behind it.
-        "group relative transition-[transform,box-shadow] duration-normal ease-rangon",
-        "hover:-translate-y-1 hover:shadow-md",
+        // Lift on hover: transform, shadow and a white surface, so the grid
+        // never reflows and neighbouring cards do not move. Pairs with the
+        // image zoom below — the card rises, the photo pushes in behind it.
+        //
+        // `-m-2 p-2` gives the raised card room around its content without
+        // moving anything at rest: the padding is paid for out of the grid
+        // gap, so the photo stays flush with the section heading above it.
+        // 8px of padding around the photo's 12px corner makes a 20px outer
+        // corner (`rounded-2xl`), so the two curves stay concentric.
+        "group relative -m-2 rounded-2xl p-2",
+        "transition-[transform,box-shadow,background-color] duration-normal ease-rangon",
+        "hover:-translate-y-1 hover:bg-surface hover:shadow-md",
         className,
       )}
     >
@@ -106,7 +113,8 @@ export function ProductCard({
 
       {/* A sibling of the link, not nested inside it: a button inside an
           anchor is invalid HTML and confuses both the browser and a screen
-          reader. Positioned against the card, which shares the image's box. */}
+          reader. Positioned against the card, inset by the card's `p-2` so it
+          shares the image's box. */}
       <QuickViewTrigger product={product} />
 
       {/* Which colours exist, not a picker: nothing here is selectable, so
