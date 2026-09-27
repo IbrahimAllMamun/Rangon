@@ -78,6 +78,24 @@ export interface ShopProductSpec {
   values: { value: string; label: string; swatch: string }[];
 }
 
+/**
+ * The product's size guide (docs/business-rules.md §5b). Rows are the sizes of
+ * one attribute, in that attribute's order; each row's `cells` line up with
+ * `columns` by position. Present on detail only.
+ */
+export interface ShopSizeChart {
+  name: string;
+  /** Which sizing standard it follows — "UK", "EU", "International" — or "". */
+  system: string;
+  /** The variant axis it describes, so the guide sits beside the right options. */
+  attribute_code: string;
+  attribute_name: string;
+  columns: string[];
+  rows: { value: string; label: string; cells: string[] }[];
+  /** How to measure, as plain text. */
+  notes: string;
+}
+
 export interface TaxTreatment {
   /** "EXCLUSIVE" — added at checkout — or "INCLUSIVE" — already in the price. */
   mode: string;
@@ -95,6 +113,8 @@ export interface ShopProduct {
   care_instructions: string;
   /** Structured specifications. Present on detail, absent on a listing. */
   specs?: ShopProductSpec[];
+  /** The size guide. Null when the product has none; absent on a listing. */
+  size_chart?: ShopSizeChart | null;
   category: ShopCategoryRef;
   brand: { name: string; slug: string } | null;
   /**
