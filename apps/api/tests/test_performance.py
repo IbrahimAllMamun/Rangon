@@ -285,9 +285,55 @@ class TestProductDetailQueryBudget:
             f"specifications: the spec list has an N+1."
         )
 
+    def test_query_count_does_not_grow_with_the_size_chart(self, api, shop):
+        """The size guide is one prefetch whatever its length.
+
+        The chart and its attribute ride on the product row's join; its rows
+        and their sizes are a single `Prefetch` carrying `select_related`. A
+        row that reached for `attribute_value` on its own would cost a query
+        per size -- invisible on a three-row chart, and the reason this checks
+        one row against six.
+        """
+        from catalog.services import save_size_chart, set_product_size_chart
+
+        size, values = factories.attribute("size", values=["S", "M", "L", "XL", "XXL", "XXXL"])
+        product = self._product_with_variants(shop, values[:2])
+        url = f"/api/v1/shop/products/{product.slug}/"
+
+        def rows(chosen: list[Any]) -> list[dict[str, Any]]:
+            return [{"attribute_value": value.pk, "cells": ["90", "38"]} for value in chosen]
+
+        chart = save_size_chart(
+            attribute=size,
+            data={"name": "Shirts", "columns": ["Chest (cm)", "UK"], "rows": rows(values[:1])},
+        )
+        set_product_size_chart(product=product, chart=chart)
+        _count_queries(api, url)  # warm
+        with_one = _count_queries(api, url)
+
+        save_size_chart(chart=chart, data={"rows": rows(values)})
+        with_many = _count_queries(api, url)
+
+        assert with_many == with_one, (
+            f"Queries grew from {with_one} to {with_many} as the size chart gained "
+            f"rows: the size guide has an N+1."
+        )
+
     def test_detail_stays_within_its_documented_budget(self, api, shop):
-        _, values = factories.attribute("size", values=["S", "M", "L"])
+        """Measured with a size chart attached -- the most a detail page reads."""
+        from catalog.services import save_size_chart, set_product_size_chart
+
+        size, values = factories.attribute("size", values=["S", "M", "L"])
         product = self._product_with_variants(shop, values)
+        chart = save_size_chart(
+            attribute=size,
+            data={
+                "name": "Shirts",
+                "columns": ["Chest (cm)"],
+                "rows": [{"attribute_value": value.pk, "cells": ["90"]} for value in values],
+            },
+        )
+        set_product_size_chart(product=product, chart=chart)
         url = f"/api/v1/shop/products/{product.slug}/"
 
         _count_queries(api, url)  # warm

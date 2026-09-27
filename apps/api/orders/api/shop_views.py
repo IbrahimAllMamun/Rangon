@@ -27,6 +27,7 @@ from catalog.models import (
     ProductImage,
     ProductVariant,
     PublishStatus,
+    SizeChartRow,
 )
 from catalog.search import facets, search_products, visible_products
 from content.api.serializers import serialise_banner
@@ -304,8 +305,17 @@ class ShopProductViewSet(viewsets.GenericViewSet):
                     queryset=ProductAttributeValue.objects.select_related(
                         "attribute_value__attribute"
                     ),
-                )
+                ),
+                # The size guide, detail only for the same reason. The chart
+                # and its attribute ride on the product row's join; the rows
+                # and their sizes are one query, and none at all for a product
+                # with no chart.
+                Prefetch(
+                    "size_chart__rows",
+                    queryset=SizeChartRow.objects.select_related("attribute_value"),
+                ),
             )
+            .select_related("size_chart__attribute")
             .filter(slug=slug)
             .first()
         )
@@ -322,6 +332,7 @@ class ShopProductViewSet(viewsets.GenericViewSet):
         # `material` / `care_instructions` above stay as they are: they predate
         # this and products already carry them.
         payload["specs"] = catalog_services.spec_payload(product)
+        payload["size_chart"] = catalog_services.size_chart_payload(product.size_chart)
 
         reviews = product.reviews.filter(status=ReviewStatus.APPROVED).select_related("customer")
         payload["reviews"] = {

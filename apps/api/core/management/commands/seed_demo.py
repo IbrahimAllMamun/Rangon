@@ -41,8 +41,14 @@ from catalog.models import (
     CategoryAttribute,
     Product,
     PublishStatus,
+    SizeChart,
 )
-from catalog.services import create_variant, set_product_specs
+from catalog.services import (
+    create_variant,
+    save_size_chart,
+    set_product_size_chart,
+    set_product_specs,
+)
 from core import phone as phone_utils
 from core.money import quantize
 from customers.models import Customer, CustomerAddress, CustomerType
@@ -193,11 +199,86 @@ CATEGORY_ATTRIBUTES = {
 #: is a shop where nothing is.
 DEMO_DISCOUNTS = [Decimal("0.00"), Decimal("0.00"), Decimal("0.30"), Decimal("0.15")]
 
+#: Size charts, one table per sizing need (docs/business-rules.md §5b). Rows
+#: are keyed by the attribute's own values, in the order `ATTRIBUTES` lists
+#: them; the figures are typical Bangladeshi retail cuts, in centimetres.
+SIZE_CHARTS: list[dict[str, Any]] = [
+    {
+        "attribute": "size",
+        "name": "Men's tops",
+        "system": "International",
+        "columns": ["Chest (cm)", "Length (cm)", "Shoulder (cm)", "UK / US"],
+        "rows": {
+            "XS": ["86–91", "68", "41", "34"],
+            "S": ["92–96", "70", "43", "36"],
+            "M": ["97–101", "72", "45", "38"],
+            "L": ["102–107", "74", "47", "40"],
+            "XL": ["108–113", "76", "49", "42"],
+            "XXL": ["114–119", "78", "51", "44"],
+        },
+        "notes": (
+            "Chest: measure around the fullest part, under the arms, with the tape level. "
+            "Between two sizes? Take the larger for a relaxed fit."
+        ),
+    },
+    {
+        "attribute": "size",
+        "name": "Women's tops",
+        "system": "International",
+        "columns": ["Bust (cm)", "Waist (cm)", "Length (cm)", "UK", "EU"],
+        "rows": {
+            "XS": ["78–82", "62–66", "96", "6", "34"],
+            "S": ["83–87", "67–71", "98", "8", "36"],
+            "M": ["88–92", "72–76", "100", "10", "38"],
+            "L": ["93–98", "77–82", "102", "12", "40"],
+            "XL": ["99–104", "83–88", "104", "14", "42"],
+            "XXL": ["105–110", "89–94", "106", "16", "44"],
+        },
+        "notes": (
+            "Bust: around the fullest part. Waist: around the natural waistline, "
+            "above the belly button. Length is shoulder to hem."
+        ),
+    },
+    {
+        "attribute": "size",
+        "name": "Men's trousers",
+        "system": "International",
+        "columns": ["Waist (cm)", "Hip (cm)", "Inseam (cm)", "Waist (in)"],
+        "rows": {
+            "S": ["76–81", "94–99", "76", "30–32"],
+            "M": ["82–87", "100–105", "78", "32–34"],
+            "L": ["88–94", "106–111", "80", "34–36"],
+            "XL": ["95–101", "112–117", "81", "36–38"],
+        },
+        "notes": "Waist: where you wear the trousers, not the natural waist.",
+    },
+    {
+        "attribute": "shoe-size",
+        "name": "Shoe conversion",
+        "system": "EU",
+        "columns": ["UK", "US men", "Foot length (cm)"],
+        "rows": {
+            "38": ["5", "6", "24.0"],
+            "39": ["6", "7", "24.7"],
+            "40": ["6.5", "7.5", "25.4"],
+            "41": ["7.5", "8.5", "26.0"],
+            "42": ["8", "9", "26.7"],
+            "43": ["9", "10", "27.3"],
+            "44": ["9.5", "10.5", "28.0"],
+        },
+        "notes": (
+            "Stand on a sheet of paper, mark heel and longest toe, and measure between "
+            "the two. Measure in the evening, when feet are largest."
+        ),
+    },
+]
+
 PRODUCTS: list[dict[str, Any]] = [
     # name, category, brand, price, cost, variant axes (`attrs`) and
     # specifications (`specs` — stated once on the product, never a SKU)
     {
         "name": "Classic Oxford Shirt",
+        "size_chart": "Men's tops",
         "care": "Machine wash cold. Warm iron. Do not bleach.",
         "specs": {"material": ["Cotton"], "gender": ["Men"], "fit": ["Regular"]},
         "category": "Shirts",
@@ -208,6 +289,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Essential Cotton T-Shirt",
+        "size_chart": "Men's tops",
         "care": "Machine wash cold. Tumble dry low. Do not bleach.",
         "specs": {"material": ["Cotton"], "gender": ["Unisex"], "fit": ["Regular"]},
         "category": "T-Shirts",
@@ -218,6 +300,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Embroidered Panjabi",
+        "size_chart": "Men's tops",
         "care": "Dry clean only. Do not wring the embroidery.",
         "specs": {"material": ["Cotton"], "gender": ["Men"]},
         "category": "Panjabi",
@@ -228,6 +311,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Slim Fit Chinos",
+        "size_chart": "Men's trousers",
         "care": "Machine wash cold. Warm iron. Do not bleach.",
         "specs": {"material": ["Cotton"], "gender": ["Men"], "fit": ["Slim"]},
         "category": "Trousers",
@@ -238,6 +322,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Block Print Kurti",
+        "size_chart": "Women's tops",
         "care": "Hand wash separately in cold water — the block print bleeds at first.",
         "specs": {"material": ["Cotton"], "gender": ["Women"]},
         "category": "Kurti",
@@ -248,6 +333,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Linen Blend Top",
+        "size_chart": "Women's tops",
         "care": "Hand wash cold. Dry flat in shade. Warm iron while damp.",
         "specs": {"material": ["Linen"], "gender": ["Women"]},
         "category": "Tops",
@@ -258,6 +344,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Street Runner Sneakers",
+        "size_chart": "Shoe conversion",
         "care": "Wipe the upper with a damp cloth. Air dry away from direct sun.",
         "specs": {"material": ["Canvas"], "gender": ["Unisex"], "sole": ["EVA"]},
         "category": "Sneakers",
@@ -268,6 +355,7 @@ PRODUCTS: list[dict[str, Any]] = [
     },
     {
         "name": "Leather Formal Shoes",
+        "size_chart": "Shoe conversion",
         "care": "Wipe clean and polish with a neutral cream. Keep away from water.",
         "specs": {"material": ["Leather"], "gender": ["Men"], "sole": ["Leather"]},
         "category": "Formal",
@@ -353,7 +441,8 @@ class Command(BaseCommand):
         brands = self._brands()
         categories = self._categories()
         attributes = self._attributes(categories)
-        products = self._products(categories, brands, attributes)
+        charts = self._size_charts(attributes)
+        products = self._products(categories, brands, attributes, charts)
         supplier = self._supplier()
         self._purchase_stock(branch, supplier, products, users["stock@rangon.test"])
         self._shipping()
@@ -443,6 +532,9 @@ class Command(BaseCommand):
         ):
             model.objects.all().delete()
         Product.objects.all().delete()
+        # After Product, which PROTECTs it; before AttributeValue and
+        # Attribute, which it PROTECTs. Its rows cascade with it.
+        SizeChart.objects.all().delete()
         AttributeValue.objects.all().delete()
         Attribute.objects.all().delete()
         CategoryAttribute.objects.all().delete()
@@ -755,11 +847,39 @@ class Command(BaseCommand):
                 )
         return attributes
 
+    def _size_charts(self, attributes: dict[str, Attribute]) -> dict[str, SizeChart]:
+        """The demo charts, through the service so the seed obeys its rules.
+
+        Re-running updates a chart in place rather than refusing its name, so
+        seeding over an existing shop converges on the figures above.
+        """
+        charts: dict[str, SizeChart] = {}
+        for position, spec in enumerate(SIZE_CHARTS):
+            attribute = attributes[spec["attribute"]]
+            values = {value.value: value for value in attribute.values.all()}
+            charts[spec["name"]] = save_size_chart(
+                chart=SizeChart.objects.filter(attribute=attribute, name=spec["name"]).first(),
+                attribute=attribute,
+                data={
+                    "name": spec["name"],
+                    "system": spec["system"],
+                    "notes": spec["notes"],
+                    "position": position,
+                    "columns": spec["columns"],
+                    "rows": [
+                        {"attribute_value": values[size].pk, "cells": cells}
+                        for size, cells in spec["rows"].items()
+                    ],
+                },
+            )
+        return charts
+
     def _products(
         self,
         categories: dict[str, Category],
         brands: dict[str, Brand],
         attributes: dict[str, Attribute],
+        charts: dict[str, SizeChart],
     ) -> list[Product]:
         products: list[Product] = []
         for spec in PRODUCTS:
@@ -800,6 +920,8 @@ class Command(BaseCommand):
                     for value in attributes[code].values.filter(value__in=wanted)
                 ],
             )
+            if spec.get("size_chart"):
+                set_product_size_chart(product=product, chart=charts[spec["size_chart"]])
 
             if not created and product.variants.exists():
                 continue

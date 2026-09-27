@@ -11,6 +11,7 @@ from django.utils.text import slugify
 
 from catalog.models import (
     Attribute,
+    AttributeKind,
     AttributeValue,
     Category,
     CategoryAttribute,
@@ -18,10 +19,12 @@ from catalog.models import (
     ProductAttributeValue,
     ProductVariant,
     PublishStatus,
+    SizeChart,
+    SizeChartRow,
     VariantAttributeValue,
 )
 from core import audit
-from core.exceptions import ValidationError
+from core.exceptions import Conflict, ValidationError
 from core.services import next_number
 
 
@@ -338,6 +341,354 @@ def spec_payload(product: Product) -> list[dict[str, Any]]:
         )
         row["values"].append({"value": value.value, "label": value.display, "swatch": value.swatch})
     return list(grouped.values())
+
+
+#: Wider than any real chart (a garment chart runs to six or seven columns), and
+#: narrow enough that the product-page table still fits a dialog.
+MAX_CHART_COLUMNS = 12
+MAX_COLUMN_LABEL = 40
+MAX_CELL_LENGTH = 32
+MAX_CHART_NOTES = 2000
+
+
+def _chart_error(field: str, message: str) -> ValidationError:
+    """Keyed by field, so the chart editor can put the message beside it."""
+    return ValidationError(message, details={field: [message]})
+
+
+def _clean_columns(columns: Any) -> list[str]:
+    if not isinstance(columns, list) or not columns:
+        raise _chart_error("columns", "Add at least one column, such as Chest (cm) or UK.")
+    if len(columns) > MAX_CHART_COLUMNS:
+        raise _chart_error("columns", f"A chart can have at most {MAX_CHART_COLUMNS} columns.")
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for label in columns:
+        text = str(label or "").strip()
+        if not text:
+            raise _chart_error("columns", "Every column needs a heading.")
+        if len(text) > MAX_COLUMN_LABEL:
+            raise _chart_error(
+                "columns", f"“{text[:20]}…” is too long for a heading ({MAX_COLUMN_LABEL} max)."
+            )
+        # Case-insensitive: "UK" and "uk" side by side read as one column twice.
+        if text.casefold() in seen:
+            raise _chart_error("columns", f"“{text}” is there twice. Each heading must differ.")
+        seen.add(text.casefold())
+        cleaned.append(text)
+    return cleaned
+
+
+def _clean_rows(
+    rows: Any, *, attribute: Attribute, width: int
+) -> list[tuple[AttributeValue, list[str]]]:
+    """Each row is `{"attribute_value": <id>, "cells": [...]}`.
+
+    Every size must be one of the attribute's own values -- a chart for Shoe
+    size cannot describe a shirt's M -- and appear once. Every row needs one
+    cell per column: a short row would shift its figures under the wrong
+    heading, which on a size chart is a wrong answer that looks right.
+    """
+    if not isinstance(rows, list) or not rows:
+        raise _chart_error("rows", "Include at least one size.")
+
+    values = {str(value.pk): value for value in AttributeValue.objects.filter(attribute=attribute)}
+    cleaned: list[tuple[AttributeValue, list[str]]] = []
+    seen: set[str] = set()
+    for row in rows:
+        value_id = str((row or {}).get("attribute_value") or "")
+        value = values.get(value_id)
+        if value is None:
+            raise _chart_error(
+                "rows", f"One of those sizes is not a {attribute.name} value. Reload and try again."
+            )
+        if value_id in seen:
+            raise _chart_error("rows", f"{value.display} is in the chart twice.")
+        seen.add(value_id)
+
+        cells = row.get("cells")
+        if not isinstance(cells, list) or len(cells) != width:
+            raise _chart_error(
+                "rows",
+                f"{value.display} has {len(cells) if isinstance(cells, list) else 0} "
+                f"figure(s) for {width} column(s). Every size needs one per column.",
+            )
+        texts = [str(cell if cell is not None else "").strip() for cell in cells]
+        if not any(texts):
+            raise _chart_error(
+                "rows", f"{value.display} has no figures. Fill it in, or leave that size out."
+            )
+        long = next((text for text in texts if len(text) > MAX_CELL_LENGTH), None)
+        if long is not None:
+            raise _chart_error(
+                "rows",
+                f"“{long[:20]}…” under {value.display} is too long ({MAX_CELL_LENGTH} max).",
+            )
+        cleaned.append((value, texts))
+    return cleaned
+
+
+def _chart_snapshot(chart: SizeChart) -> dict[str, Any]:
+    rows = SizeChartRow.objects.filter(chart=chart).select_related("attribute_value")
+    return {
+        "name": chart.name,
+        "system": chart.system,
+        "columns": list(chart.columns),
+        "rows": {row.attribute_value.display: list(row.cells) for row in rows},
+        "notes": chart.notes,
+    }
+
+
+@transaction.atomic
+def save_size_chart(
+    *,
+    chart: SizeChart | None = None,
+    attribute: Attribute | None = None,
+    data: dict[str, Any],
+    actor: Any = None,
+) -> SizeChart:
+    """Create a size chart, or update one, and validate the result as a whole.
+
+    `data` may hold `name`, `system`, `notes`, `position`, `columns` and
+    `rows`; on an update a missing key keeps what is stored. Rows are
+    **replaced, not merged**, for the reason specifications are
+    (`set_product_specs`): the editor sends the grid as it now stands.
+
+    The *finished* chart is what gets validated, so a caller that changes the
+    columns without sending rows is refused rather than left with figures
+    under the wrong headings.
+
+    The attribute is fixed at creation. Every row is one of its values, so
+    moving a chart to another attribute would invalidate all of them at once.
+    """
+    if chart is None:
+        if attribute is None:
+            raise _chart_error("attribute", "Choose the size attribute this chart describes.")
+    elif attribute is not None and attribute.pk != chart.attribute_id:
+        raise _chart_error(
+            "attribute",
+            "A chart cannot move to another attribute; its sizes belong to this one. "
+            "Create a new chart instead.",
+        )
+    else:
+        attribute = chart.attribute
+
+    assert attribute is not None  # narrowed above, for the type checker
+    if attribute.kind != AttributeKind.SIZE:
+        raise _chart_error(
+            "attribute",
+            f"{attribute.name} is a {attribute.get_kind_display().lower()} attribute. "
+            "Only a Size attribute can carry a size chart.",
+        )
+
+    name = str(data.get("name", chart.name if chart else "")).strip()
+    if not name:
+        raise _chart_error("name", "Give the chart a name, such as “Men's shirts”.")
+    if len(name) > 120:
+        raise _chart_error("name", "Keep the name under 120 characters.")
+    clash = SizeChart.objects.filter(attribute=attribute, name__iexact=name)
+    if chart is not None:
+        clash = clash.exclude(pk=chart.pk)
+    if clash.exists():
+        raise _chart_error("name", f"{attribute.name} already has a chart called “{name}”.")
+
+    system = str(data.get("system", chart.system if chart else "")).strip()
+    if len(system) > 40:
+        raise _chart_error("system", "Keep the sizing system under 40 characters.")
+    notes = str(data.get("notes", chart.notes if chart else "")).strip()
+    if len(notes) > MAX_CHART_NOTES:
+        raise _chart_error("notes", f"Keep the notes under {MAX_CHART_NOTES} characters.")
+    position = data.get("position", chart.position if chart else 0)
+
+    if "columns" in data:
+        columns = _clean_columns(data["columns"])
+    else:
+        columns = _clean_columns(list(chart.columns) if chart is not None else [])
+
+    if "rows" in data:
+        raw_rows = data["rows"]
+    elif chart is not None:
+        raw_rows = [
+            {"attribute_value": row.attribute_value_id, "cells": row.cells}
+            for row in SizeChartRow.objects.filter(chart=chart)
+        ]
+    else:
+        raw_rows = []
+    rows = _clean_rows(raw_rows, attribute=attribute, width=len(columns))
+
+    before = _chart_snapshot(chart) if chart is not None else None
+    if chart is None:
+        chart = SizeChart(attribute=attribute, created_by=actor if _is_user(actor) else None)
+    chart.name, chart.system, chart.notes = name, system, notes
+    chart.position = position or 0
+    chart.columns = columns
+    chart.save()
+
+    # Through the model, not `chart.rows`: a caller that prefetched the rows
+    # would otherwise read its stale cache back for the audit entry below.
+    SizeChartRow.objects.filter(chart=chart).delete()
+    SizeChartRow.objects.bulk_create(
+        [SizeChartRow(chart=chart, attribute_value=value, cells=cells) for value, cells in rows]
+    )
+    getattr(chart, "_prefetched_objects_cache", {}).pop("rows", None)
+
+    after = _chart_snapshot(chart)
+    if before is None:
+        audit.record(
+            action=audit.AuditAction.CREATE,
+            entity=chart,
+            actor=actor,
+            new_values={"attribute": attribute.name, **after},
+            reason="Size chart created",
+        )
+    else:
+        old, new = audit.diff(before, after)
+        if new:
+            audit.record(
+                action=audit.AuditAction.UPDATE,
+                entity=chart,
+                actor=actor,
+                old_values=old,
+                new_values=new,
+                reason="Size chart changed",
+            )
+
+    _revalidate_product_pages()
+    return chart
+
+
+@transaction.atomic
+def delete_size_chart(*, chart: SizeChart, actor: Any = None) -> None:
+    """Delete a chart no product uses; refuse in words while any does.
+
+    `Product.size_chart` is PROTECT, so the database would refuse anyway --
+    with a bare 409 that leaves the admin clicking Delete again. Clearing it
+    from the products instead would make their size guides vanish from the
+    storefront without anyone having decided that.
+    """
+    used_by = chart.products.count()
+    if used_by:
+        raise Conflict(
+            f"“{chart.name}” is the size chart for {used_by} "
+            f"product{'' if used_by == 1 else 's'} and cannot be deleted. "
+            "Pick another chart for them first.",
+            details={"product_count": used_by},
+        )
+    audit.record(
+        action=audit.AuditAction.DELETE,
+        entity=chart,
+        actor=actor,
+        old_values=_chart_snapshot(chart),
+        reason="Size chart deleted",
+    )
+    chart.delete()
+
+
+def size_chart_problem(
+    *, chart: SizeChart, category: Category, product: Product | None = None
+) -> str | None:
+    """Why `chart` cannot describe a product in `category`, or None if it can.
+
+    The same scoping the variant axes follow (docs/business-rules.md §5a rule
+    3): a chart fits when its attribute is one the category offers, inherited
+    down the tree -- so a shirt is never given a shoe chart. A category that
+    declares nothing offers everything. And an axis the product's saved
+    variants are already built on always fits, declared or not, because those
+    SKUs exist whatever the category now says.
+    """
+    offered = {link.attribute_id for link in category_attributes(category)}
+    if not offered or chart.attribute_id in offered:
+        return None
+    if (
+        product is not None
+        and product.pk
+        and VariantAttributeValue.objects.filter(
+            variant__product=product, attribute_id=chart.attribute_id
+        ).exists()
+    ):
+        return None
+    attribute = chart.attribute.name
+    return (
+        f"“{chart.name}” is a {attribute} chart, and {category.name} does not use {attribute}. "
+        "Pick a chart for one of this product's sizes."
+    )
+
+
+@transaction.atomic
+def set_product_size_chart(
+    *, product: Product, chart: SizeChart | None, actor: Any = None
+) -> Product:
+    """Point a product at a size chart, or clear it with None.
+
+    The rule lives here, not only in the serializer, so a management command
+    or a shell meets it too -- the same arrangement as `set_product_specs`.
+    """
+    if chart is not None:
+        problem = size_chart_problem(chart=chart, category=product.category, product=product)
+        if problem:
+            raise _chart_error("size_chart", problem)
+
+    before = product.size_chart
+    if (before.pk if before else None) == (chart.pk if chart else None):
+        return product
+
+    product.size_chart = chart
+    product.save(update_fields=["size_chart", "updated_at"])
+    audit.record(
+        action=audit.AuditAction.UPDATE,
+        entity=product,
+        actor=actor,
+        old_values={"size_chart": before.name if before else None},
+        new_values={"size_chart": chart.name if chart else None},
+        reason="Size chart changed",
+    )
+    return product
+
+
+def size_chart_payload(chart: SizeChart | None) -> dict[str, Any] | None:
+    """A chart ready to render on the product page, or None.
+
+    Reads `chart.rows.all()`, so a caller that prefetched the rows pays nothing
+    and one that did not pays one query -- the contract `spec_payload` keeps.
+    The value's *display* label is sent, so a renamed size reads the new name.
+    """
+    if chart is None:
+        return None
+    return {
+        "name": chart.name,
+        "system": chart.system,
+        "attribute_code": chart.attribute.code,
+        "attribute_name": chart.attribute.name,
+        "columns": list(chart.columns),
+        "rows": [
+            {
+                "value": row.attribute_value.value,
+                "label": row.attribute_value.display,
+                "cells": list(row.cells),
+            }
+            for row in chart.rows.all()
+        ],
+        "notes": chart.notes,
+    }
+
+
+def _is_user(actor: Any) -> bool:
+    return actor is not None and getattr(actor, "is_authenticated", False)
+
+
+def _revalidate_product_pages() -> None:
+    """Drop the storefront's cached product pages once the chart is committed.
+
+    Product pages are cached against the `products` tag with a 60-second
+    window, and one chart can sit behind hundreds of them -- so the whole tag,
+    not a slug per product. Fire-and-forget on commit, the same as the VAT
+    setting (`accounts.services`): a lost ping costs a stale chart until the
+    window elapses, and no stock or money invariant depends on it.
+    """
+    from content.tasks import request_revalidation
+
+    transaction.on_commit(lambda: request_revalidation("products"))
 
 
 def unique_slug(model: Any, value: str, *, field: str = "slug") -> str:

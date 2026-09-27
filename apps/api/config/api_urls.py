@@ -27,6 +27,7 @@ from catalog.api.views import (
     ProductImageViewSet,
     ProductVariantViewSet,
     ProductViewSet,
+    SizeChartViewSet,
 )
 from content.api.views import (
     NavigationItemViewSet,
@@ -80,6 +81,7 @@ router.register("categories", CategoryViewSet, basename="category")
 router.register("brands", BrandViewSet, basename="brand")
 router.register("attributes", AttributeViewSet, basename="attribute")
 router.register("attribute-values", AttributeValueViewSet, basename="attributevalue")
+router.register("size-charts", SizeChartViewSet, basename="sizechart")
 router.register("products", ProductViewSet, basename="product")
 router.register("variants", ProductVariantViewSet, basename="variant")
 router.register("product-images", ProductImageViewSet, basename="productimage")

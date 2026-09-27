@@ -39,6 +39,7 @@ from catalog.api.serializers import (
     ProductListSerializer,
     ProductVariantSerializer,
     ProductWriteSerializer,
+    SizeChartSerializer,
 )
 from catalog.models import (
     Attribute,
@@ -50,13 +51,18 @@ from catalog.models import (
     ProductImage,
     ProductVariant,
     PublishStatus,
+    SizeChart,
+    SizeChartRow,
     VariantAttributeValue,
 )
 from catalog.services import (
     category_attributes,
+    delete_size_chart,
     generate_barcode,
     generate_variants,
     publish_product,
+    save_size_chart,
+    set_product_size_chart,
     set_product_specs,
 )
 from core import audit
@@ -169,6 +175,15 @@ class AttributeViewSet(viewsets.ModelViewSet):
                 "Clear it from those products first.",
                 details={"spec_usage": stated_by},
             )
+        # `SizeChart.attribute` is PROTECT: a chart's rows are this
+        # attribute's values, so the chart would have nothing left to describe.
+        charts = instance.size_charts.count()
+        if charts:
+            raise Conflict(
+                f"“{instance.name}” has {charts} size chart{'' if charts == 1 else 's'} "
+                "and cannot be deleted. Delete the charts first.",
+                details={"size_chart_usage": charts},
+            )
         super().perform_destroy(instance)
 
 
@@ -202,6 +217,16 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
                 f"product{'' if stated_by == 1 else 's'} and cannot be deleted. "
                 "Rename it instead, or clear it from those products first.",
                 details={"spec_usage": stated_by},
+            )
+        # PROTECT again, and for the same reason: the admin typed that row's
+        # figures, and deleting the size should not quietly take them with it.
+        charted_in = instance.size_chart_rows.count()
+        if charted_in:
+            raise Conflict(
+                f"“{instance.display}” is in {charted_in} size chart"
+                f"{'' if charted_in == 1 else 's'} and cannot be deleted. "
+                "Rename it instead, or take it out of those charts first.",
+                details={"size_chart_usage": charted_in},
             )
         super().perform_destroy(instance)
 
@@ -241,6 +266,64 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
                     AttributeValue.objects.bulk_update([value, neighbour], ["position"])
 
         return Response(self.get_serializer(self.get_object()).data)
+
+
+class SizeChartViewSet(viewsets.ModelViewSet):
+    """Size charts, each describing one Size attribute (docs/business-rules.md §5b).
+
+    Thin: create, update and delete all go through `catalog.services`, which
+    owns the rules and the audit entries. Unpaginated for the reason the
+    attributes are -- a shop has a handful, and the product form needs all of
+    them to offer the right ones.
+    """
+
+    serializer_class = SizeChartSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = PRODUCT_PERMISSIONS
+    filterset_fields = ["attribute"]
+    pagination_class = None
+
+    def get_queryset(self) -> Any:
+        return (
+            SizeChart.objects.select_related("attribute")
+            .prefetch_related(
+                Prefetch("rows", queryset=SizeChartRow.objects.select_related("attribute_value"))
+            )
+            .annotate(product_count=Count("products"))
+            .order_by("attribute__position", "attribute__name", "position", "name")
+        )
+
+    @staticmethod
+    def _service_data(validated: dict[str, Any]) -> dict[str, Any]:
+        data = {key: value for key, value in validated.items() if key != "attribute"}
+        if "rows" in data:
+            data["rows"] = [
+                {"attribute_value": row["attribute_value_id"], "cells": row.get("cells", [])}
+                for row in data["rows"]
+            ]
+        return data
+
+    def perform_create(self, serializer: Any) -> None:
+        chart = save_size_chart(
+            attribute=serializer.validated_data.get("attribute"),
+            data=self._service_data(serializer.validated_data),
+            actor=self.request.user,
+        )
+        # Re-read, so the response carries the rows and the product count
+        # without a query per row.
+        serializer.instance = self.get_queryset().get(pk=chart.pk)
+
+    def perform_update(self, serializer: Any) -> None:
+        chart = save_size_chart(
+            chart=serializer.instance,
+            attribute=serializer.validated_data.get("attribute"),
+            data=self._service_data(serializer.validated_data),
+            actor=self.request.user,
+        )
+        serializer.instance = self.get_queryset().get(pk=chart.pk)
+
+    def perform_destroy(self, instance: SizeChart) -> None:
+        delete_size_chart(chart=instance, actor=self.request.user)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
@@ -310,9 +393,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         # the service -- not the serializer -- owns the rule about which
         # attributes may be stated (CLAUDE.md §4).
         specs = serializer.validated_data.pop("spec_values", None)
+        chart_given = "size_chart" in serializer.validated_data
+        chart = serializer.validated_data.pop("size_chart", None)
         product = serializer.save(created_by=self.request.user)
         if specs is not None:
             set_product_specs(product=product, value_ids=specs, actor=self.request.user)
+        if chart_given:
+            set_product_size_chart(product=product, chart=chart, actor=self.request.user)
         audit.record(
             action=audit.AuditAction.CREATE,
             entity=product,
@@ -326,9 +413,15 @@ class ProductViewSet(viewsets.ModelViewSet):
             for field in ("name", "status", "published", "featured")
         }
         specs = serializer.validated_data.pop("spec_values", None)
+        # Same arrangement as the specs: the service owns the rule and the
+        # audit entry, so the column is not written by `save()`.
+        chart_given = "size_chart" in serializer.validated_data
+        chart = serializer.validated_data.pop("size_chart", None)
         product = serializer.save()
         if specs is not None:
             set_product_specs(product=product, value_ids=specs, actor=self.request.user)
+        if chart_given:
+            set_product_size_chart(product=product, chart=chart, actor=self.request.user)
         after = {field: getattr(product, field) for field in before}
         old, new = audit.diff(before, after)
         if new:

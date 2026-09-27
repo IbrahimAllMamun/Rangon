@@ -10,6 +10,7 @@ from rest_framework import serializers
 
 from catalog.models import (
     Attribute,
+    AttributeKind,
     AttributeValue,
     Brand,
     Category,
@@ -18,9 +19,10 @@ from catalog.models import (
     ProductAttributeValue,
     ProductImage,
     ProductVariant,
+    SizeChart,
     VariantAttributeValue,
 )
-from catalog.services import spec_payload, unique_slug
+from catalog.services import size_chart_problem, spec_payload, unique_slug
 from core.media import RelativeImageField, media_url, validate_image_upload
 
 #: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
@@ -142,6 +144,28 @@ class AttributeSerializer(serializers.ModelSerializer):
                 "attribute, so it cannot stop being variant-defining. Those SKUs exist "
                 "because of it."
             )
+        return value
+
+    def validate_kind(self, value: str) -> str:
+        """A Size attribute with size charts stays a Size attribute.
+
+        Only a Size attribute may carry a chart (`catalog.services
+        .save_size_chart`), so changing the kind underneath its charts would
+        leave rows the app can read but could never have written -- the same
+        reason `is_variant_defining` cannot flip under its variants.
+        """
+        if (
+            self.instance is not None
+            and self.instance.kind == AttributeKind.SIZE
+            and value != AttributeKind.SIZE
+        ):
+            charts = self.instance.size_charts.count()
+            if charts:
+                raise serializers.ValidationError(
+                    f"{charts} size chart{'' if charts == 1 else 's'} describe "
+                    f"{'this attribute' if charts == 1 else 'it'}, so it must stay a Size "
+                    "attribute. Delete the charts first."
+                )
         return value
 
 
@@ -297,6 +321,75 @@ class CategoryAttributeSerializer(serializers.ModelSerializer):
             "declared_by",
             "values",
         ]
+
+
+class SizeChartRowSerializer(serializers.Serializer):
+    """One size and its figures. `value` and `label` are for reading only: the
+    editor sends the value's id and the cells, and the size's name always comes
+    from the attribute value, so a rename reaches every chart."""
+
+    attribute_value = serializers.UUIDField(source="attribute_value_id")
+    value = serializers.CharField(source="attribute_value.value", read_only=True)
+    # Shadows `Field.label`, as on `VariantAttributeValueSerializer` (D6).
+    label = serializers.CharField(  # type: ignore[assignment]
+        source="attribute_value.display", read_only=True
+    )
+    #: Shape only. Length, blanks and alignment with the columns are the
+    #: service's rules (`catalog.services.save_size_chart`), so a shell meets
+    #: them too and the message comes back keyed to the field.
+    cells = serializers.ListField(
+        child=serializers.CharField(allow_blank=True, trim_whitespace=False)
+    )
+
+
+class SizeChartSerializer(serializers.ModelSerializer):
+    """A size chart, read and written whole.
+
+    The viewset hands `validated_data` to `catalog.services.save_size_chart`
+    rather than calling `save()` -- the rows are nested, and the rules about
+    them (every size one of the attribute's own, one cell per column) belong
+    to the service, not to a serializer (CLAUDE.md §4).
+    """
+
+    # See `AttributeSerializer.instance` (D6).
+    instance: SizeChart | None
+
+    attribute_code = serializers.CharField(source="attribute.code", read_only=True)
+    attribute_name = serializers.CharField(source="attribute.name", read_only=True)
+    columns = serializers.ListField(
+        child=serializers.CharField(allow_blank=True, trim_whitespace=False), required=False
+    )
+    rows = SizeChartRowSerializer(many=True, required=False)
+    #: So the admin can say what a delete would be refused for before trying.
+    product_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SizeChart
+        fields = [
+            "id",
+            "attribute",
+            "attribute_code",
+            "attribute_name",
+            "name",
+            "system",
+            "columns",
+            "notes",
+            "position",
+            "rows",
+            "product_count",
+        ]
+        read_only_fields = ["id"]
+        # The (attribute, name) uniqueness is checked case-insensitively in
+        # the service. DRF's own validator would check it case-sensitively and
+        # make `attribute` required on every PATCH.
+        validators: list[Any] = []
+
+    def get_product_count(self, chart: SizeChart) -> int:
+        """Read from the viewset's annotation; the fallback is a real query."""
+        annotated = getattr(chart, "product_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return chart.products.count()
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -494,6 +587,7 @@ class ProductDetailSerializer(ProductListSerializer):
             "seo_description",
             "specs",
             "spec_value_ids",
+            "size_chart",
             "variants",
             "images",
         ]
@@ -539,9 +633,13 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "seo_title",
             "seo_description",
             "spec_values",
+            "size_chart",
         ]
         read_only_fields = ["id"]
         extra_kwargs = {"slug": {"required": False}}
+
+    # See `AttributeSerializer.instance` (D6).
+    instance: Product | None
 
     def validate_spec_values(self, value: list[Any]) -> list[Any]:
         """Refuse here as well as in the service, and say which field is wrong.
@@ -582,7 +680,30 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"published": ["A draft product cannot be published. Set status to ACTIVE first."]}
             )
+        self._check_size_chart(attrs)
         return attrs
+
+    def _check_size_chart(self, attrs: dict[str, Any]) -> None:
+        """Refuse a chart the category does not use, before anything is written.
+
+        `catalog.services.set_product_size_chart` is the authority; this runs
+        first for the reason `validate_spec_values` does -- on create, a refusal
+        after the save would leave an orphaned draft behind. It also covers the
+        case the service never sees: a category change that strands the chart
+        the product already has.
+        """
+        product = self.instance
+        chart = (
+            attrs["size_chart"]
+            if "size_chart" in attrs
+            else (product.size_chart if product is not None else None)
+        )
+        category = attrs.get("category") or (product.category if product is not None else None)
+        if chart is None or category is None:
+            return
+        problem = size_chart_problem(chart=chart, category=category, product=product)
+        if problem:
+            raise serializers.ValidationError({"size_chart": [problem]})
 
 
 class GenerateVariantsSerializer(serializers.Serializer):
