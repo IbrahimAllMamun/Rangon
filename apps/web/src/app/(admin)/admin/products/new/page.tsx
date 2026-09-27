@@ -65,6 +65,8 @@ export default async function NewProductPage() {
         initial={blankProduct()}
         initialVariants={[]}
         initialSpecValues={[]}
+        initialSizeChart=""
+        sizeCharts={data.sizeCharts}
         categories={data.categories}
         brands={data.brands}
         attributes={data.attributes}

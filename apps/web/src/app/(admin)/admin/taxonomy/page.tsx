@@ -11,6 +11,7 @@ import {
 import { Card, ErrorState } from "@/components/ui/primitives";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
+import type { SizeChartData } from "@/lib/commerce/size-chart";
 
 export const metadata = { title: "Categories & brands" };
 
@@ -47,17 +48,20 @@ export default async function TaxonomyPage() {
   let categories: CategoryRow[] = [];
   let brands: BrandRow[] = [];
   let attributes: AttributeRow[] = [];
+  let sizeCharts: SizeChartData[] = [];
   let error: string | null = null;
 
   try {
-    const [categoryPayload, brandPayload, attributePayload] = await Promise.all([
+    const [categoryPayload, brandPayload, attributePayload, chartPayload] = await Promise.all([
       apiServer<MaybePaged<CategoryRow & { children?: CategoryRow[] }>>("/categories/"),
       apiServer<MaybePaged<BrandRow>>("/brands/"),
       apiServer<MaybePaged<AttributeRow>>("/attributes/"),
+      apiServer<MaybePaged<SizeChartData>>("/size-charts/"),
     ]);
     categories = flatten(rows(categoryPayload));
     brands = rows(brandPayload);
     attributes = rows(attributePayload);
+    sizeCharts = rows(chartPayload);
   } catch (caught) {
     error = caught instanceof Error ? caught.message : "Could not load the taxonomy.";
   }
@@ -93,7 +97,11 @@ export default async function TaxonomyPage() {
             <h2 id="attributes" className="mb-3 text-h4 font-semibold">
               Attributes
             </h2>
-            <AttributeManager attributes={attributes} canManage={canManage} />
+            <AttributeManager
+              attributes={attributes}
+              sizeCharts={sizeCharts}
+              canManage={canManage}
+            />
           </section>
         </div>
       )}
