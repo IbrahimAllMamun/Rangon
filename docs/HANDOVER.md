@@ -75,7 +75,7 @@ Two real bugs were found early by the backend tests and fixed:
 2. A checked-out cart token **collided with its unique index** when the same browser started a second
    cart.
 
-The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D104. **Three are open,
+The defect register in [roadmap.md](roadmap.md#known-defects) now runs to D105. **Three are open,
 and none of them is a money or data-integrity bug:**
 
 | # | Defect |
@@ -88,6 +88,11 @@ Closed on 2026-09-26: **D103** — `migrate` had never granted a new permission 
 although `permissions.md` said it did, so a production database that was migrated but not reseeded
 would never have given managers `content.site_manage`. A `post_migrate` receiver syncs on every
 migrate now (#61). Found while building the footer and site pages (phase 40, #60).
+
+Closed on 2026-09-27: **D105** — a sign-in in production failed with `cannot adapt type
+'IPv4Address'`. It was psycopg's own race (psycopg#1230): with gunicorn's two threads, the first
+lookups of a name-registered type (`IPv4Address`, `UUID`) after a worker started could miss. psycopg
+3.2.3 → 3.3.6; production needs the api image rebuilt to get it.
 
 Closed on 2026-09-21: **D6** — mypy was 271 errors in 41 files, not the 98 this table used to quote,
 because the CI step ran with `|| echo` and had never blocked. It is 0 errors now and the step
