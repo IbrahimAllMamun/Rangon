@@ -24,6 +24,8 @@ Brand     1─n Product
 Product   1─n ProductVariant             Product  1─n ProductImage
 Product   n─n Attribute  (through ProductAttributeAssignment on the category)
 ProductVariant 1─n VariantAttributeValue → AttributeValue → Attribute
+Attribute (kind SIZE) 1─n SizeChart 1─n SizeChartRow → AttributeValue
+Product   n─1 SizeChart  (optional; the product's size guide)
 ProductVariant 1─n Inventory             ProductVariant 1─n ProductImage (optional variant image)
 
 Supplier  1─n PurchaseOrder
@@ -80,6 +82,12 @@ Bags      → Color*, Capacity, Material
 
 Cosmetics batch/expiry are stored on the variant as first-class optional fields
 (`batch_number`, `expiry_date`) because they drive expiry reporting, not just filtering.
+
+**Size charts** describe what a size means. A `SizeChart` belongs to one attribute of kind `SIZE`
+and holds free column headings (`Chest (cm)`, `UK`, `EU`); each `SizeChartRow` is one of that
+attribute's own values with one figure per heading. An attribute may carry several charts — one per
+sizing system, fit or brand — and a `Product` points at the one that describes it
+(`Product.size_chart`, optional). Rules: [business-rules §5b](../business-rules.md#5b-size-charts).
 
 ## Order lifecycle
 

@@ -45,11 +45,13 @@ Nothing here is newer than the log; the list of things still unproven is in
 [roadmap.md](roadmap.md#still-unproven).
 
 ```text
-pytest ................................ 1446 passed                        2026-09-26
-ruff 0.8.4 check + format --check ..... clean, 230 files                   2026-09-26
-mypy .................................. clean, 158 files                   2026-09-26
-frontend tsc --noEmit / next lint ..... clean                              2026-09-26
-vitest ................................ 362 passed                         2026-09-26
+pytest ................................ 1491 passed                        2026-09-27
+ruff 0.8.4 check + format --check ..... clean, 232 files                   2026-09-27
+mypy .................................. clean, 158 files                   2026-09-27
+frontend tsc --noEmit / next lint ..... clean                              2026-09-27
+vitest ................................ 393 passed                         2026-09-27
+size charts, in a browser ............. 17 of 18 checks (18th: the 400     2026-09-27
+                                        the walk provoked), 1280 and 375
 footer & site pages, in a browser ..... admin + storefront, 1280 and 375   2026-09-26
 storefront VAT notes, in a browser .... 8 of 8 checks, 0 CSP refusals      2026-09-18
 query budgets ......................... 20/20 pass                         2026-09-14
@@ -264,6 +266,7 @@ each lives in, is in [.claude/open-questions.md](../.claude/open-questions.md).
 | Why is it built this way? | `docs/architecture/decisions/` (12 ADRs) |
 | What does the business do in case X? | `docs/business-rules.md` |
 | What endpoints exist? | `docs/api/endpoints.md` + `/api/docs` |
+| Where are size charts defined, and how does a product get one? | Admin → Catalog → Categories, on each Size attribute; the product form's Size guide card. `docs/business-rules.md` §5b |
 | How are the navbar, footer and About/Contact/policy pages edited? | Admin → Storefront → Navigation, and → Footer & pages; `docs/architecture/navigation.md` (§10 for the footer) and ADR-0012 |
 | It is 2 a.m. and it is broken | `docs/operations/disaster-recovery.md` |
 | Can we launch? | `docs/operations/go-live-checklist.md` |

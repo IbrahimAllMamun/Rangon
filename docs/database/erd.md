@@ -22,6 +22,10 @@ erDiagram
     ATTRIBUTE ||--o{ ATTRIBUTE_VALUE : allows
     PRODUCT_VARIANT ||--o{ VARIANT_ATTRIBUTE_VALUE : described_by
     ATTRIBUTE_VALUE ||--o{ VARIANT_ATTRIBUTE_VALUE : used_in
+    ATTRIBUTE ||--o{ SIZE_CHART : described_by
+    SIZE_CHART ||--o{ SIZE_CHART_ROW : contains
+    ATTRIBUTE_VALUE ||--o{ SIZE_CHART_ROW : measured_in
+    SIZE_CHART |o--o{ PRODUCT : sizes
 
     PRODUCT_VARIANT ||--o{ INVENTORY : stocked_as
     PRODUCT_VARIANT ||--o{ INVENTORY_TRANSACTION : moves

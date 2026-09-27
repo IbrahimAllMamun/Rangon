@@ -92,7 +92,7 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /shop/home/` | 45 | **yes** | 29 · 0.16 s | **511 · 2.42 s** |
 | `GET /shop/products/` | 25 | **yes** | 13 · 0.09 s | **363 · 1.29 s** |
 | `GET /purchase-orders/` | — | **yes** (growth only) | 15 · 0.10 s | **156 · 0.58 s** |
-| `GET /shop/products/{slug}/` | 18 | **yes** (+ growth × 2) | 14 | 15 |
+| `GET /shop/products/{slug}/` | 18 | **yes** (+ growth × 3) | 15; 16 with a size chart | 15 |
 | `GET /pos/products/` | 12 | **yes** (+ growth) | 5 | **81 for 8 products** |
 | `GET /pos/lookup/` | 12 | **yes** | 9 | — |
 | `GET /products/` (admin) | 25 | **yes** (+ growth) | 6 | 21 · 0.42 s |
@@ -112,7 +112,21 @@ more, not one per link.
 
 Product detail went 13 → 14 on 2026-09-14, when it gained the specification list
 (`ProductAttributeValue`). One query, and it stays one however many specifications a product
-states — see below. Four of its eighteen are still spare.
+states — see below.
+
+On 2026-09-27 it measured **15** without a size chart — on the commit before size charts too, so
+the 14 above had gone stale in between — and **16** with one. The chart and its attribute ride on
+the product row's join (`select_related("size_chart__attribute")`); its rows and their sizes are a
+single `Prefetch` carrying `select_related("attribute_value")`, which issues **no** query for a
+product without a chart. `test_query_count_does_not_grow_with_the_size_chart` compares a one-row
+chart with a six-row one, and the budget test now measures a product that has a chart, since that
+is the most a detail page reads. Two of its eighteen are spare.
+
+New tables, no new indexes. `catalog_sizechart` is read by attribute (the unique `(attribute, name)`
+constraint's leading column); `catalog_sizechartrow` by chart (the unique `(chart, attribute_value)`
+constraint's leading column) and by size, for the delete refusal (Django's automatic FK index);
+`catalog_product.size_chart_id` by chart, for `product_count` and the delete refusal (the automatic
+FK index).
 
 All eleven are asserted in `apps/api/tests/test_performance.py`. That was not true
 until 2026-09-09: the heading said "enforced in tests" while only the first two
