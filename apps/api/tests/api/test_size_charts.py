@@ -495,6 +495,26 @@ class TestAProductsChart:
         product.refresh_from_db()
         assert product.category_id == shirts.pk
 
+    def test_an_unrelated_edit_is_not_held_hostage_by_a_stale_chart(self, admin, sizes):
+        """The category stops declaring Size after the chart was set. Saving
+        the product's name must still work -- only setting the chart, or
+        moving the category, re-asks whether it fits."""
+        shirts = factories.category(name="Shirts")
+        link = CategoryAttribute.objects.create(category=shirts, attribute=sizes["size"])
+        colour, _ = factories.attribute("color", name="Colour", values=["Black"])
+        CategoryAttribute.objects.create(category=shirts, attribute=colour)
+        product = factories.product(category=shirts)
+        set_product_size_chart(product=product, chart=make_chart(sizes))
+        link.delete()
+
+        response = admin.patch(f"/api/v1/products/{product.pk}/", {"featured": True}, format="json")
+
+        assert response.status_code == 200, response.content
+        same_category = admin.patch(
+            f"/api/v1/products/{product.pk}/", {"category": str(shirts.pk)}, format="json"
+        )
+        assert same_category.status_code == 200, same_category.content
+
     def test_a_category_change_that_clears_the_chart_is_fine(self, admin, sizes):
         shirts = factories.category(name="Shirts")
         CategoryAttribute.objects.create(category=shirts, attribute=sizes["size"])

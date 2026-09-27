@@ -691,8 +691,18 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         after the save would leave an orphaned draft behind. It also covers the
         case the service never sees: a category change that strands the chart
         the product already has.
+
+        Only when one of those two is actually happening. A category can stop
+        declaring Size after a chart was set; re-asking on every save would
+        make that product uneditable for a name change, and the chart is not
+        what the shopkeeper touched.
         """
         product = self.instance
+        category_moves = "category" in attrs and (
+            product is None or attrs["category"].pk != product.category_id
+        )
+        if "size_chart" not in attrs and not category_moves:
+            return
         chart = (
             attrs["size_chart"]
             if "size_chart" in attrs
