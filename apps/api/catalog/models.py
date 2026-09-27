@@ -191,6 +191,81 @@ class CategoryAttribute(BaseModel):
         return f"{self.category.name} -> {self.attribute.name}"
 
 
+class SizeChart(BaseModel):
+    """A measurement or conversion table for one Size attribute.
+
+    Sizes mean different things in different places: a UK 38 is an EU 48, and
+    one brand's M is another's L. So a Size attribute carries as many charts as
+    the shop needs -- "Men's shirts (UK)", "Kids", "Shoe conversion" -- and each
+    product picks the one that describes it (docs/business-rules.md §5b).
+
+    The rows are the attribute's own values rather than free text, so the order
+    set on the attribute screen is the order every chart reads in, and renaming
+    "XL" renames it everywhere. The columns are free labels because they are
+    the part that differs by region: `Chest (cm)` in one chart, `UK` / `US` /
+    `EU` in another.
+    """
+
+    attribute = models.ForeignKey(Attribute, on_delete=models.PROTECT, related_name="size_charts")
+    name = models.CharField(max_length=120)
+    system = models.CharField(
+        max_length=40, blank=True, help_text="Sizing system, e.g. International, UK, EU, US."
+    )
+    #: Ordered column labels. Each row's `cells` is aligned to this by index,
+    #: and the service refuses a chart where the two disagree.
+    columns = models.JSONField(default=list, blank=True)
+    notes = models.TextField(blank=True, help_text="How to measure, shown under the chart.")
+    position = models.PositiveIntegerField(default=0)
+
+    created_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "catalog_sizechart"
+        ordering = ("position", "name")
+        constraints = [
+            models.UniqueConstraint(fields=["attribute", "name"], name="catalog_sizechart_uniq")
+        ]
+        # No explicit index: "the charts for this attribute" is served by the
+        # unique constraint's leading column, and "which products use this
+        # chart" by Django's automatic index on `Product.size_chart`.
+
+    def __str__(self) -> str:
+        return f"{self.attribute.name}: {self.name}"
+
+
+class SizeChartRow(BaseModel):
+    """One size in a chart, and what it measures.
+
+    PROTECT on the value, the same as every other table that points at one: a
+    size a chart describes is refused deletion in words
+    (`catalog.api.views.AttributeValueViewSet`) rather than taking the row the
+    admin typed with it.
+    """
+
+    chart = models.ForeignKey(SizeChart, on_delete=models.CASCADE, related_name="rows")
+    attribute_value = models.ForeignKey(
+        AttributeValue, on_delete=models.PROTECT, related_name="size_chart_rows"
+    )
+    #: One string per `chart.columns` entry, in the same order.
+    cells = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        db_table = "catalog_sizechartrow"
+        # The attribute's own order, so XS to XXL reads the same in every chart,
+        # on the attribute screen and on the product page.
+        ordering = ("attribute_value__position", "attribute_value__value")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chart", "attribute_value"], name="catalog_sizechartrow_uniq"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.chart.name}: {self.attribute_value.display}"
+
+
 class Product(BaseModel):
     name = models.CharField(max_length=200)
     slug = models.SlugField(max_length=220, unique=True)
@@ -210,6 +285,16 @@ class Product(BaseModel):
     featured = models.BooleanField(default=False)
     is_final_sale = models.BooleanField(
         default=False, help_text="Not returnable (docs/business-rules.md §2.2)."
+    )
+    #: PROTECT: a chart products still use is refused deletion in words
+    #: (`catalog.services.delete_size_chart`) rather than silently vanishing
+    #: from their pages.
+    size_chart = models.ForeignKey(
+        SizeChart,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="products",
     )
 
     seo_title = models.CharField(max_length=200, blank=True)

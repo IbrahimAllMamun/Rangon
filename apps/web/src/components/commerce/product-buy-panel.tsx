@@ -3,6 +3,7 @@
 import { Check, Minus, Plus, ShoppingBag } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { SizeGuide } from "@/components/commerce/size-guide";
 import { Badge, Button } from "@/components/ui/primitives";
 import type { ShopProduct, ShopVariant } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
@@ -36,6 +37,21 @@ export function ProductBuyPanel({
 
   // Group the variant-defining attributes so we can render one row per axis.
   const axes = useMemo(() => buildAxes(product.variants), [product.variants]);
+
+  // The size guide sits under the axis it describes. A chart for an axis this
+  // product's live variants do not use still shows, once, after all of them —
+  // it was chosen on purpose, and hiding it would be a silent failure.
+  const chart = product.size_chart ?? null;
+  const chartAxis =
+    chart && axes.some((axis) => axis.code === chart.attribute_code) ? chart.attribute_code : null;
+  const guide = chart ? (
+    <SizeGuide
+      chart={chart}
+      selectedValue={selected?.attributes[chart.attribute_code]?.value}
+      productName={product.name}
+      className="mt-1"
+    />
+  ) : null;
 
   const rating = product.reviews?.average ?? null;
   const max = selected?.available ?? 0;
@@ -151,8 +167,11 @@ export function ProductBuyPanel({
                 );
               })}
             </div>
+            {axis.code === chartAxis && guide}
           </fieldset>
         ))}
+
+        {chart && !chartAxis && guide}
 
         <div>
           <label htmlFor="quantity" className="text-body-sm font-semibold">

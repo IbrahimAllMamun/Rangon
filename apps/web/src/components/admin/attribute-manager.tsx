@@ -22,7 +22,8 @@
  *    API turns that into a sentence, and this surfaces the sentence.
  */
 
-import { ArrowDown, ArrowUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Ruler, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -40,6 +41,7 @@ import {
   Select,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { type SizeChartData, chartTitle } from "@/lib/commerce/size-chart";
 
 export type AttributeKind = "TEXT" | "COLOR" | "NUMBER" | "SIZE";
 
@@ -413,13 +415,82 @@ function AttributeValueForm({
   );
 }
 
+/* ------------------------------------------------------------ size charts -- */
+
+/**
+ * The charts one Size attribute carries (docs/business-rules.md §5b).
+ *
+ * Listed here because a chart's rows *are* this attribute's values — this is
+ * where the sizes are defined and ordered, so it is where their charts live.
+ * Editing happens on the chart's own page: a grid of sizes by headings is too
+ * wide to open inline in a list that already runs to several screens.
+ */
+function SizeCharts({
+  attribute,
+  charts,
+  canManage,
+}: {
+  attribute: AttributeRow;
+  charts: SizeChartData[];
+  canManage: boolean;
+}) {
+  return (
+    <div className="mt-4 rounded-md border border-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-body-sm font-medium">
+          <Ruler className="size-4 text-muted" aria-hidden /> Size charts
+        </h3>
+        {canManage && (
+          <Button asChild variant="ghost" size="sm">
+            <Link href={`/admin/taxonomy/size-charts/new?attribute=${attribute.id}`}>
+              <Plus className="size-4" aria-hidden /> New size chart
+              <span className="sr-only"> for {attribute.name}</span>
+            </Link>
+          </Button>
+        )}
+      </div>
+
+      {charts.length === 0 ? (
+        <p className="mt-2 text-caption text-muted">
+          None yet. A chart tells shoppers what each {attribute.name.toLowerCase()} measures, or
+          what it is in UK, US or EU sizing — and each product picks the one that fits it.
+        </p>
+      ) : (
+        <ul className="mt-2 divide-y divide-border">
+          {charts.map((chart) => (
+            <li key={chart.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2">
+              <Link
+                href={`/admin/taxonomy/size-charts/${chart.id}`}
+                className="text-body-sm font-medium text-brand-700 hover:underline"
+              >
+                {chartTitle(chart)}
+              </Link>
+              <span className="text-caption text-muted">
+                {chart.rows.length} size{chart.rows.length === 1 ? "" : "s"} ·{" "}
+                {chart.columns.join(", ")}
+              </span>
+              <span className="text-caption text-muted">
+                {chart.product_count
+                  ? `used by ${chart.product_count} product${chart.product_count === 1 ? "" : "s"}`
+                  : "not used yet"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- manager -- */
 
 export function AttributeManager({
   attributes,
+  sizeCharts = [],
   canManage,
 }: {
   attributes: AttributeRow[];
+  sizeCharts?: SizeChartData[];
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -682,6 +753,14 @@ export function AttributeManager({
                   >
                     <Plus className="size-4" aria-hidden /> Add a value
                   </Button>
+                )}
+
+                {attribute.kind === "SIZE" && (
+                  <SizeCharts
+                    attribute={attribute}
+                    charts={sizeCharts.filter((chart) => chart.attribute === attribute.id)}
+                    canManage={canManage}
+                  />
                 )}
               </li>
             );

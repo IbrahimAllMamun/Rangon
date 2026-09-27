@@ -7,6 +7,7 @@
  * unpaginated, so one helper keeps the two pages honest with each other.
  */
 import { apiServer } from "@/lib/api/server";
+import type { SizeChartData, SizeChartOption } from "@/lib/commerce/size-chart";
 import type { MatrixAttribute } from "@/lib/commerce/variant-matrix";
 
 export interface CategoryOption {
@@ -35,13 +36,16 @@ export interface ProductFormData {
   attributes: MatrixAttribute[];
   /** Attribute-value ids by `attributeCode:value`, for binding images to colours. */
   valueIds: Record<string, string>;
+  /** Every size chart; the form narrows them to the category's sizes. */
+  sizeCharts: SizeChartOption[];
 }
 
 export async function getProductFormData(): Promise<ProductFormData> {
-  const [categories, brands, attributes] = await Promise.all([
+  const [categories, brands, attributes, sizeCharts] = await Promise.all([
     apiServer<CategoryOption[]>("/categories/"),
     apiServer<BrandOption[]>("/brands/?is_active=true"),
     apiServer<AttributeResponse[]>("/attributes/"),
+    apiServer<SizeChartData[]>("/size-charts/"),
   ]);
 
   const valueIds: Record<string, string> = {};
@@ -69,5 +73,13 @@ export async function getProductFormData(): Promise<ProductFormData> {
         })),
       })),
     valueIds,
+    // Only what the picker shows: a chart's grid is not needed to choose it.
+    sizeCharts: sizeCharts.map((chart) => ({
+      id: chart.id,
+      name: chart.name,
+      system: chart.system,
+      attribute_code: chart.attribute_code,
+      attribute_name: chart.attribute_name,
+    })),
   };
 }

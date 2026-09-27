@@ -26,8 +26,8 @@ Authoritative machine-readable version: `/api/schema/` (drf-spectacular). This i
 
 ## Catalog — `/api/v1/`
 
-`categories/` `brands/` `attributes/` `attribute-values/` `products/` `products/{id}/variants/`
-`variants/` `products/{id}/images/` — full CRUD, `P: products.*`.
+`categories/` `brands/` `attributes/` `attribute-values/` `size-charts/` `products/`
+`products/{id}/variants/` `variants/` `products/{id}/images/` — full CRUD, `P: products.*`.
 
 Extras:
 
@@ -38,6 +38,12 @@ Extras:
 | GET | `variants/lookup/?code=<barcode\|sku>` | exact-first lookup (POS + admin) |
 | POST | `variants/{id}/barcode/` | generate a barcode if missing |
 | POST | `products/import/` · GET `products/export/` | CSV bulk (`products.create`) |
+| GET/POST/PATCH/DELETE | `size-charts/` | size charts, each for one Size attribute ([business-rules §5b](../business-rules.md#5b-size-charts)). Unpaginated; `?attribute=<id>` filters. Body: `attribute` (create only), `name`, `system`, `notes`, `position`, `columns: [str]`, `rows: [{attribute_value, cells: [str]}]`. Rows are **replaced**, not merged, and the finished chart is validated whole — one cell per column, sizes from the chart's attribute only. Reads add `attribute_code`, `attribute_name`, each row's `value`/`label`, and `product_count`. `DELETE` answers `409` with `details.product_count` while products use the chart |
+
+`products/` write and detail carry `size_chart` (a chart id, or `null`). A chart for a size the
+product's category does not use is refused on the `size_chart` field, and so is a category change
+that would strand the chart the product already has. Deleting an attribute value a chart row uses,
+or a Size attribute with charts, answers `409` with `details.size_chart_usage`.
 
 `DELETE` on a product or a variant **archives rather than deletes** when it has stock, ledger rows or
 sales: `OrderItem`, `Inventory` and `InventoryTransaction` all reference `ProductVariant` with
@@ -242,7 +248,7 @@ The navbar, the footer and the site pages ([navigation.md](../architecture/navig
 |---|---|---|
 | GET | `home/` | hero, featured categories, new arrivals, best sellers, promos |
 | GET | `products/` | search + facet filters + sort; only published, in-stock-aware |
-| GET | `products/{slug}/` | detail incl. variants, attributes, images, related, reviews |
+| GET | `products/{slug}/` | detail incl. variants, attributes, images, related, reviews, and `size_chart` — `{name, system, attribute_code, attribute_name, columns, rows: [{value, label, cells}], notes}` or `null`. Detail only; a listing carries no chart |
 | GET | `categories/` · `categories/{slug}/` | tree + landing data |
 | GET | `facets/?category=` | available filter values with counts |
 | GET/POST/PATCH/DELETE | `cart/` · `cart/items/` · `cart/items/{id}/` | server-priced; guest via `X-Cart-Token` |

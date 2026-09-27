@@ -32,6 +32,8 @@ interface AdminProductDetail {
   seo_description: string;
   /** Attribute-value ids stated as specifications — the flat set the form ticks. */
   spec_value_ids: string[];
+  /** The size chart's id, or null for none. */
+  size_chart: string | null;
   variants: ExistingVariant[];
   images: ProductImageRow[];
 }
@@ -143,6 +145,8 @@ export default async function EditProductPage({ params }: { params: Params }) {
           initial={initial}
           initialVariants={product.variants}
           initialSpecValues={product.spec_value_ids ?? []}
+          initialSizeChart={product.size_chart ?? ""}
+          sizeCharts={data.sizeCharts}
           categories={data.categories}
           brands={data.brands}
           attributes={data.attributes}

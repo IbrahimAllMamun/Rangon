@@ -699,6 +699,67 @@ prose, because care advice is a sentence, not a value from a list.
 
 ---
 
+## 5b. Size charts
+
+A size means different things in different places: a UK 38 is an EU 48, a shoe's 42 is a UK 8, and
+one brand's M is another's L. So sizing is described by **size charts**, and a shop keeps as many as
+it needs.
+
+**A size chart belongs to one Size attribute** (`Attribute.kind = SIZE`) — `Size` (XS–XXL), `Shoe
+size` (38–44) — and one attribute may carry several: "Men's tops", "Women's tops", "Kids", "Shoe
+conversion". Each chart has a name, an optional **sizing system** label (International, UK, EU, US…),
+optional "how to measure" notes, and a grid:
+
+- **Rows are the attribute's own values**, never free text. They read in the attribute's order, a
+  renamed size is renamed in every chart, and a chart can only describe sizes the shop has. A chart
+  may cover some of the sizes — a kids' chart without XXL.
+- **Columns are free headings**, because they are what differs by region: measurements
+  (`Chest (cm)`, `Waist (in)`) in one chart, other sizing systems (`UK`, `US`, `EU`) in another, or
+  both. Figures are text, so ranges such as `92–96` are fine.
+
+**Each product picks zero or one chart** on the product form, and the product page offers it as a
+"Size guide" beside the size options. Charts live under Categories & brands → Attributes, on the Size
+attribute they describe.
+
+The API enforces all of the following; the screens only say so first.
+
+1. **Only a Size attribute carries a chart**, and a Size attribute with charts cannot change kind.
+2. **A chart is valid as a whole.** Every row is one of the attribute's values, once; every row has
+   exactly one figure per column and at least one that is not blank; headings are non-empty and
+   differ (ignoring case); names are unique per attribute (ignoring case); at most 12 columns. A row
+   short of a figure is refused rather than padded, because a shifted figure sits under the wrong
+   heading and still looks like an answer.
+3. **Rows are replaced, not merged**, as a product's specifications are (§5a): the editor sends the
+   grid as it now stands. Changing the columns without sending the rows is refused, since every
+   stored row would then be the wrong width.
+4. **A chart cannot move to another attribute** — its rows are that attribute's values.
+5. **A product may only use a chart for a size its category offers**, by the scoping §5a rule 3
+   applies to variant axes: the category's attributes, inherited down the tree, or an axis the
+   product's saved variants are already built on; a category that declares nothing offers every
+   chart. A shirt is never given a shoe chart. Changing a product's category in a way that strands
+   its chart is refused on the `size_chart` field — pick another chart, or clear it, in the same
+   save.
+6. **Nothing is deleted out from under a chart, and no chart out from under a product.** Each of
+   these is refused with a sentence and a count, not a bare 409: deleting a chart any product uses,
+   deleting a size a chart row uses, deleting a Size attribute that has charts.
+
+Every chart create, change and delete, and every change of a product's chart, is written to the audit
+log with before and after. Saving a chart asks the storefront to drop its cached product pages
+(`products` tag) on commit.
+
+*Settled with the owner on 2026-09-27, as part of the plan they approved; each can be revisited:*
+
+- *One chart per product.* A measurement chart and a conversion chart can be one table with both
+  kinds of column.
+- *Figures are text.* There is no centimetre/inch switch for the shopper; that needs numeric
+  cells and a unit per column.
+- *No category-level default chart.* Every product picks its own. A category default, or a
+  `size_chart` column in the CSV import, would help a large catalogue.
+- *A chart in use cannot be deleted*, rather than being silently cleared from its products — their
+  size guides would otherwise vanish from the storefront without anyone deciding that.
+
+---
+
 ## 6a. Reviews
 
 A review is a **claim about a purchase**, so the API treats it as one rather than as free-form

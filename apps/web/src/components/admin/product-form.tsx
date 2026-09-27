@@ -30,6 +30,12 @@ import {
 } from "@/lib/commerce/category-attributes";
 import type { ProductValues } from "@/lib/commerce/product-values";
 import {
+  type SizeChartOption,
+  chartTitle,
+  chartsForProduct,
+  groupByAttribute,
+} from "@/lib/commerce/size-chart";
+import {
   type ExistingVariant,
   type MatrixAttribute,
   MAX_MATRIX_ROWS,
@@ -87,6 +93,8 @@ export function ProductForm({
   initial,
   initialVariants,
   initialSpecValues,
+  initialSizeChart,
+  sizeCharts,
   categories,
   brands,
   attributes,
@@ -100,6 +108,10 @@ export function ProductForm({
   initialVariants: ExistingVariant[];
   /** Attribute-value ids this product already states as specifications. */
   initialSpecValues: string[];
+  /** The size chart's id, or "" for none. */
+  initialSizeChart: string;
+  /** Every size chart in the shop; the form offers the category's. */
+  sizeCharts: SizeChartOption[];
   categories: CategoryOption[];
   brands: BrandOption[];
   attributes: MatrixAttribute[];
@@ -115,6 +127,7 @@ export function ProductForm({
   );
   const [variants, setVariants] = useState<ExistingVariant[]>(initialVariants);
   const [specValues, setSpecValues] = useState<string[]>(initialSpecValues);
+  const [sizeChart, setSizeChart] = useState(initialSizeChart);
   const [defaultPrice, setDefaultPrice] = useState("");
   const [defaultCost, setDefaultCost] = useState("");
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
@@ -206,6 +219,9 @@ export function ProductForm({
         // The set as it now stands, not a diff — the API replaces it. Sending
         // it on every save is what makes un-ticking the last one stick.
         spec_values: specValues,
+        // Null clears it. The API refuses a chart the category does not use,
+        // and says so against this field.
+        size_chart: sizeChart || null,
       };
 
       // 1. The product row itself.
@@ -347,6 +363,21 @@ export function ProductForm({
     () => resolveVariantAxes(attributes, declaredAxes(category.rows), axesInUse(variants)),
     [attributes, category.rows, variants],
   );
+  // The same scoping as the axes, and the rule the API enforces: a chart for a
+  // size the category uses, or one the saved variants are built on.
+  const chartGroups = useMemo(
+    () =>
+      groupByAttribute(
+        chartsForProduct(
+          sizeCharts,
+          (category.rows ?? []).map((row) => row.code),
+          axesInUse(variants),
+          sizeChart,
+        ),
+      ),
+    [sizeCharts, category.rows, variants, sizeChart],
+  );
+  const chosenChart = sizeCharts.find((chart) => chart.id === sizeChart);
 
   return (
     <form onSubmit={submit} noValidate className="space-y-6">
@@ -646,6 +677,62 @@ export function ProductForm({
             disabled={saving}
             truncated={truncated}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Size guide</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Field
+            label="Size chart"
+            htmlFor="size_chart"
+            error={errorFor("size_chart")}
+            hint="Shoppers open it as “Size guide” beside the size options. Charts are defined per size attribute under Categories & brands → Attributes."
+          >
+            <Select
+              id="size_chart"
+              value={sizeChart}
+              onChange={(event) => {
+                setSizeChart(event.target.value);
+                setSaved(false);
+              }}
+              invalid={Boolean(errorFor("size_chart"))}
+            >
+              <option value="">No size chart</option>
+              {chartGroups.map((group) => (
+                <optgroup key={group.name} label={group.name}>
+                  {group.charts.map((chart) => (
+                    <option key={chart.id} value={chart.id}>
+                      {chartTitle(chart)}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
+          </Field>
+          {chartGroups.length === 0 && (
+            <p className="text-body-sm text-muted">
+              No size chart exists for this category&rsquo;s sizes yet.{" "}
+              <a className="underline hover:text-brand-600" href="/admin/taxonomy#attributes">
+                Create one
+              </a>{" "}
+              on a Size attribute.
+            </p>
+          )}
+          {chosenChart && (
+            <p className="text-caption text-muted">
+              <a
+                className="underline hover:text-brand-600"
+                href={`/admin/taxonomy/size-charts/${chosenChart.id}`}
+              >
+                Open {chartTitle(chosenChart)}
+              </a>{" "}
+              — a {chosenChart.attribute_name.toLowerCase()} chart. Editing it changes every
+              product that uses it.
+            </p>
+          )}
         </CardContent>
       </Card>
 

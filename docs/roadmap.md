@@ -9,7 +9,16 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-26**.
+Last updated: **2026-09-27**.
+
+**Products now carry a size chart** (phase 41). A Size attribute holds any number of charts — one
+per sizing system, fit or brand, defined under Categories & brands → Attributes — whose rows are the
+attribute's own sizes and whose columns are free headings, so one chart can give measurements
+(`Chest (cm)`) and another conversions (`UK` / `US` / `EU`). Each product picks one, scoped to the
+sizes its category uses, and the product page opens it as a "Size guide" beside the size options.
+Rules in [business-rules §5b](business-rules.md#5b-size-charts); evidence in
+[§ Size charts](#size-charts-2026-09-27). Building it found [D106](#known-defects): `seed_demo` run a
+second time without `--reset` rolls back.
 
 **The storefront footer and site pages are now edited in the admin** (phase 40, merged as #60;
 Storefront → Footer & pages, [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md)).
@@ -407,6 +416,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 38  | Business report → net profit         | ✅      | ✅       | **F4 shipped 2026-08-31**, unblocked by settling VAT. `reports.services.business_summary`, `GET /reports/business-summary/` and `/admin/reports/business`: revenue net of VAT, less refunds, less COGS plus the cost recovered from restocked returns, less expenses, to net profit — with a CSV of the statement |
 | 39  | Trade documents                       | ✅      | ✅       | **Damage, stock count and transfer shipped 2026-08-27.** `/admin/inventory` gains a write-off panel and a Branch column; `/admin/inventory/transfers` and `/admin/inventory/counts` are new, with a count sheet that shows variance live. The count was **not** the form work this row promised — `counted_quantity` had no write path at all, so `apply` was a no-op; `record/` and `cancel/` were added and `apply/` now refuses an empty or already-applied sheet. Barcode label sheets shipped 2026-09-04 (`/admin/labels`), as the phase 24 row says. **Quotation and the cheque register were dropped 2026-09-09 on the owner's decision** — both are wholesale instruments, and this shop sells retail: a quotation is how you sell to a business customer, and a cheque register only earns its keep when suppliers are paid by cheque. A cheque can still be recorded today as a payment into a `BANK` account; what is declined is the Pending → Deposited → Cleared / Bounced lifecycle around it. Revisit if the trade changes |
 | 40  | Footer & site pages                   | ✅      | ✅       | **Shipped 2026-09-26 (#60).** `/admin/footer`: the footer's text, the storefront's address, phone, email and opening hours (blank falls back to the organisation's), a Google map, eleven social platforms with a show/hide tick and a custom order, up to four link columns (pages, categories, any address, or a self-updating "Top categories"), and About, Contact, the four policies and the shop's own `/pages/*` in a TipTap editor, sanitised server-side with `nh3`. The storefront footer, About, Contact and the policies read from the API with static fallbacks. [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md) · [navigation.md §10](architecture/navigation.md#10-footer). Found [D103](#known-defects) on the way |
+| 41  | Size charts                           | ✅      | ✅       | **Built 2026-09-27.** `SizeChart` + `SizeChartRow` (`catalog.0007`): charts per Size attribute, rows the attribute's own values, columns free headings. `/api/v1/size-charts/`, `Product.size_chart`, the chart on the shop detail payload. Admin: a Size charts list on every Size attribute, a grid editor at `/admin/taxonomy/size-charts/[id]`, and a Size guide picker on the product form scoped by category. Storefront: a Size guide dialog under the size options. Four demo charts seeded. [business-rules §5b](business-rules.md#5b-size-charts) |
 
 Phases 35–39 come from a signed-in, read-only walk of all 56 screens of the **Bseba ERP**
 (`erp.bseba.com`, Dostishop tenant) on 2026-08-21 — written up with a have-it / build-it / decline-it
@@ -430,6 +440,72 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Size charts, 2026-09-27
+
+Asked for: size charts on the product page. Several charts in the database, each tied to a size
+attribute, because sizes are defined differently around the world; charts defined in the attribute
+section; the admin choosing which chart a product uses. A plan was written and approved first, with
+five defaults the owner accepted: one chart per product, figures as text (no cm/inch switch), no
+category-level default, a chart in use refused deletion, and charts only on Size attributes —
+[business-rules §5b](business-rules.md#5b-size-charts).
+
+**What shipped.** `SizeChart` (attribute, name, sizing system, headings, notes) and `SizeChartRow`
+(one attribute value, one figure per heading), `Product.size_chart`, all in `catalog.0007` —
+additive, nothing backfilled. The rules live in `catalog.services`: `save_size_chart` validates the
+finished chart as a whole, `set_product_size_chart` and `size_chart_problem` apply the category
+scoping §5a already uses for variant axes, `delete_size_chart` refuses in words. The existing
+attribute, value and product endpoints gained the refusals a chart needs. Seed: Men's tops, Women's
+tops, Men's trousers and a shoe conversion, assigned to the eight clothing and shoe products.
+
+**The browser pass** — owner signed in, `next dev` on 4000 against a seeded API on 8000, a real
+Chromium — ran 18 checks, 17 passing outright:
+
+- Categories & brands lists a Size charts block under both Size attributes.
+- A seeded chart opens in the editor; a column added, filled and saved.
+- A blank heading is refused before the request is sent; a duplicate name is refused by the API and
+  shown against the name field.
+- Delete is disabled on a chart three products use.
+- A new Shoe size chart is created (landing on its own page), then deleted once unused.
+- The Oxford shirt's form shows its chart, and offers no shoe chart.
+- On the storefront the Size guide opens with the chart, marks the current size "Selected", and
+  Escape returns focus to the trigger.
+- At 375 px the dialog fits (343 px), the page does not scroll sideways, the size column stays
+  pinned while the table scrolls, and a hint says how many columns there are.
+- A product without a chart has no trigger.
+
+The eighteenth, "no console errors", logged exactly one: the 400 from the duplicate-name refusal
+the walk triggered on purpose.
+
+It found three things no gate had:
+
+- The editor's subtitle read "Size size chart" for the attribute called Size.
+- On a phone a five-column chart looked like a two-column one, because the table's own border read
+  as its end — hence the hint.
+- The detail budget document was a query behind: 15, not 14, on the commit before this one too.
+
+All three are fixed or recorded here. Re-reading the diff before pushing found a fourth: the
+product serializer re-checked the chart on **every** save, so a product whose category later stopped
+declaring Size could not have its name changed. It now asks only when the chart is being set or the
+category actually moves, and `test_an_unrelated_edit_is_not_held_hostage_by_a_stale_chart` pins it.
+
+```text
+backend  tests/api/test_size_charts.py                43 new
+         tests/test_performance.py                    1 new (chart growth), 1 changed (budget with a chart)
+         full suite                                   1491 passed
+web      lib/commerce/size-chart.test.ts              20 new
+         components/admin/size-chart-editor.test.tsx  5 new
+         components/commerce/size-guide.test.tsx      6 new
+         full vitest                                  393 passed
+gates    ruff 0.8.4 check + format --check, mypy (158 files), makemigrations --check, tsc, next lint: clean
+seed     seed_demo --reset twice: clean; four charts, eight products with one
+```
+
+**Not proven:** the storefront's cache refresh when a chart is saved. It pings `products` on commit,
+but the pass had no `WEB_REVALIDATE_URL`; see [§ Still unproven](#still-unproven).
+
+Deploying needs `manage.py migrate` (`catalog.0007`). No new permission code: charts use
+`products.*`, like the attributes they belong to.
 
 ### Footer, social links, map and site pages, 2026-09-26
 
@@ -2224,6 +2300,7 @@ Do not describe any of these as working.
 | Load / performance                      | Query budgets **are** asserted — `tests/test_performance.py` and `tests/test_concurrency.py` ran 38 passed on 2026-09-21. What is still missing is a **load test**: a budget is a query count, not a latency under concurrency, and nothing has driven listing, checkout or POS search at peak |
 | Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**. 2026-09-21 is the argument for one: auditing a single control found every rate limit bypassable by a header and the audit trail writable by the caller ([D88](#known-defects)), both of which this table and `security.md` had listed as present. **2026-09-23 made the same argument three more times**: auditing uploads, the session and branch scope found receipts public, sign-out not revoking after thirty idle minutes, every report readable for any branch, and stock transferable out of any branch ([D91–D94](#known-defects)) — all four listed as controlled. **2026-09-24 once more**: of five more controls measured, CORS and CSP held, but the CSRF token `security.md` listed had never been built ([D101](#known-defects)), one error path echoed SQL ([D99](#known-defects)), and the order-tracking link returned the staff record ([D97](#known-defects)) |
 | Deployment                              | Compose prod stack + green CI;**no live environment** — nothing has ever been deployed                                                     |
+| Size chart cache refresh                | Saving a size chart pings the web app to drop every cached product page (`products`) on commit. Never exercised end to end — the 2026-09-27 pass had no `WEB_REVALIDATE_URL`. Without it, a chart edit reaches the storefront within the product page's 60-second window |
 | Footer / page cache refresh             | Saving the footer, a social link or a page pings the web app to drop its cache (`site`, `pages`, `page:<slug>`). The signals and the route's allow-list are tested; the round trip is **not** — the 2026-09-26 browser pass had no `WEB_REVALIDATE_URL`. Without it, edits reach the storefront within the 5-minute cache window |
 
 ## Known defects
@@ -2356,6 +2433,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D103~~ | ~~**`migrate` never granted a new permission code to any role.**~~ **Fixed 2026-09-26 (#61).** `sync_permissions()` ran only from `seed_demo` and the test fixtures, while `permissions.md` said `migrate` ran it. A database migrated but never reseeded — production — would never have given managers `content.site_manage` or `content.navigation_manage`. Found while adding the first | `apps/api/accounts/apps.py` | A `post_migrate` receiver now syncs on every migrate, including one with nothing to apply; `tests/test_permission_sync.py` |
 | D104 | **`seed_demo` dies when it has only a few orders.** `_returns` raises the demo returns against the two most recent DELIVERED orders *after* `_backdate_orders` has spread them over `--history-days` (90). With a small `--orders` (5, measured 2026-09-26) both can land outside the 14-day return window, `request_return` raises `PermissionDenied`, and the whole seed rolls back. The default 40 orders is unaffected; `--history-days 0` works around it | `apps/api/core/management/commands/seed_demo.py` `_returns` | Open. Pick orders inside the window, or skip the demo returns when none are |
 | ~~D105~~ | ~~**A sign-in could 500 on the database driver.**~~ **Fixed 2026-09-27.** Production, 2026-09-26: `POST /api/v1/auth/login/` failed saving `User.last_login_ip` with `ProgrammingError: cannot adapt type 'IPv4Address' using placeholder '%t'`. Nothing in our code: psycopg registers some dumpers by *name* (`ipaddress.IPv4Address`, `uuid.UUID`) and on first use swapped the name for the class with `dmap.pop(name)` then a store, and a second thread looking the same type up between the two was told it could not be adapted ([psycopg#1230](https://github.com/psycopg/psycopg/issues/1230), fixed in 3.3.2; never backported to 3.2). Gunicorn runs `--threads 2`; the suite runs in one thread, which is why it never failed there. Only the first lookups after a worker starts are exposed — but every primary key is a UUID, so any request could have hit it | `apps/api/requirements/base.txt` | psycopg 3.2.3 → 3.3.6. `tests/unit/test_psycopg_adapters.py` runs a second lookup at the exact point of the gap: on 3.2.3 it fails with production's error word for word |
+| D106 | **`seed_demo` run a second time without `--reset` rolls back.** Found 2026-09-27, and reproduced on the commit before size charts. `_orders` places each demo order with `idempotency_key=f"seed-order-{index}"`, so on a second run checkout replays the *existing* order — already PROCESSING or PACKED — and the next `transition(..., PROCESSING)` raises `InvalidStatusTransition: An order cannot go from PACKED to PROCESSING`. `handle` is atomic, so nothing is left half-written; `--reset` is unaffected | `apps/api/core/management/commands/seed_demo.py` `_orders` | Open. Skip the walk for a replayed order, or only transition forward from its current status |
 
 ## Still API-only (no UI)
 
