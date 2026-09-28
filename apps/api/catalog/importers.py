@@ -68,9 +68,9 @@ from catalog.models import (
     PublishStatus,
     VariantAttributeValue,
 )
-from catalog.services import unique_slug
 from core import audit
 from core.exceptions import ValidationError
+from core.slugs import unique_slug
 from inventory import services as inventory_services
 
 #: Columns a row cannot do without. Everything else has a defensible default.

@@ -48,7 +48,7 @@ def unique_supplier_code(name: str) -> str:
     `Supplier.code` is unique and has no default, so without this every caller
     has to invent one — which in practice means an admin form asking a buyer to
     make up an identifier, and two branches inventing the same one. Mirrors
-    `catalog.services.unique_slug`, but uppercase, because a supplier code is
+    `core.slugs.unique_slug`, but uppercase, because a supplier code is
     read aloud off a delivery note rather than put in a URL.
     """
     base = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").upper()[:24] or "SUPPLIER"
