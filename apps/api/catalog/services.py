@@ -7,7 +7,6 @@ import re
 from typing import Any
 
 from django.db import transaction
-from django.utils.text import slugify
 
 from catalog.models import (
     Attribute,
@@ -755,12 +754,3 @@ def _revalidate_product_pages() -> None:
     from content.tasks import request_revalidation
 
     transaction.on_commit(lambda: request_revalidation("products"))
-
-
-def unique_slug(model: Any, value: str, *, field: str = "slug") -> str:
-    base = slugify(value)[:200] or "item"
-    candidate, counter = base, 1
-    while model.objects.filter(**{field: candidate}).exists():
-        counter += 1
-        candidate = f"{base}-{counter}"
-    return candidate

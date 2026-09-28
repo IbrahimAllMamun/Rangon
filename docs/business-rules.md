@@ -1135,6 +1135,21 @@ change signs nobody out except, at most once, a page loaded between the two.
 - **A slug is generated on create only.** Renaming a category or brand keeps its slug: the slug is a
   URL, and regenerating it on every rename breaks every link and every indexed page pointing at the
   old one. Changing a slug is a separate, deliberate edit.
+- **A slug is ASCII, and a Bengali name is transliterated into it** ([D108](roadmap.md#known-defects)).
+  `core.slugs.unique_slug` spells শাড়ি as `shari`, পাঞ্জাবি as `panjabi` and থ্রি-পিস as `thri-pis`,
+  then adds `-2`, `-3` on a collision. Before this, every Bengali name slugged to nothing and fell
+  back to `item`, so a category, a brand and a product could all be called `item`. A name in any
+  other non-Latin script falls back to what the row is: `category`, `brand`, `product`. A slug the
+  admin types is always kept as typed.
+
+  > **DECISION REQUIRED — default chosen (2026-09-28).** Slugs stay ASCII rather than Bengali.
+  > Django's Unicode slugs strip Bengali vowel signs and the hasanta (শাড়ি became শড), and ASCII
+  > addresses survive being pasted into SMS and social posts unencoded. The transliteration is a
+  > practical one for addresses, not a scholarly romanisation: one spelling per letter, the
+  > inherent vowel written `a` (so কলম is `kalam`, not `kolom`), dropped at a word's end and between
+  > a vowel and a consonant that carries its own. It is a table in `core/slugs.py` rather than a
+  > dependency — one script is needed, and the common libraries are GPL. If the owner prefers the
+  > spoken `o`, it is one constant.
 - A category or brand that still holds products cannot be deleted (`PROTECT`); retire it with
   `is_active` instead.
 

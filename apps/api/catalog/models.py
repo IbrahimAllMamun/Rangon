@@ -13,9 +13,9 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
-from django.utils.text import slugify
 
 from core.models import BaseModel, money_field
+from core.slugs import unique_slug
 
 
 class PublishStatus(models.TextChoices):
@@ -67,7 +67,7 @@ class Category(BaseModel):
 
     def save(self, *args, **kwargs) -> None:
         if not self.slug:
-            self.slug = slugify(self.name)[:140]
+            self.slug = unique_slug(type(self), self.name)
         super().save(*args, **kwargs)
 
     @property
@@ -109,7 +109,7 @@ class Brand(BaseModel):
 
     def save(self, *args, **kwargs) -> None:
         if not self.slug:
-            self.slug = slugify(self.name)[:140]
+            self.slug = unique_slug(type(self), self.name)
         super().save(*args, **kwargs)
 
 
@@ -322,7 +322,7 @@ class Product(BaseModel):
 
     def save(self, *args, **kwargs) -> None:
         if not self.slug:
-            self.slug = slugify(self.name)[:220]
+            self.slug = unique_slug(type(self), self.name)
         super().save(*args, **kwargs)
 
     @property

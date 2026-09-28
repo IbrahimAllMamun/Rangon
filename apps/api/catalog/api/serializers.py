@@ -22,8 +22,9 @@ from catalog.models import (
     SizeChart,
     VariantAttributeValue,
 )
-from catalog.services import size_chart_problem, spec_payload, unique_slug
+from catalog.services import size_chart_problem, spec_payload
 from core.media import RelativeImageField, media_url, validate_image_upload
+from core.slugs import unique_slug
 
 #: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
 #: emit and everything `background-color` will accept from us.
