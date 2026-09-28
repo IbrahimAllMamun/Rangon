@@ -136,7 +136,13 @@ class TestProductDelete:
 
 
 class TestProductFormFlow:
-    """The sequence the admin form performs: create, generate, price, open stock."""
+    """The sequence the admin form performs: create, generate, price, publish.
+
+    It used to end "open stock", with an adjustment posted from the form. That
+    stock came in at a cost of nothing (D72), and since 2026-09-28 the API
+    refuses it: a variant nothing has been received against has its stock
+    brought in by receiving it (business-rules.md § 4.0a).
+    """
 
     def test_create_generate_price_and_publish(
         self, owner: Any, branch: Any, auth_client: Any
@@ -170,21 +176,28 @@ class TestProductFormFlow:
         assert priced.status_code == 200
         assert Decimal(priced.data["price"]) == Decimal("1650.00")
 
-        # Opening stock goes through the ledger, never onto a column.
+        # Opening stock by adjustment is refused: there is no cost to count it
+        # in at, and nothing is written.
         opened = client.post(
             "/api/v1/inventory/adjust/",
             {"variant": variant_id, "new_on_hand": 12, "reason": "Opening stock (product form)"},
             format="json",
         )
-        assert opened.status_code == 201
+        assert opened.status_code == 409
+        assert opened.json()["error"]["code"] == "NOT_RECEIVED"
+        fresh = ProductVariant.objects.get(pk=variant_id)
+        assert not fresh.inventory_transactions.exists()
+
+        # Receiving it is how it arrives, at the cost paid.
+        factories.stock(fresh, branch, 12, unit_cost="700.00")
 
         published = client.post(f"/api/v1/products/{product_id}/publish/", {}, format="json")
         assert published.status_code == 200
         assert published.data["published"] is True
 
-        stocked = ProductVariant.objects.get(pk=variant_id)
-        assert stocked.inventory.get(branch=branch).on_hand == 12
-        assert stocked.inventory_transactions.filter(transaction_type="ADJUSTMENT").exists()
+        assert fresh.inventory.get(branch=branch).on_hand == 12
+        assert fresh.inventory.get(branch=branch).average_cost == Decimal("700.00")
+        assert not fresh.inventory_transactions.filter(transaction_type="ADJUSTMENT").exists()
         assert len(sizes) == 2
 
     def test_publishing_without_variants_is_refused(self, owner: Any, auth_client: Any) -> None:

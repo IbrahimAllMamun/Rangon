@@ -6,6 +6,8 @@ import {
   MAX_MATRIX_ROWS,
   buildMatrix,
   combinationKey,
+  hasOptions,
+  hasSingleVersion,
   matrixSize,
   pendingSelections,
   selectionsFromVariants,
@@ -213,5 +215,39 @@ describe("selectionsFromVariants", () => {
 
   it("is empty for a product with no variants", () => {
     expect(selectionsFromVariants([])).toEqual({});
+  });
+});
+
+describe("one version only", () => {
+  it("asks for a single new row with no options", () => {
+    const rows = buildMatrix({}, ATTRIBUTES, [], true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "", combination: {}, state: "new" });
+    // Nothing for the matrix endpoint: the single row is asked for explicitly.
+    expect(pendingSelections(rows)).toEqual({});
+  });
+
+  it("matches a saved optionless SKU instead of calling it not selected", () => {
+    const saved = variant("one", {});
+    const rows = buildMatrix({}, ATTRIBUTES, [saved], true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: "", state: "existing" });
+    expect(rows[0].existing?.id).toBe("one");
+  });
+
+  it("ignores ticks left over from before the box was ticked", () => {
+    const rows = buildMatrix({ size: ["S", "M"] }, ATTRIBUTES, [], true);
+    expect(rows.map((row) => row.key)).toEqual([""]);
+  });
+
+  it("knows a product sold as one version from one with options", () => {
+    expect(hasSingleVersion([variant("one", {})])).toBe(true);
+    expect(hasSingleVersion([variant("s", { size: "S" })])).toBe(false);
+    // An importer-made mix is not "one version": its sized rows must stay visible.
+    expect(hasSingleVersion([variant("one", {}), variant("s", { size: "S" })])).toBe(false);
+    // Archived rows do not count either way.
+    expect(hasSingleVersion([variant("one", {}, { status: "ARCHIVED" })])).toBe(false);
+    expect(hasOptions([variant("s", { size: "S" }, { status: "ARCHIVED" })])).toBe(false);
+    expect(hasOptions([variant("s", { size: "S" })])).toBe(true);
   });
 });

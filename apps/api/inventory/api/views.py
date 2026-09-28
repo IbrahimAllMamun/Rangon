@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
-from django.utils import timezone
+from django.db.models import DecimalField, Exists, ExpressionWrapper, F, OuterRef, Q, Sum
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -29,6 +28,7 @@ from inventory.api.serializers import (
     WriteOffSerializer,
 )
 from inventory.models import (
+    COST_BEARING_INBOUND,
     Inventory,
     InventoryTransaction,
     StockCount,
@@ -64,6 +64,17 @@ class InventoryViewSet(
     def get_queryset(self) -> Any:
         queryset = Inventory.objects.select_related(
             "branch", "variant", "variant__product", "variant__product__category"
+        ).annotate(
+            # Whether a correction upwards is possible on this row -- see
+            # `inventory.services._check_can_raise`. A subquery, not a query
+            # per row: the list is paginated but still dozens of rows.
+            received=Exists(
+                InventoryTransaction.objects.filter(
+                    branch=OuterRef("branch"),
+                    variant=OuterRef("variant"),
+                    transaction_type__in=COST_BEARING_INBOUND,
+                )
+            )
         )
         queryset = branch_queryset(actor(self.request), queryset)
 
@@ -422,36 +433,6 @@ class StockCountViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def apply(self, request: AuthedRequest, pk: str | None = None) -> Response:
-        """Turn counted figures into ADJUSTMENT ledger rows."""
-        count = self.get_object()
-        if count.status != StockCountStatus.COUNTING:
-            raise Conflict(
-                f"{count.number} is {count.get_status_display().lower()} and cannot be applied.",
-                details={"status": count.status},
-            )
-
-        counted = count.items.filter(counted_quantity__isnull=False).select_related("variant")
-        if not counted.exists():
-            raise ValidationError(
-                f"Nothing has been counted on {count.number} yet, so there is nothing to apply."
-            )
-
-        applied = 0
-        for item in counted:
-            entry = inventory_services.adjust(
-                branch=count.branch,
-                variant=item.variant_id,
-                new_on_hand=item.counted_quantity,
-                reason=f"Stock count {count.number}",
-                actor=request.user,
-                reference_type="stock_count",
-                reference_id=count.pk,
-            )
-            if entry is not None:
-                applied += 1
-
-        count.status = StockCountStatus.APPLIED
-        count.applied_at = timezone.now()
-        count.applied_by = request.user
-        count.save(update_fields=["status", "applied_at", "applied_by", "updated_at"])
-        return Response({"adjusted_lines": applied, "status": count.status})
+        """Turn counted figures into ADJUSTMENT ledger rows, all or none."""
+        applied = inventory_services.apply_stock_count(count=self.get_object(), actor=request.user)
+        return Response({"adjusted_lines": applied, "status": StockCountStatus.APPLIED})

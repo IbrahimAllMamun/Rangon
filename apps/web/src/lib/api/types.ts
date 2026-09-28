@@ -508,6 +508,8 @@ export interface InventoryRow {
   stock_value: string;
   reorder_point: number;
   is_low_stock: boolean;
+  /** False when this branch has never received it: Adjust may lower, not raise. */
+  received: boolean;
   updated_at: string;
 }
 

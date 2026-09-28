@@ -1,3 +1,4 @@
+import { PackagePlus } from "lucide-react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
@@ -5,12 +6,13 @@ import { ProductForm } from "@/components/admin/product-form";
 import { ProductImages, type ColourOption, type ProductImageRow } from "@/components/admin/product-images";
 import { ProductSuppliers, type SupplierOfferRow } from "@/components/admin/product-suppliers";
 import { PageHeader } from "@/components/admin/shell";
-import { Card, ErrorState } from "@/components/ui/primitives";
+import { Button, Card, ErrorState } from "@/components/ui/primitives";
 import { ApiError } from "@/lib/api/client";
 import { apiServer, currentUser, type Paginated } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import type { ExistingVariant } from "@/lib/commerce/variant-matrix";
 import { getProductFormData } from "@/lib/commerce/product-form-data";
+import { purchaseOrderFor } from "@/lib/commerce/stock-adjust";
 import type { ProductValues } from "@/lib/commerce/product-values";
 
 interface AdminProductDetail {
@@ -96,6 +98,14 @@ export default async function EditProductPage({ params }: { params: Params }) {
     }
   }
 
+  // What this branch has never received. A product defined here has no stock
+  // until a purchase order brings it in (business-rules.md § 4.0a), so say so
+  // and offer the order with these versions already on it.
+  const unreceived = product.variants.filter(
+    (variant) => variant.status !== "ARCHIVED" && variant.stock?.received === false,
+  );
+  const live = product.variants.filter((variant) => variant.status !== "ARCHIVED");
+
   const initial: ProductValues = {
     name: product.name,
     slug: product.slug,
@@ -136,6 +146,23 @@ export default async function EditProductPage({ params }: { params: Params }) {
           <code className="mx-1">products.update</code> permission — the API refuses the write
           regardless of what this screen shows.
         </p>
+      )}
+
+      {can("purchases.create") && unreceived.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-4">
+          <PackagePlus className="size-5 shrink-0 text-muted" aria-hidden />
+          <p className="min-w-[16rem] flex-1 text-body-sm">
+            {unreceived.length === live.length
+              ? `Nothing has been received for this product at ${user.branch ? user.branch.name : "this branch"} yet, so there is no stock to sell.`
+              : `${unreceived.length} of its ${live.length} versions have never been received at ${user.branch ? user.branch.name : "this branch"}.`}{" "}
+            Stock comes in on a purchase order.
+          </p>
+          <Button asChild variant="secondary" size="sm">
+            <Link href={purchaseOrderFor(unreceived.map((variant) => variant.id))}>
+              Raise a purchase order
+            </Link>
+          </Button>
+        </div>
       )}
 
       <div className="space-y-6">

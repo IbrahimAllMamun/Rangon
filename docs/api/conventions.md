@@ -101,6 +101,7 @@ Validation errors put field errors in `details`:
 | `NOT_FOUND` | 404 | absent, or outside the caller's branch scope |
 | `CONFLICT` | 409 | idempotency or concurrent-state conflict |
 | `INSUFFICIENT_STOCK` | 409 | not enough available stock |
+| `NOT_RECEIVED` | 409 | stock raised on a branch that has never received the variant (business-rules § 4.0a) |
 | `INVALID_STATUS_TRANSITION` | 409 | illegal order/purchase/return transition |
 | `PRICE_CHANGED` | 409 | client total disagrees with server total |
 | `COUPON_INVALID` | 422 | expired, limit reached, scope mismatch, min order unmet |

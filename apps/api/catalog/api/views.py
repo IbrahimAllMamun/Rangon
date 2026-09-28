@@ -57,6 +57,7 @@ from catalog.models import (
 )
 from catalog.services import (
     category_attributes,
+    create_single_variant,
     delete_size_chart,
     generate_barcode,
     generate_variants,
@@ -360,6 +361,13 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
             .annotate(min_price=Min("variants__price"), max_price=Max("variants__price"))
         )
+        # Drafts no purchase order has ever named: created from an order that
+        # was then abandoned, or on the product form and never bought. By the
+        # reverse relation, so the catalogue does not import purchasing.
+        if self.request.query_params.get("never_ordered") == "true":
+            queryset = queryset.filter(status=PublishStatus.DRAFT).exclude(
+                variants__purchase_items__isnull=False
+            )
         search = self.request.query_params.get("search")
         if search:
             from catalog.search import search_products
@@ -383,8 +391,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             product = self.get_object()
             branch = resolve_branch(actor(self.request), self.request.query_params.get("branch"))
-            context["stock"] = inventory_services.availability(
-                branch=branch, variants=list(product.variants.all())
+            variants = list(product.variants.all())
+            context["stock"] = inventory_services.availability(branch=branch, variants=variants)
+            context["received"] = inventory_services.received_variant_ids(
+                branch=branch, variants=variants
             )
         return context
 
@@ -467,13 +477,19 @@ class ProductViewSet(viewsets.ModelViewSet):
         product = self.get_object()
         serializer = GenerateVariantsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        created = generate_variants(
-            product=product,
-            selections=serializer.validated_data["selections"],
-            price=serializer.validated_data["price"],
-            cost=serializer.validated_data.get("cost", 0),
-            actor=request.user,
-        )
+        data = serializer.validated_data
+        if data["single"]:
+            created = create_single_variant(
+                product=product, price=data["price"], cost=data.get("cost", 0), actor=request.user
+            )
+        else:
+            created = generate_variants(
+                product=product,
+                selections=data["selections"],
+                price=data["price"],
+                cost=data.get("cost", 0),
+                actor=request.user,
+            )
         return Response(
             {
                 "created": len(created),

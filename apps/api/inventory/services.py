@@ -22,19 +22,23 @@ from typing import Any
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
+from django.utils import timezone
 
 from accounts.models import Branch, User
 from catalog.models import ProductVariant
 from core import audit
-from core.exceptions import InsufficientStock, ValidationError
+from core.exceptions import Conflict, InsufficientStock, NotReceived, ValidationError
 from core.money import quantize
 from inventory.models import (
+    COST_BEARING_INBOUND,
     REASON_REQUIRED,
     RESERVATION_AFFECTING,
     STOCK_AFFECTING,
     TRANSACTION_SIGN,
     Inventory,
     InventoryTransaction,
+    StockCount,
+    StockCountStatus,
     TransactionType,
 )
 
@@ -185,6 +189,65 @@ def _check_can_reserve(inventory: Inventory, quantity: int, *, allow_negative: b
         )
 
 
+def received_variant_ids(*, branch: Branch, variants: Sequence[Any]) -> set[str]:
+    """The variants this branch has ever received with a cost attached.
+
+    One query for any number of variants, served by the ledger's
+    `(branch, variant, -created_at)` index. The screens read it to decide
+    whether to offer a correction upwards; `_check_can_raise` reads it to
+    refuse one.
+    """
+    variant_ids = [str(_variant_id(v)) for v in variants]
+    if not variant_ids:
+        return set()
+    return {
+        str(variant_id)
+        for variant_id in InventoryTransaction.objects.filter(
+            branch=branch,
+            variant_id__in=variant_ids,
+            transaction_type__in=COST_BEARING_INBOUND,
+        )
+        .values_list("variant_id", flat=True)
+        .distinct()
+    }
+
+
+def _not_received(inventory: Inventory, *, requested: int) -> NotReceived:
+    sku = inventory.variant.sku
+    branch_code = inventory.branch.code
+    return NotReceived(
+        f"{sku} has never been received at {branch_code}, so there is no cost to count it "
+        "in at. Receive it on a purchase order.",
+        details={
+            "variant_id": str(inventory.variant_id),
+            "sku": sku,
+            "branch": branch_code,
+            "requested": requested,
+            "on_hand": inventory.on_hand,
+        },
+    )
+
+
+def _check_can_raise(inventory: Inventory, delta: int) -> None:
+    """Refuse an adjustment that would create stock nothing ever paid for.
+
+    An adjustment writes units at the row's `average_cost` and never moves it.
+    On a branch that has received the variant that is a real figure, so a
+    counted surplus is valued like the rest of the shelf. On a branch that
+    never has, it is the column default of 0.00 -- which is how the product
+    form's opening-stock box put goods on the books at nothing (D72). Removing
+    the box left the door open one click further on, behind Adjust.
+
+    A correction *downwards* is always allowed: taking stock off costs nothing,
+    and legacy stock from before this guard still has to be countable to zero.
+    """
+    if delta <= 0:
+        return
+    if received_variant_ids(branch=inventory.branch, variants=[inventory.variant_id]):
+        return
+    raise _not_received(inventory, requested=delta)
+
+
 def _schedule_low_stock_check(inventory: Inventory) -> None:
     """Notify after commit only — a rolled-back sale must not raise an alert."""
     if not inventory.is_low_stock:
@@ -284,6 +347,8 @@ def apply_transaction(
                 )
     elif transaction_type in STOCK_AFFECTING:
         _check_can_reduce(inventory, delta, allow_negative=allow_negative)
+        if transaction_type == TransactionType.ADJUSTMENT:
+            _check_can_raise(inventory, delta)
 
     try:
         # Savepoint, so a retry that loses the race on the key can still be
@@ -682,7 +747,11 @@ def adjust(
     reference_type: str = "manual",
     reference_id: Any = None,
 ) -> InventoryTransaction | None:
-    """Correct stock to a counted figure by writing the difference."""
+    """Correct stock to a counted figure by writing the difference.
+
+    Upwards only on a branch that has received the variant before: see
+    `_check_can_raise`.
+    """
     if not reason.strip():
         raise ValidationError("A reason is required for an adjustment.")
     if new_on_hand < 0:
@@ -693,6 +762,7 @@ def adjust(
     delta = new_on_hand - inventory.on_hand
     if delta == 0:
         return None
+    _check_can_raise(inventory, delta)
 
     before = {"on_hand": inventory.on_hand, "reserved": inventory.reserved}
     entry = _write_ledger(
@@ -717,6 +787,87 @@ def adjust(
     )
     _schedule_low_stock_check(inventory)
     return entry
+
+
+@transaction.atomic
+def apply_stock_count(*, count: StockCount, actor: User | None = None) -> int:
+    """Turn a count sheet's figures into ADJUSTMENT rows, all or none.
+
+    Returns how many lines moved stock. The whole sheet is checked before any
+    line is written, the way `_bulk` checks a sale: a count that found units
+    of something this branch has never received is refused outright rather
+    than half-applied, and it stays open so the goods can be received on a
+    purchase order first -- after which the same count applies cleanly,
+    because the counted figure then matches what was received.
+
+    This lived in the view, outside any transaction, and decided on the
+    caller's copy of the count's status.
+    """
+    count = StockCount.objects.select_for_update().select_related("branch").get(pk=count.pk)
+    if count.status != StockCountStatus.COUNTING:
+        raise Conflict(
+            f"{count.number} is {count.get_status_display().lower()} and cannot be applied.",
+            details={"status": count.status},
+        )
+
+    counted = [
+        (item, item.counted_quantity)
+        for item in count.items.filter(counted_quantity__isnull=False).select_related("variant")
+        if item.counted_quantity is not None
+    ]
+    if not counted:
+        raise ValidationError(
+            f"Nothing has been counted on {count.number} yet, so there is nothing to apply."
+        )
+
+    branch = count.branch
+    inventories = _lock_inventories(branch, [item.variant_id for item, _ in counted])
+    rising = [
+        (item, quantity)
+        for item, quantity in counted
+        if quantity > inventories[str(item.variant_id)].on_hand
+    ]
+    received = received_variant_ids(branch=branch, variants=[item.variant_id for item, _ in rising])
+    refused = [
+        (item, quantity) for item, quantity in rising if str(item.variant_id) not in received
+    ]
+    if refused:
+        skus = ", ".join(item.variant.sku for item, _ in refused)
+        raise NotReceived(
+            f"{count.number} counts stock {branch.code} has never received: {skus}. "
+            "Receive it on a purchase order, then apply the count.",
+            details={
+                "lines": [
+                    {
+                        "variant_id": str(item.variant_id),
+                        "sku": item.variant.sku,
+                        "counted": quantity,
+                        "on_hand": inventories[str(item.variant_id)].on_hand,
+                    }
+                    for item, quantity in refused
+                ]
+            },
+        )
+
+    applied = 0
+    for item, quantity in counted:
+        entry = adjust(
+            branch=branch,
+            variant=item.variant_id,
+            new_on_hand=quantity,
+            reason=f"Stock count {count.number}",
+            actor=actor,
+            reference_type="stock_count",
+            reference_id=count.pk,
+        )
+        if entry is not None:
+            applied += 1
+
+    count.status = StockCountStatus.APPLIED
+    count.applied_at = timezone.now()
+    count.applied_by = actor
+    count.save(update_fields=["status", "applied_at", "applied_by", "updated_at"])
+    return applied
 
 
 @transaction.atomic

@@ -29,6 +29,9 @@ export const metadata = { title: "Products" };
 const FILTERS = [
   { key: "", label: "All", params: {} },
   { key: "draft", label: "Drafts", params: { status: "DRAFT" } },
+  // Drafts no purchase order names — usually made on an order that was then
+  // abandoned. Safe to tidy: nothing was ever bought or sold against them.
+  { key: "unordered", label: "Never ordered", params: { status: "DRAFT", never_ordered: "true" } },
   { key: "counter", label: "Counter only", params: { status: "ACTIVE", published: "false" } },
   { key: "published", label: "Published", params: { status: "ACTIVE", published: "true" } },
   { key: "archived", label: "Archived", params: { status: "ARCHIVED" } },
@@ -38,6 +41,7 @@ const FILTERS = [
 function activeFilter(params: Record<string, string | undefined>): string {
   const status = params.status ?? "";
   const published = params.published ?? "";
+  if (status === "DRAFT" && params.never_ordered === "true") return "unordered";
   if (status === "DRAFT") return "draft";
   if (status === "ARCHIVED") return "archived";
   if (status === "ACTIVE" && published === "false") return "counter";
@@ -93,7 +97,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
   const params = await searchParams;
   const paging = readPaging(params);
   const query = new URLSearchParams();
-  for (const key of ["search", "status", "published", "category"]) {
+  for (const key of ["search", "status", "published", "category", "never_ordered"]) {
     if (params[key]) query.set(key, params[key]!);
   }
   applyPaging(query, paging);

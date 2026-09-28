@@ -63,6 +63,17 @@ TRANSACTION_SIGN: dict[str, int] = {
     TransactionType.ADJUSTMENT: 0,
 }
 
+#: Movements that bring units in *with the cost that bought them*. A branch
+#: that has had one of these for a variant has a cost basis for it, so a counted
+#: surplus can be written in at that branch's weighted average. A branch that
+#: has not has only the column default of 0.00, and stock counted in at that is
+#: stock worth nothing (D72, business-rules.md § 4.0a). The CSV import receives
+#: through `receive_stock`, so its rows are `PURCHASE` too.
+COST_BEARING_INBOUND = {
+    TransactionType.PURCHASE,
+    TransactionType.TRANSFER_IN,
+}
+
 #: Reason is mandatory for these: an unexplained stock change is a red flag.
 REASON_REQUIRED = {
     TransactionType.ADJUSTMENT,

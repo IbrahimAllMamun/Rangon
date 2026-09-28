@@ -9,6 +9,7 @@ import { StockBadge } from "@/components/admin/status-badge";
 import { Button, ErrorSummary, Field, Input, Textarea } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { InventoryRow } from "@/lib/api/types";
+import { NEVER_RECEIVED_NOTE, purchaseOrderFor, upwardRefusal } from "@/lib/commerce/stock-adjust";
 import { money } from "@/lib/format";
 import { refreshAfterWrite } from "@/lib/navigation/refresh-after-write";
 
@@ -142,6 +143,7 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
   const countedNumber = Number(counted);
   const valid = counted !== "" && Number.isInteger(countedNumber) && countedNumber >= 0;
   const delta = valid ? countedNumber - row.on_hand : 0;
+  const refusal = upwardRefusal(row.received, delta);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -156,6 +158,8 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
         field: `counted-${row.id}`,
         message: "That is what the ledger already says, so there is nothing to correct.",
       });
+    } else if (refusal) {
+      found.push({ field: `counted-${row.id}`, message: refusal });
     }
     if (!reason.trim()) {
       found.push({
@@ -211,6 +215,15 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
         <span className="tabular font-medium text-neutral-900">{row.on_hand}</span> on hand.
       </p>
 
+      {!row.received && (
+        <p className="text-body-sm text-muted">
+          {NEVER_RECEIVED_NOTE}{" "}
+          <Link href={purchaseOrderFor([row.variant])} className="text-brand-600 hover:underline">
+            Raise a purchase order
+          </Link>
+        </p>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
         <Field
           label="Counted"
@@ -257,7 +270,9 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
         <span role="status" className="text-body-sm text-muted">
           {!valid || delta === 0
             ? "No movement yet."
-            : `Writes ${delta > 0 ? "+" : "−"}${Math.abs(delta)} to the ledger.`}
+            : refusal
+              ? "Cannot be raised here."
+              : `Writes ${delta > 0 ? "+" : "−"}${Math.abs(delta)} to the ledger.`}
         </span>
       </div>
     </form>

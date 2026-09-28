@@ -29,6 +29,9 @@ class InventorySerializer(serializers.ModelSerializer):
     price = serializers.DecimalField(
         source="variant.price", max_digits=14, decimal_places=2, read_only=True
     )
+    # Annotated by the viewset. False means this branch has never received the
+    # variant, so Adjust may lower the figure and may not raise it.
+    received = serializers.BooleanField(read_only=True, default=False)
 
     class Meta:
         model = Inventory
@@ -51,6 +54,7 @@ class InventorySerializer(serializers.ModelSerializer):
             "reorder_point",
             "is_low_stock",
             "bin_location",
+            "received",
             "updated_at",
         ]
         read_only_fields = ["id", "on_hand", "reserved", "average_cost", "updated_at"]

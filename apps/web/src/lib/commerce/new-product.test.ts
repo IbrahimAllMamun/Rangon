@@ -4,6 +4,8 @@ import {
   type NewProductDraft,
   axesFor,
   blankDraft,
+  findCategory,
+  skuCount,
   toProductPayload,
   toVariantsPayload,
   validateDraft,
@@ -47,6 +49,11 @@ describe("validateDraft", () => {
     expect(problems.map((p) => p.field)).toContain("selections");
   });
 
+  it("needs no values for a product in one version only", () => {
+    // A lipstick in one shade, a one-size bag: nothing to tick.
+    expect(validateDraft(draft({ selections: {}, single: true }))).toEqual([]);
+  });
+
   it("refuses a selection that would generate thousands of SKUs", () => {
     const many = Array.from({ length: 30 }, (_, i) => `v${i}`);
     const problems = validateDraft(
@@ -88,6 +95,13 @@ describe("toVariantsPayload", () => {
     expect(toVariantsPayload(draft({ price: "1290.00" }))).toMatchObject({ price: "1290.00" });
   });
 
+  it("asks for one SKU, and sends no selections, for a single version", () => {
+    const payload = toVariantsPayload(
+      draft({ single: true, selections: { size: ["S"] }, price: "" }),
+    );
+    expect(payload).toEqual({ single: true, price: "0.00", cost: "400.00" });
+  });
+
   it("drops axes with nothing ticked", () => {
     // An empty list would make `generate_variants` raise "No matching values".
     const payload = toVariantsPayload(draft({ selections: { size: ["S"], color: [] } }));
@@ -110,5 +124,25 @@ describe("axesFor", () => {
 
   it("never offers an axis with no values to tick", () => {
     expect(axesFor(all, ["empty"]).map((a) => a.code)).toEqual([]);
+  });
+});
+
+describe("skuCount", () => {
+  it("is the matrix size, or one for a single version", () => {
+    expect(skuCount(draft({ selections: { size: ["S", "M"], color: ["Black", "Red"] } }))).toBe(4);
+    expect(skuCount(draft({ selections: { size: ["S", "M"] }, single: true }))).toBe(1);
+    expect(skuCount(draft({ selections: {} }))).toBe(0);
+  });
+});
+
+describe("findCategory", () => {
+  const categories = [{ id: "1", name: "Bags" }, { id: "2", name: "Cosmetics" }];
+
+  it("matches an existing name however it is typed", () => {
+    expect(findCategory(categories, "  bags ")?.id).toBe("1");
+  });
+
+  it("finds nothing for a new name", () => {
+    expect(findCategory(categories, "Shoes")).toBeUndefined();
   });
 });

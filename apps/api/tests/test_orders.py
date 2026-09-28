@@ -628,13 +628,9 @@ class TestCostOfGoodsSold:
         """
         branch = shop["branch"]
         variant = factories.variant(price="1000.00", cost="250.00")
-        # Stock without a receipt behind it, which is what an adjustment leaves.
-        inventory_services.adjust(
-            branch=branch,
-            variant=variant,
-            new_on_hand=5,
-            reason="Counted onto the shelf with no purchase behind it",
-        )
+        # Stock without a receipt behind it, which is what an adjustment used
+        # to leave. Adjust refuses it now; the rows it wrote remain.
+        factories.unreceived_stock(variant, branch, 5)
         inventory = Inventory.objects.get(variant=variant, branch=branch)
         assert inventory.on_hand == 5
         assert inventory.average_cost == Decimal("0.00")
@@ -648,11 +644,6 @@ class TestCostOfGoodsSold:
     def test_profit_is_not_the_whole_selling_price(self, shop):
         """The bug as the owner would have seen it, on the report."""
         variant = factories.variant(price="1000.00", cost="250.00")
-        inventory_services.adjust(
-            branch=shop["branch"],
-            variant=variant,
-            new_on_hand=5,
-            reason="Opening stock, no receipt",
-        )
+        factories.unreceived_stock(variant, shop["branch"], 5)
         order = self._sell_at_the_counter(shop, variant).order
         assert order.gross_profit == Decimal("750.00")

@@ -64,6 +64,19 @@ class InsufficientStock(BusinessError):
     default_message = "The requested quantity is not available."
 
 
+class NotReceived(BusinessError):
+    """Stock cannot be counted onto a shelf that has never been bought for.
+
+    Goods enter by receiving a purchase order, which carries what they cost.
+    An adjustment carries no cost, so it may correct stock a branch has
+    received but may not create stock it never has (business-rules.md § 4.0a).
+    """
+
+    code = "NOT_RECEIVED"
+    status_code = 409
+    default_message = "This has never been received here. Receive it on a purchase order."
+
+
 class InsufficientFunds(BusinessError):
     """A cash drawer cannot pay out money it does not hold.
 

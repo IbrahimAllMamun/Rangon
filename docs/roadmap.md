@@ -9,7 +9,23 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-27**.
+Last updated: **2026-09-28**.
+
+**Goods come in through purchasing, and a shop's first order can be raised from nothing.** The
+owner's point was that the purchase order should be the only way to add stock, and that it could
+not be: with no products yet there was nothing to put on one. Both halves held. Stock could still
+arrive with no purchase behind it — *Adjust* on a product nothing had ever been received against
+wrote the units in at a cost of zero ([D107](#known-defects)) — and while a purchase order *could*
+create a product, the option appeared only after a search missed, vanished when there were no
+categories, and could not make a product with no sizes or colours. Now: an adjustment may lower
+stock but may only raise it where the branch has received the variant; *New product* sits beside
+the product search from the start, can name a category and add a size inline, and can buy a
+product in one version only; a product with nothing received offers *Raise a purchase order*, which
+opens one with it already on it; and drafts no order names are gathered under *Never ordered*.
+Product records may still be created on the product form — the owner accepted that default; what is
+exclusive to purchasing is stock. Rules in [business-rules § 4.0a](business-rules.md#40a-opening-stock)
+and [§ 7a.6](business-rules.md#7a6-creating-a-product-from-a-purchase-order); evidence in
+[§ Purchase-first products](#purchase-first-products-2026-09-28).
 
 **Products now carry a size chart** (phase 41). A Size attribute holds any number of charts — one
 per sizing system, fit or brand, defined under Categories & brands → Attributes — whose rows are the
@@ -440,6 +456,59 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Purchase-first products, 2026-09-28
+
+Asked for: the purchase order to be the only way a product arrives, and a way to raise the first
+one when there are no products yet. A plan came first, with the owner accepting four defaults:
+product records may still be made on the product form (stock is what is exclusive to purchasing),
+stock a count finds with no receipt behind it is refused rather than costed at the count, the
+stock loophole is closed before the screens change, and abandoned drafts get a list of their own.
+
+**What shipped.** `inventory.services._check_can_raise` in `adjust` and `apply_transaction`
+(`NOT_RECEIVED`, 409), `received_variant_ids` for the screens, `apply_stock_count` moved into the
+service (all or none, under the count's lock). `catalog.services.create_single_variant` behind
+`generate-variants {"single": true}`, and a product refused a mix of one version and several.
+`GET /products/?never_ordered=true`. On the screens: a `received` flag on both Adjust forms, *New
+product* beside the purchase order's product search, inline category and size/colour on the
+new-product form, *One version only* there and on the full product form, *Raise a purchase order*
+on a product with nothing received, `?variants=` prefilling a new order, and a *Never ordered* tab.
+No migration.
+
+**Tests.** `tests/api/test_stock_needs_a_receipt.py` (14), `test_single_version_products.py` (8,
+including `test_a_first_order_from_an_empty_catalogue`, which runs from an empty database to stock
+on the shelf through the API), `test_drafts_never_ordered.py` (1). Three existing tests built
+"stock with no receipt" through `adjust`; they now use `factories.unreceived_stock`, which writes
+that legacy state directly, and the product-form flow test asserts the refusal and receives the
+stock instead. Full backend suite **1505 passed** on the loophole fix alone and **1514 passed** on
+the finished branch; vitest **408 passed**; ruff, mypy, eslint and `tsc --noEmit` clean.
+
+**The browser pass** — a real Chromium against `next dev` and `runserver` on a database holding one
+organisation, one branch and one owner, and nothing else (0 categories, 0 attributes, 0 products):
+
+- *New product* is visible on the empty order; the empty state mentions it.
+- A supplier created inline; a category named inline ("Bags") — Enter in that box did not submit
+  the order around it.
+- The form said the category has no sizes or colours, so one version; "1 SKU will be created".
+- Canvas Tote was created as `RGN-CAN` and put on the order; PO-000001 raised and sent, 20 × ৳650.
+- Before receiving: the product page said nothing had been received and offered *Raise a purchase
+  order*; its row showed as the saved single SKU (not "Not selected") with *One version only* ticked
+  and locked; *Adjust* to 5 was refused on the screen with the purchase-order sentence.
+- `?variants=` opened a new order with Canvas Tote already on it.
+- Received in full (GRN-000001); the order listed Canvas Tote under "Arrived, but not on sale yet",
+  priced at zero. The product page's notice was gone, and on `/admin/inventory` the same row now
+  offered a correction upwards ("Writes +2 to the ledger").
+- On the full product form, Jute Clutch was created with *One version only*, landing on its page
+  with the *Raise a purchase order* notice; *Never ordered* listed Jute Clutch and not Canvas Tote.
+- With a Size attribute holding S and M: typing "bags" as a new category picked the existing Bags,
+  "XL" was added inline and ticked, and `RGN-LIN-S` and `RGN-LIN-XL` went onto the order.
+
+It found one defect before it shipped: the product page called `buttonVariants()` from a server
+component, which Next refuses because the helper lives in a client module — the page errored
+outright. It uses `<Button asChild>` now, as the products list does.
+
+Not run: the Playwright specs, and a production build. `next dev` under webpack was OOM-killed in
+Docker Desktop's 1.8 GB VM on this machine; Turbopack (the project's own `npm run dev`) was not.
 
 ### Size charts, 2026-09-27
 
@@ -2434,6 +2503,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D104 | **`seed_demo` dies when it has only a few orders.** `_returns` raises the demo returns against the two most recent DELIVERED orders *after* `_backdate_orders` has spread them over `--history-days` (90). With a small `--orders` (5, measured 2026-09-26) both can land outside the 14-day return window, `request_return` raises `PermissionDenied`, and the whole seed rolls back. The default 40 orders is unaffected; `--history-days 0` works around it | `apps/api/core/management/commands/seed_demo.py` `_returns` | Open. Pick orders inside the window, or skip the demo returns when none are |
 | ~~D105~~ | ~~**A sign-in could 500 on the database driver.**~~ **Fixed 2026-09-27.** Production, 2026-09-26: `POST /api/v1/auth/login/` failed saving `User.last_login_ip` with `ProgrammingError: cannot adapt type 'IPv4Address' using placeholder '%t'`. Nothing in our code: psycopg registers some dumpers by *name* (`ipaddress.IPv4Address`, `uuid.UUID`) and on first use swapped the name for the class with `dmap.pop(name)` then a store, and a second thread looking the same type up between the two was told it could not be adapted ([psycopg#1230](https://github.com/psycopg/psycopg/issues/1230), fixed in 3.3.2; never backported to 3.2). Gunicorn runs `--threads 2`; the suite runs in one thread, which is why it never failed there. Only the first lookups after a worker starts are exposed — but every primary key is a UUID, so any request could have hit it | `apps/api/requirements/base.txt` | psycopg 3.2.3 → 3.3.6. `tests/unit/test_psycopg_adapters.py` runs a second lookup at the exact point of the gap: on 3.2.3 it fails with production's error word for word |
 | D106 | **`seed_demo` run a second time without `--reset` rolls back.** Found 2026-09-27, and reproduced on the commit before size charts. `_orders` places each demo order with `idempotency_key=f"seed-order-{index}"`, so on a second run checkout replays the *existing* order — already PROCESSING or PACKED — and the next `transition(..., PROCESSING)` raises `InvalidStatusTransition: An order cannot go from PACKED to PROCESSING`. `handle` is atomic, so nothing is left half-written; `--reset` is unaffected | `apps/api/core/management/commands/seed_demo.py` `_orders` | Open. Skip the walk for a replayed order, or only transition forward from its current status |
+| ~~D107~~ | ~~**Adjust still put stock on the books at zero cost.**~~ **Fixed 2026-09-28.** D72 took the opening-stock box off the product form, but the door it closed stayed open one click further on: save the product, press *Adjust* on its row (or on `/admin/inventory`), type 50. `inventory.services.adjust` wrote the units at the row's `average_cost`, which is `0.00` on a variant nothing has been received against — stock with no supplier, no payable, no input VAT and a valuation of ৳0. A stock count that "found" units did the same through the same function, and applied line by line from the view with no transaction around it, so a failure part-way left half a count applied. `adjust` and `apply_transaction` now refuse to *raise* stock on a branch with no `PURCHASE` or `TRANSFER_IN` for the variant (`NOT_RECEIVED`, 409); lowering is still allowed. `apply_stock_count` moved into the service, checks every line before writing any, and decides under the count's row lock | `apps/api/inventory/services.py`, `apps/api/inventory/api/views.py`, `apps/web/src/components/admin/inventory-rows.tsx`, `apps/web/src/components/admin/variant-matrix-editor.tsx` | Found by auditing the owner's observation that the purchase order should be the only way goods come in. The product form's Adjust placeholder still suggested "Opening stock". Rules in [business-rules § 4.0a](business-rules.md#40a-opening-stock); tests in `tests/api/test_stock_needs_a_receipt.py` |
 
 ## Still API-only (no UI)
 

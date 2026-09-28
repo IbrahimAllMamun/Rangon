@@ -63,6 +63,7 @@ export async function getProductFormData(): Promise<ProductFormData> {
     attributes: attributes
       .filter((attribute) => attribute.is_variant_defining)
       .map((attribute) => ({
+        id: attribute.id,
         code: attribute.code,
         name: attribute.name,
         kind: attribute.kind,
