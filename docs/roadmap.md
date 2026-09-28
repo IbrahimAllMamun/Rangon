@@ -470,6 +470,71 @@ is still open and tracked in
 
 ## Verification log
 
+### Admin filters, search and one look, 2026-09-28
+
+Asked for: the dashboard's and the reviews screen's filter buttons everywhere; search on products,
+customers and inventory; a date range on purchase orders; one design throughout; and the product
+image form lined up. What was there: filters drawn five ways (solid black chips on eight screens,
+underlines, pills), the heaviest thing on each page; a products search that reused the
+storefront's whole-word search, so "kurt" and "RGN-BLO" both found nothing; customer and stock
+searches the API already answered and no screen asked; purchase orders with no date at all, in the
+list or its filters; and an image form aligned on `items-end` in a row whose hint text made the
+cells unequal, so the upload button sat level with the hints instead of the fields.
+
+**What shipped.**
+
+- `components/admin/filter-tabs.tsx` — `chips` for the values a list narrows to, `segmented` for
+  the date presets (`DateRangeTabs` now draws with it). Links built by `lib/paging.listHref`, which
+  keeps every other choice, drops `page` and keeps `page_size`. On orders, products, customers,
+  stock, movements, purchases, reviews, expenses, notifications, the call-back list, an account's
+  history, the dashboard and the three reports.
+- Search boxes on products, customers and stock, in the shared `FilterForm`. `products/?search=`
+  now also matches part of a name, part of a SKU or a barcode, one row per product, prices unmoved.
+- `purchase-orders/?date_from=&date_to=` through `core.dates.parse_window` — the day raised, in
+  Dhaka — with a *Raised* column and two date fields that bound each other.
+- One look: the current page in `Pagination` marked like a chosen filter (it was black); the
+  `PageHeader` keeps its actions top right however long the description; every secondary header
+  action and CSV download is the `secondary` `Button` (Products' ghost *Import*, Finance's and the
+  reports' hand-drawn links); every admin text link and `RowLink` is `brand-700`; Notifications
+  uses the shared pager. The pattern is written up in
+  [design-system.md § Admin list screens](design-system.md#admin-list-screens).
+- The image form: `items-start` and a label-height spacer over the upload button. Measured: all
+  three controls at the same top at 1440 and 1024 px; stacked, with a 44 px button, at 390.
+
+**Tests.** `tests/api/test_product_admin_search.py` (8) and
+`tests/api/test_purchase_order_list_filters.py` (4: Dhaka's day at both edges, open ends, dates
+with a status, an unreadable date refused); `lib/paging.test.ts` (6) and
+`components/admin/filter-tabs.test.tsx` (5). Put back to ranked-only, the product search fails
+three; `listHref` carrying `page` fails two; every tab current fails two.
+
+```text
+pytest (whole suite) ......................... 1616 passed
+vitest (TZ=UTC) .............................. 453 passed, 43 files
+playwright, Admin specs, against next dev .... 8 passed
+ruff 0.8.4 check + format --check ............ clean
+mypy ......................................... clean, 159 source files
+tsc --noEmit / eslint src .................... clean
+makemigrations --check ....................... no changes
+```
+
+**The browser pass** — Chromium against `next dev` and `runserver`, on the demo seed, typing into
+each box and pressing Enter:
+
+- Products: "kurt" found Block Print Kurti, 1 of 12. *Drafts* kept it (`?search=kurt&status=DRAFT`)
+  and was the one marked current; *Clear* took the search away and left the tab. "zzqqxx" said
+  nothing matched it, by name.
+- Stock: "RGN-BLO" found 8 rows of 25, and *Low stock* kept it. Customers: "Rezaul", 1 of 7, kept
+  by *Registered*.
+- Purchase orders: 28 September gave the three raised that day; up to the 27th, and from the 29th,
+  "No purchase order matches"; *Draft* kept both dates; `date_from=10/09/2026` answered
+  "“10/09/2026” is not a date. Use YYYY-MM-DD, or a full timestamp."
+- Seventeen list screens photographed at 1440 px after the change, and read side by side.
+
+Left as it is: Chromium draws its own navy clear button inside a search field — browser chrome,
+the same on every search box, not restyled. Stock's *Write stock off* stays under the header,
+where its form opens. Not run: the storefront and POS Playwright specs (untouched), and a
+production build.
+
 ### Discounts at the counter, 2026-09-28
 
 Asked for: a discount facility on the POS sale that can use the coupons already defined. What was
