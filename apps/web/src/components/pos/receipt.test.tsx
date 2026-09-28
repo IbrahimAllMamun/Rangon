@@ -120,3 +120,41 @@ describe("Receipt, VAT block", () => {
     expect(screen.queryByText(new RegExp(BIN))).toBeNull();
   });
 });
+
+describe("Receipt, discounts", () => {
+  /** ৳2,000 of goods: a ৳200 coupon, then 10% of what was left. */
+  function discounted(): Order {
+    return {
+      ...order("0.00"),
+      subtotal: "2000.00",
+      coupon_code: "STORE10",
+      coupon_discount: "200.00",
+      manual_discount: "180.00",
+      discount_total: "380.00",
+      grand_total: "1620.00",
+      paid_total: "1620.00",
+    };
+  }
+
+  it("prints the coupon by its code, apart from the cashier's discount", () => {
+    render(<Receipt order={discounted()} session={session()} onNewSale={() => {}} />);
+
+    expect(screen.getByText("Coupon STORE10")).toBeTruthy();
+    expect(screen.getByText("- 200.00")).toBeTruthy();
+    expect(screen.getByText("Discount")).toBeTruthy();
+    expect(screen.getByText("- 180.00")).toBeTruthy();
+  });
+
+  it("prints no coupon line on a sale without one", () => {
+    render(
+      <Receipt
+        order={{ ...order("0.00"), discount_total: "100.00", manual_discount: "100.00" }}
+        session={session()}
+        onNewSale={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText(/^Coupon/)).toBeNull();
+    expect(screen.getByText("- 100.00")).toBeTruthy();
+  });
+});

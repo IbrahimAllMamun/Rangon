@@ -2,6 +2,7 @@
 
 import {
   Barcode,
+  CircleAlert,
   Loader2,
   Minus,
   Pause,
@@ -9,6 +10,8 @@ import {
   Plus,
   Printer,
   Search,
+  ShieldCheck,
+  TicketPercent,
   Trash2,
   User,
   UserPlus,
@@ -18,13 +21,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Logo } from "@/components/brand/logo";
 import { CustomerPanel } from "@/components/pos/customer-panel";
+import { DiscountPanel } from "@/components/pos/discount-panel";
 import { PaymentPanel } from "@/components/pos/payment-panel";
 import { Receipt } from "@/components/pos/receipt";
 import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
-import type { Order, PosSession, PosVariant } from "@/lib/api/types";
+import type { Order, PosQuoteIssue, PosSession, PosVariant } from "@/lib/api/types";
+import { discountLabel, shownTotals } from "@/lib/commerce/pos-sale";
 import { money } from "@/lib/format";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useDelayedFlag } from "@/lib/use-delayed-flag";
+import { type PricedBasket, useSaleQuote } from "@/lib/use-sale-quote";
 import { usePos } from "@/lib/store/pos";
 
 /**
@@ -49,18 +56,29 @@ const SEARCH_DEBOUNCE_MS = 220;
  * Built barcode-first: the scan field holds focus at all times and a USB
  * scanner (which types then presses Enter) needs no mouse at all.
  *
- * Keyboard: F2 payment · F3 customer · F4 hold · F8 clear · Esc close dialog · / focus search
+ * Every figure in the totals is the server's (`useSaleQuote`): the browser
+ * never adds up a sale, so a coupon, a percentage and VAT all read the same
+ * here as on the receipt.
+ *
+ * Keyboard: F2 payment · F3 customer · F4 hold · F8 clear · F9 discount ·
+ * Esc close dialog · / focus search
  */
 export function PosRegister({ session }: { session: PosSession }) {
   const pos = usePos();
+  const sale = useSaleQuote();
   const scanRef = useRef<HTMLInputElement>(null);
   const [scan, setScan] = useState("");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState<PosVariant[]>([]);
   const [searching, setSearching] = useState(false);
-  const [paymentOpen, setPaymentOpen] = useState(false);
+  /** The basket being paid for, exactly as it was priced; null when not paying. */
+  const [paying, setPaying] = useState<PricedBasket | null>(null);
+  const [openingPayment, setOpeningPayment] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
+  const [discountOpen, setDiscountOpen] = useState(false);
+  /** Why payment closed on its own: the sale changed under it. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [completed, setCompleted] = useState<Order | null>(null);
   const [holds, setHolds] = useState(session.holds);
   const [announcement, setAnnouncement] = useState("");
@@ -70,7 +88,44 @@ export function PosRegister({ session }: { session: PosSession }) {
     SEARCH_DEBOUNCE_MS,
   );
 
-  const focusScan = useCallback(() => scanRef.current?.focus(), []);
+  const paymentOpen = paying !== null;
+  // Two Radix dialogs at once fight over the focus trap, so a shortcut never
+  // opens one on top of another.
+  const dialogOpen = paymentOpen || customerOpen || discountOpen;
+
+  // A failed answer is for this basket but carries the last good quote, which
+  // is some other basket's: never shown as settled.
+  const shown = shownTotals(pos, sale.quote, sale.current && !sale.error);
+  // Said only when an answer is slow: a scan answered in 200 ms must not
+  // flash "Updating…" at the counter every time. Not while an error stands,
+  // which is not going to update by itself.
+  const updating = useDelayedFlag(pos.lines.length > 0 && !shown.settled && !sale.error);
+  const blockers: PosQuoteIssue[] =
+    sale.current && !sale.error ? (sale.quote?.issues ?? []) : [];
+  const blocked = blockers.length > 0 || Boolean(sale.error);
+
+  // Deferred to the next task, so it lands after a closing dialog has gone.
+  // Radix keeps focus trapped in a dialog until it unmounts: focusing the scan
+  // field from a dialog's `onClose` was bounced back to the button that closed
+  // it, which then left the page -- focus ended on <body>, and the next scan
+  // typed into nothing. Esc never showed it, because this window listener runs
+  // after Radix's own; a click on Close or Done always did.
+  const focusScan = useCallback(() => {
+    window.setTimeout(() => scanRef.current?.focus(), 0);
+  }, []);
+
+  function removeCoupon() {
+    pos.setCoupon("");
+    setAnnouncement("Coupon removed");
+    focusScan();
+  }
+
+  function removeDiscount() {
+    pos.setOrderDiscount(0);
+    pos.setApproval(null);
+    setAnnouncement("Discount removed");
+    focusScan();
+  }
 
   useEffect(() => {
     focusScan();
@@ -82,21 +137,23 @@ export function PosRegister({ session }: { session: PosSession }) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "F2") {
         event.preventDefault();
-        if (pos.lines.length) setPaymentOpen(true);
+        if (!dialogOpen) void openPayment();
       } else if (event.key === "F3") {
         event.preventDefault();
-        // Not on top of the payment dialog: two Radix dialogs at once fight
-        // over the focus trap, and the sale is already priced by then.
-        if (!paymentOpen) setCustomerOpen(true);
+        if (!dialogOpen) setCustomerOpen(true);
       } else if (event.key === "F4") {
         event.preventDefault();
-        void hold();
+        if (!dialogOpen) void hold();
       } else if (event.key === "F8") {
         event.preventDefault();
-        if (pos.lines.length && confirm("Clear the current sale?")) pos.clear();
+        if (!dialogOpen && pos.lines.length && confirm("Clear the current sale?")) pos.clear();
+      } else if (event.key === "F9") {
+        event.preventDefault();
+        if (!dialogOpen && pos.lines.length) setDiscountOpen(true);
       } else if (event.key === "Escape") {
-        setPaymentOpen(false);
+        setPaying(null);
         setCustomerOpen(false);
+        setDiscountOpen(false);
         setCompleted(null);
         focusScan();
       }
@@ -104,7 +161,32 @@ export function PosRegister({ session }: { session: PosSession }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos.lines.length, paymentOpen]);
+  }, [pos.lines.length, dialogOpen]);
+
+  /**
+   * Price the sale once more and open payment on that answer.
+   *
+   * Never on the answer already on screen: it may be for a basket from a
+   * moment ago, and a prompt re-price is what makes the total the cashier
+   * collects the total the server will record. When something stands in the
+   * way -- a coupon that no longer applies, a discount waiting on a manager --
+   * payment stays shut and the totals say what.
+   */
+  async function openPayment() {
+    if (!pos.lines.length || openingPayment) return;
+    setNotice(null);
+    setOpeningPayment(true);
+    try {
+      const priced = await sale.refresh();
+      if (priced && priced.quote.issues.length === 0) {
+        setPaying(priced);
+      } else if (priced) {
+        setAnnouncement(priced.quote.issues[0].message);
+      }
+    } finally {
+      setOpeningPayment(false);
+    }
+  }
 
   // The hook clears its own timer; the in-flight request is ours to drop.
   useEffect(() => () => searchAbort.current?.abort(), []);
@@ -208,11 +290,16 @@ export function PosRegister({ session }: { session: PosSession }) {
             label: pos.customerName || new Date().toLocaleTimeString(),
             register: pos.register,
             customer: pos.customerId,
+            // The manager's approval is deliberately not parked: it lasts five
+            // minutes and belongs to this cashier. Resuming asks again if the
+            // discount still needs it.
             payload: {
               lines: pos.lines,
               customerId: pos.customerId,
               customerName: pos.customerName,
               orderDiscount: pos.orderDiscount,
+              orderDiscountMode: pos.orderDiscountMode,
+              couponCode: pos.couponCode,
               note: pos.note,
             },
           },
@@ -381,7 +468,7 @@ export function PosRegister({ session }: { session: PosSession }) {
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted">
                   <Search className="size-8" aria-hidden />
                   <p className="text-body-sm">Scan an item, or type at least 2 characters to search.</p>
-                  <p className="text-caption">F2 payment · F4 hold · F8 clear</p>
+                  <p className="text-caption">F2 payment · F4 hold · F8 clear · F9 discount</p>
                 </div>
               )
             )}
@@ -522,24 +609,109 @@ export function PosRegister({ session }: { session: PosSession }) {
           </div>
 
           <div className="shrink-0 border-t border-border p-4">
-            <div className="flex items-baseline justify-between">
-              <span className="text-body-sm text-muted">Subtotal</span>
-              <span className="tabular text-body">{money(pos.subtotal())}</span>
-            </div>
-            {pos.discountTotal() > 0 && (
-              <div className="mt-1 flex items-baseline justify-between text-[var(--success-text)]">
-                <span className="text-body-sm">Discount</span>
-                <span className="tabular text-body">− {money(pos.discountTotal())}</span>
-              </div>
-            )}
+            <dl className="space-y-1">
+              <TotalsRow term="Subtotal" value={money(shown.subtotal)} />
+              {shown.couponOff > 0 && (
+                <TotalsRow
+                  term={`Coupon ${shown.couponCode}`}
+                  value={`− ${money(shown.couponOff)}`}
+                  saving
+                />
+              )}
+              {shown.manualOff > 0 && (
+                <TotalsRow
+                  term={discountLabel(pos.orderDiscountMode, pos.orderDiscount)}
+                  value={`− ${money(shown.manualOff)}`}
+                  saving
+                />
+              )}
+              {shown.taxTotal > 0 && (
+                <TotalsRow
+                  term={shown.taxInclusive ? "Includes VAT" : "VAT"}
+                  value={money(shown.taxTotal)}
+                />
+              )}
+            </dl>
             <div className="mt-2 flex items-baseline justify-between border-t border-border pt-2">
               <span className="text-h4">Total</span>
-              <span className="tabular font-display text-[2rem] font-bold leading-none">
-                {money(pos.total())}
+              <span className="flex items-baseline gap-2">
+                {updating && (
+                  <span className="text-caption text-muted" role="status">
+                    Updating…
+                  </span>
+                )}
+                <span className="tabular font-display text-[2rem] font-bold leading-none">
+                  {money(shown.total)}
+                </span>
               </span>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            {/* What stands between this sale and payment, with the way past it. */}
+            <div aria-live="polite">
+              {notice && (
+                <SaleNotice tone="error" message={notice}>
+                  <Button variant="secondary" size="sm" onClick={() => setNotice(null)}>
+                    OK
+                  </Button>
+                </SaleNotice>
+              )}
+              {blockers.map((issue) => (
+                <SaleNotice
+                  key={`${issue.field}-${issue.code}`}
+                  tone={issue.details.requires ? "warning" : "error"}
+                  message={issue.message}
+                >
+                  {issue.field === "coupon" ? (
+                    <>
+                      {issue.details.needs_customer && (
+                        <Button variant="secondary" size="sm" onClick={() => setCustomerOpen(true)}>
+                          <UserPlus aria-hidden /> Attach customer (F3)
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={removeCoupon}>
+                        Remove coupon
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      {issue.details.requires && (
+                        <Button variant="secondary" size="sm" onClick={() => setDiscountOpen(true)}>
+                          <ShieldCheck aria-hidden /> Manager approval (F9)
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={removeDiscount}>
+                        Remove discount
+                      </Button>
+                    </>
+                  )}
+                </SaleNotice>
+              ))}
+              {sale.error && (
+                <SaleNotice tone="error" message={sale.error.message}>
+                  <Button variant="secondary" size="sm" onClick={() => void sale.refresh()}>
+                    Try again
+                  </Button>
+                  {pos.orderDiscount > 0 && (
+                    <Button variant="secondary" size="sm" onClick={removeDiscount}>
+                      Remove discount
+                    </Button>
+                  )}
+                </SaleNotice>
+              )}
+            </div>
+
+            <Button
+              variant="secondary"
+              size="lg"
+              full
+              className="mt-4"
+              onClick={() => setDiscountOpen(true)}
+              disabled={!pos.lines.length}
+            >
+              <TicketPercent aria-hidden /> Discount or coupon (F9)
+            </Button>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <Button
                 variant="secondary"
                 size="lg"
@@ -562,10 +734,11 @@ export function PosRegister({ session }: { session: PosSession }) {
               size="xl"
               full
               className="mt-2"
-              onClick={() => setPaymentOpen(true)}
-              disabled={!pos.lines.length}
+              onClick={() => void openPayment()}
+              loading={openingPayment}
+              disabled={!pos.lines.length || blocked}
             >
-              Payment (F2) · {money(pos.total())}
+              Payment (F2) · {money(shown.total)}
             </Button>
           </div>
         </section>
@@ -584,20 +757,83 @@ export function PosRegister({ session }: { session: PosSession }) {
         />
       )}
 
-      {paymentOpen && (
-        <PaymentPanel
-          total={pos.total()}
-          accounts={session.accounts ?? []}
+      {discountOpen && (
+        <DiscountPanel
+          session={session}
+          quote={sale.quote}
+          preview={sale.preview}
           onClose={() => {
-            setPaymentOpen(false);
+            setDiscountOpen(false);
             focusScan();
           }}
-          onCompleted={(order) => {
-            setPaymentOpen(false);
-            setCompleted(order);
+          onAttachCustomer={() => {
+            setDiscountOpen(false);
+            setCustomerOpen(true);
           }}
         />
       )}
+
+      {paying && (
+        <PaymentPanel
+          priced={paying}
+          accounts={session.accounts ?? []}
+          onClose={() => {
+            setPaying(null);
+            focusScan();
+          }}
+          onCompleted={(order) => {
+            setPaying(null);
+            setCompleted(order);
+          }}
+          onStale={(message) => {
+            setPaying(null);
+            setNotice(message);
+            setAnnouncement(message);
+            void sale.refresh();
+            focusScan();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One line of the totals. A saving is marked in words (the minus), never by colour alone. */
+function TotalsRow({ term, value, saving }: { term: string; value: string; saving?: boolean }) {
+  return (
+    <div
+      className={`flex items-baseline justify-between ${saving ? "text-[var(--success-text)]" : ""}`}
+    >
+      <dt className={`text-body-sm ${saving ? "" : "text-muted"}`}>{term}</dt>
+      <dd className="tabular text-body">{value}</dd>
+    </div>
+  );
+}
+
+/** Why payment is shut, with what gets past it. */
+function SaleNotice({
+  tone,
+  message,
+  children,
+}: {
+  tone: "warning" | "error";
+  message: string;
+  children: React.ReactNode;
+}) {
+  const Icon = tone === "warning" ? ShieldCheck : CircleAlert;
+  return (
+    <div
+      className={`mt-3 rounded-md p-3 text-body-sm ${
+        tone === "warning"
+          ? "bg-[var(--warning-bg)] text-[var(--warning-text)]"
+          : "bg-[var(--error-bg)] text-[var(--error)]"
+      }`}
+    >
+      <p className="flex items-start gap-2 font-medium">
+        <Icon className="mt-0.5 size-4 shrink-0" aria-hidden />
+        {message}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">{children}</div>
     </div>
   );
 }
