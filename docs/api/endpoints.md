@@ -188,12 +188,37 @@ CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
 | GET | `session/` | `sales.create` — register, branch, cashier, open holds |
 | GET | `lookup/?code=` | `sales.create` — barcode/SKU → variant + price + availability |
 | GET | `products/?q=&category=` | `sales.create` — fast search grid |
+| POST | `quote/` | `sales.create` — prices the basket exactly as `sales/` would record it; writes nothing |
 | POST | `sales/` | `sales.create` — full sale command; `Idempotency-Key` required |
-| POST | `sales/{id}/void/` | `sales.cancel` |
+| POST | `sales/{id}/void/` | `sales.cancel` — gives a coupon's use back |
 | GET/POST | `holds/` · POST `holds/{id}/resume/` · DELETE `holds/{id}/` | `sales.create` |
 | POST | `returns/` | `sales.refund` — in-store return + refund in one step |
-| POST | `elevate/` | manager credential check → short-lived permission grant |
+| POST | `elevate/` | manager credential check → short-lived, signed `approval_token` |
 | GET | `sales/{id}/receipt/` | `sales.view` — receipt payload |
+
+**Discounts at the counter** ([business-rules §3.3a](../business-rules.md#33a-discounts-at-the-counter)).
+`quote/` and `sales/` take the same basket: `lines`, `customer`, and three claims the server prices —
+`coupon_code`, `manual_discount` (an amount) **or** `manual_discount_percent` (0–100; sending both is
+a `400` on `manual_discount_percent`), and `approval_token`. `sales/` adds `payments`, `register`,
+`note` and `expected_total`, the total the register showed: a sale that would record another is
+refused with **`409 PRICE_CHANGED`** rather than charged.
+
+`quote/` answers `200` with every figure as a string — `subtotal`, `coupon` (`{code, description}` or
+`null`), `coupon_discount`, `manual_discount`, `discount_total`, `tax_mode`, `tax_rate`,
+`tax_total`, `grand_total`, `item_count`, `lines` — and `issues`: what stands between the basket and
+payment, each `{code, field, message, details}`. A refused coupon (`COUPON_INVALID`, `field:
+"coupon"`; `details.needs_customer` when a per-customer limit needs a named customer) is priced
+*without* the coupon; a discount over the threshold (`PERMISSION_DENIED`, `field: "discount"`,
+`details.requires: "sales.discount_override"` with `discount`, `discount_percent`, `threshold`) is
+priced *with* it, so the cashier sees what the approval is for. A basket that cannot be priced at all
+— an unknown variant, a discount larger than the sale — is a `400`. `sales/` raises the same
+refusals instead of listing them: `422 COUPON_INVALID`, `403 PERMISSION_DENIED`.
+
+`elevate/` takes `{email, password, permission}`, and for `sales.discount_override` also
+`discount_percent` — the percentage the manager is shown, required (`400` without it). It answers with
+`approval_token` and `expires_in` (300): signed for that cashier, that permission and at most that
+percentage, and re-checked when the quote or the sale relies on it. The password is never stored or
+logged; the audit entry names both people.
 
 ## Orders (staff) — `/api/v1/orders/`
 
@@ -225,7 +250,9 @@ so a retried request cannot pay a customer twice.
 ## Shipping & promotions — `/api/v1/`
 
 `shipping-zones/`, `shipping-methods/`, `couriers/` (`settings.manage`);
-`coupons/` CRUD + `coupons/{id}/redemptions/` (`content.coupons_manage`);
+`coupons/` CRUD + `coupons/{id}/redemptions/` (`content.coupons_manage`) — `channels` is where a
+coupon may be spent: `[]` (everywhere), `["ONLINE"]` or `["POS"]`; anything not a list of real
+channels is a `400` on `channels`, and duplicates are stored once;
 `reviews/` moderation queue + `{id}/{approve,reject}/` (`content.review_moderate`).
 
 ## Storefront content — `/api/v1/`

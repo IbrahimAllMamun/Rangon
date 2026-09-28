@@ -27,7 +27,10 @@ Run these manually against a seeded environment before each release
 | C1 | Log in at the register | POS opens with branch + register context, focus in the barcode field |
 | C2 | Scan 3 items with a USB scanner | each scan adds a line without touching the mouse |
 | C3 | Change a quantity, remove a line | totals recompute instantly and match the server on submit |
-| C4 | Apply a 10% line discount | allowed; a 30% discount asks for manager elevation |
+| C4 | Give 10% off the sale (F9) | allowed; 30% asks for a manager's email and password, and the sale records who approved it |
+| C4a | Apply an in-store coupon at the register | the discount is the server's; an online-only or free-delivery coupon is refused with the reason |
+| C4b | Apply a once-per-customer coupon to an anonymous sale | refused until a customer is attached (F3); the same customer's second use is refused |
+| C4c | Void a sale that used a coupon | the coupon's use comes back, and the re-rung sale can spend it |
 | C5 | Take split payment (cash + card) | two payment rows, correct change displayed, order `PAID` |
 | C6 | Print the receipt | 80 mm layout, branch details, items, totals, order number, VAT line |
 | C7 | Hold a sale, start another, resume the held one | both carts intact, no stock moved until each sale completes |

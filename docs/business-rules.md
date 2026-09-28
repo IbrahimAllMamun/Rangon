@@ -254,10 +254,14 @@ sums). Money is `Decimal`; `float` is forbidden.
 - **Line discount** (POS): amount or percentage on a line. Requires `sales.discount` permission.
   A discount above 20% additionally requires `sales.discount_override` and is audit-logged with reason.
   *`DECISION REQUIRED` — 20% threshold assumed.*
-- **Order discount** (POS): same permission rules.
-- **Coupon** (online): validated and computed server-side only. Rules: active window, minimum order
-  value, maximum discount cap, total usage limit, per-customer limit, product/category scope. A coupon
-  applies to the sum of eligible lines only.
+- **Order discount** (POS): same permission rules. An amount, or a percentage the **server** turns into
+  money — taken off what the goods come to **after any coupon**, so "another 10%" is 10% of what the
+  customer would otherwise pay. The threshold measures the cashier's own discount (lines plus the
+  order discount) against the sale before any discount; a coupon's discount is not part of it.
+  *`DECISION REQUIRED` — the percentage's base assumed.*
+- **Coupon** (online and in store): validated and computed server-side only. Rules: active window,
+  minimum order value, maximum discount cap, total usage limit, per-customer limit, product/category
+  scope, and where it may be used (§3.3a). A coupon applies to the sum of eligible lines only.
 - Coupons do not stack. One coupon per order.
   *`DECISION REQUIRED` — assumed.*
 - Coupon usage is counted when the order is **created**, and released if the order is cancelled before
@@ -275,6 +279,48 @@ sums). Money is `Decimal`; `float` is forbidden.
   fields: a PATCH sending only `ends_at` is still checked against the stored `starts_at`, and one
   sending only `value` against the stored `discount_type`. Editing a coupon never changes orders
   already placed — they keep the discount they were given.
+
+### 3.3a Discounts at the counter
+
+The register takes the coupons defined at `/admin/coupons` and the cashier's own discount from one
+**Discount** dialog (F9). Every figure on the register comes from `POST /pos/quote/`, which prices the
+basket through the same function `POST /pos/sales/` records it with (`orders.services.pos.price_sale`);
+the browser adds nothing up.
+
+- **Where a coupon may be used** is the coupon's own setting: *Online shop*, *In store*, or both.
+  Both is stored as an empty `channels` list — everywhere — which is what every coupon made before
+  the setting existed is, so those work at the counter unchanged. The demo seed's `RANGON10` and
+  `FREESHIP` are online-only; `STORE100` is in-store only. An online-only coupon is refused at the
+  register as "cannot be used in store". `channels` is validated: a list, of real channels.
+- **A free-delivery coupon is refused at the counter.** A counter sale has no delivery line to zero,
+  and redeeming it would spend a use for nothing. The coupon form keeps it online-only.
+- **A coupon limited per customer needs a named customer on the sale.** The walk-in record is shared
+  by every anonymous sale at the branch: counting a use against it would let the first stranger spend
+  everybody's, and not counting would make the limit meaningless at the counter. The register offers
+  to attach the customer (F3), and the coupon applies once they are. A coupon with no per-customer
+  limit works on an anonymous sale, and its redemption is filed against no customer.
+  *`DECISION REQUIRED` — assumed.*
+- **A coupon needs neither `sales.discount` nor a manager**, however large: it was authorised when
+  someone holding `content.coupons_manage` created it. It does not count towards the threshold.
+- **Manager approval is given at the register.** The manager types their own email and password
+  into the Discount dialog; `POST /pos/elevate/` checks them behind the login throttle and answers
+  with a signed approval. The approval is **not a session**: it names the manager, the cashier,
+  `sales.discount_override` and the largest percentage the manager was shown, and it lasts **five
+  minutes**. It is checked again when the sale relies on it: expired, another cashier's, a larger
+  discount than the manager was shown, a manager deactivated since, or a manager bound to another
+  branch are all refused. It is never parked with a held sale. Every sale that uses one writes a
+  `DISCOUNT_OVERRIDE` audit entry **against that sale**, naming the manager.
+  *`DECISION REQUIRED` — five minutes, and reuse within them by the same cashier for a discount no
+  larger than approved, assumed.*
+- **The total the register showed is the total the sale records.** The sale carries it as
+  `expected_total`; if anything moved in between — a price, a coupon's last use, its window closing —
+  the sale is refused with `PRICE_CHANGED` and the register prices the basket again, rather than
+  collecting money against a total that is gone.
+- **Use is counted when the sale is created**, inside its transaction and after its stock: every sale
+  locks the inventory rows first and the coupon row second, so a counter sale and an online order
+  racing for one coupon's last use cannot deadlock. **Voiding the sale gives the use back**, as
+  cancelling an order does — a void is how a mis-rung sale is corrected, and the re-ring must be able
+  to spend it. A return does not give it back, online or in store.
 
 ### 3.4 Tax
 

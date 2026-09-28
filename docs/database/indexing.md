@@ -95,6 +95,7 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 | `GET /shop/products/{slug}/` | 18 | **yes** (+ growth × 3) | 15; 16 with a size chart | 15 |
 | `GET /pos/products/` | 12 | **yes** (+ growth) | 5 | **81 for 8 products** |
 | `GET /pos/lookup/` | 12 | **yes** | 9 | — |
+| `POST /pos/quote/` (2 lines, scoped coupon, named customer) | 14 | **yes** (+ growth: none per line) | 10 | new 2026-09-28 |
 | `GET /products/` (admin) | 25 | **yes** (+ growth) | 6 | 21 · 0.42 s |
 | `GET /orders/` (25 orders) | 12 | **yes** (+ growth) | 3 | 6 · 0.07 s |
 | `GET /reports/dashboard/` | 20 | **yes** | 11 | 14 · 0.07 s |
