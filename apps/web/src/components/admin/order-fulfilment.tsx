@@ -314,7 +314,7 @@ function Parcel({
           href={shipment.tracking_url}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-2 inline-flex items-center gap-1 text-caption text-brand-600 underline"
+          className="mt-2 inline-flex items-center gap-1 text-caption text-brand-700 underline"
         >
           Open on the courier&rsquo;s site
           <ExternalLink className="size-3" aria-hidden />

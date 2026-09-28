@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 
 /**
  * The date presets every dated admin screen offers.
@@ -47,33 +47,18 @@ export function DateRangeTabs({
   presets = RANGE_PRESETS,
 }: {
   basePath: string;
-  active: RangeValue;
+  active: string;
   presets?: readonly { value: string; label: string }[];
 }) {
   return (
-    <div
-      className="flex flex-wrap rounded-md border border-border bg-surface p-0.5"
-      role="group"
-      aria-label="Date range"
-    >
-      {presets.map((option) => (
-        <Link
-          key={option.value}
-          href={`${basePath}?range=${option.value}`}
-          aria-current={active === option.value ? "true" : undefined}
-          // The active tab was solid black, the heaviest thing on the page and
-          // heavier than its own heading. A brand tint with a brand outline
-          // marks it as emphasis instead: text 5.4:1, outline 3.4:1 (WCAG
-          // 1.4.11), and the weight change means colour is not the only cue.
-          className={`rounded px-3 py-1.5 text-body-sm focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] ${
-            active === option.value
-              ? "bg-brand-50 font-semibold text-brand-700 ring-1 ring-inset ring-brand-500"
-              : "font-medium text-neutral-600 hover:bg-neutral-100"
-          }`}
-        >
-          {option.label}
-        </Link>
-      ))}
-    </div>
+    <FilterTabs
+      variant="segmented"
+      label="Date range"
+      tabs={presets.map((option) => ({
+        label: option.label,
+        href: `${basePath}?range=${option.value}`,
+        active: active === option.value,
+      }))}
+    />
   );
 }

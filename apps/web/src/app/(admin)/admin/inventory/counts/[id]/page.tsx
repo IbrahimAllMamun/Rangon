@@ -57,7 +57,7 @@ export default async function StockCountPage({ params }: { params: Promise<{ id:
             <Badge tone={TONE[count.status] ?? "neutral"}>{count.status}</Badge>
             <Link
               href="/admin/inventory/counts"
-              className="text-body-sm text-brand-600 hover:underline"
+              className="text-body-sm text-brand-700 hover:underline"
             >
               ← All counts
             </Link>

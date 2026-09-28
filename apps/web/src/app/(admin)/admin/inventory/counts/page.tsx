@@ -49,7 +49,7 @@ export default async function StockCountsPage({ searchParams }: { searchParams: 
       cell: (row) => (
         <RowLink
           href={`/admin/inventory/counts/${row.id}`}
-          className="font-mono font-medium text-brand-600"
+          className="font-mono font-medium text-brand-700"
         >
           {row.number}
         </RowLink>

@@ -218,7 +218,7 @@ function AdjustForm({ row, onDone }: { row: InventoryRow; onDone: () => void }) 
       {!row.received && (
         <p className="text-body-sm text-muted">
           {NEVER_RECEIVED_NOTE}{" "}
-          <Link href={purchaseOrderFor([row.variant])} className="text-brand-600 hover:underline">
+          <Link href={purchaseOrderFor([row.variant])} className="text-brand-700 hover:underline">
             Raise a purchase order
           </Link>
         </p>

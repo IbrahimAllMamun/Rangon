@@ -52,7 +52,7 @@ export default async function ReturnsPage({ searchParams }: { searchParams: Sear
         <>
           <RowLink
             href={`/admin/returns/${row.id}`}
-            className="block font-medium text-brand-600"
+            className="block font-medium text-brand-700"
           >
             {row.number}
           </RowLink>

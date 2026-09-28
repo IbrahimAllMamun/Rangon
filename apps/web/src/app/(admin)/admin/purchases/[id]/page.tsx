@@ -149,10 +149,10 @@ export default async function PurchaseOrderPage({ params }: { params: Params }) 
       />
 
       <p className="mb-4 flex flex-wrap gap-4 text-body-sm">
-        <Link href="/admin/purchases" className="text-brand-600 hover:underline">
+        <Link href="/admin/purchases" className="text-brand-700 hover:underline">
           ← Purchase orders
         </Link>
-        <Link href="/admin/suppliers" className="text-brand-600 hover:underline">
+        <Link href="/admin/suppliers" className="text-brand-700 hover:underline">
           Suppliers
         </Link>
       </p>

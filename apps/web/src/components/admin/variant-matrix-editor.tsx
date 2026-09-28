@@ -407,7 +407,7 @@ function MatrixRowView({
                     {NEVER_RECEIVED_NOTE}{" "}
                     <Link
                       href={purchaseOrderFor([saved.id])}
-                      className="text-brand-600 hover:underline"
+                      className="text-brand-700 hover:underline"
                     >
                       Raise a purchase order
                     </Link>

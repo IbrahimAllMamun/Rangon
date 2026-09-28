@@ -20,7 +20,10 @@ export const ROW_LINK_ABOVE = "relative z-10";
 
 export function RowLink({
   href,
-  className = "font-medium text-brand-600",
+  // brand-700, as every brand-coloured text link is (docs/design-system.md):
+  // brand-600 is 4.55:1 on a card but 4.36:1 on the hovered row's neutral-50,
+  // which is where the pointer puts it.
+  className = "font-medium text-brand-700",
   children,
 }: {
   href: string;

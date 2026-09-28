@@ -29,7 +29,7 @@ function Reference({ row }: { row: AccountTransaction }) {
   const label = REFERENCE_LABEL[row.reference_type] ?? row.reference_type.replace(/_/g, " ");
   if (row.reference_type === "supplier_payment") {
     return (
-      <Link href="/admin/purchases" className="text-brand-600 hover:underline">
+      <Link href="/admin/purchases" className="text-brand-700 hover:underline">
         {label}
       </Link>
     );

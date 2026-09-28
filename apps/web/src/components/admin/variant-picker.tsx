@@ -193,7 +193,7 @@ export function VariantPicker({
                     onCreateRequest(query.trim());
                     setOpen(false);
                   }}
-                  className="mt-1 inline-flex items-center gap-1.5 font-medium text-brand-600 hover:underline"
+                  className="mt-1 inline-flex items-center gap-1.5 font-medium text-brand-700 hover:underline"
                 >
                   <Plus className="size-4" aria-hidden />
                   Create “{query.trim()}” as a new product

@@ -104,7 +104,7 @@ export function ArrivedProducts({
               <span className="min-w-0 flex-1">
                 <RowLink
                   href={`/admin/products/${product.id}`}
-                  className="block font-medium group-hover/row:text-brand-600"
+                  className="block font-medium text-brand-700"
                 >
                   {product.name}
                 </RowLink>
@@ -138,7 +138,7 @@ export function ArrivedProducts({
                   Priced at zero —{" "}
                   <Link
                     href={`/admin/products/${product.id}`}
-                    className="text-brand-600 hover:underline"
+                    className="text-brand-700 hover:underline"
                   >
                     set a retail price
                   </Link>

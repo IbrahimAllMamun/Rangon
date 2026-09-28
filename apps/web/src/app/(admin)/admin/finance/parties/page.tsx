@@ -151,7 +151,7 @@ export default async function PartyLedgerPage() {
                   <strong>Ageing</strong> runs from the order date for customers and from the{" "}
                   <em>due</em> date for suppliers, using each supplier&apos;s payment terms. Record a
                   supplier payment from the{" "}
-                  <Link href="/admin/purchases" className="text-brand-600 hover:underline">
+                  <Link href="/admin/purchases" className="text-brand-700 hover:underline">
                     purchase order
                   </Link>
                   .

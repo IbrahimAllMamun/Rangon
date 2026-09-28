@@ -185,7 +185,7 @@ export function NotificationBell() {
                         <span className="mt-1 block text-caption text-muted">
                           {relativeTime(item.created_at)}
                           {!item.is_read && (
-                            <span className="ml-2 font-medium text-brand-600">New</span>
+                            <span className="ml-2 font-medium text-brand-700">New</span>
                           )}
                         </span>
                       </span>
@@ -222,7 +222,7 @@ export function NotificationBell() {
             <Link
               href="/admin/notifications"
               onClick={() => setOpen(false)}
-              className="text-body-sm font-medium text-brand-600 hover:underline"
+              className="text-body-sm font-medium text-brand-700 hover:underline"
             >
               See all notifications
             </Link>

@@ -1,18 +1,22 @@
 import { ArrowRightLeft, ClipboardList } from "lucide-react";
 import Link from "next/link";
 
+import { FilterField, FilterForm } from "@/components/admin/filter-form";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
 import { InventoryRows } from "@/components/admin/inventory-rows";
 import { PageHeader } from "@/components/admin/shell";
 import { WriteOffPanel } from "@/components/admin/write-off-form";
-import { Card, EmptyState } from "@/components/ui/primitives";
+import { Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { InventoryRow, SessionUser } from "@/lib/api/types";
 import { money } from "@/lib/format";
-import { applyPaging, readPaging } from "@/lib/paging";
+import { applyPaging, listHref, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Inventory" };
+
+const PATH = "/admin/inventory";
 
 type Search = Promise<Record<string, string | undefined>>;
 
@@ -62,18 +66,16 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         description="Every figure here comes from the ledger. Stock changes only through an adjustment, a sale, a return, a receipt, a count or a write-off."
         actions={
           <div className="flex flex-wrap gap-2">
-            <Link
-              href="/admin/inventory/counts"
-              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-            >
-              <ClipboardList className="size-4" aria-hidden /> Stock counts
-            </Link>
-            <Link
-              href="/admin/inventory/transfers"
-              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-            >
-              <ArrowRightLeft className="size-4" aria-hidden /> Transfers
-            </Link>
+            <Button variant="secondary" asChild>
+              <Link href="/admin/inventory/counts">
+                <ClipboardList className="size-4" aria-hidden /> Stock counts
+              </Link>
+            </Button>
+            <Button variant="secondary" asChild>
+              <Link href="/admin/inventory/transfers">
+                <ArrowRightLeft className="size-4" aria-hidden /> Transfers
+              </Link>
+            </Button>
           </div>
         }
       />
@@ -84,27 +86,33 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         </div>
       )}
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {FILTERS.map((filter) => {
-          const active = (params.filter ?? "") === filter.value;
-          const search = new URLSearchParams();
-          if (filter.value) search.set("filter", filter.value);
-          return (
-            <Link
-              key={filter.value || "all"}
-              href={`/admin/inventory${search.toString() ? `?${search}` : ""}`}
-              aria-current={active ? "true" : undefined}
-              className={`rounded-md px-3 py-1.5 text-body-sm font-medium ${
-                active
-                  ? "bg-neutral-900 text-white"
-                  : "border border-border bg-surface hover:bg-neutral-100"
-              }`}
-            >
-              {filter.label}
-            </Link>
-          );
-        })}
-      </div>
+      <FilterTabs
+        label="Stock level"
+        className="mb-4"
+        tabs={FILTERS.map((filter) => ({
+          label: filter.label,
+          href: listHref(PATH, params, { filter: filter.value }),
+          active: (params.filter ?? "") === filter.value,
+        }))}
+      />
+
+      <FilterForm
+        action={PATH}
+        label="Search stock"
+        keep={{ filter: params.filter, category: params.category }}
+        clearHref={listHref(PATH, params, { search: undefined })}
+        active={Boolean(params.search)}
+      >
+        <FilterField
+          id="inventory-search"
+          name="search"
+          type="search"
+          label="Product, SKU or barcode"
+          defaultValue={params.search ?? ""}
+          placeholder="e.g. Linen shirt or RGN-LIN"
+          className="min-w-[14rem] flex-1"
+        />
+      </FilterForm>
 
       <Card className="overflow-hidden">
         {error ? (
@@ -114,7 +122,11 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         ) : !rows || rows.results.length === 0 ? (
           <EmptyState
             title="Nothing to show"
-            description="No stock rows match this filter."
+            description={
+              params.search
+                ? `No stock row matches “${params.search}” here.`
+                : "No stock rows match this filter."
+            }
           />
         ) : (
           <>

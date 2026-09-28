@@ -4,7 +4,7 @@ import Link from "next/link";
 import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
-import { Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
+import { Button, Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, money, percent } from "@/lib/format";
 
@@ -125,12 +125,11 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
               <CardTitle>
                 Statement — {dateOnly(summary.period.start)} to {dateOnly(summary.period.end)}
               </CardTitle>
-              <a
-                href={`/api/proxy/reports/business-summary/?range=${range}&format=csv`}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-              >
-                <Download className="size-4" aria-hidden /> CSV
-              </a>
+              <Button variant="secondary" size="sm" className="shrink-0" asChild>
+                <a href={`/api/proxy/reports/business-summary/?range=${range}&format=csv`}>
+                  <Download className="size-4" aria-hidden /> CSV
+                </a>
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -203,7 +202,7 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
                 ) : (
                   <p className="p-6 text-body-sm text-muted">
                     No expenses recorded in this period.{" "}
-                    <Link href="/admin/expenses" className="text-brand-600 hover:underline">
+                    <Link href="/admin/expenses" className="text-brand-700 hover:underline">
                       Record one
                     </Link>
                     .

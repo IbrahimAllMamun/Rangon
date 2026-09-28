@@ -46,7 +46,7 @@ export default async function SuppliersPage({ searchParams }: { searchParams: Se
       />
 
       <p className="mb-4 text-body-sm text-muted">
-        <Link href="/admin/purchases" className="text-brand-600 hover:underline">
+        <Link href="/admin/purchases" className="text-brand-700 hover:underline">
           ← Purchase orders
         </Link>
       </p>

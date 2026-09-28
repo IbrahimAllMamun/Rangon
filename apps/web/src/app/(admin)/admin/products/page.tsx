@@ -1,6 +1,8 @@
 import { ExternalLink, Plus, Upload } from "lucide-react";
 import Link from "next/link";
 
+import { FilterField, FilterForm } from "@/components/admin/filter-form";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
 import { ROW_LINK_ABOVE, ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
@@ -8,9 +10,11 @@ import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, money } from "@/lib/format";
-import { applyPaging, readPaging } from "@/lib/paging";
+import { applyPaging, listHref, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Products" };
+
+const PATH = "/admin/products";
 
 /**
  * Where a product actually stands, which one boolean could not say.
@@ -122,8 +126,8 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
           products ? `${products.count} product${products.count === 1 ? "" : "s"}` : undefined
         }
         actions={
-          <div className="flex flex-wrap gap-2">
-            <Button asChild variant="ghost">
+          <>
+            <Button asChild variant="secondary">
               <Link href="/admin/products/import">
                 <Upload className="size-4" aria-hidden />
                 Import
@@ -135,34 +139,45 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                 New product
               </Link>
             </Button>
-          </div>
+          </>
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {FILTERS.map((filter) => {
-          const active = activeFilter(params) === filter.key;
-          const search = new URLSearchParams();
-          for (const [key, value] of Object.entries(filter.params)) search.set(key, value);
+      <FilterTabs
+        label="Where products stand"
+        className="mb-4"
+        tabs={FILTERS.map((filter) => ({
+          key: filter.key || "all",
+          label: filter.label,
           // Keep the text search when switching tabs; dropping it silently
           // would look like the search had failed.
-          if (params.search) search.set("search", params.search);
-          return (
-            <Link
-              key={filter.key || "all"}
-              href={`/admin/products${search.toString() ? `?${search}` : ""}`}
-              aria-current={active ? "true" : undefined}
-              className={`rounded-md px-3 py-1.5 text-body-sm font-medium ${
-                active
-                  ? "bg-neutral-900 text-white"
-                  : "border border-border bg-surface hover:bg-neutral-100"
-              }`}
-            >
-              {filter.label}
-            </Link>
-          );
-        })}
-      </div>
+          href: listHref(PATH, { search: params.search, category: params.category }, filter.params),
+          active: activeFilter(params) === filter.key,
+        }))}
+      />
+
+      <FilterForm
+        action={PATH}
+        label="Search products"
+        keep={{
+          status: params.status,
+          published: params.published,
+          never_ordered: params.never_ordered,
+          category: params.category,
+        }}
+        clearHref={listHref(PATH, params, { search: undefined })}
+        active={Boolean(params.search)}
+      >
+        <FilterField
+          id="product-search"
+          name="search"
+          type="search"
+          label="Name, SKU or barcode"
+          defaultValue={params.search ?? ""}
+          placeholder="e.g. Oxford shirt or RGN-OXF"
+          className="min-w-[14rem] flex-1"
+        />
+      </FilterForm>
 
       <Card className="overflow-hidden">
         {error ? (
@@ -176,7 +191,11 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
           filtered ? (
             <EmptyState
               title="Nothing here"
-              description="No product matches this filter."
+              description={
+                params.search
+                  ? `No product matches “${params.search}” here.`
+                  : "No product matches this filter."
+              }
               action={
                 <Button asChild variant="ghost">
                   <Link href="/admin/products">Show all products</Link>
@@ -232,7 +251,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Sea
                           storefront link sits above it in the last cell. */}
                       <RowLink
                         href={`/admin/products/${product.id}`}
-                        className="font-medium group-hover/row:text-brand-600"
+                        className="font-medium text-brand-700"
                       >
                         {product.name}
                       </RowLink>

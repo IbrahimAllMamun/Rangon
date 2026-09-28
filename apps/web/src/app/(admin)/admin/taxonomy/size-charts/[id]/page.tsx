@@ -59,7 +59,7 @@ export default async function EditSizeChartPage({ params }: { params: Params }) 
         description={`Describes ${loaded.attribute.name} · used by ${used} product${used === 1 ? "" : "s"}`}
       />
       <p className="mb-4 text-body-sm">
-        <Link href="/admin/taxonomy#attributes" className="text-brand-600 hover:underline">
+        <Link href="/admin/taxonomy#attributes" className="text-brand-700 hover:underline">
           ← Categories &amp; brands
         </Link>
       </p>

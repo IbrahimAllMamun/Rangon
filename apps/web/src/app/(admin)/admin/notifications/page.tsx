@@ -1,7 +1,9 @@
 import { AlertTriangle, CheckCheck, CircleAlert, Info } from "lucide-react";
 import Link from "next/link";
 
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { MarkAllReadButton } from "@/components/admin/notification-actions";
+import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
@@ -9,6 +11,7 @@ import { apiServer } from "@/lib/api/server";
 import type { StaffNotification } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { dateTime, humanise, relativeTime } from "@/lib/format";
+import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Notifications" };
 
@@ -32,9 +35,10 @@ export default async function NotificationsPage({ searchParams }: { searchParams
   const params = await searchParams;
   const unreadOnly = params.filter === "unread";
 
-  const query = new URLSearchParams({ page_size: "50" });
+  const paging = readPaging(params);
+  const query = new URLSearchParams();
   if (unreadOnly) query.set("unread", "true");
-  if (params.page) query.set("page", params.page);
+  applyPaging(query, paging);
 
   let feed: Paginated<StaffNotification> | null = null;
   let unreadCount = 0;
@@ -60,14 +64,18 @@ export default async function NotificationsPage({ searchParams }: { searchParams
         actions={<MarkAllReadButton disabled={unreadCount === 0} />}
       />
 
-      <div className="mb-4 flex gap-2" role="group" aria-label="Filter notifications">
-        <FilterTab href="/admin/notifications" active={!unreadOnly}>
-          All
-        </FilterTab>
-        <FilterTab href="/admin/notifications?filter=unread" active={unreadOnly}>
-          Unread{unreadCount > 0 ? ` (${unreadCount})` : ""}
-        </FilterTab>
-      </div>
+      <FilterTabs
+        label="Which notifications"
+        className="mb-4"
+        tabs={[
+          { label: "All", href: "/admin/notifications", active: !unreadOnly },
+          {
+            label: `Unread${unreadCount > 0 ? ` (${unreadCount})` : ""}`,
+            href: "/admin/notifications?filter=unread",
+            active: unreadOnly,
+          },
+        ]}
+      />
 
       <Card className="overflow-hidden">
         {error ? (
@@ -110,7 +118,7 @@ export default async function NotificationsPage({ searchParams }: { searchParams
                   {item.link && (
                     <Link
                       href={item.link}
-                      className="shrink-0 text-body-sm font-medium text-brand-600 hover:underline"
+                      className="shrink-0 text-body-sm font-medium text-brand-700 hover:underline"
                     >
                       Open
                     </Link>
@@ -120,65 +128,16 @@ export default async function NotificationsPage({ searchParams }: { searchParams
             })}
           </ul>
         )}
+        {feed && feed.results.length > 0 && (
+          <Pagination
+            count={feed.count}
+            page={paging.page}
+            pageSize={paging.pageSize}
+            query={params}
+            unit="notifications"
+          />
+        )}
       </Card>
-
-      {feed && (feed.next || feed.previous) && (
-        <nav className="mt-4 flex gap-2" aria-label="Notification pages">
-          {feed.previous && (
-            <PageLink
-              href={pageHref(unreadOnly, Number(params.page ?? "1") - 1)}
-              label="Previous"
-            />
-          )}
-          {feed.next && (
-            <PageLink href={pageHref(unreadOnly, Number(params.page ?? "1") + 1)} label="Next" />
-          )}
-        </nav>
-      )}
     </>
-  );
-}
-
-function pageHref(unreadOnly: boolean, page: number): string {
-  const query = new URLSearchParams();
-  if (unreadOnly) query.set("filter", "unread");
-  if (page > 1) query.set("page", String(page));
-  const search = query.toString();
-  return search ? `/admin/notifications?${search}` : "/admin/notifications";
-}
-
-function PageLink({ href, label }: { href: string; label: string }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-    >
-      {label}
-    </Link>
-  );
-}
-
-function FilterTab({
-  href,
-  active,
-  children,
-}: {
-  href: string;
-  active: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "rounded-md px-3 py-1.5 text-body-sm font-medium transition-colors duration-fast",
-        active
-          ? "bg-neutral-900 text-white"
-          : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100",
-      )}
-    >
-      {children}
-    </Link>
   );
 }

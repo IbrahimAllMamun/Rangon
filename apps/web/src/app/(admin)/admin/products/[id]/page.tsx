@@ -130,11 +130,11 @@ export default async function EditProductPage({ params }: { params: Params }) {
       />
 
       <p className="mb-4 flex flex-wrap gap-4 text-body-sm">
-        <Link href="/admin/products" className="text-brand-600 hover:underline">
+        <Link href="/admin/products" className="text-brand-700 hover:underline">
           ← All products
         </Link>
         {product.published && (
-          <Link href={`/product/${product.slug}`} className="text-brand-600 hover:underline">
+          <Link href={`/product/${product.slug}`} className="text-brand-700 hover:underline">
             View on storefront
           </Link>
         )}

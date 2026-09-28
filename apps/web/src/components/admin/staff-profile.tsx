@@ -86,7 +86,7 @@ export function StaffProfileView({
               <Detail term="Email">{staff.email}</Detail>
               <Detail term="Phone">
                 {staff.phone ? (
-                  <a href={`tel:${staff.phone}`} className="text-brand-600 hover:underline">
+                  <a href={`tel:${staff.phone}`} className="text-brand-700 hover:underline">
                     {formatPhone(staff.phone)}
                   </a>
                 ) : (
@@ -185,7 +185,7 @@ export function StaffProfileView({
                     {profile.emergency_contact_phone ? (
                       <a
                         href={`tel:${profile.emergency_contact_phone}`}
-                        className="text-brand-600 hover:underline"
+                        className="text-brand-700 hover:underline"
                       >
                         {formatPhone(profile.emergency_contact_phone)}
                       </a>
