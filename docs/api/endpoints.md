@@ -54,6 +54,14 @@ sales: `OrderItem`, `Inventory` and `InventoryTransaction` all reference `Produc
 `SearchFilter` is **not** one of the global `DEFAULT_FILTER_BACKENDS`, so it is named explicitly on
 those two viewsets; declaring `search_fields` alone does nothing.
 
+`products/?search=` (the admin list) finds a product by what the storefront search finds — whole
+words, ranked — **or** by a fragment: part of its name, part of a variant's SKU (`RGN-BLO`), or a
+variant's exact barcode. It searches every status, drafts and archived included; `status` and
+`published` narrow it as usual. A product whose several variants match is still one row, and its
+`min_price`/`max_price` are the whole product's, not the matching variants'. Whitespace alone is no
+search. (Before 2026-09-28 it reused the storefront search alone, so "kurt" and "RGN-BLO" found
+nothing.)
+
 `POST /suppliers/` derives `code` from `name` when it is omitted
 (`purchasing.services.unique_supplier_code`), so no caller has to invent one. An explicit `code` is
 kept as given, and editing a supplier never regenerates it.
@@ -62,7 +70,7 @@ kept as given, and editing a supplier never regenerates it.
 
 | Method | Path | Perm |
 |---|---|---|
-| GET | `` | `inventory.view` — per branch × variant, filters: low stock, out of stock, category |
+| GET | `` | `inventory.view` — per branch × variant, filters: low stock, out of stock, category, `search` (part of a SKU or product name, or an exact barcode) |
 | POST | `adjust/` | `inventory.adjust` — `{variant, branch, new_on_hand, reason}` |
 | POST | `write-off/` | `inventory.adjust` — `DAMAGE`/`LOSS` + reason (both mandatory) |
 | GET | `low-stock/` · `valuation/` | `inventory.view` / `reports.financial` |
@@ -92,6 +100,11 @@ treated as a count of zero.
 ## Purchasing — `/api/v1/`
 
 `suppliers/` CRUD (`purchases.view`/`create`), `purchase-orders/` CRUD, plus:
+
+`GET purchase-orders/` filters on `status`, `supplier` and `date_from`/`date_to`: the day the order
+was **raised** (`created_at`), `YYYY-MM-DD` in the shop's timezone, both ends included, either end
+optional (`core.dates.parse_window`, as the VAT return dates a purchase). An unreadable date is a
+**400 `VALIDATION_ERROR`**, not an unfiltered list.
 
 | Method | Path | Perm |
 |---|---|---|
@@ -179,7 +192,8 @@ A refund states its `method` too; left out, it goes back the way the payment cam
 ## Customers — `/api/v1/customers/`
 
 CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
-`lookup/?phone=…` (POS fast customer attach).
+`lookup/?phone=…` (POS fast customer attach). The list filters on `customer_type`, `is_active` and
+`search` (part of a name or email, or a phone number however it is typed).
 
 ## POS — `/api/v1/pos/`
 
