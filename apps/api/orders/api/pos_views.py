@@ -23,11 +23,32 @@ from orders.api.serializers import (
     ElevateSerializer,
     HeldSaleSerializer,
     OrderDetailSerializer,
+    PosBasketSerializer,
     PosSaleSerializer,
+    pos_quote_payload,
 )
 from orders.models import HeldSale, Order
 from orders.services import pos as pos_services
 from orders.services.pos import PaymentInput, SaleInput, SaleLineInput
+
+
+def _basket(data: dict[str, Any]) -> dict[str, Any]:
+    """The `SaleInput` fields a quote and a sale share, from validated data."""
+    return {
+        "lines": [
+            SaleLineInput(
+                variant_id=line["variant"],
+                quantity=line["quantity"],
+                line_discount=quantize(line.get("line_discount", 0)),
+            )
+            for line in data["lines"]
+        ],
+        "customer_id": data.get("customer"),
+        "manual_discount": quantize(data.get("manual_discount", 0)),
+        "manual_discount_percent": data.get("manual_discount_percent"),
+        "coupon_code": data.get("coupon_code", ""),
+        "approval_token": data.get("approval_token", ""),
+    }
 
 
 class PosSessionView(APIView):
@@ -168,6 +189,33 @@ class PosProductSearchView(APIView):
         return Response({"results": results})
 
 
+class PosQuoteView(APIView):
+    """Price the register's basket exactly as the sale would record it.
+
+    The register asks as the basket changes, so the total on the screen is the
+    server's -- coupon, discount and VAT included -- and never the browser's
+    arithmetic (docs/business-rules.md §3.1). It writes nothing. A coupon or a
+    discount that cannot go through does not fail the request: it comes back
+    in `issues`, beside figures priced without it, for the cashier to resolve
+    before taking payment. A basket that cannot be priced at all is a 400.
+    """
+
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = ["sales.create"]
+    throttle_scope = "pos"
+
+    def post(self, request: AuthedRequest) -> Response:
+        serializer = PosBasketSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        branch = resolve_branch(request.user, data.get("branch"))
+
+        quote = pos_services.price_sale(
+            branch=branch, actor=request.user, data=SaleInput(**_basket(data)), strict=False
+        )
+        return Response(pos_quote_payload(quote))
+
+
 class PosSaleViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = {
@@ -190,14 +238,7 @@ class PosSaleViewSet(viewsets.GenericViewSet):
             branch=branch,
             actor=request.user,
             data=SaleInput(
-                lines=[
-                    SaleLineInput(
-                        variant_id=line["variant"],
-                        quantity=line["quantity"],
-                        line_discount=quantize(line.get("line_discount", 0)),
-                    )
-                    for line in data["lines"]
-                ],
+                **_basket(data),
                 payments=[
                     PaymentInput(
                         method=payment["method"],
@@ -208,11 +249,10 @@ class PosSaleViewSet(viewsets.GenericViewSet):
                     )
                     for payment in data["payments"]
                 ],
-                customer_id=data.get("customer"),
-                manual_discount=quantize(data.get("manual_discount", 0)),
                 register=data.get("register", ""),
                 note=data.get("note", ""),
                 idempotency_key=request.headers.get("Idempotency-Key"),
+                expected_total=data.get("expected_total"),
             ),
         )
         return Response(OrderDetailSerializer(order).data, status=status.HTTP_201_CREATED)
@@ -279,7 +319,12 @@ class HeldSaleViewSet(viewsets.ModelViewSet):
 
 
 class PosElevateView(APIView):
-    """Manager override at the counter (refund, large discount, void)."""
+    """Manager override at the counter (refund, large discount, void).
+
+    The answer carries `approval_token`: what the register sends with the quote
+    and the sale so they can rely on this check without the password. It is
+    good for `expires_in` seconds, for this cashier and this permission only.
+    """
 
     permission_classes = [IsAuthenticated, RolePermission]
     required_permissions = ["sales.create"]
@@ -288,18 +333,27 @@ class PosElevateView(APIView):
     def post(self, request: AuthedRequest) -> Response:
         serializer = ElevateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         approver = pos_services.elevate(
-            email=serializer.validated_data["email"],
-            password=serializer.validated_data["password"],
-            permission=serializer.validated_data["permission"],
+            email=data["email"],
+            password=data["password"],
+            permission=data["permission"],
             requested_by=request.user,
+            discount_percent=data.get("discount_percent"),
         )
         return Response(
             {
                 "approved": True,
                 "approved_by": approver.full_name,
                 "approved_by_id": str(approver.pk),
-                "permission": serializer.validated_data["permission"],
+                "permission": data["permission"],
+                "approval_token": pos_services.approval_token(
+                    approver=approver,
+                    requested_by=request.user,
+                    permission=data["permission"],
+                    max_percent=data.get("discount_percent"),
+                ),
+                "expires_in": pos_services.APPROVAL_MAX_AGE,
             }
         )
 

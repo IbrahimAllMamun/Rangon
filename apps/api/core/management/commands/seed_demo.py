@@ -1184,6 +1184,22 @@ class Command(BaseCommand):
                 "channels": [Channel.ONLINE],
             },
         )
+        # One for the counter. No per-customer limit, so an anonymous walk-in
+        # sale can take it too -- a limited coupon needs a named customer there
+        # (business-rules §3.3).
+        Coupon.objects.get_or_create(
+            code="STORE100",
+            defaults={
+                "description": "৳100 off in store",
+                "discount_type": DiscountType.FIXED,
+                "value": Decimal("100.00"),
+                "minimum_order_value": Decimal("1000.00"),
+                "starts_at": now - timedelta(days=1),
+                "ends_at": now + timedelta(days=60),
+                "usage_limit_per_customer": None,
+                "channels": [Channel.POS],
+            },
+        )
         Coupon.objects.get_or_create(
             code="EXPIRED50",
             defaults={

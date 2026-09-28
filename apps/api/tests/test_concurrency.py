@@ -499,6 +499,96 @@ def test_one_customer_cannot_spend_a_one_per_customer_coupon_twice():
     assert coupon.used_count == 1
 
 
+def _last_coupon_use():
+    """A branch with stock to spare and a coupon with exactly one use left."""
+    branch = factories.branch(factories.organization())
+    variant = factories.variant(price="1000.00")
+    factories.stock(variant, branch, 5, "400.00")
+    coupon = Coupon.objects.create(
+        code=f"LAST{factories.unique()}",
+        discount_type=DiscountType.FIXED,
+        value=Decimal("100.00"),
+        usage_limit=1,
+        usage_limit_per_customer=None,
+    )
+    return branch, variant, coupon
+
+
+def _counter_sale(branch, variant, cashier, code: str):
+    return pos.create_pos_sale(
+        branch=branch,
+        actor=cashier,
+        data=SaleInput(
+            lines=[SaleLineInput(variant_id=str(variant.pk), quantity=1)],
+            payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("900.00"))],
+            coupon_code=code,
+            expected_total=Decimal("900.00"),
+        ),
+    )
+
+
+def test_two_tills_cannot_both_spend_a_coupons_last_use():
+    """Both registers price the sale -- and pass validation -- before either
+    holds the coupon lock. The counter must reach `redeem()`'s re-check under
+    that lock exactly as checkout does, or the last use is spent twice."""
+    branch, variant, coupon = _last_coupon_use()
+    cashiers = [factories.user("CASHIER", branch_obj=branch) for _ in range(2)]
+
+    results, errors = run_together(
+        lambda index: _counter_sale(branch, variant, cashiers[index], coupon.code), 2
+    )
+
+    assert len(results) == 1, [repr(e) for e in errors]
+    assert [type(e).__name__ for e in errors] == ["CouponInvalid"]
+    coupon.refresh_from_db()
+    assert coupon.used_count == 1
+    assert Order.objects.count() == 1
+    # The refused sale took nothing off the shelf.
+    assert Inventory.objects.get(branch=branch, variant=variant).on_hand == 4
+
+
+def test_a_till_and_the_website_cannot_share_a_coupons_last_use():
+    """The counter and checkout take their locks in the same order.
+
+    Both lock the item's inventory row and then the coupon's. Had the counter
+    taken the coupon first, each side could hold the row the other was waiting
+    for, and PostgreSQL would end one with a deadlock -- an error nobody at the
+    counter could act on. Whichever side loses must lose on the coupon.
+    """
+    branch, variant, coupon = _last_coupon_use()
+    cashier = factories.user("CASHIER", branch_obj=branch)
+    customer = factories.customer()
+    cart = checkout_services.get_or_create_cart(
+        token="till-v-web", customer=customer, branch=branch
+    )
+    checkout_services.add_item(cart=cart, variant_id=variant.pk, quantity=1)
+    checkout_services.apply_coupon(cart=cart, code=coupon.code)
+
+    def buy(index: int):
+        if index == 0:
+            return _counter_sale(branch, variant, cashier, coupon.code)
+        return checkout_services.place_order(
+            cart=cart,
+            shipping_address=ADDRESS,
+            payment_method=PaymentMethod.COD,
+            customer=customer,
+            contact_phone=customer.phone,
+            idempotency_key="till-v-web",
+            # Without it a web order that lost the coupon would go through at
+            # the full price instead of saying so.
+            expected_total=Decimal("900.00"),
+        )
+
+    results, errors = run_together(buy, 2)
+
+    assert len(results) == 1, [repr(e) for e in errors]
+    assert all(isinstance(e, BusinessError) for e in errors), [repr(e) for e in errors]
+    coupon.refresh_from_db()
+    assert coupon.used_count == 1
+    assert CouponRedemption.objects.filter(coupon=coupon).count() == 1
+    assert Order.objects.filter(coupon=coupon).count() == 1
+
+
 def _payable_order(branch, variant, actor, total="1000.00"):
     """A purchase order that has been sent, so money may be paid against it."""
     order = purchasing_services.create_purchase_order(

@@ -55,7 +55,8 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
     def get_queryset(self) -> Any:
         queryset = Order.objects.select_related("branch", "customer", "created_by")
         if self.action == "retrieve":
-            queryset = queryset.prefetch_related(
+            # `coupon` for the detail's `coupon_code`.
+            queryset = queryset.select_related("coupon").prefetch_related(
                 "items__variant__product__images", "payments", "refunds", "events__actor"
             )
         else:

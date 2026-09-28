@@ -3,6 +3,11 @@
 A POS sale is instantaneous: the customer walks out with the goods, so stock is
 deducted immediately (no reservation) and the order is created DELIVERED.
 docs/business-rules.md §1.3
+
+Discounts at the counter come from three places (§3.3): a discount on a line, a
+discount on the whole sale -- both the cashier's own, both under the approval
+threshold -- and a coupon, which was authorised when it was created and is
+checked here exactly as checkout checks it.
 """
 
 from __future__ import annotations
@@ -12,13 +17,21 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
+from django.core import signing
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.models import Branch, User
 from catalog.models import ProductVariant
 from core import audit
-from core.exceptions import Conflict, PermissionDenied, ValidationError
+from core.exceptions import (
+    BusinessError,
+    Conflict,
+    CouponInvalid,
+    PermissionDenied,
+    PriceChanged,
+    ValidationError,
+)
 from core.money import ZERO, quantize
 from core.services import next_number
 from customers.models import Customer
@@ -36,6 +49,18 @@ from orders.models import (
 from orders.services import payments as payment_services
 from orders.services import pricing
 from orders.services.lifecycle import log_event
+from promotions import services as promotion_services
+from promotions.models import Coupon, DiscountType
+
+#: What a manager holds that lets a discount pass the threshold.
+DISCOUNT_OVERRIDE = "sales.discount_override"
+
+#: A manager's approval is carried from `POST /pos/elevate/` to the sale in a
+#: token signed with this salt, and lasts this long.
+APPROVAL_SALT = "orders.pos.approval"
+APPROVAL_MAX_AGE = 5 * 60
+
+HUNDRED = Decimal("100")
 
 
 @dataclass
@@ -63,10 +88,59 @@ class SaleInput:
     payments: list[PaymentInput] = field(default_factory=list)
     customer_id: Any = None
     manual_discount: Decimal = ZERO
+    #: The same discount as a percentage, turned into money here rather than in
+    #: the browser. Taken off what the goods come to after any coupon, so
+    #: "another 10%" is 10% of what the customer would otherwise pay. Give this
+    #: or `manual_discount`, not both.
+    manual_discount_percent: Decimal | None = None
+    #: A code typed at the register: a claim, never an amount (§3.3).
+    coupon_code: str = ""
     register: str = ""
     note: str = ""
     idempotency_key: str | None = None
     elevated_by: User | None = None
+    #: A manager's approval from `POST /pos/elevate/`, for a discount above the
+    #: threshold. Read only when the discount actually needs it.
+    approval_token: str = ""
+    #: The total the register showed. A sale that would record any other total
+    #: is refused rather than charged (§3.1).
+    expected_total: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class Approval:
+    """A manager's approval, read back from its signed token."""
+
+    approver: User
+    #: The largest discount, in percent, the manager was shown. None approves
+    #: whatever the discount is -- only a service-level caller gets that.
+    max_percent: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class DiscountOverride:
+    """Who let a discount above the threshold through, recorded on the sale."""
+
+    approver: User
+    #: The cashier's own discount -- lines plus the whole sale -- in money.
+    discount: Decimal
+    percent: Decimal
+    threshold: Decimal
+
+
+@dataclass
+class SaleQuote:
+    """A counter sale priced exactly as it would be recorded."""
+
+    priced: pricing.PricedOrder
+    #: The customer the cashier attached. None is an anonymous sale, which the
+    #: sale itself files against the branch's walk-in record.
+    customer: Customer | None
+    coupon: Coupon | None = None
+    override: DiscountOverride | None = None
+    #: What stands between this basket and payment. Only a quote collects
+    #: these; a sale raises the first one instead.
+    issues: list[dict[str, Any]] = field(default_factory=list)
 
 
 def walk_in_customer(branch: Branch) -> Customer:
@@ -92,58 +166,241 @@ def walk_in_customer(branch: Branch) -> Customer:
     return customer
 
 
+def approval_token(
+    *,
+    approver: User,
+    requested_by: User,
+    permission: str,
+    max_percent: Decimal | None = None,
+) -> str:
+    """Sign what a manager has just approved, for the register to carry to the sale.
+
+    `elevate()` checks the manager's password behind the login throttle; this is
+    what lets the sale rely on that check without seeing the password again. It
+    is not a session. It names the approver, the cashier it was given to, the one
+    permission, and -- for a discount -- the largest percentage the manager was
+    shown, and it expires after APPROVAL_MAX_AGE seconds.
+    """
+    return signing.dumps(
+        {
+            "approver": str(approver.pk),
+            "cashier": str(requested_by.pk),
+            "permission": permission,
+            "max_percent": None if max_percent is None else str(quantize(max_percent)),
+        },
+        salt=APPROVAL_SALT,
+    )
+
+
+def read_approval(*, token: str, actor: User, branch: Branch, permission: str) -> Approval:
+    """Check a manager's approval at the moment a sale relies on it.
+
+    The approver is re-read rather than trusted from the token: a manager
+    deactivated, or moved off the role, since approving no longer approves.
+    """
+    refused = {"requires": permission}
+    try:
+        payload = signing.loads(token, salt=APPROVAL_SALT, max_age=APPROVAL_MAX_AGE)
+    except signing.SignatureExpired as exc:
+        raise PermissionDenied(
+            "The manager's approval has expired. Ask for it again.", details=refused
+        ) from exc
+    except signing.BadSignature as exc:
+        raise PermissionDenied("That manager approval is not valid.", details=refused) from exc
+
+    if payload.get("cashier") != str(actor.pk) or payload.get("permission") != permission:
+        raise PermissionDenied("That approval was given for something else.", details=refused)
+
+    approver = User.objects.filter(pk=payload.get("approver"), is_active=True).first()
+    if approver is None or not approver.has_perm_code(permission):
+        raise PermissionDenied(
+            "The manager who approved this can no longer approve it.", details=refused
+        )
+    # The same rule `resolve_branch` applies to the manager's own requests: a
+    # manager bound to one shop does not approve discounts in another.
+    if not approver.can_cross_branch and approver.branch_id and approver.branch_id != branch.pk:
+        raise PermissionDenied(
+            "A manager can only approve a discount at their own branch.", details=refused
+        )
+
+    max_percent = payload.get("max_percent")
+    return Approval(
+        approver=approver,
+        max_percent=None if max_percent is None else Decimal(max_percent),
+    )
+
+
 def _check_discount_permission(
     *,
     actor: User,
     discount: Decimal,
     subtotal: Decimal,
-    elevated_by: User | None,
-    branch: Branch | None = None,
-) -> None:
-    """Large discounts need manager approval (docs/business-rules.md §3.3)."""
+    branch: Branch,
+    elevated_by: User | None = None,
+    approval_token: str = "",
+) -> DiscountOverride | None:
+    """Large discounts need manager approval (docs/business-rules.md §3.3).
+
+    `discount` is the cashier's own -- lines plus the whole-sale discount --
+    measured against the sale before any discount. A coupon's is not in it: the
+    coupon was authorised when it was created.
+
+    Returns who approved a discount above the threshold, or None when nothing
+    needed approving. Writes nothing -- the register's quote runs this on every
+    change to the basket, and the sale records the override against its order.
+    """
     if discount <= ZERO:
-        return
+        return None
     if not actor.has_perm_code("sales.discount"):
         raise PermissionDenied("You do not have permission to apply discounts.")
     if subtotal <= ZERO:
-        return
+        return None
 
-    percent = (discount / subtotal) * Decimal("100")
+    exact = (discount / subtotal) * HUNDRED
     threshold = Decimal(settings.RANGON["DISCOUNT_APPROVAL_PERCENT"])
-    if percent <= threshold:
-        return
+    if exact <= threshold:
+        return None
 
-    approver = elevated_by or actor
-    if not approver.has_perm_code("sales.discount_override"):
-        raise PermissionDenied(
-            f"A discount above {threshold}% needs manager approval.",
-            details={"discount_percent": str(quantize(percent)), "threshold": str(threshold)},
+    percent = quantize(exact)
+    # The amount too, so the register can say what the percentage is of: it is
+    # measured against the whole sale, and a percentage typed after a coupon
+    # reads lower here than it did at the till.
+    details = {
+        "discount": str(quantize(discount)),
+        "discount_percent": str(percent),
+        "threshold": str(threshold),
+    }
+
+    def approved_by(approver: User) -> DiscountOverride:
+        return DiscountOverride(
+            approver=approver, discount=discount, percent=percent, threshold=threshold
         )
-    audit.record(
-        action=audit.AuditAction.DISCOUNT_OVERRIDE,
-        entity_type="Order",
-        entity_label="POS sale",
-        actor=actor,
-        new_values={
-            "discount": str(discount),
-            "percent": str(quantize(percent)),
-            "approved_by": approver.email,
-        },
-        reason="Discount above threshold approved",
-        # The till's branch: an override is that shop's business, not every
-        # shop's -- with no branch the entry reached every auditor (D95).
-        branch=branch,
+
+    for approver in (actor, elevated_by):
+        if approver is not None and approver.has_perm_code(DISCOUNT_OVERRIDE):
+            return approved_by(approver)
+
+    if approval_token:
+        approval = read_approval(
+            token=approval_token, actor=actor, branch=branch, permission=DISCOUNT_OVERRIDE
+        )
+        # Compared at the precision the manager was shown it, which is the
+        # precision it was signed at.
+        if approval.max_percent is not None and percent > approval.max_percent:
+            raise PermissionDenied(
+                f"The manager approved a discount of up to {approval.max_percent}%; "
+                f"this one is {percent}%.",
+                details={
+                    **details,
+                    "requires": DISCOUNT_OVERRIDE,
+                    "approved_percent": str(approval.max_percent),
+                },
+            )
+        return approved_by(approval.approver)
+
+    raise PermissionDenied(
+        f"A discount above {threshold}% needs manager approval.",
+        details={**details, "requires": DISCOUNT_OVERRIDE},
     )
 
 
-@transaction.atomic
-def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
-    """Create a completed counter sale: stock out, money in, receipt ready."""
-    if data.idempotency_key:
-        existing = Order.objects.filter(idempotency_key=data.idempotency_key).first()
-        if existing is not None:
-            return existing
+def _named_customer(customer_id: Any) -> Customer | None:
+    """The customer the cashier attached, or None for an anonymous sale.
 
+    The walk-in record is anonymous too: every unnamed sale at the branch
+    shares it, so it can never stand for one person.
+    """
+    if not customer_id:
+        return None
+    customer = Customer.objects.filter(pk=customer_id).first()
+    if customer is None or customer.is_walk_in:
+        return None
+    return customer
+
+
+def _times(count: int) -> str:
+    return {1: "once", 2: "twice"}.get(count, f"{count} times")
+
+
+def _coupon_for_sale(
+    *,
+    code: str,
+    lines: list[pricing.PricedLine],
+    subtotal: Decimal,
+    customer: Customer | None,
+) -> tuple[Coupon, Decimal]:
+    """Validate a code typed at the register and return what it takes off.
+
+    Everything checkout checks is checked here, for the POS channel, by the same
+    function. The counter adds three refusals of its own. Two come first,
+    because nothing the cashier could change would get past them; asking for a
+    customer comes last, because attaching one is no use if the coupon would be
+    refused anyway.
+    """
+    coupon = promotion_services.get_coupon(code)
+    details = {"code": coupon.code}
+
+    if coupon.discount_type == DiscountType.FREE_SHIPPING:
+        raise CouponInvalid(
+            f"{coupon.code} takes off the delivery charge, and a counter sale has none.",
+            details=details,
+        )
+    if coupon.channels and Channel.POS not in coupon.channels:
+        raise CouponInvalid(f"{coupon.code} cannot be used in store.", details=details)
+
+    result = promotion_services.validate_coupon(
+        coupon=coupon, lines=lines, subtotal=subtotal, customer=customer, channel=Channel.POS
+    )
+
+    # The per-customer limit has to be counted against somebody. The walk-in
+    # record is shared by every anonymous sale at the branch -- counting against
+    # it would let the first stranger spend everyone's use, and not counting
+    # would make the limit unenforceable at the counter (§3.3).
+    if customer is None and coupon.usage_limit_per_customer:
+        raise CouponInvalid(
+            f"{coupon.code} can be used {_times(coupon.usage_limit_per_customer)} per "
+            "customer, so it needs the customer on the sale. Attach them to apply it.",
+            details={**details, "needs_customer": True},
+        )
+    return coupon, result.discount
+
+
+def _manual_discount(data: SaleInput, *, base: Decimal) -> Decimal:
+    """The cashier's discount on the whole sale, in money.
+
+    `base` is what the goods come to after any coupon, so a percentage is taken
+    off what the customer would otherwise pay.
+    """
+    amount = quantize(data.manual_discount or ZERO)
+    percent = data.manual_discount_percent
+    if percent is None:
+        return amount
+    if amount > ZERO:
+        raise ValidationError(
+            "Give the discount as an amount or as a percentage, not both.",
+            details={"manual_discount": str(amount), "manual_discount_percent": str(percent)},
+        )
+    if percent < ZERO or percent > HUNDRED:
+        raise ValidationError(
+            "A percentage discount must be between 0 and 100.",
+            details={"manual_discount_percent": str(percent)},
+        )
+    return quantize(base * percent / HUNDRED)
+
+
+def price_sale(*, branch: Branch, actor: User, data: SaleInput, strict: bool = True) -> SaleQuote:
+    """Price a counter sale exactly as it would be recorded.
+
+    The register's running total (`POST /pos/quote/`) and the sale itself both
+    come through here, so the figure a cashier reads out is the figure the sale
+    records -- the guarantee `checkout.price_cart` gives the storefront.
+
+    `strict` is the sale: the first refusal is raised. A quote collects coupon
+    and discount refusals into `issues` instead and prices everything else, so
+    the register can show the total *and* what stands between it and payment.
+    A basket that cannot be priced at all -- an unknown item, a discount larger
+    than the sale -- raises either way.
+    """
     if not data.lines:
         raise ValidationError("A sale needs at least one item.")
 
@@ -169,21 +426,79 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
         ],
         costs=costs,
     )
-    line_discounts = quantize(sum((line.line_discount for line in priced_lines), ZERO))
+    subtotal = quantize(sum((line.line_total for line in priced_lines), ZERO))
     gross_subtotal = quantize(sum((line.gross for line in priced_lines), ZERO))
-    _check_discount_permission(
-        actor=actor,
-        discount=quantize(line_discounts + data.manual_discount),
-        subtotal=gross_subtotal,
-        elevated_by=data.elevated_by,
-        branch=branch,
+    line_discounts = quantize(sum((line.line_discount for line in priced_lines), ZERO))
+
+    customer = _named_customer(data.customer_id)
+    issues: list[dict[str, Any]] = []
+
+    def refuse(exc: BusinessError, field: str) -> None:
+        if strict:
+            raise exc
+        issues.append(
+            {"code": exc.code, "field": field, "message": exc.message, "details": exc.details}
+        )
+
+    coupon: Coupon | None = None
+    coupon_discount = ZERO
+    code = (data.coupon_code or "").strip()
+    if code:
+        try:
+            coupon, coupon_discount = _coupon_for_sale(
+                code=code, lines=priced_lines, subtotal=subtotal, customer=customer
+            )
+        except CouponInvalid as exc:
+            refuse(exc, "coupon")
+
+    manual_discount = _manual_discount(data, base=quantize(subtotal - coupon_discount))
+
+    override: DiscountOverride | None = None
+    try:
+        override = _check_discount_permission(
+            actor=actor,
+            discount=quantize(line_discounts + manual_discount),
+            subtotal=gross_subtotal,
+            branch=branch,
+            elevated_by=data.elevated_by,
+            approval_token=data.approval_token,
+        )
+    except PermissionDenied as exc:
+        refuse(exc, "discount")
+
+    priced = pricing.calculate(
+        priced_lines,
+        coupon_discount=coupon_discount,
+        manual_discount=manual_discount,
+        coupon=coupon,
+    )
+    if coupon is not None:
+        priced.coupon_message = coupon.description
+    return SaleQuote(
+        priced=priced, customer=customer, coupon=coupon, override=override, issues=issues
     )
 
-    priced = pricing.calculate(priced_lines, manual_discount=quantize(data.manual_discount))
 
-    customer = (
-        Customer.objects.filter(pk=data.customer_id).first() if data.customer_id else None
-    ) or walk_in_customer(branch)
+@transaction.atomic
+def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
+    """Create a completed counter sale: stock out, money in, receipt ready."""
+    if data.idempotency_key:
+        existing = Order.objects.filter(idempotency_key=data.idempotency_key).first()
+        if existing is not None:
+            return existing
+
+    quote = price_sale(branch=branch, actor=actor, data=data)
+    priced = quote.priced
+    if data.expected_total is not None and quantize(data.expected_total) != priced.grand_total:
+        raise PriceChanged(
+            "The total has changed since the register showed it.",
+            details={
+                "expected": str(quantize(data.expected_total)),
+                "actual": str(priced.grand_total),
+            },
+        )
+
+    customer = quote.customer or walk_in_customer(branch)
 
     try:
         # Savepoint: without it the IntegrityError poisons the transaction
@@ -199,6 +514,8 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
                 created_by=actor,
                 register=data.register,
                 subtotal=priced.subtotal,
+                coupon=quote.coupon,
+                coupon_discount=priced.coupon_discount,
                 manual_discount=priced.manual_discount,
                 discount_total=priced.discount_total,
                 tax_rate=priced.tax_rate,
@@ -244,6 +561,18 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
         reference_id=order.pk,
     )
 
+    # Count the coupon's use, re-checking both limits under its row lock. After
+    # the stock, as checkout does it: every sale takes the inventory rows first
+    # and the coupon row second, so a counter sale and an online order spending
+    # one coupon on one item cannot each hold the lock the other is waiting for.
+    if quote.coupon is not None:
+        promotion_services.redeem(
+            coupon=quote.coupon,
+            order=order,
+            discount=priced.coupon_discount,
+            customer=quote.customer,
+        )
+
     total_paid = ZERO
     for payment_input in data.payments:
         amount = quantize(payment_input.amount)
@@ -276,13 +605,30 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
 
     leads.recover_for_order(order)
 
+    coupon_code = quote.coupon.code if quote.coupon is not None else ""
     log_event(
         order,
         OrderEventType.CREATED,
         f"POS sale at {branch.code}",
-        data={"register": data.register, "items": len(priced.lines)},
+        data={"register": data.register, "items": len(priced.lines), "coupon": coupon_code},
         actor=actor,
     )
+    if quote.override is not None:
+        audit.record(
+            action=audit.AuditAction.DISCOUNT_OVERRIDE,
+            entity=order,
+            actor=actor,
+            new_values={
+                "discount": str(quote.override.discount),
+                "percent": str(quote.override.percent),
+                "threshold": str(quote.override.threshold),
+                "approved_by": quote.override.approver.email,
+            },
+            reason="Discount above threshold approved",
+            # The till's branch: an override is that shop's business, not every
+            # shop's -- with no branch the entry reached every auditor (D95).
+            branch=branch,
+        )
     audit.record(
         action=audit.AuditAction.SALE_CREATED,
         entity=order,
@@ -292,6 +638,8 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
             "total": order.grand_total,
             "items": len(priced.lines),
             "register": data.register,
+            "discount_total": priced.discount_total,
+            "coupon": coupon_code,
         },
         branch=branch,
     )
@@ -344,6 +692,11 @@ def void_sale(*, order: Order, actor: User, reason: str) -> Order:
             actor=actor,
             reason=f"Sale voided: {reason}",
         )
+
+    # The sale is undone -- goods back, money back -- so its coupon use comes
+    # back too, as it does for a cancelled order (§3.3). A void is how a cashier
+    # corrects a mis-rung sale, and the re-ring must be able to spend it.
+    promotion_services.release(order=order, reason=f"Sale voided: {reason}")
 
     # Re-read first: refund_order() wrote paid/refunded totals on its own copy.
     order.refresh_from_db()
@@ -418,11 +771,19 @@ def lookup_variant(*, code: str) -> ProductVariant | None:
     )
 
 
-def elevate(*, email: str, password: str, permission: str, requested_by: User) -> User:
+def elevate(
+    *,
+    email: str,
+    password: str,
+    permission: str,
+    requested_by: User,
+    discount_percent: Decimal | None = None,
+) -> User:
     """Manager override at the counter.
 
     Verifies a manager's own credentials and returns the approver; the cashier's
-    session is never upgraded.  Both identities land in the audit log.
+    session is never upgraded.  Both identities land in the audit log, with the
+    discount the manager was shown when that is what they approved.
     """
     from django.contrib.auth import authenticate
 
@@ -432,11 +793,14 @@ def elevate(*, email: str, password: str, permission: str, requested_by: User) -
     if not approver.has_perm_code(permission):
         raise PermissionDenied("That user cannot approve this action.")
 
+    new_values: dict[str, Any] = {"permission": permission, "approved_by": approver.email}
+    if discount_percent is not None:
+        new_values["discount_percent"] = str(quantize(discount_percent))
     audit.record(
         action=audit.AuditAction.PERMISSION_ELEVATION,
         entity=approver,
         actor=requested_by,
-        new_values={"permission": permission, "approved_by": approver.email},
+        new_values=new_values,
         reason="POS manager override",
         # The counter it happened at is the cashier's (D95).
         branch=requested_by.branch,
