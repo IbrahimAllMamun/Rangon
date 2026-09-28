@@ -202,6 +202,57 @@ class TestFreeShipping:
         assert response.status_code == 400
 
 
+class TestWhereACouponCanBeUsed:
+    """`channels` decides whether the counter takes a coupon, the web, or both.
+
+    The column is free JSON. Until the POS took coupons nothing read it but
+    checkout, and nothing checked what was written to it: a misspelt channel
+    made a coupon no one could use, with no field error to say so.
+    """
+
+    def test_an_in_store_coupon_is_saved(self, shop, auth_client) -> None:
+        response = auth_client(shop["manager"]).post(
+            "/api/v1/coupons/", _payload(channels=[Channel.POS]), format="json"
+        )
+
+        assert response.status_code == 201, response.data
+        assert Coupon.objects.get(code="SUMMER25").channels == [Channel.POS]
+
+    def test_left_out_it_means_everywhere(self, shop, auth_client) -> None:
+        response = auth_client(shop["manager"]).post("/api/v1/coupons/", _payload(), format="json")
+
+        assert response.status_code == 201, response.data
+        assert Coupon.objects.get(code="SUMMER25").channels == []
+
+    def test_an_unknown_channel_is_a_field_error(self, shop, auth_client) -> None:
+        response = auth_client(shop["manager"]).post(
+            "/api/v1/coupons/", _payload(channels=["WEB"]), format="json"
+        )
+
+        assert response.status_code == 400
+        assert "channels" in response.data["error"]["details"]
+        assert not Coupon.objects.exists()
+
+    def test_something_that_is_not_a_list_is_refused(self, shop, auth_client) -> None:
+        """`"POS" in "ONLINE_POS"` is True: a string would half-work, silently."""
+        response = auth_client(shop["manager"]).post(
+            "/api/v1/coupons/", _payload(channels="ONLINE_POS"), format="json"
+        )
+
+        assert response.status_code == 400
+        assert "channels" in response.data["error"]["details"]
+
+    def test_a_repeated_channel_is_stored_once_in_a_fixed_order(self, shop, auth_client) -> None:
+        response = auth_client(shop["manager"]).post(
+            "/api/v1/coupons/",
+            _payload(channels=[Channel.ONLINE, Channel.POS, Channel.ONLINE]),
+            format="json",
+        )
+
+        assert response.status_code == 201, response.data
+        assert Coupon.objects.get(code="SUMMER25").channels == [Channel.POS, Channel.ONLINE]
+
+
 class TestDeletion:
     def test_an_unused_coupon_is_deleted(self, shop, auth_client) -> None:
         coupon = _coupon()
