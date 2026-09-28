@@ -1,11 +1,13 @@
 "use client";
 
 import { AlertTriangle, Check, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { MatrixAttribute, MatrixRow } from "@/lib/commerce/variant-matrix";
+import { NEVER_RECEIVED_NOTE, purchaseOrderFor, upwardRefusal } from "@/lib/commerce/stock-adjust";
 import { cn } from "@/lib/cn";
 import { money } from "@/lib/format";
 
@@ -201,6 +203,11 @@ function MatrixRowView({
       setRowError("Counted stock must be a whole number, zero or more.");
       return;
     }
+    const refusal = upwardRefusal(stock?.received, value - (stock?.on_hand ?? 0));
+    if (refusal) {
+      setRowError(refusal);
+      return;
+    }
 
     setBusy(true);
     try {
@@ -381,7 +388,7 @@ function MatrixRowView({
                   <Input
                     value={reason}
                     onChange={(event) => setReason(event.target.value)}
-                    placeholder="Opening stock, stock count, damage found…"
+                    placeholder="Stock count, damage found, mis-scan…"
                     className="h-9"
                   />
                 </label>
@@ -395,6 +402,17 @@ function MatrixRowView({
                   This writes an <code>ADJUSTMENT</code> row to the inventory ledger against{" "}
                   {saved.sku}, attributed to you. Unit cost on record {money(saved.cost)}.
                 </p>
+                {stock?.received === false && (
+                  <p className="w-full text-caption text-muted">
+                    {NEVER_RECEIVED_NOTE}{" "}
+                    <Link
+                      href={purchaseOrderFor([saved.id])}
+                      className="text-brand-600 hover:underline"
+                    >
+                      Raise a purchase order
+                    </Link>
+                  </p>
+                )}
               </div>
             )}
           </td>

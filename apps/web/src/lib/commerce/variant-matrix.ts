@@ -38,7 +38,13 @@ export interface ExistingVariant {
     label: string;
     swatch: string;
   }[];
-  stock: { on_hand: number; reserved: number; available: number } | null;
+  stock: {
+    on_hand: number;
+    reserved: number;
+    available: number;
+    /** False when the branch has never received it: Adjust may lower, not raise. */
+    received?: boolean;
+  } | null;
 }
 
 export type RowState =

@@ -383,8 +383,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action == "retrieve":
             product = self.get_object()
             branch = resolve_branch(actor(self.request), self.request.query_params.get("branch"))
-            context["stock"] = inventory_services.availability(
-                branch=branch, variants=list(product.variants.all())
+            variants = list(product.variants.all())
+            context["stock"] = inventory_services.availability(branch=branch, variants=variants)
+            context["received"] = inventory_services.received_variant_ids(
+                branch=branch, variants=variants
             )
         return context
 

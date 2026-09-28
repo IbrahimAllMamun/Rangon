@@ -26,6 +26,7 @@ from catalog.models import (
 )
 from customers.models import Customer, CustomerType
 from inventory import services as inventory_services
+from inventory.models import InventoryTransaction, TransactionType
 from purchasing.models import Supplier
 from shipping.models import ShippingMethod, ShippingZone
 
@@ -170,6 +171,33 @@ def stock(
         reference_type="test_setup",
     )
     return inventory_services.get_or_create_inventory(branch_obj, variant_obj)
+
+
+def unreceived_stock(variant_obj: ProductVariant, branch_obj: Branch, quantity: int):
+    """Stock with no receipt behind it, as data from before § 4.0a's guard left it.
+
+    The product form's opening-stock box (D72) and, until 2026-09-28, Adjust
+    could both put units on a shelf nothing had ever been received onto. Neither
+    can now, but the rows they wrote are still in real databases, so the code
+    that reads stock still has to cope with them. No service will write this
+    state any more, so it is written directly: one `ADJUSTMENT` row and the
+    cache that matches it, which is what `verify_integrity` checks.
+    """
+    inventory = inventory_services.get_or_create_inventory(branch_obj, variant_obj)
+    inventory.on_hand += quantity
+    inventory.save(update_fields=["on_hand", "updated_at"])
+    InventoryTransaction.objects.create(
+        branch=branch_obj,
+        variant=variant_obj,
+        transaction_type=TransactionType.ADJUSTMENT,
+        quantity=quantity,
+        unit_cost=inventory.average_cost,
+        on_hand_after=inventory.on_hand,
+        reserved_after=inventory.reserved,
+        reference_type="manual",
+        reason="Opening stock, no receipt (pre-2026-09-28 data)",
+    )
+    return inventory
 
 
 def account(

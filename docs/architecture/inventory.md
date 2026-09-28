@@ -44,6 +44,8 @@ sell(*, branch, lines, actor, reference_type, reference_id)                 # di
 receive_purchase(*, receipt, actor)                                         # PURCHASE + WAC update
 restock_return(*, branch, lines, actor, reference_id)
 adjust(*, branch, variant, new_on_hand, reason, actor)                      # stock count correction
+apply_stock_count(*, count, actor) -> int                                   # a whole sheet, all or none
+received_variant_ids(*, branch, variants) -> set[str]                       # has a cost basis here
 write_off(*, branch, variant, quantity, transaction_type, reason, actor)    # DAMAGE / LOSS
 transfer(*, source_branch, target_branch, lines, actor, notes="")
 availability(*, branch, variants) -> dict[variant_id, AvailabilitySnapshot]
@@ -67,6 +69,7 @@ Every mutating function:
 | `reserved ≥ 0` | service guard + `CheckConstraint inventory_reserved_gte_0` |
 | `reserved ≤ on_hand` unless overselling enabled | service guard (org config) |
 | cached columns == ledger sum | `verify_integrity()`, nightly task, test suite |
+| stock is only **raised** by an adjustment where the branch has received the variant (`PURCHASE` / `TRANSFER_IN`) | `_check_can_raise` in `adjust` and `apply_transaction` — `NOT_RECEIVED`, business-rules § 4.0a (D107) |
 | a reservation is consumed at most once | `consume_reservation` is keyed on `(reference_type, reference_id, variant)` and refuses a second pass |
 | ledger rows are never updated or deleted | no service does it; `AppendOnlyModel` blocks `save()` on an existing row and `delete()` |
 

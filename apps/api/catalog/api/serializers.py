@@ -516,14 +516,19 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         snapshots = self.context.get("stock")
         if snapshots is None:
             return None
+        # Only the admin product detail supplies it; elsewhere nobody is
+        # offered a correction, so there is nothing to decide.
+        received = self.context.get("received")
+        flag = {} if received is None else {"received": str(variant.pk) in received}
         snapshot = snapshots.get(str(variant.pk))
         if snapshot is None:
-            return {"on_hand": 0, "reserved": 0, "available": 0}
+            return {"on_hand": 0, "reserved": 0, "available": 0, **flag}
         return {
             "on_hand": snapshot.on_hand,
             "reserved": snapshot.reserved,
             "available": snapshot.available,
             "average_cost": str(snapshot.average_cost),
+            **flag,
         }
 
 

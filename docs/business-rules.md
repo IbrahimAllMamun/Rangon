@@ -453,6 +453,33 @@ valued at nothing and sold at 100% margin ([D72](roadmap.md#known-defects)).
 `ADJUSTMENT` remains what it says: a correction to a counted figure — a stock count, breakage found,
 drift repaired. It is not a way to bring goods in, because it carries no cost with it.
 
+**The API enforces that, per branch ([D107](roadmap.md#known-defects)).** Removing the form field
+left the door open one click further on: save the product, press *Adjust* on its row, type 50. So
+`inventory.services.adjust` now refuses to **raise** stock on a branch that has never received the
+variant — no `PURCHASE` (a receipt or the import) and no `TRANSFER_IN` at that branch
+(`COST_BEARING_INBOUND`). The refusal is `NOT_RECEIVED` (409), and it names the SKU.
+
+| Case | Allowed? |
+|---|---|
+| Correcting received stock down or up | Yes — a surplus is valued at that branch's average |
+| Lowering stock that was never received (legacy rows from before this rule) | Yes — the figure has to be countable to the truth |
+| Raising stock this branch has never received | **No** — receive it on a purchase order |
+| A receipt at another branch only | **No** — cost is per branch (ADR-0006); transfer it in |
+| A receipt at `0.00` (a free sample, a replacement) | It counts as received |
+
+A **stock count** is applied all or none (`inventory.services.apply_stock_count`). A sheet that
+counts units of something the branch has never received is refused whole, names every such line,
+and stays open. Receiving the found goods on a purchase order and applying the same count again
+then works, because the counted figure now matches what was received.
+
+> **DECISION REQUIRED — default chosen (owner, 2026-09-28).** Found stock with no receipt is refused
+> rather than accepted with a cost typed at the count. The alternative is a second, cost-carrying
+> door beside the purchase order, which is what this rule exists to prevent.
+
+The screens say so before the API has to: the inventory list and the product form carry a
+`received` flag per row, and *Adjust* on a never-received row explains that it can only lower the
+figure and links to a new purchase order with that variant already on it.
+
 To put existing stock on the shelf when the business first goes live, use the CSV import
 (`/admin/products/import`), which carries a `cost` column per row. To bring in goods afterwards,
 raise and receive a purchase order.
