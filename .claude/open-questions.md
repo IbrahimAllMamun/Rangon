@@ -11,7 +11,9 @@ Last reviewed: **2026-09-19**, against `../docs/roadmap.md` as last updated 2026
 
 Each is implemented with a documented default so the system runs. Each is a
 business call, not a technical one. Full detail in `../docs/business-rules.md`,
-which carries **22** `DECISION REQUIRED` markers (re-counted 2026-09-23; this said 18 while the document held 20). Only one is changeable in the
+which carries **31** `DECISION REQUIRED` markers (re-counted 2026-09-28: 28 before the three for
+counter discounts, rows 23–25 below, so six added between 09-23 and 09-28 have no row here yet;
+on 09-23 it said 22, and 18 before that while the document held 20). Only one is changeable in the
 app: VAT, on `/admin/settings`. The same page lists four more read-only — the
 return window, the discount threshold, reservation expiry and change-of-mind
 shipping — which stay in environment variables on purpose, so that changing them
@@ -60,10 +62,13 @@ measured, not later.
 | 20 | Organisation-wide audit entries (§7, D85) | visible to every audit reader | Includes sign-ins and account changes of staff at other branches |
 | 21 | The staff list (§7.1) | spans branches | A branch manager sees every branch's staff. Found by the 2026-09-23 branch-scope sweep and left as it was, not changed silently |
 | 22 | A non-owner with **no branch** (§7.1) | sees and acts on every branch | Only an owner can create one. Decide before opening a second branch; in a one-branch shop the two answers behave the same |
+| 23 | What a percentage discount at the counter is taken off (§3.3) | what is left after the coupon | "Another 10%" reads as 10% of what the customer would pay. The alternative, 10% of the full price, gives more away when a coupon is on the sale |
+| 24 | A per-customer-limited coupon on an anonymous counter sale (§3.3a) | refused until a customer is attached | The walk-in row is shared, so the limit has no one to count against. The alternative — let it through uncounted — makes the limit meaningless in store |
+| 25 | How long a manager's discount approval lasts (§3.3a) | five minutes, same cashier, up to the percentage shown | Within that it can be reused for another sale no larger; each use is audit-logged against its sale. The strict alternative, one sale per approval, needs server-side state |
 | — | Which payment gateway | none — COD only | Blocks prepaid online orders |
 | — | Which courier, and API or manual | manual tracking | Shipping integration |
 
-Rows 1–22 are the `DECISION REQUIRED` markers, in the order the table groups
+Rows 1–25 are `DECISION REQUIRED` markers, in the order the table groups
 them rather than the document's; the section numbers are business-rules.md's.
 The two unnumbered rows are product choices that block whole features. Ask
 before implementing any of them differently. Do not silently change a default

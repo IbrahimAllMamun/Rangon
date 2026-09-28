@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from rest_framework import serializers
 
+from orders.models import Channel
 from promotions.models import Coupon, CouponRedemption, DiscountType
 
 
@@ -33,6 +35,23 @@ class CouponSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "used_count", "created_at"]
+
+    def validate_channels(self, value: Any) -> list[str]:
+        """Where the coupon can be spent: the online shop, the counter, or both.
+
+        Empty means everywhere. The column is free JSON, so the list is checked
+        here -- a misspelt channel would make a coupon nobody could ever use, and
+        nothing would say why.
+        """
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise serializers.ValidationError("Choose where the coupon can be used.")
+        unknown = sorted(set(value) - set(Channel.values))
+        if unknown:
+            raise serializers.ValidationError(f"Not a sales channel: {', '.join(unknown)}.")
+        # Once each, in the enum's order, so two equal choices store equal lists.
+        return [channel for channel in Channel.values if channel in value]
 
     def _resulting(self, attrs: dict, field: str):
         """The value this field will hold after the write.

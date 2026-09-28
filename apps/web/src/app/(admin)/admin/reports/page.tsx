@@ -4,7 +4,7 @@ import Link from "next/link";
 import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
+import { Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
 import { money, percent } from "@/lib/format";
 
@@ -135,12 +135,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                   <p className="text-body-sm font-medium">{report.label}</p>
                   <p className="text-caption text-muted">{report.description}</p>
                 </div>
-                <a
-                  href={`/api/proxy${report.path}?range=${range}&format=csv`}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-                >
-                  <Download className="size-4" aria-hidden /> CSV
-                </a>
+                <Button variant="secondary" size="sm" className="shrink-0" asChild>
+                  <a href={`/api/proxy${report.path}?range=${range}&format=csv`}>
+                    <Download className="size-4" aria-hidden /> CSV
+                  </a>
+                </Button>
               </li>
             ))}
           </ul>

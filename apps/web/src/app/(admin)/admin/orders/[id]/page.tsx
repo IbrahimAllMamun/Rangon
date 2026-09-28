@@ -92,7 +92,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
               <CardTitle>Items</CardTitle>
               <Link
                 href={`/admin/orders/${order.id}/print`}
-                className="inline-flex items-center gap-1.5 text-body-sm text-brand-600 hover:underline"
+                className="inline-flex items-center gap-1.5 text-body-sm text-brand-700 hover:underline"
               >
                 <Printer className="size-4" aria-hidden /> Invoice / packing slip
               </Link>
@@ -193,7 +193,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
               <p className="font-medium">{order.customer_name}</p>
               {order.customer_phone && (
                 <p>
-                  <a href={`tel:${order.customer_phone}`} className="text-brand-600 hover:underline">
+                  <a href={`tel:${order.customer_phone}`} className="text-brand-700 hover:underline">
                     {order.customer_phone}
                   </a>
                 </p>

@@ -108,6 +108,31 @@ Prefer borders and spacing over shadows. Admin cards use borders.
 - **StatCard** — label, big tabular value, delta with direction, optional sparkline.
 - Empty, loading (skeleton) and error states are part of every data component, not an afterthought.
 
+### Admin list screens
+
+Every admin list is built from the same four parts, top to bottom, so a manager who learns one
+screen has learnt them all (2026-09-28 pass):
+
+1. **`PageHeader`** — title and description on the left, actions top right. The title block takes the
+   free space and wraps its description inside it, so a long description never pushes the actions
+   onto a row of their own. The primary action is a `primary` `Button`; every other header action
+   is a `secondary` `Button` (`asChild` around a `Link`), never a ghost button or a hand-styled link.
+2. **`FilterTabs`** (`components/admin/filter-tabs.tsx`) — the one look for a filter.
+   `chips` (outlined links that wrap) for the values a list narrows to: a status, a kind, a channel.
+   `segmented` (one outlined strip) for a short ordered scale: the date presets, via `DateRangeTabs`.
+   The current choice is a `brand-50` tint, `brand-700` semibold text and a `brand-500` outline —
+   weight and outline as well as colour — exposed as `aria-current="true"`. They are links built
+   with `listHref`, which keeps every other choice (a search survives a status tab), drops `page`
+   and keeps `page_size`. Two sets on one screen sit on one row with a hairline divider between.
+   Solid black chips, underlined tabs and pill toggles are retired.
+3. **`FilterForm`** — a GET search landmark (`role="search"`, named) in a bordered card: labelled
+   fields, a `dark` Apply, and Clear only while something is set. A search box is `type="search"`
+   with a label saying what it matches ("Name, SKU or barcode") and an example placeholder. Date
+   ranges are two `type="date"` fields that bound each other (`min`/`max`).
+4. **`ResourceTable`** with the shared `Pagination` (current page marked the `FilterTabs` way) and
+   a `RowLink` on the record's name. A filtered list that comes back empty says so and names what
+   was typed, rather than showing the first-run "nothing here yet" state.
+
 ## Motion
 
 `fast 140ms` (hover, focus, badge), `normal 200ms` (drawer, dropdown, toast), `slow 320ms` (page/gallery
@@ -220,7 +245,11 @@ icons, fills and borders (3:1); text uses `--success-text` (`#15803D`) and `--wa
 never `text-[var(--success)]`.
 
 **Brand-coloured text links are `brand-700`.** `brand-600` text is 4.55:1 on white but 4.36:1 on the
-storefront ground (`neutral-50`); `brand-700` is 5.6:1 on both. The `Button` `link` variant uses it.
+storefront ground (`neutral-50`); `brand-700` is 5.6:1 on both. The `Button` `link` variant uses it,
+and so do `RowLink` and every admin text link (2026-09-28: the remaining `text-brand-600` links moved —
+a hovered table row is `neutral-50` too, which is exactly where the pointer puts a row link).
+`brand-600` stays the *hover* colour (`hover:text-brand-600` on neutral text) and is fine for icons,
+which need 3:1.
 
 **Muted text on the admin ground is `#6b6b6b`.** `neutral-500` (`#737373`) is 4.35:1 on the admin
 background (`neutral-100`) and fails; the admin surface overrides `--muted` (4.89:1 there, 5.33:1 on a

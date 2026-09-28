@@ -556,12 +556,18 @@ export function PageHeader({
           <ArrowLeft className="size-4" aria-hidden /> {back.label}
         </Link>
       )}
+      {/* The title takes the free space and wraps its description inside it,
+          so the actions stay top right on every screen. Without `flex-1` the
+          block was as wide as its description on one line, and a long one
+          pushed the actions onto a row of their own -- beside the title on
+          Products, under the text on Inventory and the VAT return. They still
+          drop below once the title would be narrower than 16rem. */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-[16rem] flex-1">
           <h1 className="text-h2">{title}</h1>
           {description && <p className="mt-1 text-body-sm text-muted">{description}</p>}
         </div>
-        {actions && <div className="flex gap-2">{actions}</div>}
+        {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
       </div>
     </>
   );

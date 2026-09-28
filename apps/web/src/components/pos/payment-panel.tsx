@@ -7,9 +7,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, Label, Select } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Order, PaymentMethod, PosSession } from "@/lib/api/types";
+import { saleRequest } from "@/lib/commerce/pos-sale";
 import { money } from "@/lib/format";
 import { METHOD_KIND } from "@/lib/money-accounts";
 import { usePos } from "@/lib/store/pos";
+import type { PricedBasket } from "@/lib/use-sale-quote";
+
+/**
+ * Refusals that mean the sale on screen is no longer the sale the server would
+ * record: the total moved, the coupon stopped applying, the approval lapsed.
+ * The register re-prices and shows why, rather than this dialog collecting
+ * money against a total that is gone.
+ */
+const STALE_CODES = new Set(["PRICE_CHANGED", "COUPON_INVALID", "PERMISSION_DENIED"]);
 
 interface Tender {
   method: PaymentMethod;
@@ -31,17 +41,22 @@ const METHODS: { method: PaymentMethod; label: string; icon: React.ReactNode }[]
 const QUICK_CASH = [100, 200, 500, 1000, 2000];
 
 export function PaymentPanel({
-  total,
+  priced,
   accounts,
   onClose,
   onCompleted,
+  onStale,
 }: {
-  total: number;
+  /** The basket exactly as the server priced it; this is what gets sold. */
+  priced: PricedBasket;
   accounts: PosSession["accounts"];
   onClose: () => void;
   onCompleted: (order: Order) => void;
+  /** The sale changed under the dialog; `message` says how. */
+  onStale: (message: string) => void;
 }) {
   const pos = usePos();
+  const total = Number(priced.quote.grand_total);
   const [tenders, setTenders] = useState<Tender[]>([]);
   const [method, setMethod] = useState<PaymentMethod>("CASH");
   const [amount, setAmount] = useState<string>(total.toFixed(2));
@@ -125,12 +140,9 @@ export function PaymentPanel({
       const order = await apiClient<Order>("/pos/sales/", {
         method: "POST",
         idempotencyKey,
-        body: {
-          lines: pos.lines.map((line) => ({
-            variant: line.variantId,
-            quantity: line.quantity,
-            line_discount: line.discount.toFixed(2),
-          })),
+        // The basket that was priced, not whatever the register holds now,
+        // with the total that was read out: the server refuses any other.
+        body: saleRequest(priced.request, {
           payments: tenders.map((tender) => ({
             method: tender.method,
             amount: tender.amount.toFixed(2),
@@ -138,14 +150,17 @@ export function PaymentPanel({
             reference: tender.reference ?? "",
             account: tender.account ?? null,
           })),
-          customer: pos.customerId,
-          manual_discount: pos.orderDiscount.toFixed(2),
           register: pos.register,
           note: pos.note,
-        },
+          expectedTotal: priced.quote.grand_total,
+        }),
       });
       onCompleted(order);
     } catch (caught) {
+      if (caught instanceof ApiError && STALE_CODES.has(caught.code)) {
+        onStale(caught.message);
+        return;
+      }
       setError(
         caught instanceof ApiError
           ? caught.message

@@ -164,12 +164,15 @@ export function Pagination({
                   href={href({ page: entry === 1 ? null : String(entry) })}
                   aria-current={entry === current ? "page" : undefined}
                   aria-label={`Page ${entry}`}
+                  // The current page is marked as the filters above it mark
+                  // their choice (`FilterTabs`): one "you are here" on the
+                  // screen, not a black one and a brand one.
                   className={cn(
                     CONTROL,
-                    "tabular font-medium",
+                    "tabular border",
                     entry === current
-                      ? "bg-neutral-900 text-white"
-                      : "border border-border bg-surface hover:bg-neutral-100",
+                      ? "border-brand-500 bg-brand-50 font-semibold text-brand-700"
+                      : "border-border bg-surface font-medium hover:bg-neutral-100",
                   )}
                 >
                   {entry}

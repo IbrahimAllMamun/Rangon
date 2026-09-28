@@ -127,7 +127,7 @@ export function AbandonedCheckouts({
                         counter dials it rather than making someone retype. */}
                     <a
                       href={`tel:+${lead.phone}`}
-                      className="text-body font-semibold text-brand-600 hover:underline"
+                      className="text-body font-semibold text-brand-700 hover:underline"
                     >
                       {formatPhone(lead.phone)}
                     </a>

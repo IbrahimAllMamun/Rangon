@@ -11,6 +11,19 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 
 Last updated: **2026-09-28**.
 
+**The register gives discounts, and takes the coupons the admin defines.** It had no discount
+control at all: the service took a line and an order discount that nothing on the screen could set,
+and the manager-override endpoint answered a sale that never read it — so a cashier could not give
+more than 20% even with a manager standing there. Now F9 opens a Discount dialog: a coupon code,
+checked by the same rules as checkout for the POS channel, and a discount on the sale as an amount
+or a percentage, with a manager's email and password taken right there when it is over the
+threshold. The totals on the register are the server's (`POST /pos/quote/`), which fixed a latent
+defect on the way: the register had added up its own total without VAT ([D109](#known-defects)).
+Each coupon now says where it may be used — online, in store, or both. Rules in
+[business-rules § 3.3a](business-rules.md#33a-discounts-at-the-counter); three defaults need the
+owner's word (open questions 23–25); evidence in
+[§ Discounts at the counter](#discounts-at-the-counter-2026-09-28).
+
 **Goods come in through purchasing, and a shop's first order can be raised from nothing.** The
 owner's point was that the purchase order should be the only way to add stock, and that it could
 not be: with no products yet there was nothing to put on one. Both halves held. Stock could still
@@ -399,7 +412,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 05  | Product catalog                       | ✅      | ✅       | Full CRUD API. **Specification attributes shipped 2026-09-14** — `ProductAttributeValue`, a Specifications card on the product form scoped by `GET /categories/{id}/attributes/`, and a spec list on the product page. **Admin create/edit shipped 2026-08-21** — `/admin/products/new` and `/admin/products/[id]`: details, attribute tick-lists, a variant matrix with per-row price/cost/SKU/barcode, opening stock, publish/unpublish, delete-or-archive, and per-colour photography                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 06  | Inventory engine                      | ✅      | ✅       | Ledger, reservations, transfers, WAC,`verify_inventory`. Complete 2026-09-09. `/admin/inventory` gained a per-row **Adjust** action — the row you are looking at is the row that is wrong — alongside the write-off panel, and stock counts and transfers have had screens since phase 39. Building it found the list had no total order, so a corrected row could reshuffle (D13's shape, one table over), and that the expiring filter's ordering was silently discarded                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 07  | Suppliers + purchasing                | ✅      | ✅       | PO → receive → ledger → cost recalculation.**Admin screens shipped 2026-08-22** — `/admin/purchases/new` (supplier picker with inline create, debounced variant search, line table, live totals), `/admin/purchases/[id]` (send, cancel, partial receive, delivery history) and `/admin/suppliers` (list + inline create/edit). Receiving is the only step that writes stock, and it goes through `inventory.services`                                                                                                                                                                                                                                                                                                                                                                                  |
-| 08  | POS                                   | ✅      | ✅      | Barcode-first register, split payment, hold/resume, receipt, F2/F3/F4/F8 shortcuts. **Customer attach shipped 2026-09-03** — F3 opens a phone lookup over `GET /customers/lookup/`, with inline create when the search finds nobody; an unattached sale still files against the branch's walk-in row |
+| 08  | POS                                   | ✅      | ✅      | Barcode-first register, split payment, hold/resume, receipt, F2/F3/F4/F8/F9 shortcuts. **Customer attach shipped 2026-09-03** — F3 opens a phone lookup over `GET /customers/lookup/`, with inline create when the search finds nobody; an unattached sale still files against the branch's walk-in row. **Discounts shipped 2026-09-28** — F9 takes a coupon or a discount on the sale (amount or %), with a manager's approval above the threshold typed in at the register; the totals are the server's (`POST /pos/quote/`), VAT included. Line discounts are still API-only — [§ Discounts at the counter](#discounts-at-the-counter-2026-09-28) |
 | 09  | Payments                              | ✅      | ✅       | Generic model + provider registry;`manual` provider (cash/card/MFS/COD) shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 10  | Returns                               | ✅      | ✅       | Full request→approve→receive→restock→refund + POS one-step return. **Admin screens shipped 2026-08-27** — `/admin/returns/[id]` drives approve / reject / receive / refund, with the per-line restock decision made at receipt and an account picker on the refund |
 | 11  | Customers                             | ✅      | ✅       | Phone-first identity, addresses, notes, history. **Admin create/edit shipped 2026-08-28** — `/admin/customers/new` and `/admin/customers/[id]`: profile, addresses with a managed default, notes and order history. The endpoint audit that preceded it found four defects — see D24–D27 |
@@ -410,7 +423,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 16  | Online payments                       | 🟡      | 🟡       | Abstraction + COD complete.**No live gateway** — the card option is disabled in the UI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 17  | Orders                                | ✅      | ✅       | Status machine, timeline, admin list + detail with status changes, payment capture, refunds, printable A4 invoice and packing slip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 18  | Shipping                              | ✅      | ✅       | Zones, methods, shipments, courier-ready interface. Checkout picks a method. **Fulfilment shipped 2026-09-15** — a Delivery panel on `/admin/orders/[id]` books a parcel and records tracking updates, and the customer's order page shows the courier, tracking number, a link to the courier's site and the parcel's history. Until then `ShipmentViewSet` had no caller at all: `orders.fulfil` was unreachable through the product and `Courier.tracking_url_template` could never be filled. Auditing it first found four defects — D68–D71. **Admin screens shipped 2026-08-28** — `/admin/shipping`: zones with nested methods, couriers, and a warning when no fallback zone exists. That endpoint audit found four more — D32–D35 |
-| 19  | Coupons                               | ✅      | ✅       | Full engine + API; cart can apply/remove. **Admin screens shipped 2026-08-28** — `/admin/coupons`, with a type-aware form and a state column that separates live from scheduled, expired and used up. The endpoint audit found a money race and three validation gaps — D28–D31 |
+| 19  | Coupons                               | ✅      | ✅       | Full engine + API; cart can apply/remove. **Admin screens shipped 2026-08-28** — `/admin/coupons`, with a type-aware form and a state column that separates live from scheduled, expired and used up. The endpoint audit found a money race and three validation gaps — D28–D31. **The register takes them since 2026-09-28**, and the form says where each may be used (online, in store, or both) |
 | 20  | ~~Wishlist~~ + reviews                | ✅      | 🟡       | **Wishlist removed 2026-09-15, owner's decision** — no shopper can create an account (`auth/register/` has no screen), so the heart on every product card toggled optimistically and rolled back on the 401. Reviews are now **read-only** for the same reason: existing ones render, the write form is gone. The API and the moderation queue are untouched; restore both the day customer accounts exist. Everything below describes what was built and is kept as the record. **Wishlist fixed 2026-08-21** — a heart control on the product card (`WishlistHeart`, top-right of the image, optimistic toggle) and a shared `useWishlist` store back the header count and `/wishlist`. **Reviews fixed 2026-08-21** — the section always renders and carries a star-rating form (`ReviewForm`) posting to `POST /shop/products/{slug}/reviews/`. D1 and D2 struck through below **Moderation screen shipped 2026-08-28** — `/admin/reviews` with a status filter, approve/reject and a moderator note. The endpoint audit found three defects — D36–D38 |
 | 21  | Dashboard                             | ✅      | ✅       | Server-aggregated KPIs, sales chart with a table alternative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 22  | Reports                               | ✅      | ✅       | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -456,6 +469,146 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Admin filters, search and one look, 2026-09-28
+
+Asked for: the dashboard's and the reviews screen's filter buttons everywhere; search on products,
+customers and inventory; a date range on purchase orders; one design throughout; and the product
+image form lined up. What was there: filters drawn five ways (solid black chips on eight screens,
+underlines, pills), the heaviest thing on each page; a products search that reused the
+storefront's whole-word search, so "kurt" and "RGN-BLO" both found nothing; customer and stock
+searches the API already answered and no screen asked; purchase orders with no date at all, in the
+list or its filters; and an image form aligned on `items-end` in a row whose hint text made the
+cells unequal, so the upload button sat level with the hints instead of the fields.
+
+**What shipped.**
+
+- `components/admin/filter-tabs.tsx` — `chips` for the values a list narrows to, `segmented` for
+  the date presets (`DateRangeTabs` now draws with it). Links built by `lib/paging.listHref`, which
+  keeps every other choice, drops `page` and keeps `page_size`. On orders, products, customers,
+  stock, movements, purchases, reviews, expenses, notifications, the call-back list, an account's
+  history, the dashboard and the three reports.
+- Search boxes on products, customers and stock, in the shared `FilterForm`. `products/?search=`
+  now also matches part of a name, part of a SKU or a barcode, one row per product, prices unmoved.
+- `purchase-orders/?date_from=&date_to=` through `core.dates.parse_window` — the day raised, in
+  Dhaka — with a *Raised* column and two date fields that bound each other.
+- One look: the current page in `Pagination` marked like a chosen filter (it was black); the
+  `PageHeader` keeps its actions top right however long the description; every secondary header
+  action and CSV download is the `secondary` `Button` (Products' ghost *Import*, Finance's and the
+  reports' hand-drawn links); every admin text link and `RowLink` is `brand-700`; Notifications
+  uses the shared pager. The pattern is written up in
+  [design-system.md § Admin list screens](design-system.md#admin-list-screens).
+- The image form: `items-start` and a label-height spacer over the upload button. Measured: all
+  three controls at the same top at 1440 and 1024 px; stacked, with a 44 px button, at 390.
+
+**Tests.** `tests/api/test_product_admin_search.py` (8) and
+`tests/api/test_purchase_order_list_filters.py` (4: Dhaka's day at both edges, open ends, dates
+with a status, an unreadable date refused); `lib/paging.test.ts` (6) and
+`components/admin/filter-tabs.test.tsx` (5). Put back to ranked-only, the product search fails
+three; `listHref` carrying `page` fails two; every tab current fails two.
+
+```text
+pytest (whole suite) ......................... 1616 passed
+vitest (TZ=UTC) .............................. 453 passed, 43 files
+playwright, Admin specs, against next dev .... 8 passed
+ruff 0.8.4 check + format --check ............ clean
+mypy ......................................... clean, 159 source files
+tsc --noEmit / eslint src .................... clean
+makemigrations --check ....................... no changes
+```
+
+**The browser pass** — Chromium against `next dev` and `runserver`, on the demo seed, typing into
+each box and pressing Enter:
+
+- Products: "kurt" found Block Print Kurti, 1 of 12. *Drafts* kept it (`?search=kurt&status=DRAFT`)
+  and was the one marked current; *Clear* took the search away and left the tab. "zzqqxx" said
+  nothing matched it, by name.
+- Stock: "RGN-BLO" found 8 rows of 25, and *Low stock* kept it. Customers: "Rezaul", 1 of 7, kept
+  by *Registered*.
+- Purchase orders: 28 September gave the three raised that day; up to the 27th, and from the 29th,
+  "No purchase order matches"; *Draft* kept both dates; `date_from=10/09/2026` answered
+  "“10/09/2026” is not a date. Use YYYY-MM-DD, or a full timestamp."
+- Seventeen list screens photographed at 1440 px after the change, and read side by side.
+
+Left as it is: Chromium draws its own navy clear button inside a search field — browser chrome,
+the same on every search box, not restyled. Stock's *Write stock off* stays under the header,
+where its form opens. Not run: the storefront and POS Playwright specs (untouched), and a
+production build.
+
+### Discounts at the counter, 2026-09-28
+
+Asked for: a discount facility on the POS sale that can use the coupons already defined. What was
+there: `create_pos_sale` accepted a line discount and a manual order discount, and the register
+never set either; `POST /pos/elevate/` checked a manager's password and the sale view never passed
+`elevated_by`, so its answer went nowhere; and coupons were an online-only engine. The register
+also added its total up in the browser, which is where D109 was.
+
+**What shipped.**
+
+- `orders.services.pos.price_sale` — the counter's `price_cart`: one function prices the register's
+  running total and the sale, so the two cannot disagree. Coupons go through checkout's own
+  `validate_coupon`, for the POS channel, plus three counter rules (§3.3a): online-only and
+  free-delivery coupons are refused, and a coupon limited per customer needs a named customer. The
+  sale's discount can be a percentage, turned into money off what is left after the coupon.
+- `_check_discount_permission` writes nothing now, so a quote can run it. The sale files
+  `DISCOUNT_OVERRIDE` against the order it created, where the entry used to name no order.
+- `POST /pos/quote/`: every figure plus `issues`, and no writes — no walk-in row either. 10 queries
+  for two lines with a scoped coupon and a named customer, and none more per line; budgeted at 14.
+- `POST /pos/elevate/` answers with a signed approval: this cashier, `sales.discount_override`, no
+  more than the percentage the manager was shown (now required), five minutes, re-read at use.
+- `POST /pos/sales/` takes `coupon_code`, `manual_discount_percent`, `approval_token` and
+  `expected_total` (`409 PRICE_CHANGED`). The coupon is redeemed after the stock, so inventory rows
+  then coupon row, as checkout locks them. A void gives the coupon's use back.
+- `coupons/` validates `channels`; the form asks where a coupon may be used and the list says;
+  the seed adds `STORE100`, ৳100 off in store.
+- The register: the Discount dialog (F9); totals from the server with a VAT line when there is
+  one; each blocking issue with the action that clears it; payment re-prices before it opens and
+  sells exactly the basket it priced; the receipt names the coupon. No migration.
+
+**Tests.** `tests/test_pos_discounts.py` (36) and `tests/api/test_pos_quote.py` (17), five channel
+tests in `test_coupons_admin.py`, two threaded races in `test_concurrency.py` and two budgets in
+`test_performance.py`. Each guard was checked against its own removal: without the void's release,
+the walk-in check or the expected-total check, their tests fail; with the redemption moved ahead of
+the stock, the till-against-the-website race failed 6 runs of 6 with `OperationalError('deadlock
+detected')`. On the web side: the request builder (14), the store's hold compatibility (5), the
+dialog (8), the receipt (2 more) and coupon channels (5).
+
+```text
+pytest (whole suite) ......................... 1604 passed
+vitest (TZ=UTC) .............................. 442 passed, 41 files
+playwright, POS specs, against next dev ...... 4 passed
+ruff 0.8.4 check + format --check ............ clean
+mypy ......................................... clean, 159 source files
+tsc --noEmit / eslint src .................... clean
+makemigrations --check ....................... no changes
+```
+
+**The browser pass** — a real Chromium against `next dev` and `runserver`, on the demo seed:
+
+- F9 opened the dialog with the coupon field focused. `rangon10` came back "RANGON10 cannot be used
+  in store."; `STORE100` took ৳100 off.
+- 30% of what was left asked for a manager: "৳537.00 off is 28.41% of the sale at full price. A
+  cashier can give up to 20% without a manager." A wrong password was refused and the field
+  emptied; the right one approved it, "Approved by Nusrat Jahan".
+- The register read Subtotal 1,890.00 · Coupon STORE100 −100.00 · Discount (30%) −537.00 · Total
+  1,253.00, and RGN-POS-000025 charged exactly that and printed both lines.
+- As the manager: the list said where each coupon works; a coupon with neither place was refused
+  before saving; a 5% in-store coupon, once per customer, was created.
+- On an anonymous sale that coupon asked for the customer; attaching Tasnim Karim applied it
+  (−122.50); taking her off blocked payment with *Attach customer (F3)* and *Remove coupon*; hold
+  and resume kept it; RGN-POS-000026 sold; her second use was refused, "You have already used this
+  coupon."
+- At 15% exclusive VAT, set for the test and put back: the register showed VAT 283.50 and took
+  ৳2,173.50 — the sale D109 refused.
+
+The pass found two things the suites could not. Closing a dialog with its button left focus on
+`<body>`, so the next scan typed into nothing ([D110](#known-defects)) — the customer dialog had
+done it all along. And the approval read like a mistake: 30% typed, 28.41% asked for, because the
+threshold measures the cashier's discount against the whole sale. The refusal now carries the
+amount, and the dialog says what the percentage is *of*. It also found one it did not fix:
+every modal's backdrop is transparent ([D111](#known-defects)).
+
+Not run: the rest of the Playwright suite, and a production build.
 
 ### Purchase-first products, 2026-09-28
 
@@ -2505,6 +2658,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D106 | **`seed_demo` run a second time without `--reset` rolls back.** Found 2026-09-27, and reproduced on the commit before size charts. `_orders` places each demo order with `idempotency_key=f"seed-order-{index}"`, so on a second run checkout replays the *existing* order — already PROCESSING or PACKED — and the next `transition(..., PROCESSING)` raises `InvalidStatusTransition: An order cannot go from PACKED to PROCESSING`. `handle` is atomic, so nothing is left half-written; `--reset` is unaffected | `apps/api/core/management/commands/seed_demo.py` `_orders` | Open. Skip the walk for a replayed order, or only transition forward from its current status |
 | ~~D107~~ | ~~**Adjust still put stock on the books at zero cost.**~~ **Fixed 2026-09-28.** D72 took the opening-stock box off the product form, but the door it closed stayed open one click further on: save the product, press *Adjust* on its row (or on `/admin/inventory`), type 50. `inventory.services.adjust` wrote the units at the row's `average_cost`, which is `0.00` on a variant nothing has been received against — stock with no supplier, no payable, no input VAT and a valuation of ৳0. A stock count that "found" units did the same through the same function, and applied line by line from the view with no transaction around it, so a failure part-way left half a count applied. `adjust` and `apply_transaction` now refuse to *raise* stock on a branch with no `PURCHASE` or `TRANSFER_IN` for the variant (`NOT_RECEIVED`, 409); lowering is still allowed. `apply_stock_count` moved into the service, checks every line before writing any, and decides under the count's row lock | `apps/api/inventory/services.py`, `apps/api/inventory/api/views.py`, `apps/web/src/components/admin/inventory-rows.tsx`, `apps/web/src/components/admin/variant-matrix-editor.tsx` | Found by auditing the owner's observation that the purchase order should be the only way goods come in. The product form's Adjust placeholder still suggested "Opening stock". Rules in [business-rules § 4.0a](business-rules.md#40a-opening-stock); tests in `tests/api/test_stock_needs_a_receipt.py` |
 | ~~D108~~ | ~~**A category, brand or product named in Bengali got the slug `item`.**~~ **Fixed 2026-09-28.** Django's `slugify` keeps ASCII only, so every Bengali name slugged to "" and `unique_slug` fell back to `item`, `item-2`, … — a shopper saw `/category/item` for শাড়ি. The models' own fallback, for a row saved without a slug, had no fallback at all: the first Bengali-named row was saved with an empty slug and the second hit the unique constraint (`IntegrityError`, a 500). `allow_unicode=True` was ruled out: it strips Bengali vowel signs and the hasanta (শাড়ি → শড). `core.slugs` now transliterates Bengali to Latin letters first (শাড়ি → `shari`), falls back to the model's own name for other scripts, and the models use it too | `apps/api/core/slugs.py`, `apps/api/catalog/models.py`, `apps/api/catalog/api/serializers.py`, `apps/api/catalog/importers.py` | Suspected while building D107's inline category, where a buyer names a category in whatever language they think in. Reproduced first: the API gave `item`, and the model path raised `IntegrityError` on the second row. Rules in [business-rules § 7.2](business-rules.md#72-categories-brands-and-attributes); tests in `tests/unit/test_slugs.py` and `tests/api/test_non_latin_slugs.py` |
+| ~~D109~~ | ~~**The register added up its own total, and left the VAT out.**~~ **Fixed 2026-09-28.** The POS store computed the total in the browser as the lines less the order discount, and the payment dialog collected exactly that. The server adds exclusive VAT on top, so at any rate above zero the tender fell short and every counter sale was refused. Measured through the API at 15% exclusive: a ৳1,890 kurti paid at the register's ৳1,890.00 answered `400` "Payment does not cover the sale total" (`total: 2173.50`). **Latent, not live** — the shipped rate is 0%, where the two agree. The register now shows what `POST /pos/quote/` says, VAT line included, and the sale carries that total as `expected_total`; the same sale went through in Chromium at ৳2,173.50 with the VAT on the receipt | `apps/web/src/lib/store/pos.ts`, `apps/web/src/components/pos/{register,payment-panel}.tsx`, `apps/api/orders/services/pos.py` | Found while building coupons at the counter, which could not be added up in the browser at all: a coupon's scope, cap and minimum are the server's |
+| ~~D110~~ | ~~**Closing a register dialog with its button lost the scan field's focus.**~~ **Fixed 2026-09-28.** `focusScan()` ran inside the dialog's `onClose`, while Radix still trapped focus in it: the focus bounced back to the button that closed it, which then left the page, and `document.activeElement` was `<body>` — the next scan typed into nothing. Esc never showed it, because the register's window listener runs after Radix has unmounted the dialog. Measured in Chromium: the customer dialog's Close button and the new Discount dialog's Done both ended on `<body>`; both end on the scan field now. The focus is deferred to the next task | `apps/web/src/components/pos/register.tsx` | Barcode-first is the register's one promise. Found by the browser pass, after `tsc`, eslint and vitest were all green |
+| D111 | **Every modal's backdrop is transparent.** `bg-neutral-950/50` generates no CSS: `neutral-950` is defined as a bare `var(--neutral-950)`, and Tailwind 3 cannot apply an opacity modifier to that. Measured in Chromium on the POS customer dialog: the overlay's computed background is `rgba(0, 0, 0, 0)` and no stylesheet carries the rule. Affects the POS payment, customer and discount dialogs, quick view, the size guide and the admin shell's mobile menu. The dialogs still trap focus and block clicks; only the dimming is missing | `apps/web/tailwind.config.ts`, `apps/web/src/styles/tokens.css` | Not fixed: a design-token change felt across the whole product, and outside the change that found it. An `<alpha-value>`-aware colour definition, or a literal `bg-black/50`, would do it |
 
 ## Still API-only (no UI)
 

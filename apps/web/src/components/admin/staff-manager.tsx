@@ -192,7 +192,7 @@ export function StaffManager({
                 <tr key={row.id} className={ROW_LINK_ROW}>
                   <th scope="row" className="px-4 py-2.5 text-left font-normal">
                     {/* The whole row opens the profile; editing happens there. */}
-                    <RowLink href={`/admin/staff/${row.id}`} className="block font-medium text-brand-600">
+                    <RowLink href={`/admin/staff/${row.id}`} className="block font-medium text-brand-700">
                       {row.full_name || row.email}
                     </RowLink>
                     {row.id === currentUserId && (

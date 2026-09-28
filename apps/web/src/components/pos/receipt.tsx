@@ -28,6 +28,11 @@ export function Receipt({
   // The registration number and the tax line are one fact; neither prints on a
   // memo that charged no VAT.
   const showsVat = memoShowsVat(order);
+  // The coupon prints by name, so the customer can see which one was spent;
+  // whatever else came off the whole sale is the cashier's discount.
+  const couponOff = Number(order.coupon_discount ?? 0);
+  // In whole paisa: two strings the server rounded can still subtract to 1e-13.
+  const otherOff = Math.round((Number(order.discount_total) - couponOff) * 100) / 100;
 
   return (
     <div className="grid min-h-screen place-items-center p-4">
@@ -97,9 +102,13 @@ export function Receipt({
 
           <dl className="mt-2 space-y-0.5 border-t border-dashed border-neutral-300 pt-2 text-caption">
             <Line term="Subtotal" value={money(order.subtotal, false)} />
-            {Number(order.discount_total) > 0 && (
-              <Line term="Discount" value={`- ${money(order.discount_total, false)}`} />
+            {couponOff > 0 && (
+              <Line
+                term={order.coupon_code ? `Coupon ${order.coupon_code}` : "Coupon"}
+                value={`- ${money(couponOff, false)}`}
+              />
             )}
+            {otherOff > 0 && <Line term="Discount" value={`- ${money(otherOff, false)}`} />}
             {showsVat && <Line term="VAT" value={money(order.tax_total, false)} />}
             <div className="flex justify-between border-t border-neutral-300 pt-1 text-body font-bold">
               <dt>TOTAL</dt>

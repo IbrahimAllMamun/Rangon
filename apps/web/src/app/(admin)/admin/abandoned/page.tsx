@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 
 import {
   AbandonedCheckouts,
   type AbandonedCheckoutRow,
 } from "@/components/admin/abandoned-checkouts";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
 import { Card, ErrorState } from "@/components/ui/primitives";
@@ -93,26 +93,15 @@ export default async function AbandonedCheckoutsPage({ searchParams }: { searchP
             />
           </div>
 
-          <div
-            className="mt-6 flex flex-wrap rounded-md border border-border bg-surface p-0.5"
-            role="group"
-            aria-label="Lead status"
-          >
-            {TABS.map((tab) => (
-              <Link
-                key={tab.value}
-                href={`/admin/abandoned?status=${tab.value}`}
-                aria-current={status === tab.value ? "true" : undefined}
-                className={`rounded px-3 py-1.5 text-body-sm font-medium focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] ${
-                  status === tab.value
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {tab.label}
-              </Link>
-            ))}
-          </div>
+          <FilterTabs
+            label="Lead status"
+            className="mt-6"
+            tabs={TABS.map((tab) => ({
+              label: tab.label,
+              href: `/admin/abandoned?status=${tab.value}`,
+              active: status === tab.value,
+            }))}
+          />
 
           <div className="mt-4">
             <AbandonedCheckouts leads={leads} canManage={canManage} />

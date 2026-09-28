@@ -1,6 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
 import { ReviewModeration, type ReviewRow } from "@/components/admin/review-moderation";
 import { PageHeader } from "@/components/admin/shell";
@@ -8,7 +8,6 @@ import { Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
-import { cn } from "@/lib/cn";
 import { applyPaging, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Reviews" };
@@ -53,26 +52,16 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Sear
         description="Nothing a customer writes reaches the storefront until it is approved here, and only approved reviews count towards a product's rating."
       />
 
-      <nav aria-label="Filter reviews by status" className="mb-6 flex flex-wrap gap-2">
-        {TABS.map((tab) => {
-          const active = status === tab.value;
-          return (
-            <Link
-              key={tab.value || "all"}
-              href={tab.value ? `/admin/reviews?status=${tab.value}` : "/admin/reviews?status="}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "rounded-md border px-3 py-1.5 text-body-sm transition-colors duration-fast",
-                active
-                  ? "border-brand-500 bg-brand-50 font-medium text-brand-700"
-                  : "border-neutral-300 text-neutral-700 hover:bg-neutral-100",
-              )}
-            >
-              {tab.label}
-            </Link>
-          );
-        })}
-      </nav>
+      <FilterTabs
+        label="Review status"
+        className="mb-6"
+        tabs={TABS.map((tab) => ({
+          label: tab.label,
+          // "All" is an explicit empty status: no status at all means Pending.
+          href: `/admin/reviews?status=${tab.value}`,
+          active: status === tab.value,
+        }))}
+      />
 
       {error ? (
         <Card>

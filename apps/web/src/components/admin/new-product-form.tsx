@@ -391,7 +391,7 @@ export function NewProductForm({
             ) : noAxes ? (
               <p className="mb-2 text-caption text-muted">
                 No sizes or colours are set up for this category, so it is bought as one version.{" "}
-                <Link href="/admin/taxonomy" className="text-brand-600 hover:underline">
+                <Link href="/admin/taxonomy" className="text-brand-700 hover:underline">
                   Set up sizes and colours
                 </Link>{" "}
                 to buy it in several.

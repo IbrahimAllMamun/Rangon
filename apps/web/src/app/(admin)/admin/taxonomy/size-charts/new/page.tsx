@@ -32,7 +32,7 @@ export default async function NewSizeChartPage({ searchParams }: { searchParams:
         <ErrorState title={title} description={description} />
       </Card>
       <p className="mt-4 text-body-sm">
-        <Link href="/admin/taxonomy#attributes" className="text-brand-600 hover:underline">
+        <Link href="/admin/taxonomy#attributes" className="text-brand-700 hover:underline">
           ← Categories &amp; brands
         </Link>
       </p>
@@ -79,7 +79,7 @@ export default async function NewSizeChartPage({ searchParams }: { searchParams:
         description={`For ${loaded.attribute.name}. Products then pick it on their own page, and shoppers see it as the Size guide.`}
       />
       <p className="mb-4 text-body-sm">
-        <Link href="/admin/taxonomy#attributes" className="text-brand-600 hover:underline">
+        <Link href="/admin/taxonomy#attributes" className="text-brand-700 hover:underline">
           ← Categories &amp; brands
         </Link>
       </p>

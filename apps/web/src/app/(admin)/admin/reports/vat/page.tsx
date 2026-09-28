@@ -5,6 +5,7 @@ import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs"
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
 import {
+  Button,
   Card,
   CardContent,
   CardHeader,
@@ -115,12 +116,9 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
               title="No VAT in this period"
               description="Nothing was charged on sales and nothing was reclaimed on purchases. The organisation's rate is set at Settings, and a supplier's VAT is entered on the purchase order that records their invoice."
               action={
-                <Link
-                  href="/admin/settings"
-                  className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-                >
-                  Open VAT settings
-                </Link>
+                <Button variant="secondary" asChild>
+                  <Link href="/admin/settings">Open VAT settings</Link>
+                </Button>
               }
             />
           </CardContent>
@@ -167,12 +165,11 @@ export default async function VatReturnPage({ searchParams }: { searchParams: Se
               <CardTitle>
                 Return — {dateOnly(report.period.start)} to {dateOnly(report.period.end)}
               </CardTitle>
-              <a
-                href={`/api/proxy/reports/vat/?range=${range}&format=csv`}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-              >
-                <Download className="size-4" aria-hidden /> CSV
-              </a>
+              <Button variant="secondary" size="sm" className="shrink-0" asChild>
+                <a href={`/api/proxy/reports/vat/?range=${range}&format=csv`}>
+                  <Download className="size-4" aria-hidden /> CSV
+                </a>
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">

@@ -1,6 +1,5 @@
-import Link from "next/link";
-
 import { FilterField, FilterForm } from "@/components/admin/filter-form";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
 import { ROW_LINK_ROW, RowLink } from "@/components/admin/row-link";
 import { PageHeader } from "@/components/admin/shell";
@@ -10,9 +9,11 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import type { Order } from "@/lib/api/types";
 import { channelLabel, dateTime, money } from "@/lib/format";
-import { applyPaging, readPaging } from "@/lib/paging";
+import { applyPaging, listHref, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Orders" };
+
+const PATH = "/admin/orders";
 
 type Search = Promise<Record<string, string | undefined>>;
 
@@ -58,35 +59,34 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
         description={orders ? `${orders.count} order${orders.count === 1 ? "" : "s"}` : undefined}
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {STATUS_FILTERS.map((filter) => (
-          <FilterLink
-            key={filter.value || "all"}
-            label={filter.label}
-            active={(params.status ?? "") === filter.value}
-            href={buildHref(params, { status: filter.value || undefined, page: undefined })}
-          />
-        ))}
-        <span className="mx-2 w-px bg-border" aria-hidden />
-        {CHANNEL_FILTERS.map((filter) => (
-          <FilterLink
-            key={filter.value || "all-channels"}
-            label={filter.label}
-            active={(params.channel ?? "") === filter.value}
-            href={buildHref(params, { channel: filter.value || undefined, page: undefined })}
-          />
-        ))}
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <FilterTabs
+          label="Order status"
+          tabs={STATUS_FILTERS.map((filter) => ({
+            label: filter.label,
+            href: listHref(PATH, params, { status: filter.value }),
+            active: (params.status ?? "") === filter.value,
+          }))}
+        />
+        <span className="hidden h-6 w-px bg-border sm:block" aria-hidden />
+        <FilterTabs
+          label="Sales channel"
+          tabs={CHANNEL_FILTERS.map((filter) => ({
+            label: filter.label,
+            href: listHref(PATH, params, { channel: filter.value }),
+            active: (params.channel ?? "") === filter.value,
+          }))}
+        />
       </div>
 
       <FilterForm
-        action="/admin/orders"
+        action={PATH}
         label="Search and filter orders"
         keep={{ status: params.status, channel: params.channel }}
-        clearHref={buildHref(params, {
+        clearHref={listHref(PATH, params, {
           search: undefined,
           date_from: undefined,
           date_to: undefined,
-          page: undefined,
         })}
         active={Boolean(params.search || params.date_from || params.date_to)}
       >
@@ -183,38 +183,4 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
       </Card>
     </>
   );
-}
-
-function FilterLink({
-  label,
-  href,
-  active,
-}: {
-  label: string;
-  href: string;
-  active: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? "true" : undefined}
-      className={`rounded-md px-3 py-1.5 text-body-sm font-medium ${
-        active ? "bg-neutral-900 text-white" : "border border-border bg-surface hover:bg-neutral-100"
-      }`}
-    >
-      {label}
-    </Link>
-  );
-}
-
-function buildHref(
-  params: Record<string, string | undefined>,
-  overrides: Record<string, string | undefined>,
-): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries({ ...params, ...overrides })) {
-    if (value) search.set(key, value);
-  }
-  const query = search.toString();
-  return query ? `/admin/orders?${query}` : "/admin/orders";
 }

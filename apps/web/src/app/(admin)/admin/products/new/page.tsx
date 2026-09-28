@@ -55,7 +55,7 @@ export default async function NewProductPage() {
       />
 
       <p className="mb-4 text-body-sm text-muted">
-        <Link href="/admin/products" className="text-brand-600 hover:underline">
+        <Link href="/admin/products" className="text-brand-700 hover:underline">
           ← All products
         </Link>
       </p>

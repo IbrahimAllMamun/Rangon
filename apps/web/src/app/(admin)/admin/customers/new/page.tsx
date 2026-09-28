@@ -24,7 +24,7 @@ export default async function NewCustomerPage() {
       />
 
       <p className="mb-4 text-body-sm text-muted">
-        <Link href="/admin/customers" className="text-brand-600 hover:underline">
+        <Link href="/admin/customers" className="text-brand-700 hover:underline">
           ← Customers
         </Link>
       </p>

@@ -381,6 +381,10 @@ export interface Order {
   subtotal: string;
   discount_total: string;
   coupon_discount?: string;
+  /** The code behind `coupon_discount`; only the staff detail payload has it. */
+  coupon_code?: string;
+  /** The cashier's discount on the whole sale (a POS sale's `discount_total` less the coupon). */
+  manual_discount?: string;
   tax_total: string;
   shipping_total: string;
   grand_total: string;
@@ -619,6 +623,65 @@ export interface PosVariant {
   available: number;
   image: string;
   category: string;
+}
+
+/**
+ * Something the cashier must resolve before taking payment, reported beside a
+ * quote's figures rather than instead of them (`POST /pos/quote/`).
+ */
+export interface PosQuoteIssue {
+  /** `COUPON_INVALID` or `PERMISSION_DENIED`. */
+  code: string;
+  /** Which of the register's discounts it is about. */
+  field: "coupon" | "discount";
+  message: string;
+  details: {
+    /** The coupon, as the server spells it. */
+    code?: string;
+    /** The coupon has a per-customer limit and the sale is anonymous. */
+    needs_customer?: boolean;
+    /** A manager holding this permission can approve the discount. */
+    requires?: string;
+    /** The cashier's discount in money, and as a share of the sale at full price. */
+    discount?: string;
+    discount_percent?: string;
+    threshold?: string;
+    approved_percent?: string;
+  };
+}
+
+/** The register's basket, priced by the server exactly as the sale will record it. */
+export interface PosQuote {
+  lines: {
+    variant: string;
+    sku: string;
+    quantity: number;
+    unit_price: string;
+    line_discount: string;
+    line_total: string;
+  }[];
+  subtotal: string;
+  coupon: { code: string; description: string } | null;
+  coupon_discount: string;
+  manual_discount: string;
+  discount_total: string;
+  tax_mode: "EXCLUSIVE" | "INCLUSIVE";
+  tax_rate: string;
+  tax_total: string;
+  grand_total: string;
+  item_count: number;
+  issues: PosQuoteIssue[];
+}
+
+/** `POST /pos/elevate/`: a manager's approval, carried to the quote and the sale. */
+export interface PosApproval {
+  approved: boolean;
+  approved_by: string;
+  approved_by_id: string;
+  permission: string;
+  approval_token: string;
+  /** Seconds the token is good for. */
+  expires_in: number;
 }
 
 /**

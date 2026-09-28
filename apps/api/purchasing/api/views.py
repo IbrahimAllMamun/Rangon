@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
+from core.dates import parse_window
 from core.requests import AuthedRequest, actor
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (
@@ -96,7 +97,7 @@ class PurchaseOrderViewSet(
     ordering_fields = ["created_at", "expected_at"]
 
     def get_queryset(self) -> Any:
-        return branch_queryset(
+        queryset = branch_queryset(
             actor(self.request),
             PurchaseOrder.objects.select_related("supplier", "branch").prefetch_related(
                 "items__variant__product",
@@ -113,7 +114,17 @@ class PurchaseOrderViewSet(
                 "returns__returned_by",
                 "returns__items__purchase_order_item__variant",
             ),
-        ).order_by("-created_at")
+        )
+        # The day the order was raised, as the VAT return dates a purchase
+        # (business-rules §3.4). Whole days in the shop's timezone, both ends
+        # included; an unreadable date is a 400 rather than a filter quietly
+        # dropped (`core.dates.parse_window`).
+        date_from, date_to = parse_window(self.request.query_params)
+        if date_from is not None:
+            queryset = queryset.filter(created_at__gte=date_from)
+        if date_to is not None:
+            queryset = queryset.filter(created_at__lte=date_to)
+        return queryset.order_by("-created_at")
 
     def get_serializer_class(self) -> Any:
         if self.action == "create":

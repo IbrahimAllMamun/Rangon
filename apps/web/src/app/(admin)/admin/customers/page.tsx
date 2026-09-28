@@ -2,6 +2,8 @@ import { Plus } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { FilterField, FilterForm } from "@/components/admin/filter-form";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { RowLink } from "@/components/admin/row-link";
@@ -10,7 +12,7 @@ import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { SessionUser } from "@/lib/api/types";
 import { dateOnly, humanise, money } from "@/lib/format";
-import { applyPaging, readPaging } from "@/lib/paging";
+import { applyPaging, listHref, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Customers" };
 
@@ -28,6 +30,17 @@ interface Customer {
 }
 
 type Search = Promise<Record<string, string | undefined>>;
+
+const PATH = "/admin/customers";
+
+const TYPES = [
+  { value: "", label: "All" },
+  { value: "REGISTERED", label: "Registered" },
+  { value: "GUEST", label: "Guest" },
+  { value: "WHOLESALE", label: "Wholesale" },
+  // One per branch: the record every anonymous counter sale is filed against.
+  { value: "WALK_IN", label: "Walk-in" },
+];
 
 export default async function CustomersPage({ searchParams }: { searchParams: Search }) {
   const user = await currentUser<SessionUser>();
@@ -52,6 +65,8 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
     error = caught instanceof Error ? caught.message : "Could not load customers.";
   }
 
+  const filtered = Boolean(params.search || params.customer_type);
+
   const columns: Column<Customer>[] = [
     {
       header: "Customer",
@@ -59,7 +74,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         <>
           <RowLink
             href={`/admin/customers/${row.id}`}
-            className="block font-medium text-brand-600"
+            className="block font-medium text-brand-700"
           >
             {row.name}
           </RowLink>
@@ -102,13 +117,45 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           ) : undefined
         }
       />
+      <FilterTabs
+        label="Kind of customer"
+        className="mb-4"
+        tabs={TYPES.map((type) => ({
+          label: type.label,
+          href: listHref(PATH, params, { customer_type: type.value }),
+          active: (params.customer_type ?? "") === type.value,
+        }))}
+      />
+
+      <FilterForm
+        action={PATH}
+        label="Search customers"
+        keep={{ customer_type: params.customer_type }}
+        clearHref={listHref(PATH, params, { search: undefined })}
+        active={Boolean(params.search)}
+      >
+        <FilterField
+          id="customer-search"
+          name="search"
+          type="search"
+          label="Name, phone or email"
+          defaultValue={params.search ?? ""}
+          placeholder="e.g. Tasnim or 01712…"
+          className="min-w-[14rem] flex-1"
+        />
+      </FilterForm>
+
       <ResourceTable
         rows={data?.results ?? []}
         columns={columns}
         caption="Customers"
         error={error}
-        emptyTitle="No customers yet"
-        emptyDescription="Customers appear here after their first sale, online or at the counter — or add one now."
+        emptyTitle={filtered ? "No customer matches" : "No customers yet"}
+        emptyDescription={
+          filtered
+            ? "Nobody on file matches this search. Check the spelling, or try the last digits of the phone number."
+            : "Customers appear here after their first sale, online or at the counter — or add one now."
+        }
         rowKey={(row) => row.id}
         paging={
           data

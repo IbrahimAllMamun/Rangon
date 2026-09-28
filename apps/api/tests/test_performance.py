@@ -211,6 +211,9 @@ DASHBOARD_QUERY_BUDGET = 20
 POS_SALE_QUERY_BUDGET = 75
 #: Marginal cost of one more line on a counter sale. Measured at 10.
 POS_SALE_PER_LINE_BUDGET = 13
+#: The register's running total, with a scoped coupon and a named customer.
+#: Measured at 10. Asked for on every scan, so it sits beside the scan's 12.
+POS_QUOTE_QUERY_BUDGET = 14
 
 
 def _named_products(count: int, *, branch: Any, values: list[Any], prefix: str) -> None:
@@ -562,6 +565,76 @@ class TestPosSaleQueryBudget:
             f"({one_line} for one line, {four_lines} for four), over the "
             f"{POS_SALE_PER_LINE_BUDGET} budgeted. A sale that reads the "
             f"catalogue per line grows here first."
+        )
+
+
+class TestPosQuoteQueryBudget:
+    """The register's running total.
+
+    Asked for every time the basket changes -- each scan, each quantity, each
+    discount -- so it is priced like the scan it follows, not like the sale.
+    It reads the basket, the stock snapshot, the VAT settings and the coupon;
+    nothing about it should grow with the number of lines.
+    """
+
+    def _quote(self, client: Any, variants: list[Any], **extra: Any) -> int:
+        payload = {
+            "lines": [{"variant": str(variant.pk), "quantity": 1} for variant in variants],
+            **extra,
+        }
+        with CaptureQueriesContext(connection) as captured:
+            response = client.post("/api/v1/pos/quote/", payload, format="json")
+            assert response.status_code == 200, response.data
+            assert response.data["issues"] == [], response.data["issues"]
+        return len(captured)
+
+    def _basket(self, shop: dict[str, Any], count: int) -> list[Any]:
+        _, values = factories.attribute("size", values=[f"Q{i}" for i in range(count)])
+        variants = []
+        for value in values:
+            variant = factories.variant(shop["product"], attribute_values=[value])
+            factories.stock(variant, shop["branch"], 50)
+            variants.append(variant)
+        return variants
+
+    def _coupon(self, shop: dict[str, Any]) -> str:
+        from promotions.models import Coupon, DiscountType
+
+        coupon = Coupon.objects.create(
+            code="BUDGET10",
+            discount_type=DiscountType.PERCENTAGE,
+            value=Decimal("10.00"),
+            usage_limit_per_customer=1,
+        )
+        # A scoped coupon is the expensive kind: it expands its categories.
+        coupon.categories.add(shop["product"].category)
+        return coupon.code
+
+    def test_a_quote_with_a_coupon_stays_within_budget(self, auth_client, shop):
+        client = auth_client(shop["cashier"])
+        variants = self._basket(shop, 2)
+        extra = {"coupon_code": self._coupon(shop), "customer": str(shop["customer"].pk)}
+
+        self._quote(client, variants[:1])  # warm the permission cache
+        count = self._quote(client, variants, **extra)
+
+        assert count <= POS_QUOTE_QUERY_BUDGET, (
+            f"A two-line quote with a coupon used {count} queries, over its budget "
+            f"of {POS_QUOTE_QUERY_BUDGET}. The register asks for one on every scan."
+        )
+
+    def test_a_longer_basket_costs_no_more_queries(self, auth_client, shop):
+        client = auth_client(shop["cashier"])
+        variants = self._basket(shop, 6)
+        extra = {"coupon_code": self._coupon(shop), "customer": str(shop["customer"].pk)}
+
+        self._quote(client, variants[:1], **extra)
+        one_line = self._quote(client, variants[:1], **extra)
+        six_lines = self._quote(client, variants, **extra)
+
+        assert six_lines == one_line, (
+            f"A quote of six lines used {six_lines} queries against {one_line} for "
+            f"one. Something in the pricing reads the catalogue per line."
         )
 
 

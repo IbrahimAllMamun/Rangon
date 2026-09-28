@@ -104,7 +104,7 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Sea
           </p>
           <Link
             href={hrefWith({ entity_id: undefined })}
-            className="font-medium text-brand-600 hover:underline"
+            className="font-medium text-brand-700 hover:underline"
           >
             Show every record
           </Link>
@@ -251,7 +251,7 @@ function AuditRow({
       <td className="px-4 py-2.5">
         <span className="block text-caption text-muted">{entityName(row.entity_type)}</span>
         {href ? (
-          <Link href={href} className="font-medium text-brand-600 hover:underline">
+          <Link href={href} className="font-medium text-brand-700 hover:underline">
             {row.entity_label || row.entity_id}
           </Link>
         ) : (

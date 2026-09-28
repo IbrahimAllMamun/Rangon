@@ -6,7 +6,7 @@ import { AccountManager } from "@/components/admin/account-manager";
 import { CashBook } from "@/components/admin/cash-book";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
-import { Card, ErrorState } from "@/components/ui/primitives";
+import { Button, Card, ErrorState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type {
@@ -63,12 +63,9 @@ export default async function FinancePage() {
         title="Finance"
         description="Every figure here comes from the cash book. A balance changes only when a movement is recorded against it — never by editing a number."
         actions={
-          <Link
-            href="/admin/finance/parties"
-            className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-          >
-            Receivable &amp; payable
-          </Link>
+          <Button variant="secondary" asChild>
+            <Link href="/admin/finance/parties">Receivable &amp; payable</Link>
+          </Button>
         }
       />
 
@@ -170,7 +167,7 @@ export default async function FinancePage() {
               {accounts.length > 0 && (
                 <Link
                   href={`/admin/finance/${accounts[0].id}`}
-                  className="text-body-sm text-brand-600 hover:underline"
+                  className="text-body-sm text-brand-700 hover:underline"
                 >
                   Open a full cash book →
                 </Link>

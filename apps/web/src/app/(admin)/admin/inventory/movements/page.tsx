@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { FilterField, FilterForm } from "@/components/admin/filter-form";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
 import { PageHeader } from "@/components/admin/shell";
 import { Badge, Card, EmptyState, ErrorState } from "@/components/ui/primitives";
@@ -111,31 +112,22 @@ export default async function StockMovementsPage({ searchParams }: { searchParam
               "History of one product variant"
             )}
           </p>
-          <Link href={PATH} className="font-medium text-brand-600 hover:underline">
+          <Link href={PATH} className="font-medium text-brand-700 hover:underline">
             Show every product
           </Link>
         </div>
       )}
 
-      <nav aria-label="Kind of movement" className="mb-4 flex flex-wrap gap-2">
-        {MOVEMENT_FAMILIES.map((option) => {
-          const active = option.value === family.value;
-          return (
-            <Link
-              key={option.value || "all"}
-              href={hrefWith({ family: option.value })}
-              aria-current={active ? "true" : undefined}
-              className={`rounded-md px-3 py-1.5 text-body-sm font-medium ${
-                active
-                  ? "bg-neutral-900 text-white"
-                  : "border border-border bg-surface hover:bg-neutral-100"
-              }`}
-            >
-              {option.label}
-            </Link>
-          );
-        })}
-      </nav>
+      <FilterTabs
+        label="Kind of movement"
+        className="mb-4"
+        tabs={MOVEMENT_FAMILIES.map((option) => ({
+          key: option.value || "all",
+          label: option.label,
+          href: hrefWith({ family: option.value }),
+          active: option.value === family.value,
+        }))}
+      />
 
       <FilterForm
         action={PATH}
@@ -264,7 +256,7 @@ export default async function StockMovementsPage({ searchParams }: { searchParam
                         <td className="whitespace-nowrap px-4 py-2.5">
                           {row.document ? (
                             href ? (
-                              <Link href={href} className="text-brand-600 hover:underline">
+                              <Link href={href} className="text-brand-700 hover:underline">
                                 {row.document.label}
                               </Link>
                             ) : (

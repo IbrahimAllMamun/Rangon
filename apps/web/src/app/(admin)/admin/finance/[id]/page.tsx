@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { CashBook } from "@/components/admin/cash-book";
+import { FilterTabs } from "@/components/admin/filter-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
 import { Badge, Card, ErrorState } from "@/components/ui/primitives";
@@ -9,6 +9,7 @@ import { ApiError, type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type { Account, AccountTransaction, SessionUser } from "@/lib/api/types";
 import { dateOnly, money } from "@/lib/format";
+import { listHref } from "@/lib/paging";
 
 export const metadata = { title: "Cash book" };
 
@@ -129,27 +130,15 @@ export default async function AccountCashBookPage({
               </div>
             </div>
 
-            <nav aria-label="Filter the cash book" className="flex flex-wrap gap-2">
-              {TYPE_FILTERS.map((filter) => {
-                const active = activeType === filter.value;
-                const search = new URLSearchParams();
-                if (filter.value) search.set("transaction_type", filter.value);
-                return (
-                  <Link
-                    key={filter.value || "all"}
-                    href={`/admin/finance/${id}${search.toString() ? `?${search}` : ""}`}
-                    aria-current={active ? "true" : undefined}
-                    className={`rounded-md px-3 py-1.5 text-body-sm font-medium ${
-                      active
-                        ? "bg-neutral-900 text-white"
-                        : "border border-border bg-surface hover:bg-neutral-100"
-                    }`}
-                  >
-                    {filter.label}
-                  </Link>
-                );
-              })}
-            </nav>
+            <FilterTabs
+              label="Kind of movement"
+              tabs={TYPE_FILTERS.map((filter) => ({
+                key: filter.value || "all",
+                label: filter.label,
+                href: listHref(`/admin/finance/${id}`, {}, { transaction_type: filter.value }),
+                active: activeType === filter.value,
+              }))}
+            />
 
             {error ? (
               <Card>

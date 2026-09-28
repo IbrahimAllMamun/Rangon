@@ -1,12 +1,20 @@
 import { Download, Receipt, TrendingDown, Wallet } from "lucide-react";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DateRangeTabs } from "@/components/admin/date-range-tabs";
 import { ExpenseForm, VoidExpenseButton } from "@/components/admin/expense-forms";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
 import { PageHeader } from "@/components/admin/shell";
 import { StatCard } from "@/components/admin/stat-card";
-import { Badge, Card, CardContent, CardHeader, CardTitle, ErrorState } from "@/components/ui/primitives";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  ErrorState,
+} from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer, currentUser } from "@/lib/api/server";
 import type {
@@ -150,7 +158,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
             href={`/api/proxy/expenses/${row.id}/attachment`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-brand-600 hover:underline"
+            className="text-brand-700 hover:underline"
           >
             View
           </a>
@@ -177,26 +185,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
         title="Expenses"
         description="Money that left the business for something other than stock or a refund. Each one takes the amount out of a named account and writes a cash-book row, so spending and the balance can never disagree."
         actions={
-          <div
-            className="flex rounded-md border border-border bg-surface p-0.5"
-            role="group"
-            aria-label="Date range"
-          >
-            {RANGES.map((option) => (
-              <Link
-                key={option.value}
-                href={`/admin/expenses?range=${option.value}`}
-                aria-current={period.range === option.value ? "true" : undefined}
-                className={`rounded px-3 py-1.5 text-body-sm font-medium ${
-                  period.range === option.value
-                    ? "bg-neutral-900 text-white"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {option.label}
-              </Link>
-            ))}
-          </div>
+          <DateRangeTabs basePath="/admin/expenses" active={period.range} presets={RANGES} />
         }
       />
 
@@ -300,12 +289,11 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Sea
                 Every expense
               </h2>
               {can("reports.export") && (
-                <a
-                  href={`/api/proxy/reports/expenses/?${query}&format=csv`}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-body-sm font-medium hover:bg-neutral-100"
-                >
-                  <Download className="size-4" aria-hidden /> CSV
-                </a>
+                <Button variant="secondary" size="sm" className="shrink-0" asChild>
+                  <a href={`/api/proxy/reports/expenses/?${query}&format=csv`}>
+                    <Download className="size-4" aria-hidden /> CSV
+                  </a>
+                </Button>
               )}
             </div>
             <ResourceTable

@@ -75,7 +75,7 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
             <Badge tone={STATUS_TONE[request.status] ?? "neutral"}>
               {humanise(request.status)}
             </Badge>
-            <Link href="/admin/returns" className="text-body-sm text-brand-600 hover:underline">
+            <Link href="/admin/returns" className="text-body-sm text-brand-700 hover:underline">
               ← All returns
             </Link>
           </div>

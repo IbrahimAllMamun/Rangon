@@ -91,7 +91,7 @@ export default async function StockTransfersPage({ searchParams }: { searchParam
         title="Stock transfers"
         description="Moving stock between branches writes both sides in one transaction, and the weighted average cost travels with the goods — so neither branch's margin is distorted by the move."
         actions={
-          <Link href="/admin/inventory" className="text-body-sm text-brand-600 hover:underline">
+          <Link href="/admin/inventory" className="text-body-sm text-brand-700 hover:underline">
             ← Inventory
           </Link>
         }

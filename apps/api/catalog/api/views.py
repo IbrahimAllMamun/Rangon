@@ -368,11 +368,23 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status=PublishStatus.DRAFT).exclude(
                 variants__purchase_items__isnull=False
             )
-        search = self.request.query_params.get("search")
-        if search:
+        if search := (self.request.query_params.get("search") or "").strip():
             from catalog.search import search_products
 
-            return search_products(queryset, query=search)
+            # The storefront's search answers a shopper -- whole words, ranked --
+            # and on its own it found nothing for what staff actually type: a
+            # fragment of a name ("kurt") or of a SKU ("RGN-BLO"). Both count
+            # now: whatever the storefront search finds, and any product whose
+            # name or SKU contains what was typed, or whose barcode it is. By
+            # key rather than by joining the variants here, so a product with
+            # three matching SKUs is still one row and its prices one figure.
+            ranked = search_products(Product.objects.all(), query=search).values("pk")
+            fragments = Product.objects.filter(
+                Q(name__icontains=search)
+                | Q(variants__sku__icontains=search)
+                | Q(variants__barcode=search)
+            ).values("pk")
+            queryset = queryset.filter(Q(pk__in=ranked) | Q(pk__in=fragments))
         # Pagination over an unordered queryset is not merely untidy: PostgreSQL
         # is free to return rows in any order, so page 2 can repeat or skip
         # products that page 1 already showed. `pk` breaks ties between rows

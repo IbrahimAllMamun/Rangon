@@ -115,6 +115,11 @@ required_permissions = {
 - Permission codes are resolved once per request and cached on the user object.
 - Branch scope: `accounts.scoping.branch_queryset(request, qs)` narrows any branch-bearing queryset to
   the user's branch unless the user is `OWNER`/`ADMIN` or holds an explicit cross-branch grant.
-- POS manager elevation: `POST /api/v1/pos/elevate/` verifies a manager's credentials, returns a
-  short-lived elevation token scoped to one permission and one register, and writes an audit entry.
-  The cashier's own session is never upgraded.
+- POS manager elevation: `POST /api/v1/pos/elevate/` verifies a manager's credentials behind the
+  `auth` throttle and writes an audit entry naming both people. Its `approval_token` (since
+  2026-09-28; the endpoint answered with nothing a sale could use before) is signed for one
+  permission and **the cashier who asked**, lasts five minutes and, for a discount, covers no more
+  than the percentage the manager was shown. The sale re-reads the manager when it relies on it —
+  deactivated, no longer holding the permission, or bound to another branch is refused
+  ([business-rules §3.3a](../business-rules.md#33a-discounts-at-the-counter)). The cashier's own
+  session is never upgraded.

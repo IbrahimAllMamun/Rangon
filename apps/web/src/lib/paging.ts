@@ -39,6 +39,28 @@ export function readPaging(params: Record<string, string | undefined>): {
   };
 }
 
+/**
+ * The same list screen with some of its query string changed.
+ *
+ * What every filter link and "Clear" needs: keep what the reader already chose,
+ * change one thing, and start again at page 1 -- DRF answers a page past the
+ * end of a narrower list with a 404, so `page` never rides along. `page_size`
+ * does: it is how many rows they asked to see, not where they were. A change
+ * to `undefined` or "" drops the key.
+ */
+export function listHref(
+  path: string,
+  params: Record<string, string | undefined>,
+  changes: Record<string, string | undefined> = {},
+): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries({ ...params, ...changes })) {
+    if (key !== "page" && value) query.set(key, value);
+  }
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
 /** Append `page` / `page_size` to an outgoing API query, omitting the defaults. */
 export function applyPaging(
   query: URLSearchParams,

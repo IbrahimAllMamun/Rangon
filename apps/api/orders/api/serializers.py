@@ -170,11 +170,14 @@ class OrderDetailSerializer(OrderListSerializer):
     shipping_method_name = serializers.CharField(
         source="shipping_method.name", read_only=True, default=""
     )
+    #: What the receipt prints beside the coupon's discount.
+    coupon_code = serializers.CharField(source="coupon.code", read_only=True, default="")
 
     class Meta(OrderListSerializer.Meta):
         fields = [
             *OrderListSerializer.Meta.fields,
             "coupon",
+            "coupon_code",
             "coupon_discount",
             "manual_discount",
             "tax_rate",
@@ -374,21 +377,91 @@ class PosPaymentSerializer(serializers.Serializer):
     )
 
 
-class PosSaleSerializer(serializers.Serializer):
+class PosBasketSerializer(serializers.Serializer):
+    """What the register asks the server to price: the basket and its discounts.
+
+    `POST /pos/quote/` takes exactly this; a sale takes this and the payments.
+    Every figure is worked out by `orders.services.pos.price_sale` -- a coupon
+    code and a percentage are claims, never amounts.
+    """
+
     lines = PosSaleLineSerializer(many=True)
-    payments = PosPaymentSerializer(many=True)
     customer = serializers.UUIDField(required=False, allow_null=True)
     manual_discount = serializers.DecimalField(
         max_digits=14, decimal_places=2, required=False, default=Decimal("0.00"), min_value=0
     )
-    register = serializers.CharField(required=False, allow_blank=True, max_length=32)
-    note = serializers.CharField(required=False, allow_blank=True)
+    manual_discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=Decimal("0"),
+        max_value=Decimal("100"),
+    )
+    coupon_code = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    #: From `POST /pos/elevate/`. Signed by the server, so it is not a claim.
+    approval_token = serializers.CharField(required=False, allow_blank=True, max_length=512)
     branch = serializers.UUIDField(required=False, allow_null=True)
 
     def validate_lines(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not value:
             raise serializers.ValidationError("A sale needs at least one item.")
         return value
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if attrs.get("manual_discount_percent") is not None and attrs.get("manual_discount"):
+            raise serializers.ValidationError(
+                {
+                    "manual_discount_percent": [
+                        "Give the discount as an amount or as a percentage, not both."
+                    ]
+                }
+            )
+        return attrs
+
+
+class PosSaleSerializer(PosBasketSerializer):
+    payments = PosPaymentSerializer(many=True)
+    register = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    note = serializers.CharField(required=False, allow_blank=True)
+    #: The total the register showed; a sale that would record another is
+    #: refused with PRICE_CHANGED rather than charged.
+    expected_total = serializers.DecimalField(
+        max_digits=14, decimal_places=2, required=False, allow_null=True
+    )
+
+
+def pos_quote_payload(quote: Any) -> dict[str, Any]:
+    """A priced basket, for the register to show (`orders.services.pos.SaleQuote`).
+
+    Money is a string, as everywhere else in the API.
+    """
+    priced = quote.priced
+    coupon = quote.coupon
+    return {
+        "lines": [
+            {
+                "variant": str(line.variant.pk),
+                "sku": line.sku,
+                "quantity": line.quantity,
+                "unit_price": str(line.unit_price),
+                "line_discount": str(line.line_discount),
+                "line_total": str(line.line_total),
+            }
+            for line in priced.lines
+        ],
+        "subtotal": str(priced.subtotal),
+        "coupon": ({"code": coupon.code, "description": coupon.description} if coupon else None),
+        "coupon_discount": str(priced.coupon_discount),
+        "manual_discount": str(priced.manual_discount),
+        "discount_total": str(priced.discount_total),
+        "tax_mode": priced.tax_mode,
+        "tax_rate": str(priced.tax_rate),
+        "tax_total": str(priced.tax_total),
+        "grand_total": str(priced.grand_total),
+        "item_count": priced.item_count,
+        "issues": quote.issues,
+    }
 
 
 class HeldSaleSerializer(serializers.ModelSerializer):
@@ -419,6 +492,26 @@ class ElevateSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, trim_whitespace=False)
     permission = serializers.CharField(max_length=64)
+    #: The discount the manager is shown and approves, as the register's quote
+    #: reported it. Required for a discount: the approval covers that much and
+    #: no more, rather than any discount for the next five minutes.
+    discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=Decimal("0"),
+        max_value=Decimal("100"),
+    )
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        from orders.services.pos import DISCOUNT_OVERRIDE
+
+        if attrs["permission"] == DISCOUNT_OVERRIDE and attrs.get("discount_percent") is None:
+            raise serializers.ValidationError(
+                {"discount_percent": ["Say which discount the manager is approving."]}
+            )
+        return attrs
 
 
 # --- returns ---------------------------------------------------------------
