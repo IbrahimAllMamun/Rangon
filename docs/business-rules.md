@@ -1203,6 +1203,44 @@ the order is still accepted.
 A buyer ordering something the catalogue has never carried creates it on the order itself. The
 product is created **`DRAFT` and unpublished**, and its variants are added to the order as lines.
 
+**It works for a shop's first order, when nothing exists yet** (2026-09-28). *New product* sits
+beside the product search from the start — it used to appear only after a search found nothing,
+and not at all when there were no categories, which is exactly the state of a new shop. On the
+form a buyer can:
+
+* **name a category** instead of picking one — a top-level category, created active; a name that
+  already exists (ignoring case) is picked rather than duplicated;
+* **add a size or colour** a list lacks, as an ordinary value of that attribute;
+* **buy it in one version only** — see below. When the category has no sizes or colours to offer
+  at all, that is the only choice, and the form says so and links to where they are set up.
+
+What a first order needs is therefore a supplier (already creatable inline) and a product name.
+`tests/api/test_single_version_products.py::test_a_first_order_from_an_empty_catalogue` walks it
+from an empty database to stock on the shelf.
+
+**One version only.** A product with no sizes or colours — a lipstick in one shade, a one-size bag
+— is one SKU with no options. `POST /products/{id}/generate-variants/` takes `{"single": true,
+"price", "cost"}` and `catalog.services.create_single_variant` builds it, deriving the SKU the way
+every generated one is. `single` is explicit: an empty `selections` is still refused, so a form that
+lost its ticks is told so rather than handed a SKU. The full product form offers the same box.
+
+A product is **one version or several, never both**: a SKU with no options beside sized ones is a
+version the storefront picker cannot select. Asking a product with options for a single version is
+refused (409), and so is giving a single-version product sizes until that SKU is archived. The CSV
+import can still produce a mix from a spreadsheet that has one; the form leaves such a product's
+rows as they are.
+
+> **DECISION REQUIRED — default chosen (owner, 2026-09-28).** Product records may still be created
+> on the product form, not only on a purchase order — the product form is also where photographs,
+> copy, the size chart and publishing live, and the CSV import creates products at go-live. What is
+> exclusive to purchasing is **stock**: § 4.0a. A product with nothing received shows *Raise a
+> purchase order*, which opens one with its versions already on it (`/admin/purchases/new?variants=`).
+> The stricter alternative — creating products only on an order — was declined.
+
+A product created on an order that is then abandoned stays behind as a draft nothing points at. The
+products list gathers them under **Never ordered** (`GET /products/?never_ordered=true`: `DRAFT`, and
+no purchase order line names any of its variants).
+
 Two things it does not collect:
 
 * **Stock.** Goods arrive by receiving the order being raised, which is what carries the cost paid
@@ -1219,12 +1257,9 @@ order and the goods leave for nothing ([D75](roadmap.md#known-defects)). The gat
 not per variant: a free sample alongside a priced row is a real arrangement, and what is refused is
 a product with *nothing* a shopper can pay for.
 
-> **DECISION REQUIRED** — a product with one SKU and no variant axes cannot be created this way,
-> because `generate_variants` requires at least one attribute value and `POST /variants/` requires a
-> SKU the client would have to invent. The documented default is to send the buyer to the full
-> product form for that case. If single-SKU products are common enough to matter — cosmetics are the
-> likely ones — the fix is for the variant serializer to derive a SKU the way
-> `unique_supplier_code` derives a supplier code.
+Until 2026-09-28 a product with one SKU and no variant axes could not be created this way, and the
+documented default sent the buyer to the full product form — which could not make one either. It
+is resolved by *One version only* above.
 
 ### 7a.6a After receiving: what arrived that nobody can buy
 

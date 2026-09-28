@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import type { PickableVariant } from "@/components/admin/variant-picker";
@@ -24,11 +25,13 @@ import {
   type NewProductDraft,
   axesFor,
   blankDraft,
+  findCategory,
+  skuCount,
   toProductPayload,
   toVariantsPayload,
   validateDraft,
 } from "@/lib/commerce/new-product";
-import { type MatrixAttribute, matrixSize } from "@/lib/commerce/variant-matrix";
+import type { MatrixAttribute } from "@/lib/commerce/variant-matrix";
 import { cn } from "@/lib/cn";
 import { useCategoryAttributes } from "@/lib/use-category-attributes";
 
@@ -44,6 +47,12 @@ import { useCategoryAttributes } from "@/lib/use-category-attributes";
  * it in the same form — the two do the same job for the two things a buyer
  * discovers is missing mid-order (CLAUDE.md §10: reuse, do not invent a
  * per-page visual language).
+ *
+ * It has to work for a shop's **first** order, when nothing exists yet. So a
+ * category can be named here rather than only picked, a missing size or colour
+ * can be added to its list, and a product can come in one version only — which
+ * is all a first product needs when no sizes or colours have been set up at
+ * all.
  *
  * What it deliberately does not collect:
  *
@@ -81,15 +90,26 @@ export function NewProductForm({
   const [errors, setErrors] = useState<DraftProblem[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // Both lists grow from here: a category named inline, a size added inline.
+  const [categoryOptions, setCategoryOptions] = useState(categories);
+  const [axisOptions, setAxisOptions] = useState(attributes);
+  // With no categories at all there is nothing to pick, so start by naming one.
+  const [namingCategory, setNamingCategory] = useState(categories.length === 0);
+  const [categoryName, setCategoryName] = useState("");
+  const [categoryBusy, setCategoryBusy] = useState(false);
+
   // The category decides which axes are offered, exactly as on the product
   // form: a shoe states a Size, a bag states a Capacity, and offering both to
   // both is how a catalogue becomes unsearchable.
   const category = useCategoryAttributes(draft.categoryId);
   const axes = useMemo(
-    () => axesFor(attributes, declaredAxes(category.rows)),
-    [attributes, category.rows],
+    () => axesFor(axisOptions, declaredAxes(category.rows)),
+    [axisOptions, category.rows],
   );
-  const rowCount = matrixSize(draft.selections);
+  // Nothing to tick means one version is the only thing it can be.
+  const noAxes = Boolean(draft.categoryId) && !category.loading && axes.length === 0;
+  const effective: NewProductDraft = noAxes ? { ...draft, single: true } : draft;
+  const rowCount = skuCount(effective);
 
   function set<K extends keyof NewProductDraft>(key: K, value: NewProductDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -105,8 +125,63 @@ export function NewProductForm({
     });
   }
 
+  async function createCategory() {
+    const name = categoryName.trim();
+    if (!name) {
+      setErrors([{ field: "category", message: "Name the category, for example “Bags”." }]);
+      return;
+    }
+    // A name that exists is a pick, not a second category with the same slug.
+    const existing = findCategory(categoryOptions, name);
+    if (existing) {
+      set("categoryId", existing.id);
+      setNamingCategory(false);
+      setCategoryName("");
+      setErrors([]);
+      return;
+    }
+
+    setCategoryBusy(true);
+    try {
+      const created = await apiClient<CategoryOption>("/categories/", {
+        method: "POST",
+        body: { name, is_active: true },
+      });
+      setCategoryOptions((current) =>
+        [...current, created].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      set("categoryId", created.id);
+      setNamingCategory(false);
+      setCategoryName("");
+      setErrors([]);
+    } catch (caught) {
+      setErrors([
+        {
+          field: "category",
+          message: caught instanceof ApiError ? caught.message : "Could not create the category.",
+        },
+      ]);
+    } finally {
+      setCategoryBusy(false);
+    }
+  }
+
+  function addedValue(code: string, value: { value: string; label: string; swatch: string }) {
+    setAxisOptions((current) =>
+      current.map((attribute) =>
+        attribute.code === code
+          ? { ...attribute, values: [...attribute.values, value] }
+          : attribute,
+      ),
+    );
+    setDraft((current) => {
+      const picked = current.selections[code] ?? [];
+      return { ...current, selections: { ...current.selections, [code]: [...picked, value.value] } };
+    });
+  }
+
   async function submit() {
-    const found = validateDraft(draft);
+    const found = validateDraft(effective);
     setErrors(found);
     if (found.length) return;
 
@@ -115,14 +190,14 @@ export function NewProductForm({
       // 1. The product row, as a draft.
       const product = await apiClient<{ id: string; name: string }>("/products/", {
         method: "POST",
-        body: toProductPayload(draft),
+        body: toProductPayload(effective),
       });
 
       // 2. Its sellable rows. The service skips combinations it already has, so
       //    a retried submit cannot double up.
       const generated = await apiClient<{ variants: PickableVariant[] }>(
         `/products/${product.id}/generate-variants/`,
-        { method: "POST", body: toVariantsPayload(draft) },
+        { method: "POST", body: toVariantsPayload(effective) },
       );
 
       onCreated(generated.variants ?? [], product.name);
@@ -172,20 +247,80 @@ export function NewProductForm({
               />
             </Field>
 
-            <Field label="Category" htmlFor="np-category" required error={errorFor("category")}>
-              <Select
-                id="np-category"
-                value={draft.categoryId}
-                onChange={(event) => set("categoryId", event.target.value)}
-                invalid={Boolean(errorFor("category"))}
-              >
-                <option value="">Choose a category…</option>
-                {categories.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.name}
-                  </option>
-                ))}
-              </Select>
+            <Field
+              label="Category"
+              htmlFor={namingCategory ? "np-category-name" : "np-category"}
+              required
+              hint={
+                namingCategory
+                  ? "A new top-level category. Nest or rename it later under Categories & brands."
+                  : undefined
+              }
+              error={errorFor("category")}
+            >
+              {namingCategory ? (
+                <div className="flex gap-2">
+                  <Input
+                    id="np-category-name"
+                    value={categoryName}
+                    onChange={(event) => setCategoryName(event.target.value)}
+                    // Enter would otherwise submit the purchase order around us.
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void createCategory();
+                      }
+                    }}
+                    invalid={Boolean(errorFor("category"))}
+                    placeholder="Bags, Cosmetics, Men's shirts…"
+                    autoComplete="off"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={createCategory}
+                    loading={categoryBusy}
+                    className="shrink-0"
+                  >
+                    Add
+                  </Button>
+                  {categoryOptions.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setNamingCategory(false)}
+                      disabled={categoryBusy}
+                      className="shrink-0"
+                    >
+                      Pick one
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <Select
+                    id="np-category"
+                    value={draft.categoryId}
+                    onChange={(event) => set("categoryId", event.target.value)}
+                    invalid={Boolean(errorFor("category"))}
+                  >
+                    <option value="">Choose a category…</option>
+                    {categoryOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setNamingCategory(true)}
+                    className="shrink-0"
+                  >
+                    New
+                  </Button>
+                </div>
+              )}
             </Field>
 
             <Field label="Brand" htmlFor="np-brand">
@@ -248,11 +383,35 @@ export function NewProductForm({
             <legend className="text-body-sm font-medium">
               Which versions does it come in?
             </legend>
-            <p className="mb-2 text-caption text-muted">
-              {draft.categoryId
-                ? "Tick the values it is sold in. Every combination becomes a SKU on this order."
-                : "Choose a category first — it decides which axes apply."}
-            </p>
+
+            {!draft.categoryId ? (
+              <p className="mb-2 text-caption text-muted">
+                Choose a category first — it decides which sizes and colours apply.
+              </p>
+            ) : noAxes ? (
+              <p className="mb-2 text-caption text-muted">
+                No sizes or colours are set up for this category, so it is bought as one version.{" "}
+                <Link href="/admin/taxonomy" className="text-brand-600 hover:underline">
+                  Set up sizes and colours
+                </Link>{" "}
+                to buy it in several.
+              </p>
+            ) : (
+              <>
+                <label className="mb-3 inline-flex items-center gap-2 text-body-sm">
+                  <Checkbox
+                    checked={draft.single}
+                    onChange={() => set("single", !draft.single)}
+                  />
+                  One version only — no sizes or colours
+                </label>
+                {!draft.single && (
+                  <p className="mb-2 text-caption text-muted">
+                    Tick the values it is sold in. Every combination becomes a SKU on this order.
+                  </p>
+                )}
+              </>
+            )}
 
             {errorFor("selections") && (
               <p role="alert" className="mb-2 text-body-sm text-[var(--error)]">
@@ -269,7 +428,7 @@ export function NewProductForm({
               </p>
             )}
 
-            {draft.categoryId && (
+            {draft.categoryId && !effective.single && (
               <div className="space-y-3">
                 {axes.map((attribute) => {
                   const picked = draft.selections[attribute.code] ?? [];
@@ -283,7 +442,7 @@ export function NewProductForm({
                       </p>
                       {/* Same chip as the product form's matrix picker: one
                           visual language for one action (CLAUDE.md §10). */}
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         {attribute.values.map((option) => {
                           const checked = picked.includes(option.value);
                           return (
@@ -311,6 +470,14 @@ export function NewProductForm({
                             </label>
                           );
                         })}
+                        {attribute.id && (
+                          <AddValue
+                            attributeId={attribute.id}
+                            attributeName={attribute.name}
+                            existing={attribute.values.map((option) => option.value)}
+                            onAdded={(value) => addedValue(attribute.code, value)}
+                          />
+                        )}
                       </div>
                     </div>
                   );
@@ -346,5 +513,95 @@ export function NewProductForm({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Add a size or colour the list does not have yet — a shoe in 46, a kurti in
+ * a new shade — without leaving the order. It becomes an ordinary value of
+ * that attribute, visible under Categories & brands like any other.
+ */
+function AddValue({
+  attributeId,
+  attributeName,
+  existing,
+  onAdded,
+}: {
+  attributeId: string;
+  attributeName: string;
+  existing: string[];
+  onAdded: (value: { value: string; label: string; swatch: string }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  async function add() {
+    const value = text.trim();
+    if (!value) {
+      setProblem(`Type the new ${attributeName.toLowerCase()}.`);
+      return;
+    }
+    if (existing.some((item) => item.toLocaleLowerCase() === value.toLocaleLowerCase())) {
+      setProblem(`${value} is already in the list — tick it.`);
+      return;
+    }
+    setBusy(true);
+    setProblem(null);
+    try {
+      const created = await apiClient<{ value: string; display: string; swatch: string }>(
+        "/attribute-values/",
+        { method: "POST", body: { attribute: attributeId, value, label: value } },
+      );
+      onAdded({
+        value: created.value,
+        label: created.display || created.value,
+        swatch: created.swatch ?? "",
+      });
+      setText("");
+      setOpen(false);
+    } catch (caught) {
+      setProblem(caught instanceof ApiError ? caught.message : "Could not add it.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        <Plus className="size-4" aria-hidden />
+        Add {attributeName.toLowerCase()}
+      </Button>
+    );
+  }
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <Input
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        // Enter would otherwise submit the purchase order around us.
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void add();
+          }
+          if (event.key === "Escape") setOpen(false);
+        }}
+        aria-label={`New ${attributeName.toLowerCase()}`}
+        className="h-8 w-28 text-body-sm"
+        autoFocus
+      />
+      <Button type="button" variant="secondary" size="sm" onClick={add} loading={busy}>
+        Add
+      </Button>
+      {problem && (
+        <span role="alert" className="text-caption text-[var(--error)]">
+          {problem}
+        </span>
+      )}
+    </span>
   );
 }

@@ -51,7 +51,7 @@ export default async function NewProductPage() {
     <>
       <PageHeader
         title="New product"
-        description="Details first, then tick the values it comes in to build its variants."
+        description="Details first, then tick the values it comes in to build its variants. Stock arrives on a purchase order — once saved, the product offers one."
       />
 
       <p className="mb-4 text-body-sm text-muted">

@@ -722,11 +722,24 @@ class ProductWriteSerializer(serializers.ModelSerializer):
 
 
 class GenerateVariantsSerializer(serializers.Serializer):
-    selections = serializers.DictField(child=serializers.ListField(child=serializers.CharField()))
+    selections = serializers.DictField(
+        child=serializers.ListField(child=serializers.CharField()), required=False, default=dict
+    )
+    # One SKU with no options, instead of a matrix (business-rules.md § 7a.6).
+    # Explicit rather than inferred from an empty `selections`: a form that
+    # forgot to send its ticks must still be told so, not handed a SKU.
+    single = serializers.BooleanField(required=False, default=False)
     price = serializers.DecimalField(max_digits=14, decimal_places=2)
     cost = serializers.DecimalField(
         max_digits=14, decimal_places=2, required=False, default=Decimal("0.00")
     )
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        if attrs.get("single") and any(attrs.get("selections", {}).values()):
+            raise serializers.ValidationError(
+                {"selections": ["A single version has no sizes or colours to choose."]}
+            )
+        return attrs
 
 
 class ProductImportSerializer(serializers.Serializer):

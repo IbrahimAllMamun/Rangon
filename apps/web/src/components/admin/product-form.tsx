@@ -41,6 +41,8 @@ import {
   MAX_MATRIX_ROWS,
   buildMatrix,
   combinationKey,
+  hasOptions,
+  hasSingleVersion,
   matrixSize,
   pendingSelections,
   selectionsFromVariants,
@@ -126,6 +128,9 @@ export function ProductForm({
     selectionsFromVariants(initialVariants),
   );
   const [variants, setVariants] = useState<ExistingVariant[]>(initialVariants);
+  // One SKU with no sizes or colours (business-rules.md § 7a.6). Starts on for
+  // a product that is already sold that way.
+  const [single, setSingle] = useState(() => hasSingleVersion(initialVariants));
   const [specValues, setSpecValues] = useState<string[]>(initialSpecValues);
   const [sizeChart, setSizeChart] = useState(initialSizeChart);
   const [defaultPrice, setDefaultPrice] = useState("");
@@ -138,10 +143,14 @@ export function ProductForm({
   const [isPublished, setIsPublished] = useState(published);
 
   const rows = useMemo(
-    () => buildMatrix(selections, attributes, variants),
-    [selections, attributes, variants],
+    () => buildMatrix(selections, attributes, variants, single),
+    [selections, attributes, variants, single],
   );
-  const requested = matrixSize(selections);
+  // Fixed once saved: a saved single SKU is archived before the product takes
+  // options, and a product with options never grows an optionless SKU.
+  const singleLocked = hasSingleVersion(variants);
+  const offerSingle = !hasOptions(variants);
+  const requested = single ? 1 : matrixSize(selections);
   const truncated = requested > MAX_MATRIX_ROWS;
 
   // A row keeps whatever the user typed; anything untouched falls back to the
@@ -237,7 +246,23 @@ export function ProductForm({
       //    it already has, so this is safe to re-run.
       const pending = pendingSelections(rows);
       let created: ExistingVariant[] = [];
-      if (Object.keys(pending).length > 0) {
+      // The single row is the empty combination, so `pending` has nothing in
+      // it; it is asked for explicitly instead.
+      const newSingle = single && rows.some((row) => row.key === "" && row.state === "new");
+      if (newSingle) {
+        const response = await apiClient<{ variants: ExistingVariant[] }>(
+          `/products/${product.id}/generate-variants/`,
+          {
+            method: "POST",
+            body: {
+              single: true,
+              price: firstPrice(rows, rowDrafts, defaultPrice),
+              cost: firstCost(rows, rowDrafts, defaultCost),
+            },
+          },
+        );
+        created = response.variants ?? [];
+      } else if (Object.keys(pending).length > 0) {
         const response = await apiClient<{ variants: ExistingVariant[] }>(
           `/products/${product.id}/generate-variants/`,
           {
@@ -558,6 +583,28 @@ export function ProductForm({
             own price, barcode and stock — stock arrives when a purchase order is received.
           </p>
 
+          {offerSingle && (
+            <div>
+              <label className="inline-flex items-center gap-2 text-body-sm">
+                <Checkbox
+                  checked={single}
+                  disabled={singleLocked || saving}
+                  onChange={() => {
+                    setSingle((current) => !current);
+                    setSaved(false);
+                  }}
+                />
+                One version only — no sizes or colours
+              </label>
+              {singleLocked && (
+                <p className="mt-1 text-caption text-muted">
+                  Sold as one SKU. To give it sizes or colours, remove that SKU below first — it is
+                  archived if it has stock or sales, so its history stays.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* A failed lookup falls back to offering every axis rather than
               blocking the form — narrowing the list is a convenience, and a
               merchant who cannot build a variant has a worse problem than a
@@ -575,7 +622,7 @@ export function ProductForm({
             </p>
           )}
 
-          {category.loading && category.rows === null ? (
+          {single ? null : category.loading && category.rows === null ? (
             <div className="space-y-4" aria-busy="true">
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-9 w-3/4" />

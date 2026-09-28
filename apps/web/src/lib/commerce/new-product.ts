@@ -18,6 +18,12 @@
  *     created unpublished, and `publish` refuses a product with nothing priced
  *     above zero (D75), so an unpriced draft cannot reach the storefront by
  *     accident.
+ *
+ * A product comes in versions — sizes, colours, every combination a SKU — or
+ * in **one version only** (`single`): a lipstick in one shade, a one-size bag.
+ * The second used to be impossible here and on the full product form alike,
+ * because `generate_variants` needs at least one value; the API now builds a
+ * single SKU on request (business-rules.md § 7a.6).
  */
 import { type MatrixAttribute, matrixSize, MAX_MATRIX_ROWS } from "@/lib/commerce/variant-matrix";
 
@@ -25,8 +31,10 @@ export interface NewProductDraft {
   name: string;
   categoryId: string;
   brandId: string;
-  /** attribute code -> ticked values. */
+  /** attribute code -> ticked values. Ignored when `single`. */
   selections: Record<string, string[]>;
+  /** One SKU, no sizes or colours. */
+  single: boolean;
   cost: string;
   price: string;
 }
@@ -37,7 +45,15 @@ export interface DraftProblem {
 }
 
 export function blankDraft(name = ""): NewProductDraft {
-  return { name, categoryId: "", brandId: "", selections: {}, cost: "", price: "" };
+  return {
+    name,
+    categoryId: "",
+    brandId: "",
+    selections: {},
+    single: false,
+    cost: "",
+    price: "",
+  };
 }
 
 /** Whether a string is a usable money amount: present, numeric, not negative. */
@@ -57,12 +73,11 @@ export function validateDraft(draft: NewProductDraft): DraftProblem[] {
     problems.push({ field: "category", message: "Choose a category — it decides the axes below." });
   }
 
-  const rows = matrixSize(draft.selections);
+  const rows = draft.single ? 1 : matrixSize(draft.selections);
   if (rows === 0) {
     problems.push({
       field: "selections",
-      message:
-        "Tick at least one value. A product with a single SKU and no axes is made on the full product form.",
+      message: "Tick at least one value, or choose “One version only” for a single SKU.",
     });
   } else if (rows > MAX_MATRIX_ROWS) {
     problems.push({
@@ -101,15 +116,34 @@ export function toProductPayload(draft: NewProductDraft): Record<string, unknown
 
 /** The `POST /products/{id}/generate-variants/` body. */
 export function toVariantsPayload(draft: NewProductDraft): Record<string, unknown> {
+  // The endpoint requires a price. Blank means "not decided", which is 0 on an
+  // unpublishable draft rather than a guess that would look authoritative.
+  const price = draft.price.trim() === "" ? "0.00" : draft.price;
+  if (draft.single) return { single: true, price, cost: draft.cost };
   return {
     selections: Object.fromEntries(
       Object.entries(draft.selections).filter(([, values]) => values.length > 0),
     ),
-    // The endpoint requires a price. Blank means "not decided", which is 0 on
-    // an unpublishable draft rather than a guess that would look authoritative.
-    price: draft.price.trim() === "" ? "0.00" : draft.price,
+    price,
     cost: draft.cost,
   };
+}
+
+/** How many SKUs submitting this draft would create. */
+export function skuCount(draft: NewProductDraft): number {
+  return draft.single ? 1 : matrixSize(draft.selections);
+}
+
+/**
+ * An existing category with this name, so typing one that exists picks it
+ * rather than creating a second with the same slug.
+ */
+export function findCategory<T extends { name: string }>(
+  categories: readonly T[],
+  name: string,
+): T | undefined {
+  const wanted = name.trim().toLocaleLowerCase();
+  return categories.find((category) => category.name.trim().toLocaleLowerCase() === wanted);
 }
 
 /** Axes to offer: what the category declares, else everything usable. */

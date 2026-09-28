@@ -15,6 +15,8 @@
  */
 
 export interface MatrixAttribute {
+  /** The attribute's id, when known — needed to add a value to it inline. */
+  id?: string;
   code: string;
   name: string;
   kind: string;
@@ -104,15 +106,41 @@ export function matrixSize(selections: Record<string, string[]>): number {
 }
 
 /**
+ * Whether this product is sold in one version only: a live SKU with no options.
+ *
+ * The CSV import has always made these, and since business-rules.md § 7a.6 the
+ * purchase order and this form can too. `generate_variants` refuses to give
+ * such a product sizes or colours until that SKU is archived.
+ */
+export function hasSingleVersion(existing: ExistingVariant[]): boolean {
+  const live = existing.filter((variant) => variant.status !== "ARCHIVED");
+  return live.length > 0 && live.every((variant) => variant.attributes.length === 0);
+}
+
+/** Whether any live SKU has sizes or colours — then it cannot become one version. */
+export function hasOptions(existing: ExistingVariant[]): boolean {
+  return existing.some(
+    (variant) => variant.status !== "ARCHIVED" && variant.attributes.length > 0,
+  );
+}
+
+/**
  * The rows to render: every ticked combination, plus every saved variant whose
  * combination is no longer ticked.
+ *
+ * `single` asks for the one row with no options — the empty combination, whose
+ * key is the same `""` a saved optionless variant has, so the saved one is
+ * matched rather than shown as "not selected".
  */
 export function buildMatrix(
   selections: Record<string, string[]>,
   attributes: MatrixAttribute[],
   existing: ExistingVariant[],
+  single = false,
 ): MatrixRow[] {
-  const codes = Object.keys(selections).filter((code) => selections[code].length > 0);
+  const codes = single
+    ? []
+    : Object.keys(selections).filter((code) => selections[code].length > 0);
   const byCode = new Map(attributes.map((attribute) => [attribute.code, attribute]));
 
   const labelFor = (code: string, value: string) =>
@@ -120,7 +148,7 @@ export function buildMatrix(
 
   // Cartesian product, built iteratively so the row order is stable: the first
   // attribute varies slowest, which is what a human reading the table expects.
-  let combinations: Record<string, string>[] = codes.length ? [{}] : [];
+  let combinations: Record<string, string>[] = codes.length || single ? [{}] : [];
   for (const code of codes) {
     const next: Record<string, string>[] = [];
     for (const partial of combinations) {

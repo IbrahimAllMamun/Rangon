@@ -1,6 +1,6 @@
 "use client";
 
-import { Send, Trash2 } from "lucide-react";
+import { Plus, Send, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -56,16 +56,26 @@ import { money } from "@/lib/format";
 export function PurchaseOrderForm({
   suppliers: initialSuppliers,
   defaultBranchLabel,
+  canCreateProducts,
   categories,
   brands,
   attributes,
+  initialVariants = [],
 }: {
   suppliers: SupplierRow[];
   defaultBranchLabel: string;
-  /** Reference data for creating a product inline; empty disables the option. */
+  /**
+   * Whether this buyer may create a product inline. Separate from the lists
+   * below: a shop's first order has no categories yet, and that is exactly
+   * when creating one here matters most.
+   */
+  canCreateProducts: boolean;
+  /** Reference data for creating a product inline. */
   categories: CategoryOption[];
   brands: BrandOption[];
   attributes: MatrixAttribute[];
+  /** Lines to start with — "Raise a purchase order" from a product or a stock row. */
+  initialVariants?: PickableVariant[];
 }) {
   const router = useRouter();
 
@@ -81,7 +91,20 @@ export function PurchaseOrderForm({
   // preview then says nothing about VAT at all.
   const [vatPercent, setVatPercent] = useState("");
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<DraftLine[]>([]);
+  const [lines, setLines] = useState<DraftLine[]>(() =>
+    // Priced from the catalogue for now; choosing a supplier re-prices every
+    // line nobody has typed into, exactly as it does for a picked one.
+    initialVariants.map((variant, index) => ({
+      key: `${variant.id}-${index}`,
+      variantId: variant.id,
+      sku: variant.sku,
+      productName: variant.product_name,
+      variantLabel: variant.label,
+      quantity: "1",
+      unitCost: variant.cost,
+      discount: "0",
+    })),
+  );
   const [sendNow, setSendNow] = useState(false);
   const [errors, setErrors] = useState<{ field: string; message: string }[]>([]);
   const [saving, setSaving] = useState(false);
@@ -372,14 +395,24 @@ export function PurchaseOrderForm({
               onCancel={() => setCreatingNamed(null)}
             />
           ) : (
-            <VariantPicker
-              onPick={addLine}
-              exclude={chosen}
-              label="Add a product to this order"
-              // Only offered when the page could hand us the reference data;
-              // without categories there is nothing to build a product from.
-              onCreateRequest={categories.length ? setCreatingNamed : undefined}
-            />
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-[16rem] flex-1">
+                <VariantPicker
+                  onPick={addLine}
+                  exclude={chosen}
+                  label="Add a product to this order"
+                  onCreateRequest={canCreateProducts ? setCreatingNamed : undefined}
+                />
+              </div>
+              {/* Visible from the start, not only after a search misses: a
+                  shop's first order has nothing to search for. */}
+              {canCreateProducts && (
+                <Button type="button" variant="secondary" onClick={() => setCreatingNamed("")}>
+                  <Plus className="size-4" aria-hidden />
+                  New product
+                </Button>
+              )}
+            </div>
           )}
 
           {errorFor("lines") && (
@@ -390,7 +423,9 @@ export function PurchaseOrderForm({
 
           {lines.length === 0 ? (
             <p className="rounded-md border border-dashed border-border p-8 text-center text-body-sm text-muted">
-              No lines yet. Scan a barcode or search for a product above.
+              {canCreateProducts
+                ? "No lines yet. Scan a barcode, search for a product above, or add a new product."
+                : "No lines yet. Scan a barcode or search for a product above."}
             </p>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-border">

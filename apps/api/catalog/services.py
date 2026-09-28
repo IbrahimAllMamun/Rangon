@@ -139,6 +139,7 @@ def generate_variants(
         frozenset(str(link.attribute_value_id) for link in variant.attribute_values.all())
         for variant in product.variants.prefetch_related("attribute_values")
     }
+    _refuse_options_beside_a_single_version(product)
 
     created: list[ProductVariant] = []
     for combination in itertools.product(*groups):
@@ -163,6 +164,71 @@ def generate_variants(
         reason="Variant matrix generated",
     )
     return created
+
+
+def _live_variants(product: Product) -> list[ProductVariant]:
+    return list(
+        product.variants.exclude(status=PublishStatus.ARCHIVED).prefetch_related("attribute_values")
+    )
+
+
+def _refuse_options_beside_a_single_version(product: Product) -> None:
+    """A product is one version or several, never both.
+
+    A SKU with no options beside sized ones is a version the storefront's picker
+    cannot select and the POS cannot describe. Archiving the single SKU first
+    keeps its history and frees the product to take options.
+    """
+    single = next((v for v in _live_variants(product) if not v.attribute_values.all()), None)
+    if single is not None:
+        raise Conflict(
+            f"{product.name} is sold as one version ({single.sku}). Archive that SKU "
+            "before giving it sizes or colours.",
+            details={"single_variant": str(single.pk), "sku": single.sku},
+        )
+
+
+@transaction.atomic
+def create_single_variant(
+    *,
+    product: Product,
+    price: Any,
+    cost: Any = 0,
+    actor: Any = None,
+) -> list[ProductVariant]:
+    """One SKU with no sizes or colours: a lipstick in one shade, a one-size bag.
+
+    `generate_variants` needs at least one attribute value, so until this
+    existed such a product could be created by the CSV import and nowhere else
+    -- not on the product form, and not on a purchase order (business-rules.md
+    § 7a.6). The SKU is derived the way every generated one is.
+
+    Returns a list, the shape `generate_variants` returns: the new variant, or
+    nothing when the product already has its single SKU, so a retried submit
+    cannot make a second. The product row is locked for that decision.
+    """
+    locked = Product.objects.select_for_update().get(pk=product.pk)
+    live = _live_variants(locked)
+    if any(not variant.attribute_values.all() for variant in live):
+        return []
+    if live:
+        raise Conflict(
+            f"{locked.name} already comes in {len(live)} version"
+            f"{'' if len(live) == 1 else 's'}. Add another size or colour instead.",
+            details={"variant_count": len(live)},
+        )
+
+    variant = create_variant(
+        product=locked, attribute_values=[], price=price, cost=cost, actor=actor
+    )
+    audit.record(
+        action=audit.AuditAction.CREATE,
+        entity=locked,
+        actor=actor,
+        new_values={"variants_created": 1, "sku": variant.sku},
+        reason="Single-version SKU created",
+    )
+    return [variant]
 
 
 @transaction.atomic
