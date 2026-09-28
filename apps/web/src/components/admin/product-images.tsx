@@ -146,7 +146,12 @@ export function ProductImages({
           </p>
         )}
 
-        <div className="grid items-end gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto]">
+        {/* Aligned by the top, not the bottom. Each field is label, control,
+            hint, and the two hints wrap to different heights: `items-end`
+            lined up the *hints*, which left the select, the alt text and the
+            button on three different lines. From the top, equal labels put
+            every control on one line; the button's spacer is its label. */}
+        <div className="grid items-start gap-4 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto]">
           <Field
             label="Colour"
             htmlFor="image-colour"
@@ -156,6 +161,7 @@ export function ProductImages({
               id="image-colour"
               value={colour}
               onChange={(event) => setColour(event.target.value)}
+              aria-describedby="image-colour-hint"
             >
               <option value="">Every colour (shared)</option>
               {colours.map((option) => (
@@ -172,37 +178,46 @@ export function ProductImages({
               value={altText}
               onChange={(event) => setAltText(event.target.value)}
               placeholder="Model wearing the black oxford shirt, front view"
+              aria-describedby="image-alt-hint"
             />
           </Field>
 
-          {/* A styled <label> wrapping a visually-hidden (but still focusable)
-              file input. A <button> that forwards a click to a hidden input
-              would leave the input as a second, unlabelled tab stop; this way
-              there is one control, it has a name, and Tab reaches it with the
-              focus ring drawn on the label. */}
-          <label
-            htmlFor="image-file"
-            className={cn(
-              "inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md px-4",
-              "bg-brand-500 text-body-sm font-semibold text-white transition-colors duration-fast",
-              "hover:bg-brand-600 active:bg-brand-700",
-              "focus-within:ring-4 focus-within:ring-[var(--ring)]",
-              busy && "pointer-events-none opacity-50",
-            )}
-          >
-            <input
-              ref={fileInput}
-              id="image-file"
-              type="file"
-              accept={ACCEPTED.join(",")}
-              multiple
-              disabled={busy}
-              className="sr-only"
-              onChange={(event) => void upload(event.target.files)}
-            />
-            <ImagePlus className="size-4" aria-hidden />
-            {busy ? "Uploading…" : "Upload images"}
-          </label>
+          <div className="space-y-1.5">
+            {/* Takes a label's line so the button starts where the fields'
+                controls do. Stacked on a phone there is nothing to line up. */}
+            <span aria-hidden className="invisible hidden text-body-sm font-medium sm:block">
+              Upload
+            </span>
+            {/* A styled <label> wrapping a visually-hidden (but still focusable)
+                file input. A <button> that forwards a click to a hidden input
+                would leave the input as a second, unlabelled tab stop; this way
+                there is one control, it has a name, and Tab reaches it with the
+                focus ring drawn on the label. */}
+            <label
+              htmlFor="image-file"
+              className={cn(
+                // The fields' own heights, so the three controls are one row.
+                "inline-flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-md px-4 sm:h-10 sm:w-auto",
+                "bg-brand-500 text-body-sm font-semibold text-white transition-colors duration-fast",
+                "hover:bg-brand-600 active:bg-brand-700",
+                "focus-within:ring-4 focus-within:ring-[var(--ring)]",
+                busy && "pointer-events-none opacity-50",
+              )}
+            >
+              <input
+                ref={fileInput}
+                id="image-file"
+                type="file"
+                accept={ACCEPTED.join(",")}
+                multiple
+                disabled={busy}
+                className="sr-only"
+                onChange={(event) => void upload(event.target.files)}
+              />
+              <ImagePlus className="size-4" aria-hidden />
+              {busy ? "Uploading…" : "Upload images"}
+            </label>
+          </div>
         </div>
 
         {colours.length === 0 && (
