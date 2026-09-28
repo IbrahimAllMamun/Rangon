@@ -18,6 +18,7 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { channelsFromPlaces, placesFromChannels } from "@/lib/commerce/coupon-channels";
 
 export type DiscountType = "PERCENTAGE" | "FIXED" | "FREE_SHIPPING";
 
@@ -53,6 +54,10 @@ interface Draft {
   ends_at: string;
   usage_limit: string;
   usage_limit_per_customer: string;
+  /** Taken at checkout on the website. */
+  online: boolean;
+  /** Taken at the register. */
+  inStore: boolean;
   is_active: boolean;
 }
 
@@ -83,11 +88,14 @@ function blank(): Draft {
     ends_at: "",
     usage_limit: "",
     usage_limit_per_customer: "1",
+    online: true,
+    inStore: true,
     is_active: true,
   };
 }
 
 function fromRow(row: CouponRow): Draft {
+  const places = placesFromChannels(row.channels);
   return {
     code: row.code,
     description: row.description,
@@ -100,6 +108,8 @@ function fromRow(row: CouponRow): Draft {
     usage_limit: row.usage_limit === null ? "" : String(row.usage_limit),
     usage_limit_per_customer:
       row.usage_limit_per_customer === null ? "" : String(row.usage_limit_per_customer),
+    online: places.online,
+    inStore: places.inStore,
     is_active: row.is_active,
   };
 }
@@ -116,6 +126,10 @@ function fromRow(row: CouponRow): Draft {
  *   constraint now exempts this type.
  * - **Maximum discount** caps a percentage. On a fixed amount the cap can only
  *   ever be the amount itself, so it is hidden there too.
+ * - **Where it can be used** decides whether the register takes the coupon as
+ *   well as the online shop. Both is stored as "everywhere", which is what
+ *   every coupon made before the choice existed is. Free shipping is online
+ *   only: a counter sale has no delivery charge for it to take off.
  *
  * Every rule is re-checked by the API — this is here to answer sooner, not
  * instead. Blank usage limits mean "unlimited", which is why they are sent as
@@ -170,6 +184,15 @@ export function CouponForm({
       found.push({ field: "ends_at", message: "The end date must be after the start." });
     }
 
+    // Free delivery has nothing to take off at the counter, so it is an
+    // online coupon whatever the boxes say; the register refuses it anyway.
+    const places = isFreeShipping
+      ? { online: true, inStore: false }
+      : { online: draft.online, inStore: draft.inStore };
+    if (!places.online && !places.inStore) {
+      found.push({ field: "channels", message: "Choose where the coupon can be used." });
+    }
+
     setErrors(found);
     if (found.length) return;
 
@@ -190,6 +213,7 @@ export function CouponForm({
         usage_limit_per_customer: draft.usage_limit_per_customer.trim()
           ? Number(draft.usage_limit_per_customer)
           : null,
+        channels: channelsFromPlaces(places),
         is_active: draft.is_active,
       };
       const coupon = editing
@@ -228,7 +252,7 @@ export function CouponForm({
               label="Code"
               htmlFor="cpn-code"
               required
-              hint="What the shopper types at checkout."
+              hint="What the shopper types at checkout, or tells the cashier."
               error={errorFor("code")}
             >
               <Input
@@ -391,6 +415,50 @@ export function CouponForm({
             </Field>
           </div>
 
+          <fieldset
+            className="space-y-2"
+            aria-describedby={errorFor("channels") ? "cpn-channels-error" : undefined}
+          >
+            <legend className="text-body-sm font-medium text-neutral-900">
+              Where it can be used
+            </legend>
+            <label className="flex items-start gap-2 text-body-sm">
+              <Checkbox
+                id="cpn-online"
+                className="mt-0.5"
+                checked={isFreeShipping || draft.online}
+                disabled={isFreeShipping}
+                onChange={(event) => set("online", event.target.checked)}
+              />
+              <span>
+                Online shop
+                <span className="block text-caption text-muted">At checkout on the website.</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-body-sm">
+              <Checkbox
+                id="cpn-in-store"
+                className="mt-0.5"
+                checked={!isFreeShipping && draft.inStore}
+                disabled={isFreeShipping}
+                onChange={(event) => set("inStore", event.target.checked)}
+              />
+              <span>
+                In store
+                <span className="block text-caption text-muted">
+                  {isFreeShipping
+                    ? "Not for free delivery: a counter sale has no delivery charge to take off."
+                    : "Typed or scanned at the register. A limit per customer needs the customer attached to the sale."}
+                </span>
+              </span>
+            </label>
+            {errorFor("channels") && (
+              <p id="cpn-channels-error" className="text-caption font-medium text-[var(--error)]">
+                {errorFor("channels")}
+              </p>
+            )}
+          </fieldset>
+
           <label className="flex items-start gap-2 text-body-sm">
             <Checkbox
               className="mt-0.5"
@@ -400,7 +468,7 @@ export function CouponForm({
             <span>
               Active
               <span className="block text-caption text-muted">
-                An inactive coupon is refused at checkout, whatever its dates say.
+                An inactive coupon is refused everywhere, whatever its dates say.
               </span>
             </span>
           </label>

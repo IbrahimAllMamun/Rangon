@@ -7,6 +7,7 @@ import { useState } from "react";
 import { CouponForm, type CouponRow } from "@/components/admin/coupon-form";
 import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
+import { whereLabel } from "@/lib/commerce/coupon-channels";
 import { dateOnly, money } from "@/lib/format";
 
 /** What the coupon is worth, in the units it is actually expressed in. */
@@ -132,6 +133,9 @@ export function CouponManager({
                     Minimum
                   </th>
                   <th scope="col" className="px-4 py-2.5 font-medium">
+                    Where
+                  </th>
+                  <th scope="col" className="px-4 py-2.5 font-medium">
                     Window
                   </th>
                   <th scope="col" className="px-4 py-2.5 text-right font-medium">
@@ -165,6 +169,7 @@ export function CouponManager({
                           ? money(row.minimum_order_value)
                           : "—"}
                       </td>
+                      <td className="px-4 py-2.5 text-muted">{whereLabel(row.channels)}</td>
                       <td className="px-4 py-2.5 text-muted">
                         {row.starts_at || row.ends_at
                           ? `${dateOnly(row.starts_at) || "any time"} → ${dateOnly(row.ends_at) || "no end"}`
