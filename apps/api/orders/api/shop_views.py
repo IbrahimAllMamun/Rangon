@@ -631,22 +631,25 @@ class ShopHomeView(APIView):
             .first()
         )
 
+        # The merchandiser's carousel, in their order. A product in the list
+        # that a shopper could not open -- a draft, counter-only, archived --
+        # stays in the list and is skipped here. One row per product at most
+        # (a unique constraint), so the join cannot repeat one.
+        carousel = (
+            visible_products()
+            .filter(home_carousel_items__isnull=False)
+            .order_by("home_carousel_items__position", "home_carousel_items__created_at")
+        )
+
         return Response(
             {
                 # Merchandised hero, or None — the page keeps its previous
                 # behaviour of falling back to a new arrival's photograph.
                 "hero": serialise_banner(hero),
-                "featured_categories": [
-                    {
-                        "name": category.name,
-                        "slug": category.slug,
-                        "path": category.slug,
-                        "image": media_url(category.image),
-                    }
-                    for category in Category.objects.filter(
-                        is_active=True, show_in_navigation=True, parent__isnull=True
-                    )[:6]
-                ],
+                # Straight under the hero. It replaced the "Shop by category"
+                # row, whose `featured_categories` this payload no longer
+                # carries: the navbar already lists the categories.
+                "carousel": serialise(_ranked(carousel)),
                 "new_arrivals": serialise(base.order_by("-created_at")[:8]),
                 "featured": serialise(base.filter(featured=True)[:8]),
                 "best_sellers": serialise(best_sellers),

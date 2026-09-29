@@ -54,7 +54,10 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "settings.manage": ("settings", "Change settings"),
     "content.review_moderate": ("content", "Moderate reviews"),
     "content.coupons_manage": ("content", "Manage coupons"),
-    "content.navigation_manage": ("content", "Manage navigation and banners"),
+    "content.navigation_manage": (
+        "content",
+        "Manage navigation, banners and the homepage carousel",
+    ),
     "content.site_manage": ("content", "Manage the footer, social links and site pages"),
     "audit.view": ("audit", "View the audit log"),
 }

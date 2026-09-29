@@ -398,3 +398,34 @@ class SitePage(BaseModel):
     @property
     def path(self) -> str:
         return SYSTEM_PAGE_PATHS.get(self.slug, f"{CUSTOM_PAGE_PREFIX}{self.slug}")
+
+
+class HomeCarouselItem(BaseModel):
+    """One product in the homepage carousel, in the order a merchandiser chose.
+
+    A list of its own rather than `Product.featured`: that flag also lifts a
+    product in search, and it has no order. A product sits here at most once.
+    Whether it *shows* is decided when the homepage is read -- only published,
+    active products do -- so a row can be set up before its product goes live,
+    and an archived product drops out without anyone having to remember it.
+    """
+
+    product = models.ForeignKey(
+        "catalog.Product", on_delete=models.CASCADE, related_name="home_carousel_items"
+    )
+    position = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "content_homecarouselitem"
+        ordering = ("position", "created_at")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product"], name="content_homecarouselitem_product_uniq"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Carousel #{self.position}: {self.product_id}"

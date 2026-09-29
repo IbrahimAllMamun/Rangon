@@ -12,6 +12,7 @@ import {
   Compass,
   Factory,
   FolderTree,
+  GalleryHorizontal,
   History,
   Landmark,
   LayoutDashboard,
@@ -200,6 +201,12 @@ const GROUPS: NavGroup[] = [
         href: "/admin/navigation",
         label: "Navigation",
         icon: Compass,
+        permission: "content.navigation_manage",
+      },
+      {
+        href: "/admin/carousel",
+        label: "Homepage carousel",
+        icon: GalleryHorizontal,
         permission: "content.navigation_manage",
       },
       {

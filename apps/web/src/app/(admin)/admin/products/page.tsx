@@ -10,6 +10,7 @@ import { Badge, Button, Card, EmptyState } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
 import { apiServer } from "@/lib/api/server";
 import { dateOnly, money } from "@/lib/format";
+import { standing } from "@/lib/commerce/product-standing";
 import { applyPaging, listHref, readPaging } from "@/lib/paging";
 
 export const metadata = { title: "Products" };
@@ -51,32 +52,6 @@ function activeFilter(params: Record<string, string | undefined>): string {
   if (status === "ACTIVE" && published === "false") return "counter";
   if (status === "ACTIVE" && published === "true") return "published";
   return "";
-}
-
-/** The badge, from the pair rather than from `published` alone. */
-function standing(product: { status: string; published: boolean }): {
-  label: string;
-  tone: "success" | "info" | "warning" | "neutral";
-  title: string;
-} {
-  if (product.status === "DRAFT") {
-    return {
-      label: "Draft",
-      tone: "warning",
-      title: "Not on the storefront and not at the counter. Publish it to start selling.",
-    };
-  }
-  if (product.status === "ARCHIVED") {
-    return { label: "Archived", tone: "neutral", title: "Retired. Kept so history resolves." };
-  }
-  if (!product.published) {
-    return {
-      label: "Counter only",
-      tone: "info",
-      title: "Sells at the POS, hidden from the storefront.",
-    };
-  }
-  return { label: "Published", tone: "success", title: "Live on the storefront and at the counter." };
 }
 
 interface AdminProduct {

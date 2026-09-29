@@ -18,7 +18,14 @@ from django.dispatch import receiver
 
 from accounts.models import Organization
 from catalog.models import Category
-from content.models import NavigationItem, SitePage, SiteSettings, SocialLink, StorefrontBanner
+from content.models import (
+    HomeCarouselItem,
+    NavigationItem,
+    SitePage,
+    SiteSettings,
+    SocialLink,
+    StorefrontBanner,
+)
 from content.tasks import request_revalidation
 
 #: `site` is the footer: its columns are `NavigationItem` rows and its
@@ -42,6 +49,12 @@ def _navigation_changed(sender, **kwargs) -> None:
 @receiver(post_delete, sender=StorefrontBanner)
 def _banner_changed(sender, **kwargs) -> None:
     request_revalidation("navigation", "home")
+
+
+@receiver(post_save, sender=HomeCarouselItem)
+@receiver(post_delete, sender=HomeCarouselItem)
+def _carousel_changed(sender, **kwargs) -> None:
+    _on_commit("home")
 
 
 @receiver(post_save, sender=SiteSettings)
