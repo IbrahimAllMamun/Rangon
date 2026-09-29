@@ -101,12 +101,33 @@ Rollback target time: application ≤ 10 minutes, database restore ≤ 60 minute
 
 ## Scaling order
 
+The prod overlay starts at one of everything, sized for one shop on one host:
+
+| Service | Processes | Concurrency | Memory (measured 2026-09-30) |
+|---|---|---|---|
+| `api` | gunicorn master + 2 workers | 4 threads each, 8 requests | ~235 MB per replica |
+| `worker` | 1 Celery process, `--pool=threads` | 4 tasks | ~100 MB per replica |
+| `beat` | 1 | — | ~98 MB |
+
+Measured on the local prod stack after warm-up traffic. The method is in the roadmap's verification
+log, 2026-09-30.
+
+Raise these in order when a measurement says so, not before:
+
 1. `api` replicas (stateless behind the proxy)
 2. `worker` replicas
 3. PostgreSQL vertical + read replica for reports
 4. CDN in front of media and static assets
 
-`beat` must stay at exactly **one** replica or scheduled jobs run twice.
+`beat` must stay at exactly **one** replica or scheduled jobs run twice. For the same reason it is not
+folded into the worker with `celery worker -B`: that forks a separate beat process anyway (so it
+saves little), Celery documents it as development-only, and a second worker replica would then
+schedule every job twice.
+
+The worker's thread pool **does not enforce `CELERY_TASK_TIME_LIMIT`** — only prefork does. A task
+that blocks on the network is stopped by that call's own timeout instead (`EMAIL_TIMEOUT`, 30 s by
+default; the storefront revalidation call's 5 s). Any new task that talks to the network must set
+one.
 
 ## Reverse proxy
 
