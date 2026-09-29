@@ -312,6 +312,9 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
+# Enforced by the prefork pool only. The worker runs `--pool=threads`
+# (docker-compose.yml), which ignores it, so a hung call has to be stopped by
+# its own timeout -- see EMAIL_TIMEOUT.
 CELERY_TASK_TIME_LIMIT = 10 * 60
 CELERY_TASK_ALWAYS_EAGER = env_bool("CELERY_TASK_ALWAYS_EAGER", False)
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
@@ -323,6 +326,9 @@ EMAIL_PORT = env_int("EMAIL_PORT", 1025)
 EMAIL_HOST_USER = env("EMAIL_USER")
 EMAIL_HOST_PASSWORD = env("EMAIL_PASSWORD")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS")
+# Django's default is no timeout at all. A stalled SMTP server would then hold a
+# Celery thread forever, since the thread pool ignores CELERY_TASK_TIME_LIMIT.
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "Rangon Fashion <no-reply@rangonfashion.test>")
 
 # --------------------------------------------------------------------------- business config

@@ -28,6 +28,7 @@ x-api-env: &api-env
   EMAIL_USER: ${EMAIL_USER:-}
   EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
   EMAIL_USE_TLS: ${EMAIL_USE_TLS:-0}
+  EMAIL_TIMEOUT: ${EMAIL_TIMEOUT:-30}
   DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-Rangon Fashion <no-reply@rangonfashion.test>}
   # Same origin as NEXT_PUBLIC_SITE_URL, but stated separately rather than
   # nested-interpolated off it, because nested defaults are a Compose-version
@@ -106,7 +107,13 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    # Threads, not the default prefork: one ~100 MB process instead of a parent
+    # plus one child per slot. Every task waits on SMTP, HTTP or Postgres, so
+    # the GIL costs nothing here. The thread pool does NOT enforce
+    # CELERY_TASK_TIME_LIMIT -- network calls carry their own timeouts instead
+    # (EMAIL_TIMEOUT, content.tasks.TIMEOUT_SECONDS). Keep it that way.
+    command: ["celery", "-A", "config", "worker", "--loglevel=info",
+              "--pool=threads", "--concurrency=4"]
     environment: *api-env
     # Same volume as the API: a task that generates a thumbnail must write it
     # where the API will serve it from.
