@@ -9,7 +9,18 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-09-28**.
+Last updated: **2026-09-29**.
+
+**The homepage leads with products a merchandiser chose, and the register takes a scan wherever
+focus is.** A carousel of products now sits straight under the hero, in place of "Shop by category"
+(the navbar already lists the categories); the products and their order are kept at **Storefront →
+Homepage carousel**, where a draft can wait until it is published. The desktop header has *Track
+order* beside the cart — it had been reachable only from the phone menu. And a scanner no longer
+needs the scan field to have focus: before, a scan after a click on a basket's **+** typed into
+nothing and its Enter pressed **+** again ([D112](#known-defects)). Rules in
+[business-rules § 8c](business-rules.md#8c-the-homepage-carousel); three defaults need the owner's
+word (open questions 26–28); evidence in
+[§ Homepage carousel, header, scanner focus](#homepage-carousel-header-scanner-focus-2026-09-29).
 
 **The register gives discounts, and takes the coupons the admin defines.** It had no discount
 control at all: the service took a line and an order discount that nothing on the screen could set,
@@ -469,6 +480,67 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Homepage carousel, header, scanner focus, 2026-09-29
+
+Asked for: a product carousel under the homepage hero instead of "Shop by category", an admin
+section to choose what is in it, *Track order* beside the cart on a desktop, and a register that
+takes a scan without a click back into the field first.
+
+**What shipped.**
+
+- `content.HomeCarouselItem` (migration `content/0004`) and `content.services`
+  `add_carousel_product` / `remove_carousel_product` / `move_carousel_product`: once each, never
+  archived, at most 24, audited, and the storefront told to rebuild the homepage on commit.
+  `/api/v1/home-carousel/` (read `settings.view`, write `content.navigation_manage`).
+  `GET /shop/home/` serves `carousel` — the published, active ones, in order — and no longer
+  `featured_categories`. `seed_demo` puts eight products in it on a shop that has none.
+- `/admin/carousel` (Storefront → Homepage carousel): search by name, SKU or barcode, add, move
+  up/down, remove; everything saves as it happens; a product that cannot show yet says why.
+  `lib/commerce/product-standing` is the products list's status badge, now shared.
+- `ProductCarousel` on the homepage, straight under the hero.
+- *Track order* in the storefront header from `lg`, beside the cart.
+- `lib/commerce/scan-focus` and the register: a printable key typed anywhere that is not a field or
+  a dialog starts a fresh entry in the scan field, and the rest of the scanner's burst follows it
+  there; a click on nothing in particular, or coming back to the window, focuses the field. Space
+  and Enter still press a focused button; shortcuts with Ctrl, Cmd or Alt are left alone.
+
+**Tests.** `tests/api/test_home_carousel.py` (20: keeping the list, what it refuses, who may, what
+the homepage shows, queries flat as it grows and inside the home budget, the rebuild ping);
+`lib/commerce/scan-focus.test.ts` (12); three Playwright specs — the carousel and its buttons
+(desktop and mobile), *Track order*, and a scan with focus on **+**. Broken on purpose: the homepage
+query without the visibility filter, the order reversed, and archived products allowed each fail a
+test; the scan spec fails on the old register ("scanned item not visible").
+
+```text
+pytest (whole suite) ......................... 1636 passed
+vitest (TZ=UTC) .............................. 465 passed, 44 files
+playwright, whole suite, desktop + mobile .... 50 passed
+ruff 0.8.4 check + format --check ............ clean
+mypy ......................................... clean, 159 source files
+tsc --noEmit / eslint src e2e ................ clean
+makemigrations --check ....................... no changes
+```
+
+**The browser pass** — Chromium against `next dev` and `runserver`, on the demo seed:
+
+- The register, first on the old code: with focus on a line's **+**, a scan typed nothing and its
+  Enter pressed **+** (2 → 3); after a click on the *Current sale* heading, focus sat on `<body>`
+  and the scan was lost. On the fix: the scan added the second product and **+** stayed at 2; the
+  click put focus in the field and the next scan landed; with nothing focused, a scan landed; typing
+  in a quantity box stayed there; Space on **+** still pressed it.
+- Homepage at 1440, 820 and 390 px: *Our picks* under the hero, no "Shop by category", no page-wide
+  sideways scroll; one card and part of the next on a phone, four across on a desktop; *Previous*
+  starts `aria-disabled`. *Track order* shows at 1440 only, and opens `/track`.
+- As the manager: eight seeded products listed; "kurti" offered *In the carousel*, not *Add*;
+  Enter on *Add City Handbag* put it ninth and returned focus to the search box; three presses of
+  *Move earlier* took it to sixth with focus kept on the button, and `/shop/home/` agreed;
+  *Remove* took it out and focus went to the next row's *Remove*. The same product added from a
+  second tab was refused: "City Handbag is already in the carousel." A product made a draft read
+  *Not shown — A draft. It shows once it is published.* and left the homepage. An accountant saw the
+  list without controls; a cashier was told they may not view it.
+
+Not run: a production build (CI runs it).
 
 ### Admin filters, search and one look, 2026-09-28
 
@@ -2661,6 +2733,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D109~~ | ~~**The register added up its own total, and left the VAT out.**~~ **Fixed 2026-09-28.** The POS store computed the total in the browser as the lines less the order discount, and the payment dialog collected exactly that. The server adds exclusive VAT on top, so at any rate above zero the tender fell short and every counter sale was refused. Measured through the API at 15% exclusive: a ৳1,890 kurti paid at the register's ৳1,890.00 answered `400` "Payment does not cover the sale total" (`total: 2173.50`). **Latent, not live** — the shipped rate is 0%, where the two agree. The register now shows what `POST /pos/quote/` says, VAT line included, and the sale carries that total as `expected_total`; the same sale went through in Chromium at ৳2,173.50 with the VAT on the receipt | `apps/web/src/lib/store/pos.ts`, `apps/web/src/components/pos/{register,payment-panel}.tsx`, `apps/api/orders/services/pos.py` | Found while building coupons at the counter, which could not be added up in the browser at all: a coupon's scope, cap and minimum are the server's |
 | ~~D110~~ | ~~**Closing a register dialog with its button lost the scan field's focus.**~~ **Fixed 2026-09-28.** `focusScan()` ran inside the dialog's `onClose`, while Radix still trapped focus in it: the focus bounced back to the button that closed it, which then left the page, and `document.activeElement` was `<body>` — the next scan typed into nothing. Esc never showed it, because the register's window listener runs after Radix has unmounted the dialog. Measured in Chromium: the customer dialog's Close button and the new Discount dialog's Done both ended on `<body>`; both end on the scan field now. The focus is deferred to the next task | `apps/web/src/components/pos/register.tsx` | Barcode-first is the register's one promise. Found by the browser pass, after `tsc`, eslint and vitest were all green |
 | D111 | **Every modal's backdrop is transparent.** `bg-neutral-950/50` generates no CSS: `neutral-950` is defined as a bare `var(--neutral-950)`, and Tailwind 3 cannot apply an opacity modifier to that. Measured in Chromium on the POS customer dialog: the overlay's computed background is `rgba(0, 0, 0, 0)` and no stylesheet carries the rule. Affects the POS payment, customer and discount dialogs, quick view, the size guide and the admin shell's mobile menu. The dialogs still trap focus and block clicks; only the dimming is missing | `apps/web/tailwind.config.ts`, `apps/web/src/styles/tokens.css` | Not fixed: a design-token change felt across the whole product, and outside the change that found it. An `<alpha-value>`-aware colour definition, or a literal `bg-black/50`, would do it |
+| ~~D112~~ | ~~**A scan with focus away from the scan field went nowhere, or pressed a button.**~~ **Fixed 2026-09-29.** The register kept the field focused after its own actions, but a click anywhere else -- a line's **+**, the basket, the page -- took focus with it. The scanner then typed into nothing, and its Enter pressed whatever button still had focus: after **+**, the scan added one more of the *previous* item. Now a printable key outside a field or dialog goes to the scan field and the burst follows (`lib/commerce/scan-focus`), and a click on nothing in particular focuses it. Pinned by the Playwright spec "a scan lands in the scan field wherever focus has wandered", which fails on the old register |
 
 ## Still API-only (no UI)
 

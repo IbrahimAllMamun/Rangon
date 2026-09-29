@@ -19,6 +19,7 @@ Run these manually against a seeded environment before each release
 | O10 | Set the shop address and paste Google's "Embed a map" code | the address sits in full under the footer logo; the Contact page shows the map and an "Open in Google Maps" link |
 | O11 | Edit the privacy policy with a heading, a list and a link, then unpublish it | the text reads the same on `/policies/privacy`; once unpublished that page is not found and its footer link is gone |
 | O12 | Add a column and a link to the footer as a manager, then try as a cashier | the manager's change appears on the storefront; the cashier cannot open Footer & pages |
+| O13 | Add three products to the homepage carousel, move the last one up, add a draft | the homepage shows the published three in that order under the hero; the draft waits in the list marked *Not shown* with the reason; a cashier cannot open the screen |
 
 ## Cashier
 
@@ -26,6 +27,7 @@ Run these manually against a seeded environment before each release
 |---|---|---|
 | C1 | Log in at the register | POS opens with branch + register context, focus in the barcode field |
 | C2 | Scan 3 items with a USB scanner | each scan adds a line without touching the mouse |
+| C2a | Press a line's **+** with the mouse, then scan; click an empty part of the screen, then scan | each scan adds its item, and the **+** is not pressed again — no click back into the field |
 | C3 | Change a quantity, remove a line | totals recompute instantly and match the server on submit |
 | C4 | Give 10% off the sale (F9) | allowed; 30% asks for a manager's email and password, and the sale records who approved it |
 | C4a | Apply an in-store coupon at the register | the discount is the server's; an online-only or free-delivery coupon is refused with the reason |
@@ -42,7 +44,7 @@ Run these manually against a seeded environment before each release
 
 | # | Scenario | Pass when |
 |---|---|---|
-| S1 | Browse the homepage on a phone | hero, categories, new arrivals load; no horizontal scroll |
+| S1 | Browse the homepage on a phone | hero, the *Our picks* carousel (swipe; one card and part of the next), new arrivals load; no horizontal scroll of the page |
 | S2 | Search "polo" | relevant products; typo "polo shrt" still finds it |
 | S3 | Filter by size M + colour black + price range | facet counts correct, results respect every filter |
 | S4 | Open a product, pick a variant | price, images and availability update; out-of-stock sizes disabled |
@@ -50,7 +52,7 @@ Run these manually against a seeded environment before each release
 | S6 | Apply a coupon | discount computed server-side; expired/limit-reached coupons are refused with a clear reason |
 | S7 | Checkout with COD | order `CONFIRMED`, stock reserved, confirmation page + email |
 | S8 | Double-click "Place order" | exactly one order exists |
-| S9 | Track the order | timeline shows every status change with timestamps |
+| S9 | Track the order — on a desktop from *Track order* beside the cart, on a phone from the menu | timeline shows every status change with timestamps |
 | S10 | Request a return | request created; admin sees it; refund only after approval and receipt |
 | S11 | Review a purchased product | allowed and marked verified; review is hidden until moderated |
 | S12 | Review a product never purchased | refused |

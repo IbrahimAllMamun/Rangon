@@ -1674,6 +1674,26 @@ Only Google Maps' own embed is accepted (Share → Embed a map). Nothing else ca
 pages. With no map, the Contact page offers an "Open in Google Maps" link that searches for the
 address.
 
+## 8c. The homepage carousel
+
+The row of products straight under the homepage hero. A merchandiser chooses the products and their
+order at **Storefront → Homepage carousel**; `content.navigation_manage` changes it, `settings.view`
+reads it.
+
+- **Shown only when a shopper could open it** — published and active. A draft or a counter-only
+  product may wait in the list and appears once it is published; an archived one drops off the
+  homepage by itself, and cannot be added.
+- **Once each.** Adding a product already there is refused (409).
+- **At most 24 products.** *`DECISION REQUIRED` — the number.* Each is priced on every rebuild of the
+  homepage and a shopper scrolls the row by hand; 24 is well past what anyone scrolls.
+- **An empty list shows no carousel.** *`DECISION REQUIRED` — the alternative is to fall back to
+  the featured products.* Nothing is shown that nobody chose.
+- **No autoplay.** The row moves only when the shopper moves it (WCAG 2.2.2).
+- **The heading reads "Our picks".** *`DECISION REQUIRED` — the wording, and whether the admin
+  should be able to change it.*
+
+It replaced the homepage's "Shop by category" row (2026-09-29); the navbar lists the categories.
+
 ---
 
 ## 9. Currency and formatting

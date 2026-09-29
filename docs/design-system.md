@@ -108,6 +108,17 @@ Prefer borders and spacing over shadows. Admin cards use borders.
 - **StatCard** — label, big tabular value, delta with direction, optional sparkline.
 - Empty, loading (skeleton) and error states are part of every data component, not an afterthought.
 
+### Product carousel (storefront)
+
+`components/commerce/product-carousel.tsx`: the homepage's *Our picks* row under the hero. Native
+horizontal scrolling with snap points — a swipe, a trackpad — over the same server-rendered
+`ProductCard`s as the grids, plus previous/next buttons (44 px, labelled, `aria-controls` the row).
+**No autoplay**, ever (WCAG 2.2.2). A phone shows one card and part of the next, which is the cue
+that the row scrolls; four across from `lg`. The buttons are `aria-disabled`, not `disabled`, at the
+ends, so a keyboard user pressing *Next* to the end keeps focus. `scrollBy` is instant under
+reduced motion — the global CSS block does not reach a scripted scroll. The row is `relative` with
+`-mx-2 px-2`, so a card's hover lift is not clipped and no `sr-only` text can widen the page.
+
 ### Admin list screens
 
 Every admin list is built from the same four parts, top to bottom, so a manager who learns one
