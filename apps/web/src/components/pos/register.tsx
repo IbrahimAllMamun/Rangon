@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { Logo } from "@/components/brand/logo";
 import { CustomerPanel } from "@/components/pos/customer-panel";
@@ -28,6 +29,7 @@ import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Order, PosQuoteIssue, PosSession, PosVariant } from "@/lib/api/types";
 import { discountLabel, shownTotals } from "@/lib/commerce/pos-sale";
+import { isBlankClick, redirectsToScan } from "@/lib/commerce/scan-focus";
 import { money } from "@/lib/format";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useDelayedFlag } from "@/lib/use-delayed-flag";
@@ -54,14 +56,17 @@ const SEARCH_DEBOUNCE_MS = 220;
  * The register.
  *
  * Built barcode-first: the scan field holds focus at all times and a USB
- * scanner (which types then presses Enter) needs no mouse at all.
+ * scanner (which types then presses Enter) needs no mouse at all. When focus
+ * has wandered -- a click on a quantity button, on the basket -- a character
+ * typed anywhere but a field goes to the scan field, and so does a click on
+ * nothing in particular (`lib/commerce/scan-focus`).
  *
  * Every figure in the totals is the server's (`useSaleQuote`): the browser
  * never adds up a sale, so a coupon, a percentage and VAT all read the same
  * here as on the receipt.
  *
  * Keyboard: F2 payment · F3 customer · F4 hold · F8 clear · F9 discount ·
- * Esc close dialog · / focus search
+ * Esc close dialog · any character outside a field goes to the scan field
  */
 export function PosRegister({ session }: { session: PosSession }) {
   const pos = usePos();
@@ -162,6 +167,52 @@ export function PosRegister({ session }: { session: PosSession }) {
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pos.lines.length, dialogOpen]);
+
+  // A scan that lands while focus is elsewhere. Without this the scanner typed
+  // into nothing, or its Enter pressed the button that still had focus -- the
+  // "+" on a basket line added one more of the last item -- and the cashier
+  // had to click back into the field. The first character is written into
+  // the field here and the rest of the burst follows it there, because focus
+  // has moved before the scanner types the next one.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const input = scanRef.current;
+      if (!input || dialogOpen || event.target === input) return;
+      if (!redirectsToScan(event, event.target)) return;
+      event.preventDefault();
+      // A fresh entry: whatever was left in the field was the last attempt,
+      // and a scan appended to it would never match.
+      flushSync(() => {
+        setScan(event.key);
+        setScanError(null);
+      });
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      queueSearch(input.value);
+    }
+
+    function onClick(event: MouseEvent) {
+      if (dialogOpen || !isBlankClick(event.target, window.getSelection())) return;
+      scanRef.current?.focus();
+    }
+
+    // Back from another window (the receipt printer's dialog, a spreadsheet)
+    // with focus nowhere: the next thing through the door is a scan.
+    function onWindowFocus() {
+      if (dialogOpen) return;
+      if (!document.activeElement || document.activeElement === document.body) focusScan();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("click", onClick);
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("click", onClick);
+      window.removeEventListener("focus", onWindowFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialogOpen, focusScan]);
 
   /**
    * Price the sale once more and open payment on that answer.
