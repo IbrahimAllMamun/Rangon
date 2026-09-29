@@ -55,6 +55,16 @@ StorefrontBanner
 had no content model of any kind before this; the storefront hero was hardcoded to the first
 new-arrival image in `app/(storefront)/page.tsx`.
 
+`HomeCarouselItem` (`product`, `position`, `created_by`; a product at most once) is the row of
+products straight under the homepage hero, managed at **Storefront → Homepage carousel**
+(`/admin/carousel`). It is its own list rather than `Product.featured`, which also lifts a product in
+search and has no order. The homepage shows the rows whose product is published and active, in
+`position` order; the others stay in the list with the reason beside them in the admin, so a product
+can be lined up before it goes live and an archived one drops out by itself. Rules
+(`content.services`): once each, never an archived product, at most 24. Reordering is up/down, as for
+navigation items. The carousel replaced the homepage's "Shop by category" row on 2026-09-29 — the
+navbar already lists the categories. An empty list shows no carousel.
+
 ### Rules
 
 1. **Visibility is enforced server-side.** An item outside its `starts_at`/`ends_at` window is never

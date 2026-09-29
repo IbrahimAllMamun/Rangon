@@ -89,7 +89,7 @@ table refreshed by Celery beat — not an in-memory cache of raw rows.
 
 | Endpoint | Budget | Enforced? | Measured | Was |
 |---|---|---|---|---|
-| `GET /shop/home/` | 45 | **yes** | 29 · 0.16 s | **511 · 2.42 s** |
+| `GET /shop/home/` | 45 | **yes** (+ growth, incl. the carousel) | 29 · 0.16 s; 24 with a ten-product carousel in the test shop | **511 · 2.42 s** |
 | `GET /shop/products/` | 25 | **yes** | 13 · 0.09 s | **363 · 1.29 s** |
 | `GET /purchase-orders/` | — | **yes** (growth only) | 15 · 0.10 s | **156 · 0.58 s** |
 | `GET /shop/products/{slug}/` | 18 | **yes** (+ growth × 3) | 15; 16 with a size chart | 15 |

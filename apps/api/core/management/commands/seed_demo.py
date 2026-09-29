@@ -447,6 +447,7 @@ class Command(BaseCommand):
         self._purchase_stock(branch, supplier, products, users["stock@rangon.test"])
         self._shipping()
         self._coupons()
+        self._carousel(products)
         customers = self._customers()
         self._orders(branch, users, customers, options["orders"])
         self._backdate_orders(options["history_days"])
@@ -1153,6 +1154,26 @@ class Command(BaseCommand):
                 "max_days": 1,
                 "position": 2,
             },
+        )
+
+    def _carousel(self, products: list[Product]) -> None:
+        """Eight live products in the homepage carousel, so the demo shows one.
+
+        Only on a shop that has none: rerunning the seed must not undo a list
+        someone has since arranged by hand.
+        """
+        from content.models import HomeCarouselItem
+
+        if HomeCarouselItem.objects.exists():
+            return
+        live = [
+            product
+            for product in products
+            if product.published and product.status == PublishStatus.ACTIVE
+        ]
+        HomeCarouselItem.objects.bulk_create(
+            HomeCarouselItem(product=product, position=index)
+            for index, product in enumerate(live[:8])
         )
 
     def _coupons(self) -> None:

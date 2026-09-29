@@ -30,6 +30,7 @@ from catalog.api.views import (
     SizeChartViewSet,
 )
 from content.api.views import (
+    HomeCarouselViewSet,
     NavigationItemViewSet,
     SitePageViewSet,
     SiteSettingsView,
@@ -124,6 +125,7 @@ router.register("coupons", CouponViewSet, basename="coupon")
 router.register("reviews", ReviewModerationViewSet, basename="review-moderation")
 router.register("navigation-items", NavigationItemViewSet, basename="navigationitem")
 router.register("storefront-banners", StorefrontBannerViewSet, basename="storefrontbanner")
+router.register("home-carousel", HomeCarouselViewSet, basename="homecarousel")
 router.register("social-links", SocialLinkViewSet, basename="sociallink")
 router.register("site-pages", SitePageViewSet, basename="sitepage")
 

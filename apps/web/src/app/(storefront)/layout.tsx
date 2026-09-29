@@ -1,3 +1,5 @@
+import { Package } from "lucide-react";
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { LogoLink } from "@/components/brand/logo";
@@ -61,6 +63,16 @@ export default async function StorefrontLayout({ children }: { children: React.R
               <Suspense fallback={<div className="h-10 w-10" aria-hidden />}>
                 <SearchBar />
               </Suspense>
+              {/* Desktop only: below `lg` it is the last entry in the menu.
+                  Words beside the icon, because a parcel alone reads as
+                  "delivery information" as easily as "where is my order". */}
+              <Link
+                href="/track"
+                className="hidden h-10 items-center gap-1.5 rounded-md px-2.5 text-body-sm font-medium text-neutral-700 transition-colors duration-fast hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)] lg:inline-flex"
+              >
+                <Package className="size-5" aria-hidden />
+                Track order
+              </Link>
               <CartButton />
             </div>
           </div>

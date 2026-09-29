@@ -2,7 +2,8 @@ import { ArrowRight, RotateCcw, ShieldCheck, Truck } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
-import { ProductGrid } from "@/components/commerce/product-card";
+import { ProductCard, ProductGrid } from "@/components/commerce/product-card";
+import { ProductCarousel } from "@/components/commerce/product-carousel";
 import { Button } from "@/components/ui/primitives";
 import { Reveal } from "@/components/ui/reveal";
 import { apiServer } from "@/lib/api/server";
@@ -10,7 +11,8 @@ import type { ShopProduct, StorefrontBanner } from "@/lib/api/types";
 
 interface HomePayload {
   hero: StorefrontBanner | null;
-  featured_categories: { name: string; slug: string; path: string; image: string }[];
+  /** Chosen at Storefront → Homepage carousel, in that order; only what a shopper can open. */
+  carousel: ShopProduct[];
   new_arrivals: ShopProduct[];
   featured: ShopProduct[];
   best_sellers: ShopProduct[];
@@ -40,7 +42,6 @@ export default async function HomePage() {
   // (docs/architecture/navigation.md §2).
   const hero = data?.hero ?? null;
   const heroImage = hero?.image ?? data?.new_arrivals?.[0]?.images?.[0]?.url ?? "";
-  const categoryPhotos = Boolean(data?.featured_categories?.some((category) => category.image));
 
   return (
     <>
@@ -107,6 +108,24 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {/* Straight under the hero: the products a merchandiser put there, in
+          their order. It took the place of "Shop by category", which only
+          repeated the navbar. Nothing chosen, nothing shown. */}
+      {data?.carousel?.length ? (
+        <ProductCarousel id="home-carousel" title="Our picks">
+          {data.carousel.map((product, index) => (
+            <ProductCard
+              key={product.id}
+              product={product}
+              // On a phone the hero has no photograph, so the first cards here
+              // are the largest image on the first screen.
+              priority={index < 2}
+              sizes="(max-width: 640px) 72vw, (max-width: 768px) 42vw, (max-width: 1024px) 33vw, 25vw"
+            />
+          ))}
+        </ProductCarousel>
+      ) : null}
+
       {/* Trust strip */}
       <section className="border-b border-border bg-surface">
         <Reveal className="container-rangon grid gap-6 py-6 sm:grid-cols-3">
@@ -115,55 +134,6 @@ export default async function HomePage() {
           <Trust icon={<ShieldCheck className="size-5" aria-hidden />} title="Cash on delivery" body="Pay when it arrives" />
         </Reveal>
       </section>
-
-      {data?.featured_categories?.length ? (
-        <Section title="Shop by category">
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-            {data.featured_categories.map((category) => (
-              <Link
-                key={category.slug}
-                href={`/category/${category.path ?? category.slug}`}
-                // The same card as "Shop by brand": white, bordered, brand
-                // border on hover, a focus ring. It used to be a flat grey box
-                // that read as a disabled placeholder whenever it had no photo.
-                // Square only when there are photographs to fill the squares;
-                // otherwise as compact as the brand cards.
-                className={`${NAV_CARD} group relative flex flex-col items-center justify-center gap-2 overflow-hidden ${
-                  categoryPhotos ? "aspect-square" : "h-24"
-                }`}
-              >
-                {category.image ? (
-                  <>
-                    <Image
-                      src={category.image}
-                      alt=""
-                      fill
-                      sizes="(max-width: 768px) 50vw, 16vw"
-                      className="object-cover transition-transform duration-slow ease-rangon group-hover:scale-105"
-                    />
-                    {/* A solid band, not a gradient into transparency: white
-                        text keeps at least 10:1 over any photograph, where the
-                        gradient's top half let a light image through. */}
-                    <span className="absolute inset-x-0 bottom-0 bg-neutral-950/75 px-3 py-2 text-body-sm font-semibold text-white">
-                      {category.name}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-body font-semibold text-neutral-900">
-                      {category.name}
-                    </span>
-                    <ArrowRight
-                      className="size-4 text-brand-700 transition-transform duration-fast ease-rangon motion-safe:group-hover:translate-x-1"
-                      aria-hidden
-                    />
-                  </>
-                )}
-              </Link>
-            ))}
-          </div>
-        </Section>
-      ) : null}
 
       {data?.new_arrivals?.length ? (
         <Section title="New arrivals" href="/shop?sort=newest">
@@ -232,7 +202,7 @@ export default async function HomePage() {
   );
 }
 
-/** One look for every "Shop by …" card, so categories and brands match. */
+/** The "Shop by brand" card: white, bordered, a brand border on hover, a focus ring. */
 const NAV_CARD =
   "rounded-xl border border-border bg-surface transition-colors duration-fast hover:border-brand-500 " +
   "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]";

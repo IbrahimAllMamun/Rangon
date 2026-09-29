@@ -65,6 +65,9 @@ measured, not later.
 | 23 | What a percentage discount at the counter is taken off (§3.3) | what is left after the coupon | "Another 10%" reads as 10% of what the customer would pay. The alternative, 10% of the full price, gives more away when a coupon is on the sale |
 | 24 | A per-customer-limited coupon on an anonymous counter sale (§3.3a) | refused until a customer is attached | The walk-in row is shared, so the limit has no one to count against. The alternative — let it through uncounted — makes the limit meaningless in store |
 | 25 | How long a manager's discount approval lasts (§3.3a) | five minutes, same cashier, up to the percentage shown | Within that it can be reused for another sale no larger; each use is audit-logged against its sale. The strict alternative, one sale per approval, needs server-side state |
+| 26 | How many products the homepage carousel holds (§8c) | 24 | Each is priced on every rebuild of the homepage; a shopper scrolls the row by hand |
+| 27 | The homepage carousel with nothing chosen (§8c) | no carousel | The alternative is to show the featured products until someone chooses |
+| 28 | The carousel's heading (§8c) | "Our picks", fixed | Making it editable is a field on site settings and a box on the carousel screen |
 | — | Which payment gateway | none — COD only | Blocks prepaid online orders |
 | — | Which courier, and API or manual | manual tracking | Shipping integration |
 

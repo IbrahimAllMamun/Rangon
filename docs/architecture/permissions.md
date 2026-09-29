@@ -84,6 +84,9 @@ pages — About, Contact, and the shipping, returns, privacy and terms policies.
 navigation items, so they stay under `content.navigation_manage`. Reading any of it is
 `settings.view`.
 
+`content.navigation_manage` also writes the homepage hero and announcement bar (banners) and the
+homepage carousel (`home-carousel/`, 2026-09-29): all three are merchandising the same people do.
+
 `CUSTOMER` holds no staff permission. Customer-facing endpoints authorise on ownership
 (`obj.customer.user == request.user`), not on permission codes.
 

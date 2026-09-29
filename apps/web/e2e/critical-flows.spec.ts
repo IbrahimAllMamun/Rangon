@@ -78,6 +78,38 @@ test.describe("Storefront", () => {
     await expect(page.getByRole("heading", { name: /thank you/i })).toBeVisible();
   });
 
+  test("the homepage leads with the carousel, and its buttons scroll it", async ({ page }) => {
+    await page.goto("/");
+
+    // seed_demo puts eight products in it; "Shop by category" is gone.
+    const carousel = page.getByRole("region", { name: "Our picks" });
+    // Its own items only: each card holds a list of colour swatches.
+    const track = carousel.getByRole("list").first();
+    await expect(track.locator(":scope > li")).toHaveCount(8);
+    await expect(page.getByRole("heading", { name: "Shop by category" })).toHaveCount(0);
+
+    const previous = carousel.getByRole("button", { name: "Previous products" });
+    const next = carousel.getByRole("button", { name: "Next products" });
+    await expect(previous).toHaveAttribute("aria-disabled", "true");
+
+    await next.click();
+    await expect.poll(() => track.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+    await expect(previous).not.toHaveAttribute("aria-disabled", "true");
+    // Pressed, it keeps focus: nothing about scrolling drops the reader.
+    await expect(next).toBeFocused();
+  });
+
+  test(
+    "the desktop header links to order tracking beside the cart",
+    { tag: "@desktop-only" },
+    async ({ page }) => {
+      await page.goto("/");
+      await page.getByRole("banner").getByRole("link", { name: "Track order" }).click();
+      await expect(page).toHaveURL(/\/track$/);
+      await expect(page.getByRole("heading", { name: /track your order/i })).toBeVisible();
+    },
+  );
+
   test("checkout refuses an incomplete address and says why", async ({ page }) => {
     await page.goto("/shop");
     await page.locator("article a").first().click();
@@ -120,6 +152,46 @@ test.describe("POS", { tag: "@desktop-only" }, () => {
       timeout: 15000,
     });
     await expect(page.getByRole("button", { name: /print receipt/i })).toBeVisible();
+  });
+
+  test("a scan lands in the scan field wherever focus has wandered", async ({ page, request }) => {
+    await signIn(page, CASHIER);
+    await page.goto("/pos");
+
+    // Two different products, so a scan and a press of "+" cannot be mistaken
+    // for each other: the scan adds a line, the press adds to the first one.
+    const response = await request.get("/api/proxy/shop/products/?in_stock=true&page_size=2");
+    const body = await response.json();
+    const [first, second] = body.results.map(
+      (product: { variants: { sku: string; in_stock: boolean }[] }) =>
+        product.variants.find((variant) => variant.in_stock)!.sku,
+    );
+
+    const scan = page.getByLabel(/scan barcode or type sku/i);
+    await scan.fill(first);
+    await scan.press("Enter");
+    await expect(page.getByText(first, { exact: false })).toBeVisible();
+
+    // A mouse click on "+" leaves focus on it; a scanner then types and presses
+    // Enter. That Enter used to press "+" again and the scan went nowhere.
+    await page.getByRole("button", { name: /^Increase / }).first().click();
+    const quantities = page.getByRole("spinbutton", { name: /^Quantity of / });
+    await expect(quantities.first()).toHaveValue("2");
+    await page.keyboard.type(second, { delay: 10 });
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByText(second, { exact: false })).toBeVisible();
+    await expect(quantities).toHaveCount(2);
+    // One of the new product, and still two of the first: "+" was not pressed.
+    const values = await quantities.evaluateAll((inputs) =>
+      inputs.map((input) => (input as HTMLInputElement).value).sort(),
+    );
+    expect(values).toEqual(["1", "2"]);
+    await expect(scan).toBeFocused();
+
+    // A click on nothing in particular hands focus back to the scan field.
+    await page.getByRole("heading", { name: "Current sale" }).click();
+    await expect(scan).toBeFocused();
   });
 
   test("keyboard shortcut F2 opens payment", async ({ page, request }) => {

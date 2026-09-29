@@ -18,8 +18,15 @@ from django.db import IntegrityError, transaction
 from django.db.models import QuerySet
 from django.utils.text import slugify
 
+from catalog.models import Product, PublishStatus
 from content import rich_text
-from content.models import SYSTEM_PAGE_PATHS, SitePage, SiteSettings, SocialLink
+from content.models import (
+    SYSTEM_PAGE_PATHS,
+    HomeCarouselItem,
+    SitePage,
+    SiteSettings,
+    SocialLink,
+)
 from content.validators import (
     normalize_map_embed,
     normalize_map_link,
@@ -184,6 +191,99 @@ def move_social_link(*, link_id: Any, direction: str, actor: Any) -> SocialLink:
             new_values={"moved": direction, "position": link.position},
         )
     return link
+
+
+# --- homepage carousel ---------------------------------------------------------
+
+#: The homepage prices every product in the carousel each time it is rebuilt,
+#: and a shopper scrolls through it by hand: two dozen is already a long row.
+MAX_CAROUSEL_PRODUCTS = 24
+
+
+def add_carousel_product(*, product_id: Any, actor: Any) -> HomeCarouselItem:
+    """Put a product at the end of the homepage carousel.
+
+    A draft, or a product sold only at the counter, may be added -- it waits
+    in the list and shows once it is published. An archived one may not: it
+    has been retired, so it never would.
+    """
+    with transaction.atomic():
+        # Locked against a reorder renumbering it underneath. Two adds at the
+        # same moment can still take the same number; `created_at` breaks
+        # that tie, so the order stays the order they were added in.
+        run = list(HomeCarouselItem.objects.select_for_update().order_by("position", "created_at"))
+        product = Product.objects.filter(pk=product_id).first()
+        if product is None:
+            raise _fail("product", "That product does not exist.")
+        if product.status == PublishStatus.ARCHIVED:
+            raise _fail(
+                "product",
+                f"{product.name} is archived, so it would never show. Restore it first.",
+            )
+        if any(item.product_id == product.pk for item in run):
+            raise Conflict(f"{product.name} is already in the carousel.")
+        if len(run) >= MAX_CAROUSEL_PRODUCTS:
+            raise _fail(
+                "product",
+                f"The carousel holds up to {MAX_CAROUSEL_PRODUCTS} products. Remove one first.",
+            )
+        try:
+            with transaction.atomic():
+                item = HomeCarouselItem.objects.create(
+                    product=product,
+                    position=run[-1].position + 1 if run else 0,
+                    created_by=actor,
+                )
+        except IntegrityError as exc:
+            # The same product added from two screens at once: the constraint
+            # answers for the one that lost.
+            raise Conflict(f"{product.name} is already in the carousel.") from exc
+        audit.record(
+            action=audit.AuditAction.SETTINGS_CHANGED,
+            entity=item,
+            actor=actor,
+            new_values={"carousel_product": product.name, "position": item.position},
+        )
+    return item
+
+
+def remove_carousel_product(*, item_id: Any, actor: Any) -> None:
+    """Take a product out of the carousel. The product itself is untouched."""
+    with transaction.atomic():
+        item = (
+            HomeCarouselItem.objects.select_for_update()
+            .select_related("product")
+            .filter(pk=item_id)
+            .first()
+        )
+        if item is None:
+            raise NotFound("That product is not in the carousel.")
+        audit.record(
+            action=audit.AuditAction.SETTINGS_CHANGED,
+            entity=item,
+            actor=actor,
+            old_values={"carousel_product": item.product.name, "position": item.position},
+            reason="Removed from the homepage carousel.",
+        )
+        item.delete()
+
+
+def move_carousel_product(*, item_id: Any, direction: str, actor: Any) -> HomeCarouselItem:
+    """One place earlier or later in the carousel (`move`)."""
+    item = HomeCarouselItem.objects.filter(pk=item_id).first()
+    if item is None:
+        raise NotFound("That product is not in the carousel.")
+    run = HomeCarouselItem.objects.order_by("position", "created_at")
+    moved = move(run, pk=item.pk, direction=direction)
+    item = HomeCarouselItem.objects.select_related("product").get(pk=item.pk)
+    if moved:
+        audit.record(
+            action=audit.AuditAction.SETTINGS_CHANGED,
+            entity=item,
+            actor=actor,
+            new_values={"carousel_product": item.product.name, "moved": direction},
+        )
+    return item
 
 
 # --- pages ---------------------------------------------------------------------

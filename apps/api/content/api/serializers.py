@@ -15,6 +15,7 @@ from django.db.models import Model
 from rest_framework import serializers
 
 from content.models import (
+    HomeCarouselItem,
     NavigationItem,
     SitePage,
     SiteSettings,
@@ -392,3 +393,62 @@ class SitePageWriteSerializer(serializers.Serializer):
 class SitePageCreateSerializer(SitePageWriteSerializer):
     slug = serializers.CharField(max_length=64, allow_blank=True, required=False)
     title = serializers.CharField(max_length=120)
+
+
+# --- homepage carousel ---------------------------------------------------------
+
+
+def carousel_hidden_reason(product: Any) -> str:
+    """Why a product in the carousel is not on the homepage, or "" when it is.
+
+    The storefront shows only published, active products
+    (`catalog.search.visible_products`); the admin says which rule is in the way.
+    """
+    from catalog.models import PublishStatus
+
+    if product.status == PublishStatus.ARCHIVED:
+        return "Archived, so it will not show."
+    if product.status == PublishStatus.DRAFT:
+        return "A draft. It shows once it is published."
+    if not product.published:
+        return "Sold at the counter only. It shows once it is published online."
+    return ""
+
+
+class HomeCarouselItemSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+    shown = serializers.SerializerMethodField()
+    hidden_reason = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HomeCarouselItem
+        fields = ["id", "position", "product", "shown", "hidden_reason", "created_at"]
+
+    def get_product(self, item: HomeCarouselItem) -> dict[str, Any]:
+        product = item.product
+        image = product.primary_image
+        prices = product.price_range()
+        return {
+            "id": str(product.pk),
+            "name": product.name,
+            "slug": product.slug,
+            "status": product.status,
+            "published": product.published,
+            "image": (
+                {"url": media_url(image.image), "alt": image.effective_alt}
+                if image is not None and image.image
+                else None
+            ),
+            "min_price": str(prices[0]) if prices else None,
+            "max_price": str(prices[1]) if prices else None,
+        }
+
+    def get_shown(self, item: HomeCarouselItem) -> bool:
+        return not carousel_hidden_reason(item.product)
+
+    def get_hidden_reason(self, item: HomeCarouselItem) -> str:
+        return carousel_hidden_reason(item.product)
+
+
+class HomeCarouselAddSerializer(serializers.Serializer):
+    product = serializers.UUIDField()

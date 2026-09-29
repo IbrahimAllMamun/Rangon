@@ -4,6 +4,7 @@ Public:  GET /api/v1/shop/navigation/     — the whole navbar in one request
          GET /api/v1/shop/site/           — the whole footer in one request
          GET /api/v1/shop/pages/[<slug>/] — published site pages
 Staff:   /api/v1/navigation-items/, /api/v1/storefront-banners/,
+         /api/v1/home-carousel/,
          /api/v1/site-settings/, /api/v1/social-links/, /api/v1/site-pages/
 """
 
@@ -22,6 +23,8 @@ from accounts.permissions import RolePermission
 from accounts.services import get_organization
 from content import selectors, services
 from content.api.serializers import (
+    HomeCarouselAddSerializer,
+    HomeCarouselItemSerializer,
     NavigationItemSerializer,
     SitePageCreateSerializer,
     SitePageSerializer,
@@ -38,6 +41,7 @@ from content.api.serializers import (
 )
 from content.models import (
     BannerPlacement,
+    HomeCarouselItem,
     NavigationItem,
     Placement,
     SitePage,
@@ -191,6 +195,59 @@ class StorefrontBannerViewSet(viewsets.ModelViewSet):
             reason="Banner removed.",
         )
         instance.delete()
+
+
+class HomeCarouselViewSet(viewsets.GenericViewSet):
+    """The products in the homepage carousel, in order: add, remove, reorder.
+
+    Merchandising, like the banners, so the same permission writes it. The
+    rules -- once each, not archived, at most `MAX_CAROUSEL_PRODUCTS` -- live
+    in `content.services`.
+    """
+
+    queryset = (
+        HomeCarouselItem.objects.select_related("product")
+        .prefetch_related("product__images", "product__variants")
+        .order_by("position", "created_at")
+    )
+    serializer_class = HomeCarouselItemSerializer
+    permission_classes = [IsAuthenticated, RolePermission]
+    required_permissions = {
+        "list": ["settings.view"],
+        "create": ["content.navigation_manage"],
+        "destroy": ["content.navigation_manage"],
+        "move": ["content.navigation_manage"],
+    }
+    pagination_class = None
+
+    def _row(self, pk: Any) -> dict[str, Any]:
+        return self.get_serializer(self.get_queryset().get(pk=pk)).data
+
+    def list(self, request: Request) -> Response:
+        return Response(self.get_serializer(self.get_queryset(), many=True).data)
+
+    def create(self, request: Request) -> Response:
+        serializer = HomeCarouselAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = services.add_carousel_product(
+            product_id=serializer.validated_data["product"], actor=request.user
+        )
+        return Response(self._row(item.pk), status=status.HTTP_201_CREATED)
+
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        services.remove_carousel_product(item_id=self.get_object().pk, actor=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["post"])
+    def move(self, request: Request, pk: str | None = None) -> Response:
+        item = services.move_carousel_product(
+            item_id=self.get_object().pk,
+            direction=str(request.data.get("direction", "")).lower(),
+            actor=request.user,
+        )
+        # `bulk_update` sends no `post_save`, so the signal never fires for this.
+        request_revalidation("home")
+        return Response(self._row(item.pk))
 
 
 # --- footer & site pages -------------------------------------------------------

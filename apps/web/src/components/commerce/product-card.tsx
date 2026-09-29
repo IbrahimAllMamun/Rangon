@@ -23,10 +23,13 @@ export function ProductCard({
   product,
   priority = false,
   className,
+  sizes = "(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw",
 }: {
   product: ShopProduct;
   priority?: boolean;
   className?: string;
+  /** How wide the card is drawn, for the image's srcset. The grid's by default. */
+  sizes?: string;
 }) {
   const image = product.images[0];
   const hasRange = product.price_min !== product.price_max;
@@ -64,7 +67,7 @@ export function ProductCard({
               src={image.url}
               alt={image.alt || product.name}
               fill
-              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              sizes={sizes}
               priority={priority}
               className="object-cover transition-transform duration-slow ease-rangon group-hover:scale-[1.03]"
             />
