@@ -481,6 +481,43 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 1: staff permissions, brands and categories, 2026-10-01
+
+Asked for: phase 4 of the port, now that phase 3 is merged. Ported first: the check every staff
+endpoint makes, `accounts.permissions.RolePermission` (role to permission codes, owner and
+superuser bypass, per-action and per-method requirements, fail closed), with the branch rules
+`resolve_branch` and `branch_queryset` beside it; the router's shape (list, detail and action
+routes, a 403 or a 405 for a method with no handler depending on who asks); and DRF's two default
+filter backends, django-filter over `filterset_fields` and `OrderingFilter`. Then the first two
+staff viewsets on top of them: brands and categories, reads and writes, and a category's inherited
+attributes.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 822/822 (286 new), 22 by the documented differences
+concurrency (parity/concurrency.ts) ........... 12/12 (none new: nothing here takes a row lock)
+throttle-check ................................ not rerun: no scope changed
+nest unit tests ............................... 458 passed (268 new: RolePermission's decision for
+                                                six declarations x six actions x six methods, the
+                                                slugs, IntegerField, the boolean filter)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases run every role -- anonymous, customer, cashier, manager, inventory manager, accountant,
+owner, administrator, a superuser with a cashier's role, and staff with no role -- through a list,
+a create, a delete, a method with no handler on a list, a detail and an action route. Then every
+filter value django-filter treats differently (`TRUE`, `1`, `yes`, a blank, a repeated key, a
+malformed or unknown parent), the ordering terms, the lookups (upper case, braces, no hyphens, a
+filter that hides the row itself), and each validation branch of both serializers, their unique
+checks, the slug (Bengali transliterated, a name that spells nothing, a collision), the tax rate,
+the position, the parent and its cycles. Writes compare every brand and category row, the
+navigation items and attribute links a delete removes, and the revalidation jobs queued: the
+parity stack now sets `WEB_REVALIDATE_URL` so both APIs queue them.
+
+Found on the way, in the port: a request with no handler for its method, answered with a 401,
+lacked the view's `Allow` header -- DRF puts it on every answer a view gives, a refusal included.
+And, not yet fixed: the health checks answer an unsafe method with JSON 405 where Django's
+`require_GET` views answer 403 (CSRF) or an empty 405.
+
 ### The NestJS API, phase 3 part 3: the payment webhook, 2026-10-01
 
 Asked for: phase 3 of the port, continued. Ported: `shop/payments/<provider>/webhook/` -- the

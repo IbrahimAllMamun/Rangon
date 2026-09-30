@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -113,6 +113,34 @@ The concurrent stock race alone could not prove the lock: the `order:WEB` sequen
 already serialises online checkouts, and with the port's `FOR UPDATE` removed it still passed.
 Hence the mid-flight check.
 
+Phase 4 opens the staff API. First the check every staff endpoint makes before anything else,
+`accounts.permissions.RolePermission`, ported as `auth/permissions.ts`: an owner or superuser
+passes; anyone else needs every code the action requires, read from their role's permissions;
+an action the view declares nothing for is refused (it fails closed); an action serving a read
+and a write is scoped by HTTP method. A request with no handler for its method is checked the
+way DRF checks it -- with no action, so the method's own name is looked up -- which is why a
+manager's `PUT /brands/` is a 403 and an owner's a 405, both carrying the view's `Allow`. The
+branch rules (`resolve_branch`, `branch_queryset`) are ported beside it, for the inventory
+endpoints to use.
+
+A staff viewset is a `@StaffView(base, requirements)` controller whose handlers name their
+action (`@Action('list')`), routed as DRF's `DefaultRouter` routes it: a list route, a detail
+route whose key is `[^/.]+`, and one route per `@action`. `common/filtering.ts` is the two
+default filter backends: django-filter over `filterset_fields` (every parameter validated
+before any filters, errors in the view's field order, a foreign key checked against its
+table) and `OrderingFilter` (allowed terms replace the view's order). Both apply to a detail
+lookup too, as `get_object` applies them.
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/brands/`, `GET/PUT/PATCH/DELETE /api/v1/brands/<id>/` | `products.*` codes; unpaginated; `is_active`/`is_featured` filters, `ordering=name`. Unique name and slug (DRF's `UniqueValidator`, run first, then every other validator); a slug made on create only, from the name, Bengali transliterated (`common/slugs.ts`); a missing file is stored as `""`. A brand with products is not deleted (`PROTECT`: 409) |
+| `GET/POST /api/v1/categories/`, `GET/PUT/PATCH/DELETE /api/v1/categories/<id>/` | `?tree=true` lists the roots with their active children nested, and narrows detail lookups to roots; each annotated row counts its published products, and an unannotated one (a new category, a nested child) has no `product_count` at all. `validate_parent` refuses a cycle. A partial update's response leaves out `parent_name` for a root: DRF skips a field's default when the serializer is partial. Every save and delete queues the storefront revalidation job, and a delete takes the category's navigation items (and their children) with it, one job each. With children or products, 409 |
+| `GET /api/v1/categories/<id>/attributes/` | the attributes a category uses, inherited down the tree; the nearest category's link wins |
+
+The parity stack now sets `WEB_REVALIDATE_URL` on both APIs (nothing listens), so the
+`content.tasks.revalidate_storefront` jobs a write queues are compared like checkout's. Seeding
+unsets it: the demo seed saves categories, and its signals would otherwise ping the URL inline.
+
 ## Running it
 
 ```bash
@@ -199,6 +227,7 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | `OPTIONS` without CORS headers | DRF's view metadata | 405 | Nothing calls it |
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
+| Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
 
 One Django quirk is *not* copied because the harness cannot see it: gunicorn writes a body on
 `HEAD` responses. The Nest API sends none, as HTTP requires.
