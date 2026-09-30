@@ -65,9 +65,13 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile.dev
-    environment: *django-env
+    environment:
+      <<: *django-env
+      # The stand-in payment gateway `config.settings.parity` installs.
+      PYTHONPATH: /app:/opt/parity-gateway
     volumes:
       - ./apps/api:/app
+      - ./apps/api-nest/parity/gateway:/opt/parity-gateway:ro
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -107,6 +111,11 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       RANGON_PUBLIC_URL: https://shop.parity.test
       PORT: "3000"
+    # The image's own app, plus the stand-in payment gateway the Django side
+    # installs too (parity/serve.ts). The image's command runs without it.
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+    command: ["node", "parity/serve.ts"]
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}

@@ -132,6 +132,14 @@ async function main(): Promise<void> {
       path: '/api/v1/auth/logout/',
       body: { refresh: 'abc' },
     },
+    // A webhook skips authentication, not throttling: the anonymous 60/min,
+    // keyed by address, as DRF applies it to a view with no authenticators.
+    {
+      name: 'payment webhook, 62 requests',
+      count: 62,
+      path: '/api/v1/shop/payments/manual/webhook/',
+      body: {},
+    },
     // The `checkout` scope, 20/hour. The throttle runs before the body is
     // read, so a refused body spends a try too. Nothing here writes.
     {

@@ -10,7 +10,7 @@ import { CheckoutService } from './checkout.service';
 import { CouponsService } from './coupons.service';
 import { NoticesService } from './notices.service';
 
-/** Cart pricing, coupons and (next) checkout: `orders.services.checkout` and friends. */
+/** Cart pricing, coupons and checkout: `orders.services.checkout` and friends. */
 @Module({
   imports: [AccountsModule, InventoryModule],
   providers: [

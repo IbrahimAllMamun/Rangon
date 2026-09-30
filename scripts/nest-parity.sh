@@ -32,6 +32,7 @@ case "${1:-}" in
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_accounts.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_orders.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_cart.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_payments.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity

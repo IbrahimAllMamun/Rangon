@@ -238,6 +238,15 @@ export class PyFloat {
     const text = String(value);
     return text.includes('.') ? text : `${text}.0`;
   }
+
+  /**
+   * `json.dumps` writes `repr(float)`: `4.0` stays `4.0`, which a jsonb column
+   * keeps. NaN and the infinities are not JSON and fail here, as Postgres
+   * refuses the `NaN` Python writes.
+   */
+  toJSON(): unknown {
+    return (JSON as unknown as { rawJSON(text: string): unknown }).rawJSON(this.toString());
+  }
 }
 
 /** Python `repr()` of a str: single quotes unless the text holds one and no double. */

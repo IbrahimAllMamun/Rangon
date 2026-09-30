@@ -10,6 +10,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import pg from 'pg';
 
 import { resetCheckout } from './checkout-cases.ts';
+import { resetPayments } from './payment-cases.ts';
 import { send } from './run.ts';
 
 interface Check {
@@ -135,6 +136,7 @@ export async function concurrencyChecks(apis: {
     await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);
 
     checks.push(...(await checkoutRaces(db, apis)));
+    checks.push(...(await paymentRaces(db, apis)));
   } finally {
     await db.end();
   }
@@ -512,5 +514,260 @@ async function checkoutRaces(
   });
   await resetCheckout(db);
   await db.query(`DELETE FROM promotions_coupon WHERE id = $1`, [coupon]);
+  return checks;
+}
+
+/** A webhook from the stand-in gateway both APIs install in the parity stack. */
+function webhook(
+  base: URL,
+  event: Record<string, unknown>,
+): Promise<{ status: number; body: string }> {
+  return send(base, {
+    name: 'race',
+    method: 'POST',
+    path: '/api/v1/shop/payments/paritypay/webhook/',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(event),
+  });
+}
+
+/**
+ * The duplicate-webhook race CLAUDE.md section 9 names, and the captures and
+ * failures that can meet on one payment -- each across both APIs at once.
+ * The card payment of RGN-PARITY-P01 (1000.00, waiting on the gateway) is the
+ * one fought over; each check starts from, and returns to, the fixture.
+ */
+async function paymentRaces(
+  db: pg.Client,
+  apis: { DJANGO: URL; NEST: URL; SIGNING_KEY: string },
+): Promise<Check[]> {
+  const checks: Check[] = [];
+  const side = (index: number) => (index % 2 ? apis.NEST : apis.DJANGO);
+  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  await resetPayments(db);
+  const payment = (
+    await db.query<{ id: string }>(
+      `SELECT p.id FROM orders_payment p JOIN orders_order o ON o.id = p.order_id
+        WHERE o.number = 'RGN-PARITY-P01'`,
+    )
+  ).rows[0]?.id as string;
+  const bankBefore = (
+    await db.query<{ balance: string }>(
+      `SELECT balance FROM finance_account WHERE name = 'City Bank Current'`,
+    )
+  ).rows[0]?.balance as string;
+  // Audit rows are not undone by resetPayments, so each check counts its own, from its start.
+  const mark = async () =>
+    (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now as string;
+  const tally = async (from: string) => {
+    const [events, postings, captured, failed, audited] = await Promise.all([
+      count(
+        db,
+        `SELECT count(*) AS count FROM orders_paymentevent
+          WHERE provider = 'paritypay' AND id NOT IN (SELECT id FROM parity_pay_events)`,
+      ),
+      count(
+        db,
+        `SELECT count(*) AS count FROM finance_accounttransaction
+          WHERE reference_type = 'payment' AND reference_id = $1`,
+        [payment],
+      ),
+      count(
+        db,
+        `SELECT count(*) AS count FROM orders_orderevent
+          WHERE event_type = 'PAYMENT_CAPTURED' AND data->>'payment_id' = $1`,
+        [payment],
+      ),
+      count(
+        db,
+        `SELECT count(*) AS count FROM orders_orderevent e JOIN orders_order o ON o.id = e.order_id
+          WHERE e.event_type = 'PAYMENT_FAILED' AND o.number = 'RGN-PARITY-P01'
+            AND e.id NOT IN (SELECT id FROM parity_pay_order_events)`,
+      ),
+      count(
+        db,
+        `SELECT count(*) AS count FROM core_auditlog
+          WHERE entity_id = $1 AND new_values->>'status' = 'CAPTURED' AND created_at >= $2`,
+        [payment, from],
+      ),
+    ]);
+    const row = (
+      await db.query<{ status: string; moved: string }>(
+        `SELECT p.status, (SELECT balance FROM finance_account WHERE name = 'City Bank Current') - $2 AS moved
+           FROM orders_payment p WHERE p.id = $1`,
+        [payment, bankBefore],
+      )
+    ).rows[0] as { status: string; moved: string };
+    return { events, postings, captured, failed, audited, status: row.status, moved: row.moved };
+  };
+  const describe = (t: Awaited<ReturnType<typeof tally>>) =>
+    `payment ${t.status}, ${t.events} event(s), ${t.postings} posting(s), bank +${t.moved}, ${t.captured} captured and ${t.failed} failed on the timeline, ${t.audited} capture audit(s)`;
+  const once = (t: Awaited<ReturnType<typeof tally>>) =>
+    t.status === 'CAPTURED' &&
+    t.postings === 1 &&
+    t.moved === '1000.00' &&
+    t.captured === 1 &&
+    t.audited === 1 &&
+    t.failed === 0;
+
+  // 1. A gateway retrying one event: eight copies at once, half to each API.
+  //    The unique (provider, event id) makes every copy after the first wait,
+  //    then answer the first one's result.
+  {
+    const from = await mark();
+    const event = {
+      event_id: 'evt-race-dup',
+      event_type: 'payment.captured',
+      order_number: 'RGN-PARITY-P01',
+      amount: '1000.00',
+    };
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => webhook(side(i), event)));
+    const t = await tally(from);
+    checks.push({
+      name: 'webhook: 8 copies of one capture event at once, across both APIs -- stored and captured once',
+      passed:
+        once(t) &&
+        t.events === 1 &&
+        results.every((r) => r.status === 200 && r.body.includes('"captured"')),
+      detail: `statuses ${results.map((r) => r.status).join(',')}, ${describe(t)}`,
+    });
+    await resetPayments(db);
+  }
+
+  // 2. Six different events for the one payment ("captured" and "success",
+  //    each with its own id). Only the payment's row lock stops a second
+  //    capture read from a stale "PENDING".
+  {
+    const from = await mark();
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        webhook(side(i), {
+          event_id: `evt-race-${i}`,
+          event_type: i % 3 ? 'payment.captured' : 'payment.success',
+          order_number: 'RGN-PARITY-P01',
+        }),
+      ),
+    );
+    const t = await tally(from);
+    checks.push({
+      name: 'webhook: 6 different capture events for one payment, across both APIs -- captured once',
+      passed:
+        once(t) &&
+        t.events === 6 &&
+        results.every(
+          (r) =>
+            r.status === 200 && (r.body.includes('"captured"') || r.body.includes('"ignored"')),
+        ),
+      detail: `statuses ${results.map((r) => r.status).join(',')}, ${describe(t)}`,
+    });
+    await resetPayments(db);
+  }
+
+  // 3. Captures and failures for one payment at once: one outcome wins. The
+  //    loser is refused (409) or finds nothing left to act on -- never a
+  //    failed payment with money in the cash book, or a captured one marked failed.
+  {
+    const from = await mark();
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        webhook(side(i), {
+          event_id: `evt-race-mixed-${i}`,
+          event_type: i < 3 ? 'payment.captured' : 'payment.failed',
+          order_number: 'RGN-PARITY-P01',
+        }),
+      ),
+    );
+    const t = await tally(from);
+    const failedClean =
+      t.status === 'FAILED' && t.postings === 0 && t.moved === '0.00' && t.captured === 0;
+    checks.push({
+      name: 'webhook: 3 captures and 3 failures for one payment at once, across both APIs -- one outcome',
+      passed:
+        (once(t) || failedClean) && results.every((r) => r.status === 200 || r.status === 409),
+      detail: `statuses ${results.map((r) => r.status).join(',')}, ${describe(t)}`,
+    });
+    await resetPayments(db);
+  }
+
+  // 4. The same, made certain. The harness takes the payment's lock and
+  //    captures it as Django's `capture_payment` does (the row, the cash book,
+  //    the timeline), while one Nest webhook with its own event id queues on
+  //    the lock; then it commits. With the lock, the webhook reads CAPTURED and
+  //    stops. Without it, it acted on the "PENDING" it read first: a second
+  //    capture on the timeline and in the audit log.
+  {
+    const from = await mark();
+    const bank = (
+      await db.query<{ id: string; balance: string }>(
+        `SELECT id, balance FROM finance_account WHERE name = 'City Bank Current'`,
+      )
+    ).rows[0] as { id: string; balance: string };
+    const order = (
+      await db.query<{ id: string }>(`SELECT id FROM orders_order WHERE number = 'RGN-PARITY-P01'`)
+    ).rows[0]?.id as string;
+    const gateway = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await gateway.connect();
+    await gateway.query('BEGIN');
+    await gateway.query(`SELECT id FROM orders_payment WHERE id = $1 FOR UPDATE`, [payment]);
+    const pending = webhook(apis.NEST, {
+      event_id: 'evt-race-held',
+      event_type: 'payment.captured',
+      order_number: 'RGN-PARITY-P01',
+    });
+    let waiting = 0;
+    for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      waiting = await count(
+        db,
+        `SELECT count(*) AS count FROM pg_stat_activity
+          WHERE application_name = 'rangon-api-nest' AND wait_event_type = 'Lock'`,
+      );
+    }
+    await gateway.query(
+      `UPDATE orders_payment SET status = 'CAPTURED', captured_at = now(), updated_at = now(),
+              account_id = $2 WHERE id = $1`,
+      [payment, bank.id],
+    );
+    await gateway.query(
+      `UPDATE finance_account SET balance = balance + 1000.00, updated_at = now() WHERE id = $1`,
+      [bank.id],
+    );
+    await gateway.query(
+      `INSERT INTO finance_accounttransaction
+         (id, created_at, updated_at, account_id, transaction_type, amount, balance_after, reference_type,
+          reference_id, reason, notes, occurred_at, created_by_id, idempotency_key)
+       VALUES (gen_random_uuid(), now(), now(), $1, 'SALE_PAYMENT', 1000.00, $2::numeric + 1000.00, 'payment',
+               $3, '', 'RGN-PARITY-P01 - CARD', now(), NULL, NULL)`,
+      [bank.id, bank.balance, payment],
+    );
+    await gateway.query(
+      `INSERT INTO orders_orderevent
+         (id, created_at, updated_at, order_id, event_type, message, data, is_customer_visible, actor_id)
+       VALUES (gen_random_uuid(), now(), now(), $1, 'PAYMENT_CAPTURED', 'CARD 1000.00 captured',
+               jsonb_build_object('payment_id', $2::text), true, NULL)`,
+      [order, payment],
+    );
+    await gateway.query(
+      `INSERT INTO core_auditlog
+         (id, created_at, updated_at, actor_id, actor_label, action, entity_type, entity_id, entity_label,
+          old_values, new_values, reason, ip_address, user_agent, request_id, branch_id)
+       VALUES (gen_random_uuid(), now(), now(), NULL, '', 'PAYMENT_RECORDED', 'Payment', $1,
+               'CARD 1000.00 (CAPTURED)', '{"status": "PENDING"}', '{"status": "CAPTURED", "amount": "1000.00"}',
+               '', NULL, '', 'parity-gateway', NULL)`,
+      [payment],
+    );
+    await gateway.query('COMMIT');
+    await gateway.end();
+    const result = await pending;
+    const t = await tally(from);
+    checks.push({
+      name: 'webhook: a capture (Nest) that meets another capture mid-flight stops -- the payment lock holds',
+      passed: waiting > 0 && result.status === 200 && once(t),
+      detail: `webhook ${result.status} ${result.body}, ${waiting ? 'waited on the lock' : 'NEVER reached the lock'}, ${describe(t)}`,
+    });
+    await resetPayments(db);
+  }
+
+  await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);
   return checks;
 }

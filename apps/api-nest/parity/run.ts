@@ -16,6 +16,7 @@ import pg from 'pg';
 import { accountCases } from './accounts-cases.ts';
 import { cartCases } from './cart-cases.ts';
 import { checkoutCases } from './checkout-cases.ts';
+import { paymentCases } from './payment-cases.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
@@ -455,6 +456,9 @@ async function buildCases(): Promise<Case[]> {
 
   // --- Checkout: stock reserved, money recorded, jobs queued ---------------------------
   cases.push(...(await checkoutCases({ DJANGO, NEST })));
+
+  // --- A payment provider's webhook: capture, the cash book, replays ---------------------
+  cases.push(...(await paymentCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
