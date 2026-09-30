@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { SkipAuthentication } from '../auth/authentication';
+import { ThrottleScope } from '../auth/throttle';
 import { FeedService } from '../catalog/feed.service';
 import { absoluteUri } from '../common/http';
 import { PageCache } from '../common/page-cache';
@@ -17,6 +18,7 @@ const CACHE_SECONDS = 15 * 60;
  */
 @Controller('api/v1/shop')
 @SkipAuthentication()
+@ThrottleScope('search')
 export class ShopFeedController {
   constructor(
     private readonly feed: FeedService,

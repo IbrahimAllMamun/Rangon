@@ -2,6 +2,7 @@ import { Controller, Get, Logger, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 
 import { SkipAuthentication } from '../auth/authentication';
+import { SkipThrottle } from '../auth/throttle';
 import { Database } from '../database/database.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -12,6 +13,7 @@ import { RedisService } from '../redis/redis.service';
  */
 @Controller('api')
 @SkipAuthentication()
+@SkipThrottle()
 export class HealthController {
   private readonly logger = new Logger('rangon.health');
 

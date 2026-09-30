@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 
 import { Authenticator, AuthGuard } from './auth/authentication';
+import { ThrottleGuard } from './auth/throttle';
 import { EnvelopeFilter } from './common/envelope.filter';
 import { ENV, Env } from './config/env';
 import { Database } from './database/database.service';
@@ -36,7 +37,9 @@ export class AppModule {
       imports: [CoreModule.forRoot(env, routes), ShopModule],
       controllers: [HealthController],
       providers: [
+        // In DRF's order: authenticate and check permissions, then throttle.
         { provide: APP_GUARD, useClass: AuthGuard },
+        { provide: APP_GUARD, useClass: ThrottleGuard },
         { provide: APP_FILTER, useClass: EnvelopeFilter },
       ],
     };

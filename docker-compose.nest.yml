@@ -115,5 +115,55 @@ services:
       django: {condition: service_started}
       nest: {condition: service_started}
 
+  # Both APIs with their rate limits on (dev settings), for parity/throttle.ts.
+  django-throttled:
+    profiles: [throttle]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *django-env
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    command: >
+      gunicorn config.wsgi:application --bind 0.0.0.0:8000
+      --workers 2 --threads 4 --timeout 60
+
+  nest-throttled:
+    profiles: [throttle]
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      PORT: "3000"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  throttle-check:
+    image: node:22-bookworm-slim
+    profiles: [throttle]
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest:/app:ro
+    environment:
+      DJANGO_BASE: http://django-throttled:8000
+      NEST_BASE: http://nest-throttled:3000
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+    command: ["node", "parity/throttle.ts"]
+    depends_on:
+      django-throttled: {condition: service_started}
+      nest-throttled: {condition: service_started}
+
 volumes:
   nest_postgres:

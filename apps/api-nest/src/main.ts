@@ -17,7 +17,9 @@ async function bootstrap(): Promise<void> {
     // DATA_UPLOAD_MAX_MEMORY_SIZE in config/settings/base.py.
     bodyLimit: 10 * 1024 * 1024,
     routerOptions: { ignoreTrailingSlash: true, maxParamLength: 500 },
-    trustProxy: env.DJANGO_TRUSTED_PROXY_HOPS > 0 ? env.DJANGO_TRUSTED_PROXY_HOPS : false,
+    // Not Fastify's trustProxy: the client address is `core.ip`'s rule
+    // (auth/throttle.ts), and the scheme is `SECURE_PROXY_SSL_HEADER`'s
+    // (common/http.ts), each exactly as the Django API reads them.
     logger: false,
   });
   const fastify = adapter.getInstance();

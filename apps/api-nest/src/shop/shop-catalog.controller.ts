@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 
 import { OrganizationService } from '../accounts/organization.service';
 import { AllowAny } from '../auth/authentication';
+import { ThrottleScope } from '../auth/throttle';
 import { DiscoveryService } from '../catalog/discovery.service';
 import { MerchandisingService } from '../catalog/merchandising.service';
 import { ProductDetailsService } from '../catalog/product-details.service';
@@ -45,6 +46,7 @@ export class ShopCatalogController {
   ) {}
 
   @Get('products/')
+  @ThrottleScope('search')
   async productList(@Req() request: FastifyRequest, @Params() params: QueryDict) {
     const branchId = await this.organization.storefrontBranchId();
     const listing = await this.search.search(this.filters(params, branchId));
@@ -62,6 +64,7 @@ export class ShopCatalogController {
   }
 
   @Get('products/:slug/')
+  @ThrottleScope('search')
   async productDetail(@Param('slug') rawSlug: string) {
     const slug = slugParam(rawSlug);
     const product = await this.merchandising.visibleBySlug(slug);
@@ -227,6 +230,7 @@ export class ShopCatalogController {
   }
 
   @Get('facets/')
+  @ThrottleScope('search')
   async facets(@Params() params: QueryDict) {
     const listing = await this.search.search({
       query: params.get('q', ''),
@@ -236,6 +240,7 @@ export class ShopCatalogController {
   }
 
   @Get('search/suggest/')
+  @ThrottleScope('search')
   async suggest(@Params() params: QueryDict) {
     const query = params.get('q', '');
     const result = await this.discovery.suggest(query);

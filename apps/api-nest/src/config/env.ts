@@ -54,6 +54,8 @@ const schema = z.object({
   DJANGO_SECURE_SSL_REDIRECT: flag(true),
   // Proxy hops whose X-Forwarded-For entries are believed (core/ip.py).
   DJANGO_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+  // The one rate read from the environment (config/settings/base.py).
+  DJANGO_THROTTLE_ANON: z.string().default('60/min'),
 
   DJANGO_TIME_ZONE: z.string().default('Asia/Dhaka'),
   RANGON_DEFAULT_TAX_RATE: z.string().default('0.00'),
