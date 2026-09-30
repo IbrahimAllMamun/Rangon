@@ -69,10 +69,17 @@ services:
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000
-             --workers 2 --threads 4 --timeout 60 --access-logfile -"
+    # A list, not a folded `>` block: YAML keeps the newlines of more-indented
+    # lines in a folded scalar, and the shell then ran gunicorn without its
+    # worker flags -- one sync worker, which made every benchmark unfair.
+    # Same shape as production: 2 workers x 4 threads (apps/api/Dockerfile).
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000
+        --workers 2 --threads 4 --timeout 60 --access-logfile -
     ports:
       - "127.0.0.1:8610:8000"
 
