@@ -13,7 +13,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 |---|---|---|
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
-| 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **In progress**: the cart, coupons and shipping options done 2026-09-30; checkout and lead capture 2026-10-01, parity 498/498 and eight race checks |
+| 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
@@ -46,7 +46,7 @@ Phase 2 (write cases: the rows each API writes are compared too):
 | `GET/POST/PATCH/DELETE /api/v1/shop/account/addresses/` | one default per customer, held by locking the customer row -- the same lock Django takes, so the two APIs queue behind each other |
 | `POST /api/v1/shop/products/<slug>/reviews/` | once per received purchase, pending moderation; the `search` throttle scope |
 
-Phase 3 so far -- the cart. Every cart endpoint writes (a read without a token creates a cart,
+Phase 3, first the cart. Every cart endpoint writes (a read without a token creates a cart,
 and a read drops a coupon that has stopped applying), so each case restores the fixture's carts
 and compares the carts and lines each API leaves:
 
@@ -67,7 +67,23 @@ Celery jobs each queued.
 | `POST /api/v1/shop/checkout/` | one transaction, in Django's order. An `Idempotency-Key` is required; a retry with it returns the first order, found by a lookup and, under a race, by a savepoint that catches the unique violation. The row-locked `order:WEB` sequence numbers the order. Every stock row is locked `FOR UPDATE` in id order and every line checked before any is written, then one `RESERVATION` per line. The coupon is redeemed under its own row lock. Cash on delivery is confirmed with a pending manual payment, other methods wait for the provider. After commit: low-stock jobs, staff notices, then the customer's email and SMS jobs ([ADR-0014](decisions/0014-nest-enqueues-celery-jobs.md)). Throttled on the `checkout` scope, 20 an hour |
 | `POST /api/v1/shop/checkout/lead/` | holds the number a shopper typed but did not use, at the server's price for the cart; always 204; the same `checkout` bucket |
 
-Still to come in phase 3: the payment webhook.
+Then the payment webhook. The one provider either API ships, `manual`, takes no webhooks, so
+in production both answer every webhook with a 404. A webhook reaches the capture path only
+through a gateway. So the parity stack installs a stand-in gateway, `paritypay`, in both APIs:
+a Django app that `config.settings.parity` alone installs, from a directory only
+`docker-compose.nest.yml` mounts (`parity/gateway/`), and its twin, which `parity/serve.ts`
+registers before the Nest API listens. Like `StubPay` in Django's own tests, it stands in for a
+gateway whose signature check has passed. No image contains either; the Nest image's own
+command (`node dist/main.js`) never loads `parity/`.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/shop/payments/<provider>/webhook/` | no authentication; throttled as any anonymous request. The body goes to the provider as bytes, never parsed by the view. The event is stored once per (provider, event id): a replay waits on the unique index and answers the first result. It acts only on a waiting payment made through the same provider (D100), captures only the amount that payment was for, and captures under the payment's row lock: the cash book posting, the order's payment status, the timeline and the audit row. An unknown provider or `manual` is a 404 |
+
+Each webhook case compares the event row, the payment, the order's payment status, the cash-book
+posting and balances, the timeline, the audit log and the (absent) jobs, with payloads compared as
+jsonb's own text so that `3.0` and a 20-digit integer survive (`parity/payment-cases.ts`,
+`fixture_payments.py`).
 
 Invariants are also checked under concurrency on every parity run (`parity/concurrency.ts`), each
 across both APIs where both serve the path:
@@ -82,6 +98,13 @@ across both APIs where both serve the path:
 | 5 online checkouts (Nest) against 5 counter sales (Django) | no lost update; the stock row equals what the ledger says; no online over-reservation |
 | A counter sale committed while a Nest checkout waits on the row | the checkout sees it -- the harness holds the lock and writes the sale, so this is deterministic, and it fails on every run with the port's `FOR UPDATE` removed |
 | 6 checkouts for a coupon good once | one redemption, one discounted order |
+| 8 copies of one webhook event | one event row, one capture, one posting, the balance moved once |
+| 6 different capture events for one payment | one posting, one capture on the timeline and in the audit log |
+| 3 captures and 3 failures for one payment | one outcome: captured with its posting, or failed with none; the losers 409 or find nothing to act on |
+| A capture committed while a Nest webhook waits on the payment row | the webhook sees it and stops -- deterministic, and it fails on every run with the port's `FOR UPDATE` removed (as do the two before it, sometimes) |
+
+Two failure events for one payment can both act: `fail_payment` does not refuse a payment
+already failed, so the timeline shows the failure twice. Copied, as harmless.
 
 The concurrent stock race alone could not prove the lock: the `order:WEB` sequence's row lock
 already serialises online checkouts, and with the port's `FOR UPDATE` removed it still passed.
@@ -110,7 +133,8 @@ docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run 
 ```
 
 The parity stack runs Django with `CELERY_TASK_ALWAYS_EAGER=0` and no worker, so the jobs each API
-queues stay on the broker for the harness to compare. The seed runs eagerly.
+queues stay on the broker for the harness to compare. The seed runs eagerly. Both APIs there carry
+the stand-in payment gateway described above; the throttled pair does not.
 
 **Always pass `-p rangon-nest`** when calling compose directly: `.env` sets
 `COMPOSE_PROJECT_NAME=rangon`, and without `-p` these containers join the development project.

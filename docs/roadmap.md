@@ -481,6 +481,44 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 3 part 3: the payment webhook, 2026-10-01
+
+Asked for: phase 3 of the port, continued. Ported: `shop/payments/<provider>/webhook/` -- the
+provider registry, `handle_provider_event`, `capture_payment` and `fail_payment`, and the cash-book
+posting a capture makes (`resolve_account`, `check_named_account`, `record_movement`). **Phase 3 is
+done**: the cart, checkout and the webhook, the port's first stock and money writes.
+
+The only provider either API ships, `manual`, takes no webhooks. So the capture path is proven
+through a stand-in gateway both APIs install in the parity stack only, as Django's own tests use
+`StubPay`: a Django app that the parity settings alone install, from a directory only the parity
+compose file mounts, and a Nest twin registered by the parity stack's own entry point. To make that
+possible, the Nest app is now built by `createApp()` (`src/app.factory.ts`), and `main.ts` only
+listens.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 536/536 (38 new), 15 by the documented differences
+concurrency (parity/concurrency.ts) ........... 12/12 (4 new: a retried event, six capture events
+                                                for one payment, captures against failures, a
+                                                capture landing mid-webhook)
+throttle-check ................................ 9/9 (1 new: the webhook's anonymous 60/min)
+nest unit tests ............................... 190 passed (12 new)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover every branch of the view and service: an unknown provider, an encoded slash in its
+name, the body never parsed by the view, capture with and without an amount, a half cent that
+rounds past the payment, success and failure events, events it ignores, cash on delivery not
+captured by a gateway (D100), the older of two waiting payments, a named account of the wrong kind,
+closed or another branch's, no account to post to, the default bank closed, and replays. With the
+payment's `FOR UPDATE` removed from the port, the mid-flight check failed on every run, and the
+six-event and capture-against-failure races failed too. Once, a payment was left both captured and
+marked failed.
+
+Found on the way, in the harness: `pg` reads jsonb into JavaScript numbers, so a payload's `3.0`
+and a 20-digit integer looked equal to `3` and a rounded one. Payloads are now compared as
+jsonb's own text. And in the port: Python's `json.dumps` writes a float as `repr`, and the port's
+`PyFloat` had no JSON form at all.
+
 ### The NestJS API, phase 3 part 2: checkout, 2026-10-01
 
 Asked for: phase 3 of the port, continued. Ported: `shop/checkout/` and `shop/checkout/lead/`,
