@@ -481,6 +481,69 @@ is still open and tracked in
 
 ## Verification log
 
+### Fewer Python processes for the same work, 2026-09-30
+
+Asked for: would an Express (then NestJS) backend use fewer resources? Measured first. A Node
+process on this machine sat at ~92 MB, and each Python process at ~85–90 MB. The difference was
+never the language; it was that the backend ran **eight** Python processes. So this pass cut the
+count instead of the framework (rewrite declined in *Skip*, below).
+
+**What changed.**
+
+| | Before | After |
+|---|---|---|
+| gunicorn (`apps/api/Dockerfile`) | 3 workers × 2 threads | 2 workers × 4 threads |
+| Celery worker (`docker-compose.yml`, prodlocal) | prefork, `--concurrency=2` | `--pool=threads --concurrency=4` |
+| prod overlay `api` / `worker` replicas | 2 / 2 | 1 / 1 |
+| `EMAIL_TIMEOUT` | unset, i.e. block forever | 30 s |
+
+**The catch the change created, and its fix.** Celery's thread pool ignores
+`CELERY_TASK_TIME_LIMIT`. `TaskPool.on_apply` takes the timeouts as `**_` (read from the
+installed 5.4.0 source, not the docs). Under prefork, that ten-minute limit was the only thing
+that would kill a task stuck on a stalled SMTP server, because Django's `EMAIL_TIMEOUT` defaults to
+`None`. Under threads, four such stalls would have stopped every task, including
+`release_expired_reservations`, and reserved stock would never have been freed.
+`EMAIL_TIMEOUT` is now 30 s, and `tests/unit/test_email_timeout.py` failed against the old settings
+before it passed against the new ones.
+
+**Measured on the local prod stack.** Both configurations were started fresh and sent the same 50
+storefront requests, 8 at a time, under the 60/min anonymous throttle. Memory is RSS summed over
+the Python processes (`docker top`, read from the host).
+
+```text
+                       before                  after (run 1 / run 2)
+api      gunicorn      276 MB  4 processes     234 / 239 MB  3 processes
+worker   celery        218 MB  3 processes      96 / 100 MB  1 process
+beat     celery         89 MB  1 process        98 /  98 MB  1 process
+total                  583 MB                  428 / 437 MB             -150 MB, -26%
+
+latency  mean          0.298 s                 0.316 / 0.289 s
+         p50           0.189 s                 0.222 / 0.132 s          within run-to-run noise
+         p90           0.697 s                 0.804 / 0.752 s
+```
+
+In the prod overlay, the replica change is worth more than the flags. From the per-replica
+figures above: 2 × 276 + 2 × 218 + 89 ≈ **1,080 MB** before, 1 × ~237 + 1 × ~98 + 98 ≈ **430 MB**
+after. That is computed, not measured on a server.
+
+Two predictions were wrong, and are recorded so nobody trusts them later. Gunicorn saved ~40 MB,
+not ~85, because each worker grew from ~89 to ~104 MB carrying four threads. And `celery worker -B`
+would not have merged beat into the worker process: `EmbeddedService` forks it. The Express
+comparison had quoted both.
+
+Beat-to-worker, on the threaded pool:
+
+```text
+01:50:00,008 Scheduler: Sending due task release-expired-reservations
+01:50:00,076 Task orders.tasks.release_expired_reservations[8be8e65c…] succeeded in 0.0437s: 'released:0'
+```
+
+```text
+pytest ....................................... 1637 passed
+ruff 0.8.4 check + format --check ............ clean, 244 files
+docker compose config (prod, prodlocal) ...... valid; api/worker/beat replicas 1, web 2
+```
+
 ### Homepage carousel, header, scanner focus, 2026-09-29
 
 Asked for: a product carousel under the homepage hero instead of "Shop by category", an admin
@@ -2959,6 +3022,9 @@ Shipped from this list on 2026-09-15:
 | **Search `word_similarity`** | The suggest endpoint and the `SearchTerm` log already shipped. Swapping `trigram_similar` for `word_similarity` is a marginal recall improvement on a 12-product catalogue |
 | **Sales-rep attribution** (G11) | There are no sales reps |
 | **Backup download from the UI** (G12) | The script exists and has been used in anger. Scheduling it (Tier 0 #4) is the real need; a button is not |
+| **Rewrite the API in Express or NestJS** | Asked 2026-09-29 to save resources. A Node process measured ~92 MB beside Python's ~85 MB each, so the gap was process *count*, and that was closed by configuration instead (verification log, 2026-09-30). `/api/health/` answers in 3 ms, so the framework is not where request time goes. A rewrite is ~31k lines, 1,426 tests, 52 row locks and every money path moved off `Decimal`. Revisit only if a profile shows the framework itself as the bottleneck |
+| **`celery worker -B`** | Declined 2026-09-30. It forks beat into its own process anyway (`celery.beat.EmbeddedService` defaults to `multiprocessing`), so the saving is small; Celery documents it as development-only; and a second worker replica would run every scheduled job twice |
+| **Redis cache for `/shop/home/`** | Declined 2026-09-30. The storefront already caches that payload for 120 s under the `home` tag, and content changes revalidate it (`content.tasks.revalidate_storefront`). Django serves it about once every two minutes per web replica; a second cache would only add a second place for a price to be stale |
 
 ### Three habits to keep
 

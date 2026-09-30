@@ -47,8 +47,10 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DJANGO_SECURE_SSL_REDIRECT: "0"
+    # Same pool as the base file; see the note there.
     command:
-      ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+      ["celery", "-A", "config", "worker", "--loglevel=info",
+       "--pool=threads", "--concurrency=4"]
     restart: unless-stopped
 
   beat:

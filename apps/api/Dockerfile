@@ -71,10 +71,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # Migrations are a deployment step, not a container-start step. See
 # docs/operations/deployment.md.
+#
+# 2 workers x 4 threads rather than 3 x 2: 8 request slots instead of 6, in
+# ~40 MB less (measured; each worker grows ~15 MB carrying the extra threads).
+# A request spends much of its time waiting on Postgres rather than holding
+# the GIL, so threads are the cheaper way to add slots. Threads are safe
+# here since psycopg 3.3.2 (D105). Scale with api replicas, not workers.
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
-     "--workers", "3", \
-     "--threads", "2", \
+     "--workers", "2", \
+     "--threads", "4", \
      "--timeout", "60", \
      "--graceful-timeout", "30", \
      "--access-logfile", "-", \

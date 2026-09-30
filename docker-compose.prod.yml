@@ -55,8 +55,12 @@ services:
       # `collectstatic` is a step in the release procedure rather than a
       # property of the image.
       - api_static:/app/staticfiles
+    # One replica is 2 gunicorn workers x 4 threads (apps/api/Dockerfile) --
+    # enough for one shop on one host. Raise this first when the API is the
+    # bottleneck (docs/operations/deployment.md, "Scaling order"); each replica
+    # costs ~235 MB.
     deploy:
-      replicas: 2
+      replicas: 1
       resources:
         limits: {memory: 1G}
 
@@ -67,8 +71,10 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings.prod
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # One replica runs 4 task threads (docker-compose.yml) -- the same 4 slots
+    # two prefork replicas at --concurrency=2 gave, in ~100 MB instead of ~440.
     deploy:
-      replicas: 2
+      replicas: 1
 
   beat:
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
