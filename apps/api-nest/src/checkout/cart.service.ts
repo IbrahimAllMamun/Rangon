@@ -214,8 +214,8 @@ export class CartService {
   }
 
   /** The cart's lines with their variant, product and category, in `Meta.ordering`. */
-  private async items(cartId: string): Promise<ItemRow[]> {
-    return this.db.query<ItemRow>(
+  private async items(cartId: string, q: Queryable = this.db): Promise<ItemRow[]> {
+    return q.query<ItemRow>(
       `SELECT i.id, i.variant_id, i.quantity, v.sku, v.name AS variant_name, v.price, v.cost,
               v.status AS variant_status, p.id AS product_id, p.name AS product_name,
               p.slug AS product_slug, p.status AS product_status, p.published, p.category_id,
@@ -270,8 +270,12 @@ export class CartService {
   }
 
   /** `price_cart`: re-price from scratch and report anything that changed. */
-  async price(cart: CartRow, shippingMethod: ShippingMethodRow | null = null): Promise<CartView> {
-    const items = await this.items(cart.id);
+  async price(
+    cart: CartRow,
+    shippingMethod: ShippingMethodRow | null = null,
+    q: Queryable = this.db,
+  ): Promise<CartView> {
+    const items = await this.items(cart.id, q);
     const issues: Record<string, unknown>[] = [];
 
     const sellable: ItemRow[] = [];
@@ -291,6 +295,7 @@ export class CartService {
     const snapshots = await this.stock.availability(
       cart.branch_id,
       sellable.map((item) => item.variant_id),
+      q,
     );
     const raw: [PricedVariant, number, Dec | null][] = [];
     for (const item of sellable) {
@@ -315,7 +320,7 @@ export class CartService {
     let couponDiscount = ZERO;
     let freeShipping = false;
     if (cart.coupon_id && lines.length) {
-      const coupon = await this.coupons.byId(cart.coupon_id);
+      const coupon = await this.coupons.byId(cart.coupon_id, q);
       try {
         const result = await this.coupons.validate(
           coupon as CouponRow,
@@ -341,7 +346,7 @@ export class CartService {
         }
         issues.push({ code: 'COUPON_INVALID', message, coupon: coupon?.code });
         cart.coupon_id = null;
-        await this.db.query(
+        await q.query(
           `UPDATE orders_cart SET coupon_id = NULL, updated_at = clock_timestamp() WHERE id = $1::uuid`,
           [cart.id],
         );

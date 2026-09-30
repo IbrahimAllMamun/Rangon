@@ -34,6 +34,37 @@ const LINES = `SELECT ${NEW} AS cart, v.sku, i.quantity, i.created_at >= $1 AS c
   WHERE c.token LIKE 'parity-cart-%' OR c.created_at >= $1
   ORDER BY 1, 2`;
 
+/**
+ * The fixture's carts and lines back as they were, and every cart made
+ * since they were copied gone. Copied once, on the harness's connection,
+ * at the first cart case -- before any case has touched a cart.
+ */
+export async function resetCarts(client: pg.Client): Promise<void> {
+  // Told by id, not time, like resetCheckout: whatever is not in the copy is new.
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS parity_cart_ids AS SELECT id FROM orders_cart`,
+  );
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS parity_carts AS SELECT * FROM orders_cart WHERE token LIKE 'parity-cart-%'`,
+  );
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS parity_cart_items AS SELECT i.* FROM orders_cartitem i
+       JOIN orders_cart c ON c.id = i.cart_id WHERE c.token LIKE 'parity-cart-%'`,
+  );
+  const fresh = `(SELECT id FROM orders_cart WHERE id NOT IN (SELECT id FROM parity_cart_ids))`;
+  await client.query(
+    `DELETE FROM orders_cartitem WHERE cart_id IN (SELECT id FROM parity_carts) OR cart_id IN ${fresh}`,
+  );
+  await client.query(`DELETE FROM orders_cart WHERE id IN ${fresh}`);
+  await client.query(
+    `UPDATE orders_cart c SET customer_id = s.customer_id, token = s.token, branch_id = s.branch_id,
+            coupon_id = s.coupon_id, is_active = s.is_active, last_activity_at = s.last_activity_at,
+            updated_at = s.updated_at
+       FROM parity_carts s WHERE s.id = c.id`,
+  );
+  await client.query(`INSERT INTO orders_cartitem SELECT * FROM parity_cart_items`);
+}
+
 export async function cartCases(): Promise<Case[]> {
   const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
@@ -70,38 +101,7 @@ export async function cartCases(): Promise<Case[]> {
   const knownItems = new Map(items.rows.map((row) => [row.id, `${row.token}:${row.sku}`]));
   const knownCarts = new Set(carts.rows.map((row) => row.id));
 
-  /**
-   * The fixture's carts and lines back as they were, and every cart made
-   * since they were copied gone. Copied once, on the harness's connection,
-   * at the first cart case -- before any case has touched a cart.
-   */
-  const reset = async (client: pg.Client) => {
-    await client.query(
-      `CREATE TEMP TABLE IF NOT EXISTS parity_cart_epoch AS SELECT clock_timestamp() AS at`,
-    );
-    await client.query(
-      `CREATE TEMP TABLE IF NOT EXISTS parity_carts AS SELECT * FROM orders_cart WHERE token LIKE 'parity-cart-%'`,
-    );
-    await client.query(
-      `CREATE TEMP TABLE IF NOT EXISTS parity_cart_items AS SELECT i.* FROM orders_cartitem i
-         JOIN orders_cart c ON c.id = i.cart_id WHERE c.token LIKE 'parity-cart-%'`,
-    );
-    const since = `(SELECT at FROM parity_cart_epoch)`;
-    await client.query(
-      `DELETE FROM orders_cartitem WHERE cart_id IN (SELECT id FROM parity_carts)
-          OR cart_id IN (SELECT id FROM orders_cart WHERE created_at > ${since})`,
-    );
-    await client.query(
-      `DELETE FROM orders_cart WHERE created_at > ${since} AND id NOT IN (SELECT id FROM parity_carts)`,
-    );
-    await client.query(
-      `UPDATE orders_cart c SET customer_id = s.customer_id, token = s.token, branch_id = s.branch_id,
-              coupon_id = s.coupon_id, is_active = s.is_active, last_activity_at = s.last_activity_at,
-              updated_at = s.updated_at
-         FROM parity_carts s WHERE s.id = c.id`,
-    );
-    await client.query(`INSERT INTO orders_cartitem SELECT * FROM parity_cart_items`);
-  };
+  const reset = resetCarts;
 
   /** New carts and lines carry each API's own ids and token: their shape is what is compared. */
   const normalize = (body: unknown) => {

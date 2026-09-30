@@ -25,9 +25,13 @@ export function quantize(value: Dec | string | number): Dec {
   return new Dec(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
 
-/** Python `str(Decimal)` of a quantized amount: always two places. */
+/**
+ * Python `str(Decimal)` of a quantized amount: always two places, and a
+ * negative zero keeps its sign ("-0.00"), which decimal.js's `toFixed` drops.
+ */
 export function money(value: Dec): string {
-  return value.toFixed(2);
+  const text = value.toFixed(2);
+  return value.isZero() && value.isNeg() && !text.startsWith('-') ? `-${text}` : text;
 }
 
 /** What pricing needs to know about a variant on a line. */

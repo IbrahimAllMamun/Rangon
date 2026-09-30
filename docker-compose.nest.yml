@@ -28,9 +28,11 @@ x-django-env: &django-env
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/1
   CELERY_RESULT_BACKEND: redis://redis:6379/2
-  # Seeding and any request that queues work runs it inline: there is no
-  # worker in this stack, and nothing here sends real mail.
-  CELERY_TASK_ALWAYS_EAGER: "1"
+  # Requests queue their jobs for real, into the broker, where no worker takes
+  # them: the harness reads what each API queued and compares the two
+  # (checkout's email, SMS and low-stock jobs). `scripts/nest-parity.sh seed`
+  # turns this back on, so seeding still runs its jobs inline.
+  CELERY_TASK_ALWAYS_EAGER: "0"
   EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
   RANGON_ALLOW_OVERSELL: "0"
   # The product feed needs an origin to make links absolute.
@@ -101,6 +103,8 @@ services:
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
       DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
       REDIS_URL: redis://redis:6379/0
+      # Django's broker: jobs this API queues are for Django's worker.
+      CELERY_BROKER_URL: redis://redis:6379/1
       RANGON_PUBLIC_URL: https://shop.parity.test
       PORT: "3000"
     depends_on:
@@ -123,6 +127,8 @@ services:
       NEST_BASE: http://nest:3000
       DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
       REDIS_URL: redis://redis:6379/0
+      # Where both APIs queue Celery jobs; the harness reads and empties it.
+      CELERY_BROKER_URL: redis://redis:6379/1
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
       PARITY_ONLY: ${PARITY_ONLY:-}
     command: ["node", "parity/run.ts"]
@@ -164,6 +170,7 @@ services:
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
       DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
       PORT: "3000"
     depends_on:
       db: {condition: service_healthy}

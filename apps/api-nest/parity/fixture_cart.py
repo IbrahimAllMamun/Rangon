@@ -21,8 +21,9 @@ What each piece is for (tokens start `parity-cart-`, which the harness keeps):
 - Coupons: every refusal `validate_coupon` has, a category restriction that
   covers the category's descendants, a product restriction, a cap, and a
   fixed amount larger than the cart.
-- A shipping zone with untidy city names (spaces, capitals, a number) and two
-  methods tied on (position, price).
+- A shipping zone with untidy city names (spaces, capitals, a number), two
+  methods tied on (position, price), and one that refuses cash on delivery.
+- An open abandoned-checkout lead, which a checkout with its number closes.
 """
 
 from datetime import timedelta
@@ -34,7 +35,7 @@ from django.utils import timezone
 from accounts.models import Branch
 from catalog.models import Category, Product, ProductVariant, PublishStatus
 from customers.models import Customer
-from orders.models import Cart, CartItem, Order
+from orders.models import AbandonedCheckout, Cart, CartItem, Order
 from promotions.models import Coupon, CouponRedemption, DiscountType
 from shipping.models import ShippingMethod, ShippingZone
 
@@ -108,6 +109,15 @@ def apply() -> None:
         )
     ShippingMethod.objects.create(
         zone=zone, name="Parity retired", code="p-off", price=Decimal("10.00"), is_active=False,
+    )
+    ShippingMethod.objects.create(
+        zone=zone, name="Parity prepaid only", code="p-nocod", price=Decimal("50.00"),
+        supports_cod=False, position=3,
+    )
+    # An open lead a checkout with this number closes.
+    AbandonedCheckout.objects.create(
+        phone="8801711000078", name="Parity Lead", branch=branch,
+        cart_total=Decimal("2450.00"), item_count=1,
     )
 
 

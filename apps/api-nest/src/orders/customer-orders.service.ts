@@ -298,6 +298,13 @@ export class CustomerOrdersService {
     );
   }
 
+  async byId(id: string): Promise<OrderRow | null> {
+    return this.db.one<OrderRow>(
+      `SELECT ${select('orders_order', ORDER_COLUMNS)} FROM "orders_order" WHERE "orders_order"."id" = $1::uuid`,
+      [id],
+    );
+  }
+
   /** `get_object_or_404(Order, number=number, customer=customer)`. */
   async byNumberFor(number: string, customerId: string): Promise<OrderRow | null> {
     return this.db.one<OrderRow>(
@@ -335,8 +342,14 @@ export class CustomerOrdersService {
     }));
   }
 
-  /** `_customer_order(order)`: `CustomerOrderSerializer` plus the parcels. */
-  async payload(order: OrderRow): Promise<Record<string, unknown>> {
+  /**
+   * `_customer_order(order)`: `CustomerOrderSerializer` plus the parcels --
+   * or, as checkout answers, the serializer alone.
+   */
+  async payload(
+    order: OrderRow,
+    options: { shipments?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
     const customer = await this.db.one<{ name: string }>(
       `SELECT name FROM customers_customer WHERE id = $1::uuid`,
       [order.customer_id],
@@ -371,7 +384,7 @@ export class CustomerOrdersService {
       items: await this.items(order.id),
       payments: await this.payments(order.id),
       events: await this.events(order.id),
-      shipments: await this.shipments(order.id),
+      ...(options.shipments === false ? {} : { shipments: await this.shipments(order.id) }),
     };
   }
 

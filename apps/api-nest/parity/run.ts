@@ -15,6 +15,7 @@ import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
 import { cartCases } from './cart-cases.ts';
+import { checkoutCases } from './checkout-cases.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
@@ -59,6 +60,50 @@ export interface Case {
   effects?: string[];
   /** Adjust a parsed JSON body before comparing: blank out a value each API mints (a new id). */
   normalize?: (body: unknown) => void;
+  /**
+   * Compare the Celery jobs each API queued (task and arguments, ids read as
+   * the order number or the variant they name), emptying the queue around it.
+   */
+  jobs?: boolean;
+}
+
+// Where both APIs queue Celery jobs. No worker takes them in this stack.
+const broker = new Redis(process.env.CELERY_BROKER_URL ?? 'redis://redis:6379/1', {
+  lazyConnect: true,
+});
+
+/** The jobs queued since the queue was emptied, oldest first, their ids made readable. */
+async function queuedJobs(db: pg.Client): Promise<unknown[]> {
+  const raw = await broker.lrange('celery', 0, -1);
+  await broker.del('celery');
+  const jobs: unknown[] = [];
+  for (const entry of raw.reverse()) {
+    const message = JSON.parse(entry) as { headers: { task: string }; body: string };
+    const [args, kwargs] = JSON.parse(Buffer.from(message.body, 'base64').toString('utf8')) as [
+      unknown[],
+      unknown,
+    ];
+    const readable: unknown[] = [];
+    for (const arg of args) {
+      const order = await db.query<{ number: string }>(
+        `SELECT number FROM orders_order WHERE id::text = $1`,
+        [arg],
+      );
+      const stock = await db.query<{ sku: string }>(
+        `SELECT v.sku FROM inventory_inventory i JOIN catalog_productvariant v ON v.id = i.variant_id WHERE i.id::text = $1`,
+        [arg],
+      );
+      readable.push(
+        order.rows[0]
+          ? `order:${order.rows[0].number}`
+          : stock.rows[0]
+            ? `inventory:${stock.rows[0].sku}`
+            : arg,
+      );
+    }
+    jobs.push({ task: message.headers.task, args: readable, kwargs });
+  }
+  return jobs;
 }
 
 export function send(base: URL, testCase: Case): Promise<Captured> {
@@ -408,6 +453,9 @@ async function buildCases(): Promise<Case[]> {
   // --- The cart: lines, coupons, shipping options ----------------------------------
   cases.push(...(await cartCases()));
 
+  // --- Checkout: stock reserved, money recorded, jobs queued ---------------------------
+  cases.push(...(await checkoutCases({ DJANGO, NEST })));
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
 
@@ -425,12 +473,14 @@ async function run(
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
   const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  if (testCase.jobs) await broker.del('celery');
   const response = normalizeBody(await send(base, sent), testCase);
   const effects: unknown[][] = [];
   for (const query of testCase.effects ?? []) {
     const parameters = query.includes('$1') ? [since] : [];
     effects.push((await db.query(query, parameters)).rows);
   }
+  if (testCase.jobs) effects.push(await queuedJobs(db));
   if (writes) await undoWrites(db, since as string);
   return { response, effects };
 }
@@ -553,4 +603,7 @@ void main()
     console.error(error);
     process.exitCode = 2;
   })
-  .finally(() => process.exit());
+  .finally(() => {
+    broker.disconnect();
+    process.exit();
+  });

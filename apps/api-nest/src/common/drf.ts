@@ -15,8 +15,12 @@ import { isIP } from 'node:net';
 import { domainToASCII } from 'node:url';
 
 import { isDict, pythonTypeName } from '../http/request-body';
+import Decimal from 'decimal.js';
+
+import { Dec } from './decimal';
 import { canonicalPhone, INVALID_PHONE_MESSAGE } from './phone';
-import { PyFloat, pyLen, pyStr, pyStrip } from './python';
+import { isFiniteDecimal, PyFloat, pyDecimal, pyLen, pyStr, pyStrip } from './python';
+import { uuidFromValue } from './uuid';
 
 /** DRF's `empty`: the key was not in the data at all. */
 export const EMPTY = Symbol('empty');
@@ -36,6 +40,16 @@ export class Invalid extends Error {
 
   static of(message: string, code = 'invalid'): Invalid {
     return new Invalid([{ message, code }]);
+  }
+}
+
+/**
+ * A `validate_<field>` method raising `ValidationError({...})`: the field's
+ * errors are a dict of their own (`{"shipping_address": {"city": [...]}}`).
+ */
+export class InvalidNested extends Error {
+  constructor(readonly detail: Record<string, ErrorDetail[]>) {
+    super('Invalid input.');
   }
 }
 
@@ -252,7 +266,7 @@ export function choiceField(
 }
 
 export type Fields = Record<string, Field<unknown>>;
-export type Errors = Record<string, ErrorDetail[]>;
+export type Errors = Record<string, ErrorDetail[] | Record<string, ErrorDetail[]>>;
 
 export interface SerializerOptions<V> {
   partial?: boolean;
@@ -302,6 +316,7 @@ export async function runSerializer<V extends Record<string, unknown>>(
       values[name] = value;
     } catch (error) {
       if (error instanceof Invalid) errors[name] = error.details;
+      else if (error instanceof InvalidNested) errors[name] = error.detail;
       else throw error;
     }
   }
@@ -318,11 +333,14 @@ export async function runSerializer<V extends Record<string, unknown>>(
 }
 
 /** `serializer.errors` as the envelope's `details`: messages only. */
-export function errorMessages(errors: Errors): Record<string, string[]> {
+export function errorMessages(errors: Errors): Record<string, unknown> {
+  const messages = (details: ErrorDetail[]) => details.map((detail) => detail.message);
   return Object.fromEntries(
     Object.entries(errors).map(([name, details]) => [
       name,
-      details.map((detail) => detail.message),
+      Array.isArray(details)
+        ? messages(details)
+        : Object.fromEntries(Object.entries(details).map(([key, value]) => [key, messages(value)])),
     ]),
   );
 }
@@ -334,4 +352,129 @@ export function bangladeshiPhoneField(options: CharOptions = {}): Field<string |
     invalidMessage: INVALID_PHONE_MESSAGE,
     convert: (value, fail) => (pyStrip(value) ? (canonicalPhone(value) ?? fail()) : ''),
   });
+}
+
+/** `serializers.DictField()`: any dict, values unvalidated, keys as str. */
+export function dictField(
+  options: { required?: boolean } = {},
+): Field<Record<string, unknown> | null> {
+  return {
+    run(data, partial) {
+      const settled = emptyValue<Record<string, unknown>>(data, partial, {
+        required: options.required ?? true,
+        allowNull: false,
+      });
+      if (settled.settled) return settled.value;
+      if (!isDict(data)) {
+        throw Invalid.of(
+          `Expected a dictionary of items but got type "${pythonTypeName(data)}".`,
+          'not_a_dict',
+        );
+      }
+      return { ...data };
+    },
+  };
+}
+
+/** `serializers.UUIDField()`: an int is `UUID(int=...)`, a str `UUID(hex=...)`, anything else refused. */
+export function uuidField(
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<string | null> {
+  return {
+    run(data, partial) {
+      const settled = emptyValue<string>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      const isInt =
+        typeof data === 'boolean' ||
+        typeof data === 'bigint' ||
+        (typeof data === 'number' && Number.isInteger(data));
+      if (!isInt && typeof data !== 'string') throw Invalid.of('Must be a valid UUID.');
+      const lookup = uuidFromValue(data);
+      if ('invalid' in lookup || !lookup.id) throw Invalid.of('Must be a valid UUID.');
+      return lookup.id;
+    },
+  };
+}
+
+/** `Decimal(text).as_tuple()`'s digits and exponent, for a finite literal. */
+function decimalTuple(text: string): { digits: string; exponent: number } {
+  const unsigned = text.replace(/^[+-]/, '');
+  const [mantissa = '', power = '0'] = unsigned.split(/[eE]/);
+  const [whole = '', fraction = ''] = mantissa.split('.');
+  const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '');
+  return { digits, exponent: Number(power) - fraction.length };
+}
+
+/**
+ * `serializers.DecimalField(max_digits, decimal_places)`: Python's `Decimal`
+ * parsing, DRF's precision checks, then quantized (half even) -- answered as
+ * the Decimal's text.
+ */
+export function decimalField(
+  maxDigits: number,
+  decimalPlaces: number,
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<string | null> {
+  const allowNull = options.allowNull ?? false;
+  return {
+    run(data, partial) {
+      // `validate_empty_values`: a blank string is None when null is allowed.
+      if (allowNull && data !== EMPTY && data !== undefined && pyStrip(pyStr(data)) === '')
+        return null;
+      const settled = emptyValue<string>(data, partial, {
+        required: options.required ?? true,
+        allowNull,
+      });
+      if (settled.settled) return settled.value;
+      // `smart_str(data).strip()`.
+      const text = pyStrip(pyStr(data));
+      if (pyLen(text) > 1000) throw Invalid.of('String value too large.', 'max_string_length');
+      const parsed = pyDecimal(text);
+      if (parsed === null || !isFiniteDecimal(parsed))
+        throw Invalid.of('A valid number is required.');
+
+      const { digits, exponent } = decimalTuple(parsed);
+      let total: number;
+      let whole: number;
+      let places: number;
+      if (exponent >= 0) {
+        total = digits.length + exponent;
+        whole = total;
+        places = 0;
+      } else if (digits.length > -exponent) {
+        total = digits.length;
+        whole = total + exponent;
+        places = -exponent;
+      } else {
+        total = -exponent;
+        whole = 0;
+        places = total;
+      }
+      if (total > maxDigits) {
+        throw Invalid.of(
+          `Ensure that there are no more than ${maxDigits} digits in total.`,
+          'max_digits',
+        );
+      }
+      if (places > decimalPlaces) {
+        throw Invalid.of(
+          `Ensure that there are no more than ${decimalPlaces} decimal places.`,
+          'max_decimal_places',
+        );
+      }
+      if (whole > maxDigits - decimalPlaces) {
+        throw Invalid.of(
+          `Ensure that there are no more than ${maxDigits - decimalPlaces} digits before the decimal point.`,
+          'max_whole_digits',
+        );
+      }
+      const value = new Dec(parsed).toDecimalPlaces(decimalPlaces, Decimal.ROUND_HALF_EVEN);
+      const shown = value.toFixed(decimalPlaces);
+      // Python keeps a negative zero's sign: `Decimal("-0")` quantizes to -0.00.
+      return value.isZero() && value.isNeg() && !shown.startsWith('-') ? `-${shown}` : shown;
+    },
+  };
 }
