@@ -114,6 +114,65 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
           NEXT_PUBLIC_SITE_URL: http://localhost:4000
 
+  # -------------------------------------------------------------- api-nest --
+  # The NestJS port (ADR-0013): its own checks, then the proof that it answers
+  # as the Django API does.
+  api-nest:
+    name: NestJS API (lint, types, unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api-nest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/api-nest/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Type check (API and parity harness)
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # Both APIs on one freshly migrated and seeded database; every parity case to
+  # both. A difference not listed in parity/known-differences.ts fails the job,
+  # so a change to either API that breaks the other's answer cannot merge.
+  api-nest-parity:
+    name: NestJS API parity with Django
+    runs-on: ubuntu-latest
+    needs: [api-nest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start both APIs, migrate, seed, apply the parity fixtures
+        run: scripts/nest-parity.sh reset
+
+      - name: Compare every case
+        run: scripts/nest-parity.sh run
+
+      - name: Compare the rate limits (both APIs throttled)
+        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run --rm throttle-check
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -p rangon-nest -f docker-compose.nest.yml logs --tail 200 django nest
+
   # ------------------------------------------------------------------- e2e --
   # The four critical flows, driven in a real browser against a real API and a
   # real database (docs/testing/strategy.md).
@@ -337,6 +396,10 @@ jobs:
       - name: Node dependency audit
         working-directory: apps/web
         run: npm audit --audit-level=high || echo "::warning::npm audit found advisories"
+
+      - name: Node dependency audit (NestJS API)
+        working-directory: apps/api-nest
+        run: npm audit --omit=dev --audit-level=high || echo "::warning::npm audit found advisories in apps/api-nest"
 
   # --------------------------------------------------------------- secrets --
   secrets:
