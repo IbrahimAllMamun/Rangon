@@ -59,11 +59,53 @@ export class MerchandisingService {
       `${WITH_RELATED} WHERE ${P}."id" IN ${params.list([...position.keys()], 'uuid')} ORDER BY ${P}."created_at" DESC`,
       params.values,
     );
-    const products = rows.map(toProduct);
+    const products = rows.map((row) => toProduct(row));
     // Python's sort is stable; so is Array.prototype.sort.
     return products.sort(
       (a, b) => (position.get(a.id) ?? position.size) - (position.get(b.id) ?? position.size),
     );
+  }
+
+  /** Visible products with category and brand: `base.order_by(...)[:n]` on the home page. */
+  async visibleWithRelated(
+    where: string,
+    orderAndLimit: string,
+    values: unknown[] = [],
+  ): Promise<ListedProduct[]> {
+    const rows = await this.db.arrays(
+      `${WITH_RELATED} WHERE (${VISIBLE}${where ? ` AND ${where}` : ''}) ${orderAndLimit}`,
+      values,
+    );
+    return rows.map((row) => toProduct(row));
+  }
+
+  /** The merchandiser's carousel, in their order; products a shopper cannot open are skipped. */
+  async carouselIds(): Promise<string[]> {
+    const rows = await this.db.arrays(
+      `SELECT ${P}."id" FROM ${P} INNER JOIN "content_homecarouselitem" ON (${P}."id" = "content_homecarouselitem"."product_id") ` +
+        `WHERE (${VISIBLE} AND "content_homecarouselitem"."id" IS NOT NULL) ` +
+        `ORDER BY "content_homecarouselitem"."position" ASC, "content_homecarouselitem"."created_at" ASC`,
+    );
+    return rows.map((row) => row[0] as string);
+  }
+
+  /**
+   * Best sellers: most order lines first (every line, whatever its order's
+   * status, as the Django API counts them), ties left to the plan -- hence
+   * its statement exactly.
+   */
+  async bestSellers(limit = 8): Promise<ListedProduct[]> {
+    const rows = await this.db.arrays(
+      `SELECT ${columns(P, PRODUCT_COLUMNS)}, COUNT("orders_orderitem"."id") AS "sold", ` +
+        `${columns('"catalog_category"', CATEGORY_COLUMNS)}, ${columns('"catalog_brand"', BRAND_COLUMNS)} ` +
+        `FROM ${P} LEFT OUTER JOIN "catalog_productvariant" ON (${P}."id" = "catalog_productvariant"."product_id") ` +
+        `LEFT OUTER JOIN "orders_orderitem" ON ("catalog_productvariant"."id" = "orders_orderitem"."variant_id") ` +
+        `INNER JOIN "catalog_category" ON (${P}."category_id" = "catalog_category"."id") ` +
+        `LEFT OUTER JOIN "catalog_brand" ON (${P}."brand_id" = "catalog_brand"."id") ` +
+        `WHERE (${VISIBLE}) GROUP BY ${P}."id", "catalog_category"."id", "catalog_brand"."id" ` +
+        `HAVING COUNT("orders_orderitem"."id") > 0 ORDER BY ${PRODUCT_COLUMNS.length + 1} DESC LIMIT ${Number(limit)}`,
+    );
+    return rows.map((row) => toProduct(row, PRODUCT_COLUMNS.length + 1));
   }
 
   /** `visible_products()` in a statement: ids in `Meta.ordering` (newest first) unless told otherwise. */
@@ -143,10 +185,14 @@ export class MerchandisingService {
   }
 }
 
-export function toProduct(row: unknown[]): ListedProduct {
+/** A product row followed by its category's and brand's columns, from `categoryStart`. */
+export function toProduct(
+  row: unknown[],
+  categoryStart: number = PRODUCT_COLUMNS.length,
+): ListedProduct {
   const product = pick(row, PRODUCT_COLUMNS, 0);
-  const category = pick(row, CATEGORY_COLUMNS, PRODUCT_COLUMNS.length);
-  const brand = pick(row, BRAND_COLUMNS, PRODUCT_COLUMNS.length + CATEGORY_COLUMNS.length);
+  const category = pick(row, CATEGORY_COLUMNS, categoryStart);
+  const brand = pick(row, BRAND_COLUMNS, categoryStart + CATEGORY_COLUMNS.length);
   return {
     id: product.id as string,
     createdAt: product.created_at as string,

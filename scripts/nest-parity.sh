@@ -27,6 +27,8 @@ case "${1:-}" in
   seed)
     "${compose[@]}" exec -T -e DJANGO_ALLOW_DEMO_SEED=1 django python manage.py seed_demo --reset
     "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture.py
+    "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_content.py
+    "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_nav.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" parity

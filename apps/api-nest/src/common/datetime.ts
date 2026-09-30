@@ -46,6 +46,16 @@ export function utcIso(text: string | null): string | null {
   return `${wallClock(epochSeconds, 0)}${fraction(microseconds)}Z`;
 }
 
+/**
+ * Python's own `isoformat()` of the UTC value, with no DRF in between -- what
+ * a view gets when it calls `.isoformat()` itself: `+00:00`, never `Z`.
+ */
+export function pyIsoformat(text: string | null): string | null {
+  if (text === null) return null;
+  const { epochSeconds, microseconds } = parsePgTimestamptz(text);
+  return `${wallClock(epochSeconds, 0)}${fraction(microseconds)}+00:00`;
+}
+
 /** A serializer `DateTimeField`: converted to `timeZone`, then `isoformat()`. */
 export function localIso(text: string | null, timeZone: string): string | null {
   if (text === null) return null;

@@ -26,6 +26,9 @@ export interface Case {
   method?: string;
   path: string;
   headers?: Record<string, string>;
+  /** SQL run before the pair of requests, and undone by `teardown` after. */
+  setup?: string[];
+  teardown?: string[];
 }
 
 function send(base: URL, testCase: Case): Promise<Captured> {
@@ -36,6 +39,9 @@ function send(base: URL, testCase: Case): Promise<Captured> {
         port: base.port,
         method: testCase.method ?? 'GET',
         path: testCase.path,
+        // One connection per request: Node's keep-alive agent would otherwise
+        // hold the Nest API's sockets open and keep this process from exiting.
+        agent: false,
         headers: { host: HOST, accept: 'application/json', ...testCase.headers },
       },
       (res) => {
@@ -328,6 +334,24 @@ async function buildCases(): Promise<Case[]> {
     add(`suggest ${JSON.stringify(q)}`, path);
   }
 
+  // --- Content: home, navigation, footer, pages ------------------------------
+  add('home', '/api/v1/shop/home/');
+  add('navigation', '/api/v1/shop/navigation/');
+  // With every header override switched off, navigation falls back to the
+  // category tree (ADR-0009 path 2) -- both paths checked in one run.
+  add('navigation: category fallback', '/api/v1/shop/navigation/', {
+    setup: [`UPDATE content_navigationitem SET is_active = false WHERE placement = 'HEADER'`],
+    teardown: [`UPDATE content_navigationitem SET is_active = true WHERE placement = 'HEADER'`],
+  });
+  add('site', '/api/v1/shop/site/');
+  add('pages', '/api/v1/shop/pages/');
+  for (const page of await json<{ slug: string }[]>('/api/v1/shop/pages/')) {
+    add(`page ${page.slug}`, `/api/v1/shop/pages/${page.slug}/`);
+  }
+  add('page: unpublished', '/api/v1/shop/pages/parity-draft-page/');
+  add('page: missing', '/api/v1/shop/pages/no-such-page/');
+  add('page: slug converter refuses', '/api/v1/shop/pages/bad%24slug/');
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
 
@@ -344,9 +368,18 @@ async function main(): Promise<void> {
   let known = 0;
   const knownReasons = new Map<string, number>();
 
+  const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await db.connect();
   for (const testCase of cases) {
-    const django = await send(DJANGO, testCase);
-    const nest = await send(NEST, testCase);
+    for (const statement of testCase.setup ?? []) await db.query(statement);
+    let django: Captured;
+    let nest: Captured;
+    try {
+      django = await send(DJANGO, testCase);
+      nest = await send(NEST, testCase);
+    } finally {
+      for (const statement of testCase.teardown ?? []) await db.query(statement);
+    }
     const differences = compare(django, nest, testCase.headers?.['x-request-id']);
     const unexplained = differences.filter((difference) => {
       const reason = isKnown(testCase, difference);
@@ -375,7 +408,9 @@ async function main(): Promise<void> {
   process.exitCode = failed ? 1 : 0;
 }
 
-void main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 2;
-});
+void main()
+  .catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 2;
+  })
+  .finally(() => process.exit());
