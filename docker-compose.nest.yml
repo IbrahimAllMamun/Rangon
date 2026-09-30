@@ -1,0 +1,176 @@
+# The NestJS API beside the Django one, on one database -- for building it and
+# for proving it answers the same (docs/architecture/decisions/0013-nestjs-api-alongside-django.md).
+#
+#   docker compose -p rangon-nest -f docker-compose.nest.yml up -d --build
+#   docker compose -p rangon-nest -f docker-compose.nest.yml run --rm django python manage.py seed_demo --reset
+#   docker compose -p rangon-nest -f docker-compose.nest.yml run --rm parity
+#
+# **Always pass `-p rangon-nest`.** `.env` sets `COMPOSE_PROJECT_NAME=rangon`,
+# and that beats the `name:` below -- without `-p` these containers become
+# `rangon-db-1` and friends, inside the *development* project, where the next
+# dev `up` treats them as its own.
+#
+# Its own compose project, database and ports, so it cannot touch the dev,
+# test or local-production stacks. Django owns the schema: `django` migrates on
+# start, and the Nest API only ever reads the tables Django created.
+#
+# Ports are bound to 127.0.0.1 and chosen clear of every other stack here:
+#   8610  Django (gunicorn, current source mounted)
+#   8620  NestJS
+
+name: rangon-nest
+
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: config.settings.parity
+  DJANGO_SECRET_KEY: nest-parity-not-a-secret
+  DJANGO_DEBUG: "0"
+  DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  # Seeding and any request that queues work runs it inline: there is no
+  # worker in this stack, and nothing here sends real mail.
+  CELERY_TASK_ALWAYS_EAGER: "1"
+  EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+  RANGON_ALLOW_OVERSELL: "0"
+  # The product feed needs an origin to make links absolute.
+  RANGON_PUBLIC_URL: https://shop.parity.test
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rangon
+      POSTGRES_USER: rangon
+      POSTGRES_PASSWORD: rangon_nest_password
+    volumes:
+      - nest_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rangon -d rangon"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  django:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    environment: *django-env
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    # A list, not a folded `>` block: YAML keeps the newlines of more-indented
+    # lines in a folded scalar, and the shell then ran gunicorn without its
+    # worker flags -- one sync worker, which made every benchmark unfair.
+    # Same shape as production: 2 workers x 4 threads (apps/api/Dockerfile).
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000
+        --workers 2 --threads 4 --timeout 60 --access-logfile -
+    ports:
+      - "127.0.0.1:8610:8000"
+
+  nest:
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    environment:
+      # One settings module name drives both APIs' profiles (src/config/env.ts).
+      DJANGO_SETTINGS_MODULE: config.settings.parity
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      RANGON_PUBLIC_URL: https://shop.parity.test
+      PORT: "3000"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      # Django migrates on start; the Nest API reads what that created.
+      django: {condition: service_started}
+    ports:
+      - "127.0.0.1:8620:3000"
+
+  # The same requests to both APIs; every difference printed (apps/api-nest/parity/).
+  parity:
+    image: node:22-bookworm-slim
+    profiles: [parity]
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest:/app:ro
+    environment:
+      DJANGO_BASE: http://django:8000
+      NEST_BASE: http://nest:3000
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      PARITY_ONLY: ${PARITY_ONLY:-}
+    command: ["node", "parity/run.ts"]
+    depends_on:
+      django: {condition: service_started}
+      nest: {condition: service_started}
+
+  # Both APIs with their rate limits on (dev settings), for parity/throttle.ts.
+  django-throttled:
+    profiles: [throttle]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *django-env
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    command: >
+      gunicorn config.wsgi:application --bind 0.0.0.0:8000
+      --workers 2 --threads 4 --timeout 60
+
+  nest-throttled:
+    profiles: [throttle]
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      PORT: "3000"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  throttle-check:
+    image: node:22-bookworm-slim
+    profiles: [throttle]
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest:/app:ro
+    environment:
+      DJANGO_BASE: http://django-throttled:8000
+      NEST_BASE: http://nest-throttled:3000
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+    command: ["node", "parity/throttle.ts"]
+    depends_on:
+      django-throttled: {condition: service_started}
+      nest-throttled: {condition: service_started}
+
+volumes:
+  nest_postgres:

@@ -37,6 +37,13 @@ ledger, customer database, order table and payment table. There is exactly one i
 Do not swap a working technology for a newer one. Do not add a dependency without stating why in the PR
 description or an ADR.
 
+**A NestJS port of the API is in progress** in `apps/api-nest/` (NestJS 11, Fastify, Drizzle), beside
+Django on the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md),
+[plan](docs/architecture/nest-port.md)). Django still owns the schema and every business rule: never run
+Drizzle migrations, and change a rule in Django first. A ported endpoint must pass the parity harness
+(`scripts/nest-parity.sh run`) against Django before it changes; a write path is ported only with its
+row locks and concurrency tests.
+
 ## 3. Architecture rules (non-negotiable)
 
 1. **Single source of truth** — products, variants, customers, inventory, orders, payments and

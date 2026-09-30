@@ -481,6 +481,42 @@ is still open and tracked in
 
 ## Verification log
 
+### A NestJS API beside Django, phase 1, 2026-09-30
+
+Asked for: a NestJS version of the API, built alongside Django rather than replacing it, full
+parity in phases, on Django's database. ADR-0013; the living plan is
+[docs/architecture/nest-port.md](architecture/nest-port.md).
+
+**What shipped.** `apps/api-nest/`: the foundation (config from the same environment, Django's
+middleware order, the error envelope, SimpleJWT-compatible tokens, DRF pagination, rate limits)
+and the storefront's read endpoints -- products, categories, brands, facets, suggestions, home,
+navigation, site, pages and both product feeds.
+
+**How it is proven.** `docker-compose.nest.yml` runs both APIs on one database. The parity harness
+sends each of 202 requests to both and compares status, media type, three headers, the request-id
+echo and every JSON value; XML and CSV byte for byte. Fixtures add what the demo seed lacks: ties on
+the sort key, inactive variants with the deepest discount, colour-bound images with non-ASCII file
+names, reviews, header navigation overrides.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 202/202, 9 by the one documented difference
+throttle-check (limits on, both APIs) ......... 3/3 sequences identical
+nest unit tests ............................... 84 passed
+tsc (API + harness) / eslint / prettier ....... clean
+```
+
+Things the harness caught that reading the code had not: `WWW-Authenticate`, which Django never sends
+because `core.handlers` replaces the DRF handler that adds it; `price_min=NaN`, a 400 in Django
+(`DecimalField` refuses non-finite bounds) that the port first answered 200; the ORM's alias for a
+join it creates and then trims, which shifts every later `T<n>`; and `Allow` on the APPEND_SLASH
+redirect, which DRF puts on what a view returns and never on what middleware returns. And one in the harness itself: the
+Django service's folded YAML `command:` had silently run gunicorn with one sync worker, which made
+the first benchmark unfair; the numbers in the port document are from the corrected run.
+
+**Measured** (one API at a time, 8 concurrent clients, Django as production runs it): the port serves
+the storefront endpoints at 4-8x the requests per second, p95 3-9x lower, in 114 MB against
+248 MB. That contradicts the *Skip* row written a day earlier, now struck through.
+
 ### Fewer Python processes for the same work, 2026-09-30
 
 Asked for: would an Express (then NestJS) backend use fewer resources? Measured first. A Node
@@ -3022,7 +3058,7 @@ Shipped from this list on 2026-09-15:
 | **Search `word_similarity`** | The suggest endpoint and the `SearchTerm` log already shipped. Swapping `trigram_similar` for `word_similarity` is a marginal recall improvement on a 12-product catalogue |
 | **Sales-rep attribution** (G11) | There are no sales reps |
 | **Backup download from the UI** (G12) | The script exists and has been used in anger. Scheduling it (Tier 0 #4) is the real need; a button is not |
-| **Rewrite the API in Express or NestJS** | Asked 2026-09-29 to save resources. A Node process measured ~92 MB beside Python's ~85 MB each, so the gap was process *count*, and that was closed by configuration instead (verification log, 2026-09-30). `/api/health/` answers in 3 ms, so the framework is not where request time goes. A rewrite is ~31k lines, 1,426 tests, 52 row locks and every money path moved off `Decimal`. Revisit only if a profile shows the framework itself as the bottleneck |
+| ~~**Rewrite the API in Express or NestJS**~~ | **Superseded 2026-09-30:** the owner asked for a NestJS API *beside* Django instead (ADR-0013), and a fair benchmark then contradicted this row's reasoning -- under 8 concurrent clients the storefront endpoints are CPU-bound in Python, not waiting on PostgreSQL (verification log, 2026-09-30 "A NestJS API beside Django") |
 | **`celery worker -B`** | Declined 2026-09-30. It forks beat into its own process anyway (`celery.beat.EmbeddedService` defaults to `multiprocessing`), so the saving is small; Celery documents it as development-only; and a second worker replica would run every scheduled job twice |
 | **Redis cache for `/shop/home/`** | Declined 2026-09-30. The storefront already caches that payload for 120 s under the `home` tag, and content changes revalidate it (`content.tasks.revalidate_storefront`). Django serves it about once every two minutes per web replica; a second cache would only add a second place for a price to be stale |
 

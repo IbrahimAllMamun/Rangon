@@ -215,6 +215,17 @@ Tests in a throwaway containerised environment (what CI runs):
 docker compose -f docker-compose.test.yml run --rm api-test
 ```
 
+## The NestJS API (in progress)
+
+`apps/api-nest/` is a NestJS port of the API, built beside Django on the same database and proven
+equal to it endpoint by endpoint (ADR-0013). Nothing routes to it yet. Phase 1, the storefront's
+read endpoints, is done. See [docs/architecture/nest-port.md](docs/architecture/nest-port.md):
+
+```bash
+scripts/nest-parity.sh reset   # both APIs on one fresh database, seeded
+scripts/nest-parity.sh run     # every request to both; fails on any difference
+```
+
 ## Run the production build locally
 
 `docker-compose.prodlocal.yml` runs the **production** images on your own machine — gunicorn, the

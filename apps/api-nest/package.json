@@ -1,0 +1,53 @@
+{
+  "name": "@rangon/api-nest",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Rangon API on NestJS, served beside the Django API from the same database.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput & node --watch-path=dist dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.parity.json",
+    "lint": "eslint \"{src,test,parity}/**/*.ts\"",
+    "format": "prettier --write \"{src,test,parity}/**/*.ts\"",
+    "format:check": "prettier --check \"{src,test,parity}/**/*.ts\"",
+    "test": "jest",
+    "parity": "node parity/run.ts",
+    "db:pull": "drizzle-kit pull && node scripts/pull-schema.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.2.6",
+    "@nestjs/core": "11.2.6",
+    "@nestjs/platform-fastify": "11.2.6",
+    "decimal.js": "10.6.0",
+    "drizzle-orm": "0.45.3",
+    "fastify": "5.12.5",
+    "ioredis": "5.11.1",
+    "pg": "8.23.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@nestjs/testing": "11.2.6",
+    "@swc/core": "1.16.12",
+    "@swc/jest": "0.2.39",
+    "@types/jest": "30.0.0",
+    "@types/node": "22.20.4",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11",
+    "eslint": "10.11.0",
+    "jest": "30.5.2",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0"
+  },
+  "overrides": {
+    "fastify": "$fastify"
+  }
+}
