@@ -1,6 +1,6 @@
 # ADR-0013 — A NestJS API beside Django, on the same database, ported module by module
 
-**Status:** Accepted · 2026-09-30 · phase 1 (storefront catalogue and content) done
+**Status:** Accepted · 2026-09-30 · phase 1 (storefront catalogue and content) done; phase 2 in progress (`auth/` done)
 
 ## Context
 
@@ -43,7 +43,14 @@ creates, and proven equal to Django by comparing live responses rather than by r
    with its row locks, idempotency and concurrency tests, and proven by parity *and* by
    `apps/api/tests/test_concurrency.py`-style tests against the shared database. Until then that path
    stays Django's.
-7. **NestJS 11, not 12.** 12.0 shipped on 2026-09-14 and is ESM-only; 11.2 is still patched
+7. **Passwords are Django's.** Hashes are read and written in Django's encodings with Django's
+   parameters (Argon2id, m=102400, t=2, p=8, a 22-character salt), so an account created or
+   rehashed by one API signs in on the other. Argon2 comes from **`@node-rs/argon2`** (2.2.1), the
+   one dependency phase 2 adds: Node 22 has no Argon2 of its own (`crypto.argon2` arrives in 24.7),
+   the package ships prebuilt binaries with no dependencies of its own, and unlike the older `argon2`
+   package it takes a caller's salt -- which Django's 22-character salt needs. Checked: for the same
+   password and salt it produces Django's hash byte for byte. PBKDF2 is `node:crypto`.
+8. **NestJS 11, not 12.** 12.0 shipped on 2026-09-14 and is ESM-only; 11.2 is still patched
    (11.2.6, 2026-09-23). Move once 12 has settled.
 
 ## Consequences
