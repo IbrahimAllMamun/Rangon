@@ -25,9 +25,10 @@ export interface AttributeValueRow {
   attribute: { id: string; code: string; name: string; kind: string };
 }
 
-interface ImageRow {
+export interface ImageRow {
   image: string;
   altText: string;
+  isPrimary: boolean;
   attributeValue: AttributeValueRow | null;
 }
 
@@ -110,6 +111,7 @@ export class ProductPayloadService {
       byProduct.get(image.product_id as string)?.images.push({
         image: image.image as string,
         altText: image.alt_text as string,
+        isPrimary: image.is_primary as boolean,
         attributeValue:
           image.attribute_value_id === null ? null : toAttributeValue(value, attribute),
       });

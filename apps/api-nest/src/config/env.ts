@@ -57,6 +57,10 @@ const schema = z.object({
 
   DJANGO_TIME_ZONE: z.string().default('Asia/Dhaka'),
   RANGON_DEFAULT_TAX_RATE: z.string().default('0.00'),
+  RANGON_CURRENCY: z.string().default('BDT'),
+  // The origin customers reach the shop on; the product feed refuses to render
+  // without it rather than publish links nothing can follow.
+  RANGON_PUBLIC_URL: z.string().default(''),
 
   // Media is served root-relative from one origin (core/media.py).
   MEDIA_URL: z.string().default('/media/'),

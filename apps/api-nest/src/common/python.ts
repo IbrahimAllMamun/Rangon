@@ -167,3 +167,27 @@ function joinUrl(head: string, query: string, fragment: string): string {
   // urlunsplit drops an empty query or fragment entirely, `?` and `#` included.
   return `${head}${query ? `?${query}` : ''}${fragment ? `#${fragment}` : ''}`;
 }
+
+/**
+ * `str.split()` with no argument: runs of what Python's `str.isspace()` calls
+ * whitespace, empty pieces dropped. Not JavaScript's `\s`, which differs both
+ * ways: Python counts the ASCII separators U+001C-U+001F and U+0085, and does
+ * not count U+FEFF.
+ */
+const PY_WHITESPACE =
+  // eslint-disable-next-line no-control-regex -- the separators are the point: Python splits on them.
+  /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+
+export function pySplit(text: string): string[] {
+  return text.split(PY_WHITESPACE).filter(Boolean);
+}
+
+/** Python `len()` of a str: code points, not UTF-16 units. */
+export function pyLen(text: string): number {
+  return Array.from(text).length;
+}
+
+/** Python `text[:n]`: the first n code points. */
+export function pySlice(text: string, end: number): string {
+  return Array.from(text).slice(0, end).join('');
+}

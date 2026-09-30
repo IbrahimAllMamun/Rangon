@@ -2,15 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
 
+import { pySlice, pySplit } from '../common/python';
 import { Database } from '../database/database.service';
 
 const MAX_TERM_LENGTH = 120;
 
 /** `catalog.search.normalise_term`: trimmed, lower-cased, single-spaced, capped. */
 export function normaliseTerm(query: string): string {
-  return Array.from((query ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean).join(' '))
-    .slice(0, MAX_TERM_LENGTH)
-    .join('');
+  return pySlice(pySplit((query ?? '').toLowerCase()).join(' '), MAX_TERM_LENGTH);
 }
 
 /** What shoppers type and whether it found anything (`catalog.search`). */

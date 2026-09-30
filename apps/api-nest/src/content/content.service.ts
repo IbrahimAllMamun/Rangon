@@ -5,7 +5,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { categoryUrl, DiscoveryService } from '../catalog/discovery.service';
 import { mediaUrl } from '../common/media';
 import { pyIsoformat } from '../common/datetime';
-import { parseQsl, quotePlus } from '../common/python';
+import { parseQsl, pySplit, quotePlus } from '../common/python';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
 
@@ -114,7 +114,7 @@ export function isExternal(url: string): boolean {
 
 /** `map_link_for_address`: a Google Maps search, or "" with no address. */
 export function mapLinkForAddress(address: string): string {
-  const query = (address ?? '').split(/\s+/).filter(Boolean).join(' ');
+  const query = pySplit(address ?? '').join(' ');
   if (!query) return '';
   return `https://www.google.com/maps/search/?api=1&query=${quotePlus(query)}`;
 }

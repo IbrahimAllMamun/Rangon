@@ -10,6 +10,7 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 
+import { Redis } from 'ioredis';
 import pg from 'pg';
 
 import { type Captured, compare, type Difference } from './compare.ts';
@@ -29,6 +30,8 @@ export interface Case {
   /** SQL run before the pair of requests, and undone by `teardown` after. */
   setup?: string[];
   teardown?: string[];
+  /** Empty the shared Redis first: both APIs' page caches live there. */
+  flushCache?: boolean;
 }
 
 function send(base: URL, testCase: Case): Promise<Captured> {
@@ -352,6 +355,17 @@ async function buildCases(): Promise<Case[]> {
   add('page: missing', '/api/v1/shop/pages/no-such-page/');
   add('page: slug converter refuses', '/api/v1/shop/pages/bad%24slug/');
 
+  // --- Product feeds ------------------------------------------------------------
+  // Cached for 15 minutes by both APIs, each under its own keys: flushed first,
+  // so neither answers from a copy made before the data last changed.
+  add('feed.xml', '/api/v1/shop/feed.xml', { flushCache: true });
+  add('feed.csv', '/api/v1/shop/feed.csv', { flushCache: true });
+  add('feed.xml: a trailing slash is another URL', '/api/v1/shop/feed.xml/');
+  add('feed ignores a bad token', '/api/v1/shop/feed.csv', {
+    flushCache: true,
+    headers: { authorization: 'Bearer abc' },
+  });
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
 
@@ -370,7 +384,9 @@ async function main(): Promise<void> {
 
   const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
+  const redis = new Redis(process.env.REDIS_URL ?? 'redis://redis:6379/0');
   for (const testCase of cases) {
+    if (testCase.flushCache) await redis.flushdb();
     for (const statement of testCase.setup ?? []) await db.query(statement);
     let django: Captured;
     let nest: Captured;
