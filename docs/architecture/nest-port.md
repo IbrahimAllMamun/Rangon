@@ -4,6 +4,9 @@ The NestJS API (`apps/api-nest/`) is being built beside the Django API (`apps/ap
 PostgreSQL database, module by module, each module proven to answer exactly as Django does before
 anything is routed to it. Why and how it was decided: [ADR-0013](decisions/0013-nestjs-api-alongside-django.md).
 
+How to continue the port -- the rules, commands, method and lessons -- is in
+[nest-port-instructions.md](../nest-port-instructions.md).
+
 **Django remains the source of truth.** It owns the schema and every migration, and every path the
 storefront, admin and POS use today is still served by it. Nothing routes to the Nest API yet.
 
