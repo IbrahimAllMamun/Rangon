@@ -77,6 +77,14 @@ Overselling is refused (`INSUFFICIENT_STOCK`) unless `RANGON_ALLOW_OVERSELL=1`, 
 organisation-level configuration. `available` may never go negative while that flag is off. Enforced by
 a database `CheckConstraint` plus a service-level guard under `SELECT … FOR UPDATE`.
 
+**DECISION REQUIRED (D115, found 2026-10-01).** The code does not fully do this. Online checkout
+checks `available` under the row lock, but a counter sale checks only `on_hand`, so the POS can sell
+units reserved for an online order and leave `available` negative. No database constraint holds
+`available` either; only `reserved >= 0` is enforced. Until this is decided, the code's behaviour
+stands: the counter may sell reserved units. Either `inventory.services.sell` checks `available`,
+or this rule says that reservations give way to the counter and what then happens to the online
+order.
+
 ### 1.5 Expired reservations
 
 An online order that is `PENDING` (awaiting prepayment) for longer than `RANGON_RESERVATION_MINUTES`
