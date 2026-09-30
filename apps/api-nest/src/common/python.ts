@@ -174,7 +174,7 @@ function joinUrl(head: string, query: string, fragment: string): string {
  * ways: Python counts the ASCII separators U+001C-U+001F and U+0085, and does
  * not count U+FEFF.
  */
-const PY_WHITESPACE =
+export const PY_WHITESPACE =
   // eslint-disable-next-line no-control-regex -- the separators are the point: Python splits on them.
   /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
 

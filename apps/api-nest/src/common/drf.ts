@@ -19,7 +19,16 @@ import Decimal from 'decimal.js';
 
 import { Dec } from './decimal';
 import { canonicalPhone, INVALID_PHONE_MESSAGE } from './phone';
-import { isFiniteDecimal, PyFloat, pyDecimal, pyLen, pyStr, pyStrip } from './python';
+import {
+  isFiniteDecimal,
+  PY_WHITESPACE,
+  PyFloat,
+  pyDecimal,
+  pyIntText,
+  pyLen,
+  pyStr,
+  pyStrip,
+} from './python';
 import { uuidFromValue } from './uuid';
 
 /** DRF's `empty`: the key was not in the data at all. */
@@ -54,7 +63,8 @@ export class InvalidNested extends Error {
 }
 
 export interface Field<T> {
-  run(data: unknown, partial: boolean): T | typeof SKIP;
+  /** Async where a check needs the database: a unique value, a related row. */
+  run(data: unknown, partial: boolean): T | typeof SKIP | Promise<T | typeof SKIP>;
 }
 
 type Validator = (value: string) => ErrorDetail | null;
@@ -71,6 +81,17 @@ export interface CharOptions {
   /** Runs after the string conversion, as a subclass's `to_internal_value` does. */
   convert?: (value: string, fail: () => never) => string;
   validators?: Validator[];
+  /**
+   * A `UniqueValidator`, which a ModelSerializer puts first: it runs before
+   * the length and character checks, and every one of them still runs.
+   */
+  unique?: UniqueCheck;
+}
+
+/** `UniqueValidator(queryset, message)`: does another row already hold this value? */
+export interface UniqueCheck {
+  message: string;
+  exists: (value: string) => Promise<boolean>;
 }
 
 /** `Field.validate_empty_values`: the answer for a missing or null value, if it settles the field. */
@@ -149,10 +170,37 @@ export function charField(options: CharOptions = {}): Field<string | null> {
           throw Invalid.of(invalid);
         });
       }
+      if (options.unique) return checkUnique(value, options.unique, validators);
       runValidators(value, validators);
       return value;
     },
   };
+}
+
+async function checkUnique(value: string, unique: UniqueCheck, validators: Validator[]) {
+  const errors: ErrorDetail[] = [];
+  if (await uniqueTaken(value, unique)) errors.push({ message: unique.message, code: 'unique' });
+  for (const validator of validators) {
+    const error = validator(value);
+    if (error) errors.push(error);
+  }
+  if (errors.length) throw new Invalid(errors);
+  return value;
+}
+
+/**
+ * DRF's `qs_exists`: a value the database cannot even compare -- a NUL in a
+ * string -- is a data error, which counts as "not taken", and the other
+ * validators say what is wrong with it.
+ */
+async function uniqueTaken(value: string, unique: UniqueCheck): Promise<boolean> {
+  try {
+    return await unique.exists(value);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (typeof code === 'string' && code.startsWith('22')) return false;
+    throw error;
+  }
 }
 
 /** `serializers.EmailField`: a CharField with Django's `EmailValidator` last. */
@@ -306,7 +354,7 @@ export async function runSerializer<V extends Record<string, unknown>>(
   const errors: Errors = {};
   for (const [name, field] of Object.entries(fields)) {
     try {
-      let value = field.run(
+      let value = await field.run(
         Object.hasOwn(data, name) ? data[name] : EMPTY,
         options.partial ?? false,
       );
@@ -475,6 +523,139 @@ export function decimalField(
       const shown = value.toFixed(decimalPlaces);
       // Python keeps a negative zero's sign: `Decimal("-0")` quantizes to -0.00.
       return value.isZero() && value.isNeg() && !shown.startsWith('-') ? `-${shown}` : shown;
+    },
+  };
+}
+
+/** `serializers.SlugField()`: a CharField whose last validator is the ASCII slug pattern. */
+export function slugField(options: CharOptions = {}): Field<string | null> {
+  return charField({
+    ...options,
+    validators: [
+      ...(options.validators ?? []),
+      (value) =>
+        /^[-a-zA-Z0-9_]+$/.test(value)
+          ? null
+          : {
+              message:
+                'Enter a valid "slug" consisting of letters, numbers, underscores or hyphens.',
+              code: 'invalid',
+            },
+    ],
+  });
+}
+
+/** Python whitespace, then `$`: DRF's `re_decimal`, `\.0*\s*$`. */
+const RE_DECIMAL = new RegExp(`\\.0*(?:${PY_WHITESPACE.source})?$`);
+
+/**
+ * `serializers.IntegerField(min_value, max_value)`: `int()` of the value's
+ * `str()` once a `.0` tail is dropped, so `"5.0"` and `5.0` are 5 and `5.5`,
+ * `true` and `"five"` are refused. The maximum is checked before the minimum,
+ * and both always run. Answers a number, or a bigint past 2^53.
+ */
+export function integerField(
+  options: { required?: boolean; allowNull?: boolean; minValue?: number; maxValue?: number } = {},
+): Field<number | bigint | null> {
+  return {
+    run(data, partial) {
+      const settled = emptyValue<number>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      if (typeof data === 'string' && pyLen(data) > 1000)
+        throw Invalid.of('String value too large.', 'max_string_length');
+      const text = typeof data === 'boolean' ? 'True' : pyStr(data);
+      const parsed =
+        data === true || data === false ? null : pyIntText(text.replace(RE_DECIMAL, ''));
+      if (parsed === null) throw Invalid.of('A valid integer is required.');
+      const errors: ErrorDetail[] = [];
+      if (options.maxValue !== undefined && parsed > BigInt(options.maxValue)) {
+        errors.push({
+          message: `Ensure this value is less than or equal to ${options.maxValue}.`,
+          code: 'max_value',
+        });
+      }
+      if (options.minValue !== undefined && parsed < BigInt(options.minValue)) {
+        errors.push({
+          message: `Ensure this value is greater than or equal to ${options.minValue}.`,
+          code: 'min_value',
+        });
+      }
+      if (errors.length) throw new Invalid(errors);
+      const small =
+        parsed >= BigInt(Number.MIN_SAFE_INTEGER) && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
+      return small ? Number(parsed) : parsed;
+    },
+  };
+}
+
+/**
+ * The primary-key lookup Django's `UUIDField` makes of a value: `UUID(int=)`
+ * for an int, `UUID(hex=)` for anything else -- which only a str can pass.
+ * Null where Django raises its "is not a valid UUID" `ValidationError`.
+ */
+function uuidLookup(value: unknown): string | null {
+  const lookup = uuidFromValue(value);
+  return 'invalid' in lookup ? null : lookup.id;
+}
+
+/**
+ * `PrimaryKeyRelatedField(queryset=Model.objects.all())` over a UUID primary
+ * key, as a ModelSerializer builds one for a foreign key. A blank is null; a
+ * bool is the wrong type; a value that is not a UUID is Django's own
+ * `ValidationError` (which DRF reports under the field); a UUID nothing has is
+ * "does not exist", naming the value as sent. Answers the canonical id.
+ */
+export function pkRelatedField(
+  exists: (id: string) => Promise<boolean>,
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<string | null> {
+  return {
+    async run(input, partial) {
+      // `RelatedField.run_validation`: "" is forced to None first.
+      const data = input === '' ? null : input;
+      const settled = emptyValue<string>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      if (typeof data === 'boolean')
+        throw Invalid.of('Incorrect type. Expected pk value, received bool.', 'incorrect_type');
+      const id = uuidLookup(data);
+      if (id === null) throw Invalid.of(`“${pyStr(data)}” is not a valid UUID.`);
+      if (!(await exists(id)))
+        throw Invalid.of(`Invalid pk "${pyStr(data)}" - object does not exist.`, 'does_not_exist');
+      return id;
+    },
+  };
+}
+
+/** An upload, as `request.data` holds one from a multipart body. */
+export interface UploadedFile {
+  name: string;
+  size: number;
+  contentType: string;
+  bytes: Buffer;
+}
+
+/**
+ * `serializers.ImageField` (`RelativeImageField` too) for a body that is not
+ * multipart: nothing in JSON is a file, so anything but null is refused.
+ * `validate` is the serializer's `validate_<field>` for an actual file.
+ */
+export function imageField(
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<UploadedFile | null> {
+  return {
+    run(data, partial) {
+      const settled = emptyValue<UploadedFile>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      throw Invalid.of('The submitted data was not a file. Check the encoding type on the form.');
     },
   };
 }

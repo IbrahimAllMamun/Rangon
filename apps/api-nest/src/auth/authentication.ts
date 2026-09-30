@@ -14,6 +14,12 @@ import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
 import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
+import {
+  ACTION_METADATA,
+  RolePermissions,
+  STAFF_VIEW_METADATA,
+  type StaffViewMeta,
+} from './permissions';
 
 export interface RequestUser {
   id: string;
@@ -144,6 +150,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly authenticator: Authenticator,
+    private readonly permissions: RolePermissions,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -165,6 +172,23 @@ export class AuthGuard implements CanActivate {
       request.user.roleCode !== 'CUSTOMER'
     ) {
       throw new PermissionDenied();
+    }
+    // `RolePermission`, after `IsAuthenticated`, on every staff view.
+    const view = this.reflector.get<StaffViewMeta | undefined>(
+      STAFF_VIEW_METADATA,
+      context.getClass(),
+    );
+    if (view) {
+      const action = this.reflector.get<string | undefined>(ACTION_METADATA, context.getHandler());
+      if (
+        !(await this.permissions.allows(
+          request.user,
+          view.required,
+          action ?? null,
+          request.method,
+        ))
+      )
+        throw new PermissionDenied();
     }
     return true;
   }

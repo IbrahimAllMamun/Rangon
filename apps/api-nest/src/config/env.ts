@@ -69,6 +69,10 @@ const schema = z.object({
   PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
   // Django's Celery broker: jobs this API queues are run by Django's worker.
   CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
+  // The storefront's cache-revalidation endpoint (`content.tasks`): when set,
+  // a navigation, category or content change queues a job asking it to drop
+  // the cached pages. Unset, nothing is queued.
+  WEB_REVALIDATE_URL: z.string().default(''),
   // The origin customers reach the shop on; the product feed refuses to render
   // without it rather than publish links nothing can follow.
   RANGON_PUBLIC_URL: z.string().default(''),

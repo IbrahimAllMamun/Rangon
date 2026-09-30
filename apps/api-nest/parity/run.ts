@@ -15,6 +15,7 @@ import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
 import { cartCases } from './cart-cases.ts';
+import { catalogAdminCases } from './catalog-admin-cases.ts';
 import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
 import { concurrencyChecks } from './concurrency.ts';
@@ -195,6 +196,11 @@ async function buildCases(): Promise<Case[]> {
   add('wrong method', '/api/v1/shop/categories/', { method: 'POST' });
   add('wrong method on detail', '/api/v1/shop/products/classic-oxford-shirt/', {
     method: 'DELETE',
+  });
+  // DRF authenticates before it refuses the method, and puts `Allow` on the 401.
+  add('wrong method, bad token', '/api/v1/shop/categories/', {
+    method: 'PUT',
+    headers: { authorization: 'Bearer abc' },
   });
   // No HEAD case: gunicorn writes a body on HEAD responses, which Node's HTTP
   // client rightly refuses to parse. HEAD is checked with curl instead.
@@ -422,8 +428,16 @@ async function buildCases(): Promise<Case[]> {
   // With every header override switched off, navigation falls back to the
   // category tree (ADR-0009 path 2) -- both paths checked in one run.
   add('navigation: category fallback', '/api/v1/shop/navigation/', {
-    setup: [`UPDATE content_navigationitem SET is_active = false WHERE placement = 'HEADER'`],
-    teardown: [`UPDATE content_navigationitem SET is_active = true WHERE placement = 'HEADER'`],
+    // Only the rows that were on come back on: fixture_staff.py keeps some off.
+    setup: [
+      `CREATE TEMP TABLE parity_header_on AS SELECT id FROM content_navigationitem
+        WHERE placement = 'HEADER' AND is_active`,
+      `UPDATE content_navigationitem SET is_active = false WHERE placement = 'HEADER'`,
+    ],
+    teardown: [
+      `UPDATE content_navigationitem SET is_active = true WHERE id IN (SELECT id FROM parity_header_on)`,
+      `DROP TABLE parity_header_on`,
+    ],
   });
   add('site', '/api/v1/shop/site/');
   add('pages', '/api/v1/shop/pages/');
@@ -459,6 +473,9 @@ async function buildCases(): Promise<Case[]> {
 
   // --- A payment provider's webhook: capture, the cash book, replays ---------------------
   cases.push(...(await paymentCases()));
+
+  // --- Staff: permissions, then the catalogue's admin --------------------------------------
+  cases.push(...(await catalogAdminCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }

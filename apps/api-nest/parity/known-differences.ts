@@ -32,4 +32,11 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
       difference.django.startsWith('JSON parse error - ') &&
       difference.nest.startsWith('JSON parse error - '),
   },
+  {
+    reason:
+      "Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`): Django's " +
+      'DefaultRouter serves them, the browsable HTML API among them; the Nest API does not route them. ' +
+      'No client appends a suffix.',
+    appliesTo: (testCase) => testCase.name.startsWith('admin catalogue: format suffix'),
+  },
 ];
