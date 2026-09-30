@@ -230,7 +230,10 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
 
 One Django quirk is *not* copied because the harness cannot see it: gunicorn writes a body on
-`HEAD` responses. The Nest API sends none, as HTTP requires.
+`HEAD` responses. The Nest API sends none, as HTTP requires. Nor is a second, which the harness
+does not compare: `CsrfViewMiddleware` replaces a malformed `csrftoken` cookie on every response
+(a fresh `Set-Cookie`), on any path. The Nest API reads that cookie only where Django checks it,
+on an unsafe request to a plain view, and sets none; the web app authenticates with bearer tokens.
 
 Django defects that *are* copied, so the two agree until Django is fixed (fix Django first, then
 the port):

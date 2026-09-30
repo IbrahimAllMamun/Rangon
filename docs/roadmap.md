@@ -493,12 +493,14 @@ staff viewsets on top of them: brands and categories, reads and writes, and a ca
 attributes.
 
 ```text
-parity (scripts/nest-parity.sh run) ........... 822/822 (286 new), 22 by the documented differences
+parity (scripts/nest-parity.sh run) ........... 838/838 (302 new), 22 by the documented differences
 concurrency (parity/concurrency.ts) ........... 12/12 (none new: nothing here takes a row lock)
-throttle-check ................................ not rerun: no scope changed
-nest unit tests ............................... 458 passed (268 new: RolePermission's decision for
+throttle-check ................................ 9/9 (none new: no scope changed; rerun because
+                                                the pipeline before the throttles changed)
+nest unit tests ............................... 470 passed (280 new: RolePermission's decision for
                                                 six declarations x six actions x six methods, the
-                                                slugs, IntegerField, the boolean filter)
+                                                slugs, IntegerField, the boolean filter, cookies,
+                                                CSRF tokens, the pipeline by method)
 tsc / eslint / prettier / build; ruff ......... clean
 ```
 
@@ -513,10 +515,15 @@ the position, the parent and its cycles. Writes compare every brand and category
 navigation items and attribute links a delete removes, and the revalidation jobs queued: the
 parity stack now sets `WEB_REVALIDATE_URL` so both APIs queue them.
 
-Found on the way, in the port: a request with no handler for its method, answered with a 401,
-lacked the view's `Allow` header -- DRF puts it on every answer a view gives, a refusal included.
-And, not yet fixed: the health checks answer an unsafe method with JSON 405 where Django's
-`require_GET` views answer 403 (CSRF) or an empty 405.
+Found on the way, in the port, and fixed: a request with no handler for its method, answered
+with a 401, lacked the view's `Allow` header -- DRF puts it on every answer a view gives, a refusal
+included. `APPEND_SLASH` redirected only a method some route took, where Django redirects any
+method before it asks the view (`PUT /api/v1/shop/categories` was a 405, not a 301). And the health
+checks, plain `require_GET` views, answered HEAD with 200 and an unsafe method with JSON 405: Django
+answers HEAD and OPTIONS with an empty 405 and runs `CsrfViewMiddleware` first on an unsafe
+method, whose 403 page explains a missing cookie or Referer. That check is ported
+(`http/csrf.ts`): the Origin, the Referer over HTTPS, the cookie against a plain or masked token
+from the header or a form field; 20 cases walk its branches.
 
 ### The NestJS API, phase 3 part 3: the payment webhook, 2026-10-01
 
