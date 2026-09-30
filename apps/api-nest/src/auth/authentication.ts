@@ -1,0 +1,155 @@
+import {
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  SetMetadata,
+  applyDecorators,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import type { FastifyRequest } from 'fastify';
+
+import { AuthenticationRequired } from '../common/errors';
+import { parseUuid } from '../common/uuid';
+import { ENV, Env } from '../config/env';
+import { Database } from '../database/database.service';
+import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
+
+export interface RequestUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  isActive: boolean;
+  isStaff: boolean;
+  isSuperuser: boolean;
+  status: string;
+  roleId: string | null;
+  branchId: string | null;
+  organizationId: string | null;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Set by `AuthGuard`: the authenticated user, or null for an anonymous request. */
+    user: RequestUser | null;
+  }
+}
+
+const ALLOW_ANY = 'rangon:allow-any';
+const SKIP_AUTHENTICATION = 'rangon:skip-authentication';
+
+/** DRF `permission_classes = [AllowAny]`: authentication still runs, and can still refuse. */
+export const AllowAny = () => SetMetadata(ALLOW_ANY, true);
+
+/**
+ * `authentication_classes = []` and no permission check: a plain Django view
+ * such as the health checks, or a webhook that authenticates by signature.
+ */
+export const SkipAuthentication = () =>
+  applyDecorators(SetMetadata(SKIP_AUTHENTICATION, true), SetMetadata(ALLOW_ANY, true));
+
+/** Python `bytes.split()`: runs of ASCII whitespace, empty pieces dropped. */
+function splitHeader(value: string): string[] {
+  return value.split(/[ \t\n\r\v\f]+/).filter(Boolean);
+}
+
+/**
+ * SimpleJWT's `JWTAuthentication`, statement for statement.
+ *
+ * Refusals keep the Django API's status and code (401 `AUTHENTICATION_REQUIRED`).
+ * The messages are SimpleJWT's own words, not the Python `repr` of its error
+ * dict that the Django API currently prints -- see
+ * docs/architecture/nest-port.md, "Deliberate differences".
+ */
+@Injectable()
+export class Authenticator {
+  constructor(
+    private readonly db: Database,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  async authenticate(request: FastifyRequest): Promise<RequestUser | null> {
+    const header = request.headers.authorization;
+    if (header === undefined) return null;
+
+    const parts = splitHeader(header);
+    if (parts.length === 0) return null;
+    // Any other scheme is "not a JSON web token", so not this authenticator's business.
+    if (parts[0] !== 'Bearer') return null;
+    if (parts.length !== 2) {
+      throw new AuthenticationRequired(
+        'Authorization header must contain two space-delimited values',
+      );
+    }
+
+    let claims;
+    try {
+      claims = verifyAccessToken(parts[1] as string, this.env.jwtSigningKey);
+    } catch (error) {
+      if (error instanceof TokenError) {
+        throw new AuthenticationRequired('Given token not valid for any token type');
+      }
+      throw error;
+    }
+
+    const userId = claims.user_id;
+    if (userId === undefined) {
+      throw new AuthenticationRequired('Token contained no recognizable user identification');
+    }
+
+    // A validly signed token naming something that is not a UUID can only come
+    // from a holder of the signing key; it matches no user.
+    const id = parseUuid(String(userId));
+    if (!id) throw new AuthenticationRequired('User not found');
+
+    const row = await this.db.one<RequestUser & { password: string }>(
+      `SELECT id, email, first_name AS "firstName", last_name AS "lastName",
+              is_active AS "isActive", is_staff AS "isStaff", is_superuser AS "isSuperuser",
+              status, role_id AS "roleId", branch_id AS "branchId",
+              organization_id AS "organizationId", password
+         FROM accounts_user
+        WHERE id = $1::uuid`,
+      [id],
+    );
+    if (!row) throw new AuthenticationRequired('User not found');
+    if (!row.isActive) throw new AuthenticationRequired('User is inactive');
+    // CHECK_REVOKE_TOKEN: a password change ends every session at once (D86).
+    if (claims.hash_password !== passwordFingerprint(row.password)) {
+      throw new AuthenticationRequired("The user's password has been changed.");
+    }
+
+    const { password: _password, ...user } = row;
+    return user;
+  }
+}
+
+/**
+ * Authentication, then the permission check, in DRF's order and on every
+ * route: `APIView.initial()` authenticates before it looks at the method or
+ * the permission classes, so a bad token is a 401 even on a public endpoint.
+ */
+@Injectable()
+export class AuthGuard implements CanActivate {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly authenticator: Authenticator,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<FastifyRequest>();
+    const targets = [context.getHandler(), context.getClass()];
+
+    request.user = null;
+    if (this.reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)) return true;
+
+    request.user = await this.authenticator.authenticate(request);
+
+    if (this.reflector.getAllAndOverride<boolean>(ALLOW_ANY, targets)) return true;
+    // DRF's default: IsAuthenticated, and NotAuthenticated when nobody is.
+    if (!request.user) {
+      throw new AuthenticationRequired('Authentication credentials were not provided.');
+    }
+    return true;
+  }
+}
