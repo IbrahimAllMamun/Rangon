@@ -30,6 +30,7 @@ case "${1:-}" in
     "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_content.py
     "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_nav.py
     "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_accounts.py
+    "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_orders.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity
