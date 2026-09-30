@@ -9,7 +9,7 @@ import pytest
 
 from accounts.models import RoleCode
 from inventory import services as inventory_services
-from orders.models import Order, PaymentMethod
+from orders.models import Channel, Order, PaymentMethod
 from tests import factories
 
 pytestmark = pytest.mark.django_db
@@ -281,6 +281,26 @@ class TestCheckout:
 
         assert allowed.status_code == 200
         assert refused.status_code == 404  # the number alone is not enough
+
+    def test_an_order_with_no_guest_token_is_not_opened_by_its_number(self, api, shop):
+        """D113: a counter order's blank token matched a request that sent none."""
+        order = factories.order(shop, channel=Channel.POS, guest_token="")
+
+        for params in ({}, {"token": ""}, {"token": "x"}):
+            response = api.get(f"/api/v1/shop/orders/{order.number}/", params)
+            assert response.status_code == 404, params
+            assert response.data["error"]["message"] == "Order not found."
+
+    def test_its_own_customer_still_sees_a_counter_order(self, auth_client, shop):
+        customer_user = factories.user(RoleCode.CUSTOMER)
+        shop["customer"].user = customer_user
+        shop["customer"].save()
+        order = factories.order(shop, channel=Channel.POS, guest_token="")
+
+        response = auth_client(customer_user).get(f"/api/v1/shop/orders/{order.number}/")
+
+        assert response.status_code == 200
+        assert response.data["number"] == order.number
 
 
 class TestReviews:

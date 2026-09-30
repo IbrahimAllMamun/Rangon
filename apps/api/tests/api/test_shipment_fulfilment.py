@@ -38,12 +38,16 @@ pytestmark = pytest.mark.django_db
 
 
 def _order(branch, status: str = OrderStatus.PACKED) -> Order:
+    # An online order carries the guest token checkout mints for its tracking
+    # link. Without one, the shopper tests below passed only because a blank
+    # token used to open any order (D113).
     return Order.objects.create(
         number=f"RGN-SHIP-{factories.unique()}",
         channel=Channel.ONLINE,
         status=status,
         branch=branch,
         customer=factories.customer(),
+        guest_token=f"guest-{factories.unique()}",
     )
 
 

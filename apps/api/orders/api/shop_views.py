@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
@@ -833,10 +834,25 @@ class OrderTrackingView(APIView):
 
         customer = _customer_for(request)
         token = request.query_params.get("token", "")
-        if not (customer and order.customer_id == customer.pk) and token != order.guest_token:
+        if not (customer and order.customer_id == customer.pk) and not _token_opens(
+            token, order.guest_token
+        ):
             raise NotFound("Order not found.")
 
         return Response(_customer_order(order))
+
+
+def _token_opens(given: str, guest_token: str) -> bool:
+    """Does the tracking link's token open this order?  A blank one opens nothing.
+
+    Only online checkout mints a guest token; every POS, phone and social order
+    has a blank one. Compared with `!=`, a request with no token matched that
+    blank, so the order number alone -- sequential, `RGN-POS-000001` onwards --
+    showed any of those orders to anyone: the customer's name, the items, the
+    totals and the payments (D113). Constant-time, as a secret's comparison
+    should be.
+    """
+    return bool(guest_token) and hmac.compare_digest(given.encode(), guest_token.encode())
 
 
 def _customer_order(order: Order) -> dict[str, Any]:
