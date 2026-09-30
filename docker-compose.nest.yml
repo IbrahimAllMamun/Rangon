@@ -80,10 +80,18 @@ services:
         python manage.py migrate --noinput &&
         exec gunicorn config.wsgi:application --bind 0.0.0.0:8000
         --workers 2 --threads 4 --timeout 60 --access-logfile -
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health/"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     ports:
       - "127.0.0.1:8610:8000"
 
   nest:
+    # Named, because the harness runs in it too: it already carries pg and
+    # ioredis, which a fresh checkout's apps/api-nest has no node_modules for.
+    image: rangon-api-nest:parity
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -105,11 +113,11 @@ services:
 
   # The same requests to both APIs; every difference printed (apps/api-nest/parity/).
   parity:
-    image: node:22-bookworm-slim
+    image: rangon-api-nest:parity
     profiles: [parity]
     working_dir: /app
     volumes:
-      - ./apps/api-nest:/app:ro
+      - ./apps/api-nest/parity:/app/parity:ro
     environment:
       DJANGO_BASE: http://django:8000
       NEST_BASE: http://nest:3000
@@ -119,8 +127,8 @@ services:
       PARITY_ONLY: ${PARITY_ONLY:-}
     command: ["node", "parity/run.ts"]
     depends_on:
-      django: {condition: service_started}
-      nest: {condition: service_started}
+      django: {condition: service_healthy}
+      nest: {condition: service_healthy}
 
   # Both APIs with their rate limits on (dev settings), for parity/throttle.ts.
   django-throttled:
@@ -139,9 +147,15 @@ services:
     command: >
       gunicorn config.wsgi:application --bind 0.0.0.0:8000
       --workers 2 --threads 4 --timeout 60
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health/"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   nest-throttled:
     profiles: [throttle]
+    image: rangon-api-nest:parity
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -156,11 +170,11 @@ services:
       redis: {condition: service_healthy}
 
   throttle-check:
-    image: node:22-bookworm-slim
+    image: rangon-api-nest:parity
     profiles: [throttle]
     working_dir: /app
     volumes:
-      - ./apps/api-nest:/app:ro
+      - ./apps/api-nest/parity:/app/parity:ro
     environment:
       DJANGO_BASE: http://django-throttled:8000
       NEST_BASE: http://nest-throttled:3000
@@ -168,9 +182,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
     command: ["node", "parity/throttle.ts"]
+    # Healthy, not merely started: the first request must not race the boot.
     depends_on:
-      django-throttled: {condition: service_started}
-      nest-throttled: {condition: service_started}
+      django-throttled: {condition: service_healthy}
+      nest-throttled: {condition: service_healthy}
 
 volumes:
   nest_postgres:

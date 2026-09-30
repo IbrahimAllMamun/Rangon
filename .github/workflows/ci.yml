@@ -161,10 +161,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Start both APIs, migrate, seed, apply the parity fixtures
-        run: scripts/nest-parity.sh reset
+        run: bash scripts/nest-parity.sh reset
 
       - name: Compare every case
-        run: scripts/nest-parity.sh run
+        run: bash scripts/nest-parity.sh run
 
       - name: Compare the rate limits (both APIs throttled)
         run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run --rm throttle-check

@@ -35,8 +35,8 @@ case "${1:-}" in
     ;;
   reset)
     "${compose[@]}" down -v --remove-orphans
-    "$0" up
-    "$0" seed
+    bash "$0" up
+    bash "$0" seed
     ;;
   down)
     "${compose[@]}" down
