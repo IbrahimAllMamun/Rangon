@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 
+import { primaryImageUrl } from '../catalog/primary-image';
 import { localIso, parsePgTimestamptz } from '../common/datetime';
-import { mediaUrl } from '../common/media';
 import { pyFormatNamed, pyStr } from '../common/python';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
@@ -65,19 +65,6 @@ const ITEM_COLUMNS = [
   'line_total',
   'fulfilled_quantity',
   'returned_quantity',
-] as const;
-const IMAGE_COLUMNS = [
-  'id',
-  'created_at',
-  'updated_at',
-  'product_id',
-  'attribute_value_id',
-  'image',
-  'alt_text',
-  'position',
-  'is_primary',
-  'width',
-  'height',
 ] as const;
 const PAYMENT_COLUMNS = [
   'id',
@@ -403,7 +390,8 @@ export class CustomerOrdersService {
         [item.variant_id],
       );
       const productId = variant?.product_id ?? '';
-      if (!images.has(productId)) images.set(productId, await this.primaryImage(productId));
+      if (!images.has(productId))
+        images.set(productId, await primaryImageUrl(this.db, productId, this.env.MEDIA_URL));
       out.push({
         id: item.id,
         variant: item.variant_id,
@@ -422,18 +410,6 @@ export class CustomerOrdersService {
       });
     }
     return out;
-  }
-
-  /** `Product.primary_image`: the flagged image, else the first by `Meta.ordering`. */
-  private async primaryImage(productId: string): Promise<string> {
-    const rows = await this.db.query<{ image: string; is_primary: boolean }>(
-      `SELECT ${select('catalog_productimage', IMAGE_COLUMNS)} FROM "catalog_productimage"
-        WHERE "catalog_productimage"."product_id" = $1::uuid
-        ORDER BY "catalog_productimage"."position" ASC, "catalog_productimage"."created_at" ASC`,
-      [productId],
-    );
-    const chosen = rows.find((row) => row.is_primary) ?? rows[0];
-    return chosen ? mediaUrl(chosen.image, this.env.MEDIA_URL) : '';
   }
 
   /** `CustomerPaymentSerializer`. */

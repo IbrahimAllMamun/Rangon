@@ -14,6 +14,7 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
+import { cartCases } from './cart-cases.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
@@ -404,6 +405,9 @@ async function buildCases(): Promise<Case[]> {
   // --- Orders, addresses, tracking and reviews -----------------------------------
   cases.push(...(await orderCases()));
 
+  // --- The cart: lines, coupons, shipping options ----------------------------------
+  cases.push(...(await cartCases()));
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
 
@@ -462,6 +466,10 @@ function normalizeBody(response: Captured, testCase: Case): Captured {
     return response;
   }
   body = describeTokens(body, SIGNING_KEY);
+  // The cart token travels in a header too; compared with the body.
+  if (response.headers['x-cart-token'] !== undefined && body && typeof body === 'object') {
+    (body as Record<string, unknown>)['header:x-cart-token'] = response.headers['x-cart-token'];
+  }
   testCase.normalize?.(body);
   return { ...response, body: JSON.stringify(body) };
 }

@@ -6,11 +6,12 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import { AppModule } from './app.module';
 import { loadEnv } from './config/env';
 import { genRequestId, installPipeline } from './http/pipeline';
-import { installBodyCapture } from './http/request-body';
+import { installBigIntJson, installBodyCapture } from './http/request-body';
 import { RouteRegistry } from './http/routes';
 
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
+  installBigIntJson();
   const routes = new RouteRegistry();
 
   const adapter = new FastifyAdapter({
