@@ -481,6 +481,28 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 3 part 1: the cart, 2026-09-30
+
+Asked for: phase 3 of the port. Phase 3 carries the first stock and money writes, so it goes in
+three parts: the cart (this one), checkout, then the payment webhook. Ported: `shop/cart/` (read,
+add, change, remove), `shop/cart/coupon/` and `shop/shipping-options/` -- the server-side
+re-pricing every basket goes through, which checkout will reuse.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 456/456 (86 new), 14 by the two documented differences
+concurrency ................................... 2/2 (unchanged)
+nest unit tests ............................... 152 passed (5 new: pricing against Django's own figures)
+tsc / eslint / prettier / build ............... clean
+```
+
+The cases cover both VAT modes at awkward rates (4410 x 0.0733 / 1.0733 -> 301.18 on both), a
+category's VAT override, every coupon refusal, a category coupon covering its descendants, a fixed
+coupon larger than the basket, the guest cart merged into a customer's on sign-in, a checked-out
+cart's token not reused, an unavailable and an unstocked line, and Python's `int()` on a quantity
+(`2.9` becomes 2; `"5.0"` is a 500, copied). Every cart read can write, so each case restores the
+fixture's carts and compares the carts and lines each API leaves. The stock check here is advisory
+in Django too: the one that decides is taken under a row lock at checkout, which is part 2.
+
 ### The NestJS API, phase 2 part 2: orders, addresses, tracking, reviews, 2026-09-30
 
 Asked for: the rest of phase 2. Ported: the signed-in customer's orders (list and detail), guest

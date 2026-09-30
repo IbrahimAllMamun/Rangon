@@ -13,7 +13,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 |---|---|---|
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
-| 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | |
+| 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **In progress**: the cart, coupons and shipping options done 2026-09-30, parity 456/456 |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
@@ -45,6 +45,19 @@ Phase 2 (write cases: the rows each API writes are compared too):
 | `GET /api/v1/shop/orders/<number>/?token=` | guest tracking: the order's customer signed in, or the link's token -- a blank one opens nothing (D113) |
 | `GET/POST/PATCH/DELETE /api/v1/shop/account/addresses/` | one default per customer, held by locking the customer row -- the same lock Django takes, so the two APIs queue behind each other |
 | `POST /api/v1/shop/products/<slug>/reviews/` | once per received purchase, pending moderation; the `search` throttle scope |
+
+Phase 3 so far -- the cart. Every cart endpoint writes (a read without a token creates a cart,
+and a read drops a coupon that has stopped applying), so each case restores the fixture's carts
+and compares the carts and lines each API leaves:
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST/PATCH/DELETE /api/v1/shop/cart/` | re-priced from the database on every read (`checkout/pricing.ts`: Python's decimal context, half-up cents, VAT spread over lines with the drift on the last); a guest's cart by `X-Cart-Token`, a customer's merged on sign-in; the stock check here is advisory |
+| `POST/DELETE /api/v1/shop/cart/coupon/` | every refusal `validate_coupon` has; a category restriction covers its descendants |
+| `GET /api/v1/shop/shipping-options/?city=` | the city's zone, else the default; prices as JSON numbers, as DRF's encoder writes a bare Decimal |
+
+Still to come in phase 3: checkout (the stock reservation, idempotency, the oversell and
+double-submit races) and the payment webhook.
 
 Two invariants are also checked under concurrency on every parity run (`parity/concurrency.ts`):
 twenty simultaneous "add as my default address" requests, split across both APIs, leave exactly one
@@ -140,6 +153,9 @@ the port):
   registration, also a 500.
 - Registering with a guest customer's email and no mobile is a 409 rather than a link to that
   customer.
+- The cart's quantity is `int(request.data.get("quantity"))`: `"5.0"`, `null` or a list is a
+  500, and `2.9` is quietly 2. A coupon code that is not a string, and a cart token longer than
+  the column's 64 characters, are 500s too.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
   `as_view({"post": "reviews"})`, which drops the action's `[IsAuthenticated, IsCustomer]` (only a
   router applies them), so anonymous and staff callers reach the view and are refused by its
