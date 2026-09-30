@@ -3,6 +3,7 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -12,8 +13,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { Authenticator } from '../auth/authentication';
 import { RolePermissions, staffViewFor } from '../auth/permissions';
-import { allowedMethods, markShortCircuit } from '../http/pipeline';
+import { allowedMethods, markShortCircuit, PLAIN_VIEWS, plainViewRefusal } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
+import { ENV, Env } from '../config/env';
 import {
   AuthenticationRequired,
   BusinessError,
@@ -45,6 +47,7 @@ export class EnvelopeFilter implements ExceptionFilter {
     private readonly routes: RouteRegistry,
     private readonly authenticator: Authenticator,
     private readonly permissions: RolePermissions,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -89,6 +92,10 @@ export class EnvelopeFilter implements ExceptionFilter {
     // here, so it reads the method's name, and a signed-in owner reaches
     // the 405 where a manager is refused with a 403.
     const pattern = this.routes.match(path)[0]?.pattern;
+    if (pattern !== undefined && PLAIN_VIEWS.has(pattern)) {
+      plainViewRefusal(request, reply, this.env);
+      return;
+    }
     if (pattern !== undefined) {
       const fastify = this.adapterHost.httpAdapter.getInstance<FastifyInstance>();
       const allow = allowedMethods(fastify, pattern, this.allowCache);

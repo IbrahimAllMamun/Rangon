@@ -31,7 +31,7 @@ export async function createApp(): Promise<{ app: NestFastifyApplication; env: E
   });
   const fastify = adapter.getInstance();
   routes.attach(fastify);
-  installPipeline(fastify, env);
+  installPipeline(fastify, env, routes);
   installBodyCapture(fastify);
 
   const app = await NestFactory.create<NestFastifyApplication>(

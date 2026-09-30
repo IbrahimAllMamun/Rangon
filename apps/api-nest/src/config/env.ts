@@ -51,6 +51,8 @@ const schema = z.object({
 
   DJANGO_ALLOWED_HOSTS: list('localhost,127.0.0.1,api'),
   DJANGO_CORS_ALLOWED_ORIGINS: list('http://localhost:3000'),
+  // CSRF_TRUSTED_ORIGINS: only the plain (non-DRF) views are CSRF-checked.
+  DJANGO_CSRF_TRUSTED_ORIGINS: list('http://localhost:3000'),
   DJANGO_SECURE_SSL_REDIRECT: flag(true),
   // Proxy hops whose X-Forwarded-For entries are believed (core/ip.py).
   DJANGO_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),

@@ -202,6 +202,65 @@ async function buildCases(): Promise<Case[]> {
     method: 'PUT',
     headers: { authorization: 'Bearer abc' },
   });
+  // APPEND_SLASH runs before the resolver asks whether the view takes the method.
+  add('append slash, a method with no handler', '/api/v1/shop/categories?x=1', { method: 'PUT' });
+  add('append slash, a plain view', '/api/health', { method: 'POST' });
+  // The health checks are plain Django views: `require_GET`, and CSRF-checked.
+  const csrfChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const secret = 'parityCsrfSecret0123456789abcdef';
+  const mask = 'Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe';
+  const masked =
+    mask +
+    [...secret]
+      .map(
+        (char, i) =>
+          csrfChars[(csrfChars.indexOf(char) + csrfChars.indexOf(mask[i] as string)) % 62],
+      )
+      .join('');
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    add(`health: ${method}, no CSRF cookie`, '/api/health/', { method });
+  }
+  add('ready: OPTIONS', '/api/ready/', { method: 'OPTIONS' });
+  add('health: an untrusted Origin', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'https://evil.example' },
+  });
+  add('health: a trusted Origin, no cookie', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'http://localhost:3000' },
+  });
+  add('health: its own origin', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'http://localhost', cookie: `csrftoken=${secret}`, 'x-csrftoken': secret },
+  });
+  add('health: cookie and header agree', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: `a=b; csrftoken=${secret}`, 'x-csrftoken': secret },
+  });
+  add('health: a masked token for the cookie', '/api/health/', {
+    method: 'DELETE',
+    headers: { cookie: `csrftoken=${masked}`, 'x-csrftoken': masked },
+  });
+  add('health: cookie, no token', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: `csrftoken=${secret}` },
+  });
+  add('health: a token that does not match', '/api/health/', {
+    method: 'PUT',
+    headers: { cookie: `csrftoken=${secret}`, 'x-csrftoken': 'x'.repeat(32) },
+  });
+  add('health: a malformed cookie', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: 'csrftoken=short', 'x-csrftoken': 'short' },
+  });
+  add('health: the token in a form', '/api/health/', {
+    method: 'POST',
+    headers: {
+      cookie: `csrftoken=${secret}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: `csrfmiddlewaretoken=${masked}`,
+  });
   // No HEAD case: gunicorn writes a body on HEAD responses, which Node's HTTP
   // client rightly refuses to parse. HEAD is checked with curl instead.
   add('bad host', '/api/v1/shop/brands/', { headers: { host: 'bad host!' } });
