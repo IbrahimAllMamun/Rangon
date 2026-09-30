@@ -29,6 +29,8 @@ RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
+# Django's common-password list, read by accounts/passwords.ts from ../../assets.
+COPY --chown=node:node assets ./assets
 COPY --chown=node:node package.json ./
 
 # The image's own unprivileged user.

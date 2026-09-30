@@ -157,3 +157,10 @@ export function slugParam(value: string): string {
   if (!SLUG.test(value)) throw new RouteNotMatched();
   return value;
 }
+
+/** Django's `ValidationError` from a UUID lookup, as `core.handlers` words it. */
+export function invalidUuid(text: string): ValidationError {
+  return new ValidationError('Invalid input.', {
+    details: { non_field_errors: [`“${text}” is not a valid UUID.`] },
+  });
+}

@@ -6,6 +6,7 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import { AppModule } from './app.module';
 import { loadEnv } from './config/env';
 import { genRequestId, installPipeline } from './http/pipeline';
+import { installBodyCapture } from './http/request-body';
 import { RouteRegistry } from './http/routes';
 
 async function bootstrap(): Promise<void> {
@@ -25,12 +26,15 @@ async function bootstrap(): Promise<void> {
   const fastify = adapter.getInstance();
   routes.attach(fastify);
   installPipeline(fastify, env);
+  installBodyCapture(fastify);
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forRoot(env, routes),
     adapter,
     {
       logger: ['log', 'warn', 'error'],
+      // Bodies are parsed on first use, as DRF parses them (http/request-body.ts).
+      bodyParser: false,
     },
   );
   app.enableShutdownHooks();

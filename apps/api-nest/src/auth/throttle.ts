@@ -1,4 +1,11 @@
-import { CanActivate, ExecutionContext, Inject, Injectable, SetMetadata } from '@nestjs/common';
+import {
+  applyDecorators,
+  CanActivate,
+  ExecutionContext,
+  Inject,
+  Injectable,
+  SetMetadata,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
 
@@ -28,9 +35,19 @@ const SKIP = 'rangon:skip-throttle';
 /** A plain Django view (not DRF), which no throttle class ever sees: the health checks. */
 export const SkipThrottle = () => SetMetadata(SKIP, true);
 
+type Scope = 'search' | 'auth' | 'checkout' | 'pos';
+
 /** `throttle_scope = "search"` on a DRF view. */
-export const ThrottleScope = (scope: 'search' | 'auth' | 'checkout' | 'pos') =>
-  SetMetadata(SCOPE, scope);
+export const ThrottleScope = (scope: Scope) => SetMetadata(SCOPE, scope);
+
+const ONLY_SCOPED = 'rangon:throttle-only-scoped';
+
+/**
+ * `throttle_classes = [ScopedRateThrottle]` with a scope: that bucket alone,
+ * the anon and user ones not counted (`PasswordChangeView`).
+ */
+export const OnlyScopedThrottle = (scope: Scope) =>
+  applyDecorators(SetMetadata(SCOPE, scope), SetMetadata(ONLY_SCOPED, true));
 
 const DURATIONS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
 
@@ -110,10 +127,12 @@ export class ThrottleGuard implements CanActivate {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    // config.settings.parity: DEFAULT_THROTTLE_CLASSES = ().
-    if (this.env.throttlingDisabled) return true;
     const targets = [context.getHandler(), context.getClass()];
     if (this.reflector.getAllAndOverride<boolean>(SKIP, targets)) return true;
+    const onlyScoped = this.reflector.getAllAndOverride<boolean>(ONLY_SCOPED, targets);
+    // config.settings.parity empties DEFAULT_THROTTLE_CLASSES. A view that
+    // names its own throttle classes keeps them there too.
+    if (this.env.throttlingDisabled && !onlyScoped) return true;
     const request = context.switchToHttp().getRequest<FastifyRequest>();
     const scope = this.reflector.getAllAndOverride<string>(SCOPE, targets);
     const ident = clientIp(request, this.env.DJANGO_TRUSTED_PROXY_HOPS);
@@ -121,9 +140,15 @@ export class ThrottleGuard implements CanActivate {
 
     const buckets: Bucket[] = [];
     // AnonRateThrottle: anonymous requests only.
-    if (!user) buckets.push({ scope: 'anon', ident, rate: this.rates.anon as string });
+    if (!user && !onlyScoped)
+      buckets.push({ scope: 'anon', ident, rate: this.rates.anon as string });
     // UserRateThrottle: the user, else the address.
-    buckets.push({ scope: 'user', ident: user ? user.id : ident, rate: this.rates.user as string });
+    if (!onlyScoped)
+      buckets.push({
+        scope: 'user',
+        ident: user ? user.id : ident,
+        rate: this.rates.user as string,
+      });
     // ScopedRateThrottle: only on a view that names a scope.
     if (scope)
       buckets.push({ scope, ident: user ? user.id : ident, rate: this.rates[scope] as string });

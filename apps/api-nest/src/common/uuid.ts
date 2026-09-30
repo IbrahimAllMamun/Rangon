@@ -15,3 +15,26 @@ export function parseUuid(value: unknown): string | null {
   const lower = hex.toLowerCase();
   return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}`;
 }
+
+/**
+ * A primary-key lookup on a value from a request body, as the ORM makes it:
+ * `UUIDField.to_python`. An int (a bool is one) is `UUID(int=value)`; None
+ * matches nothing; anything unreadable is Django's `ValidationError`, which
+ * the Django API answers with 400 -- reproduced by the caller throwing
+ * `invalidUuid(value)`.
+ */
+export function uuidFromValue(value: unknown): { id: string | null } | { invalid: true } {
+  if (value === null || value === undefined) return { id: null };
+  if (
+    typeof value === 'boolean' ||
+    typeof value === 'bigint' ||
+    (typeof value === 'number' && Number.isInteger(value))
+  ) {
+    const number = BigInt(value);
+    if (number < 0n || number >= 1n << 128n) return { invalid: true };
+    const hex = number.toString(16).padStart(32, '0');
+    return { id: parseUuid(hex) };
+  }
+  const id = typeof value === 'string' ? parseUuid(value) : null;
+  return id ? { id } : { invalid: true };
+}

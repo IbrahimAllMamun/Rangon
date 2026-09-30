@@ -13,7 +13,8 @@ import { request } from 'node:http';
 import { Redis } from 'ioredis';
 import pg from 'pg';
 
-import { type Captured, compare, type Difference } from './compare.ts';
+import { accountCases } from './accounts-cases.ts';
+import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
@@ -21,21 +22,45 @@ const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
 const HOST = process.env.PARITY_HOST ?? 'localhost';
 const SIGNING_KEY = process.env.JWT_SIGNING_KEY || process.env.DJANGO_SECRET_KEY || '';
 const ONLY = process.env.PARITY_ONLY ?? '';
+// PARITY_VERBOSE=1: print each case's status and side effects, to check a case tests what it says.
+const VERBOSE = Boolean(process.env.PARITY_VERBOSE);
+
+export type Side = 'django' | 'nest';
 
 export interface Case {
   name: string;
   method?: string;
   path: string;
   headers?: Record<string, string>;
+  /** Sent as is; give the Content-Type in `headers`. */
+  body?: string;
   /** SQL run before the pair of requests, and undone by `teardown` after. */
   setup?: string[];
   teardown?: string[];
   /** Empty the shared Redis first: both APIs' page caches live there. */
   flushCache?: boolean;
+
+  // --- Writes: each API gets the same starting state ----------------------
+  /**
+   * Put the rows this case changes back as they were: run before each API's
+   * request and once after both. Its presence makes the case a write case,
+   * whose side effects are undone after each request (see `undoWrites`).
+   */
+  reset?: (db: pg.Client) => Promise<void>;
+  /** Per-API request details made fresh for each side: a newly minted token, say. */
+  prepare?: (side: Side) => Promise<Partial<Pick<Case, 'headers' | 'body' | 'path'>>>;
+  /**
+   * Queries whose rows, read after each API's request, must match: what the
+   * request wrote. `$1` is the instant just before the request.
+   */
+  effects?: string[];
+  /** Adjust a parsed JSON body before comparing: blank out a value each API mints (a new id). */
+  normalize?: (body: unknown) => void;
 }
 
-function send(base: URL, testCase: Case): Promise<Captured> {
+export function send(base: URL, testCase: Case): Promise<Captured> {
   return new Promise((resolve, reject) => {
+    const body = testCase.body === undefined ? undefined : Buffer.from(testCase.body, 'utf8');
     const req = request(
       {
         host: base.hostname,
@@ -45,7 +70,12 @@ function send(base: URL, testCase: Case): Promise<Captured> {
         // One connection per request: Node's keep-alive agent would otherwise
         // hold the Nest API's sockets open and keep this process from exiting.
         agent: false,
-        headers: { host: HOST, accept: 'application/json', ...testCase.headers },
+        headers: {
+          host: HOST,
+          accept: 'application/json',
+          ...(body ? { 'content-length': String(body.length) } : {}),
+          ...testCase.headers,
+        },
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -64,7 +94,7 @@ function send(base: URL, testCase: Case): Promise<Captured> {
       },
     );
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
 }
 
@@ -75,7 +105,7 @@ async function json<T>(path: string): Promise<T> {
 }
 
 /** An access token SimpleJWT would have issued for this user. */
-function token(
+export function token(
   user: { id: string; password: string },
   claims: Record<string, unknown> = {},
   key = SIGNING_KEY,
@@ -366,7 +396,69 @@ async function buildCases(): Promise<Case[]> {
     headers: { authorization: 'Bearer abc' },
   });
 
+  // --- Accounts: sign-in, tokens, registration, password change -------------
+  cases.push(...(await accountCases({ DJANGO, NEST, SIGNING_KEY })));
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
+}
+
+/**
+ * One API's answer to a case -- for a write case, from the reset state, with
+ * what it wrote read back and then undone, so the other API starts equal.
+ */
+async function run(
+  db: pg.Client,
+  base: URL,
+  side: Side,
+  testCase: Case,
+): Promise<{ response: Captured; effects: unknown[][] }> {
+  const writes = testCase.reset !== undefined;
+  if (writes) await testCase.reset?.(db);
+  const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
+  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  const response = normalizeBody(await send(base, sent), testCase);
+  const effects: unknown[][] = [];
+  for (const query of testCase.effects ?? []) {
+    const parameters = query.includes('$1') ? [since] : [];
+    effects.push((await db.query(query, parameters)).rows);
+  }
+  if (writes) await undoWrites(db, since as string);
+  return { response, effects };
+}
+
+/**
+ * What any account request may have written since `since`: audit entries,
+ * issued and blacklisted tokens. Test data in the parity database only --
+ * the audit log is append-only everywhere else.
+ */
+async function undoWrites(db: pg.Client, since: string): Promise<void> {
+  await db.query(`DELETE FROM token_blacklist_blacklistedtoken WHERE blacklisted_at >= $1`, [
+    since,
+  ]);
+  await db.query(`DELETE FROM token_blacklist_outstandingtoken WHERE created_at >= $1`, [since]);
+  // A token blacklisted without ever having been outstanding (one this
+  // harness signed without recording) is recorded by `blacklist()` with no
+  // creation time.
+  await db.query(
+    `DELETE FROM token_blacklist_outstandingtoken
+      WHERE created_at IS NULL AND jti LIKE 'parity%'
+        AND NOT EXISTS (SELECT 1 FROM token_blacklist_blacklistedtoken b WHERE b.token_id = token_blacklist_outstandingtoken.id)`,
+  );
+  await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);
+}
+
+/** Tokens described rather than compared (each API mints its own), then the case's own adjustments. */
+function normalizeBody(response: Captured, testCase: Case): Captured {
+  if (!(response.headers['content-type'] ?? '').startsWith('application/json')) return response;
+  let body: unknown;
+  try {
+    body = JSON.parse(response.body);
+  } catch {
+    return response;
+  }
+  body = describeTokens(body, SIGNING_KEY);
+  testCase.normalize?.(body);
+  return { ...response, body: JSON.stringify(body) };
 }
 
 function isKnown(testCase: Case, difference: Difference): string | null {
@@ -388,15 +480,25 @@ async function main(): Promise<void> {
   for (const testCase of cases) {
     if (testCase.flushCache) await redis.flushdb();
     for (const statement of testCase.setup ?? []) await db.query(statement);
-    let django: Captured;
-    let nest: Captured;
+    let differences: Difference[];
     try {
-      django = await send(DJANGO, testCase);
-      nest = await send(NEST, testCase);
+      const django = await run(db, DJANGO, 'django', testCase);
+      const nest = await run(db, NEST, 'nest', testCase);
+      differences = compare(django.response, nest.response, testCase.headers?.['x-request-id']);
+      if (VERBOSE) {
+        console.log(
+          `CASE  ${testCase.name}: ${django.response.status} ${django.response.body.slice(0, 160)}`,
+        );
+        for (const rows of django.effects)
+          console.log(`      ${JSON.stringify(rows).slice(0, 400)}`);
+      }
+      django.effects.forEach((rows, index) =>
+        differences.push(...diffJson(rows, nest.effects[index], `effects[${index}]`)),
+      );
     } finally {
       for (const statement of testCase.teardown ?? []) await db.query(statement);
+      await testCase.reset?.(db);
     }
-    const differences = compare(django, nest, testCase.headers?.['x-request-id']);
     const unexplained = differences.filter((difference) => {
       const reason = isKnown(testCase, difference);
       if (reason) knownReasons.set(reason, (knownReasons.get(reason) ?? 0) + 1);

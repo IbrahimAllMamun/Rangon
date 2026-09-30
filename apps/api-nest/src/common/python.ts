@@ -191,3 +191,105 @@ export function pyLen(text: string): number {
 export function pySlice(text: string, end: number): string {
   return Array.from(text).slice(0, end).join('');
 }
+
+const PY_STRIP_EDGES = new RegExp(`^(?:${PY_WHITESPACE.source})|(?:${PY_WHITESPACE.source})$`, 'g');
+
+/** Python `str.strip()` with no argument: `str.isspace()` whitespace, not `\s`. */
+export function pyStrip(text: string): string {
+  return text.replace(PY_STRIP_EDGES, '');
+}
+
+/**
+ * Python `str.isdigit()`: every character a decimal digit (any script) or a
+ * digit-valued symbol such as a superscript or a circled number. False for ''.
+ */
+const PY_DIGIT =
+  /^[\p{Nd}\u{B2}-\u{B3}\u{B9}\u{1369}-\u{1371}\u{19DA}\u{2070}\u{2074}-\u{2079}\u{2080}-\u{2089}\u{2460}-\u{2468}\u{2474}-\u{247C}\u{2488}-\u{2490}\u{24EA}\u{24F5}-\u{24FD}\u{24FF}\u{2776}-\u{277E}\u{2780}-\u{2788}\u{278A}-\u{2792}\u{10A40}-\u{10A43}\u{10E60}-\u{10E68}\u{11052}-\u{1105A}\u{1F100}-\u{1F10A}]+$/u;
+
+export function pyIsDigit(text: string): boolean {
+  return PY_DIGIT.test(text);
+}
+
+/**
+ * A JSON number Python's `json` module read as a `float`: it was written with
+ * a fraction or an exponent. JavaScript's `JSON.parse` makes `4.0` and `4`
+ * the same number; Python does not, and `str()` of one is `"4.0"`.
+ * `common/request-body.ts` produces these.
+ */
+export class PyFloat {
+  constructor(readonly value: number) {}
+
+  /** Python `repr(float)`: the shortest round-trip digits, Python's exponent style. */
+  toString(): string {
+    const value = this.value;
+    if (Number.isNaN(value)) return 'nan';
+    if (value === Infinity) return 'inf';
+    if (value === -Infinity) return '-inf';
+    if (Object.is(value, -0)) return '-0.0';
+    // Python uses scientific notation below 1e-4 and from 1e16, JavaScript
+    // below 1e-6 and from 1e21. Both print the same shortest digits.
+    const magnitude = Math.abs(value);
+    if (magnitude >= 1e16 || magnitude < 1e-4) {
+      const [mantissa, exponent] = value.toExponential().split('e') as [string, string];
+      const power = Number(exponent);
+      const sign = power < 0 ? '-' : '+';
+      return `${mantissa}e${sign}${String(Math.abs(power)).padStart(2, '0')}`;
+    }
+    const text = String(value);
+    return text.includes('.') ? text : `${text}.0`;
+  }
+}
+
+/** Python `repr()` of a str: single quotes unless the text holds one and no double. */
+export function pyReprStr(text: string): string {
+  const quote = text.includes("'") && !text.includes('"') ? '"' : "'";
+  let out = quote;
+  for (const char of text) {
+    const code = char.codePointAt(0) as number;
+    if (char === quote || char === '\\') out += `\\${char}`;
+    else if (char === '\n') out += '\\n';
+    else if (char === '\r') out += '\\r';
+    else if (char === '\t') out += '\\t';
+    else if (code < 0x20 || code === 0x7f) out += `\\x${code.toString(16).padStart(2, '0')}`;
+    else if (!isPrintable(char)) {
+      if (code <= 0xff) out += `\\x${code.toString(16).padStart(2, '0')}`;
+      else if (code <= 0xffff) out += `\\u${code.toString(16).padStart(4, '0')}`;
+      else out += `\\U${code.toString(16).padStart(8, '0')}`;
+    } else out += char;
+  }
+  return out + quote;
+}
+
+/** `str.isprintable()` for one character: not a control, format, separator or unassigned one, space excepted. */
+function isPrintable(char: string): boolean {
+  if (char === ' ') return true;
+  return !/[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u.test(char);
+}
+
+/**
+ * Python `str(value)` for a value parsed from a JSON body (`request.data`):
+ * what `str(request.data.get("email", ""))` writes into an audit row, or
+ * DRF's `CharField` makes of a number.
+ */
+export function pyStr(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return pyRepr(value);
+}
+
+/** Python `repr(value)` for a value parsed from a JSON body. */
+export function pyRepr(value: unknown): string {
+  if (value === null || value === undefined) return 'None';
+  if (value === true) return 'True';
+  if (value === false) return 'False';
+  if (typeof value === 'string') return pyReprStr(value);
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  if (value instanceof PyFloat) return value.toString();
+  if (Array.isArray(value)) return `[${value.map(pyRepr).join(', ')}]`;
+  if (typeof value === 'object') {
+    const items = Object.entries(value as Record<string, unknown>).map(
+      ([key, item]) => `${pyReprStr(key)}: ${pyRepr(item)}`,
+    );
+    return `{${items.join(', ')}}`;
+  }
+  return String(value);
+}
