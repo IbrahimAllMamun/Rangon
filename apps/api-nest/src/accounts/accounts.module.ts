@@ -1,6 +1,14 @@
 import { Module } from '@nestjs/common';
 
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { MeService } from './me.service';
 import { OrganizationService } from './organization.service';
+import { TokensService } from './tokens.service';
 
-@Module({ providers: [OrganizationService], exports: [OrganizationService] })
+@Module({
+  controllers: [AuthController],
+  providers: [OrganizationService, AuthService, MeService, TokensService],
+  exports: [OrganizationService],
+})
 export class AccountsModule {}

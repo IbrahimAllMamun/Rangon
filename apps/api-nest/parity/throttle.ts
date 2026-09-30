@@ -17,19 +17,28 @@ const APIS = {
   nest: new URL(process.env.NEST_BASE ?? 'http://nest-throttled:3000'),
 };
 
-function get(
+function call(
   base: URL,
   path: string,
   headers: Record<string, string> = {},
+  body?: unknown,
 ): Promise<{ status: number; body: string }> {
+  const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
     const req = request(
       {
         host: base.hostname,
         port: base.port,
         path,
+        method: payload ? 'POST' : 'GET',
         agent: false,
-        headers: { host: 'localhost', ...headers },
+        headers: {
+          host: 'localhost',
+          ...(payload
+            ? { 'content-type': 'application/json', 'content-length': String(payload.length) }
+            : {}),
+          ...headers,
+        },
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -40,7 +49,7 @@ function get(
       },
     );
     req.on('error', reject);
-    req.end();
+    req.end(payload);
   });
 }
 
@@ -63,8 +72,8 @@ async function main(): Promise<void> {
   const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
   const user = (
-    await db.query<{ id: string; password: string }>(
-      `SELECT id, password FROM accounts_user ORDER BY email LIMIT 1`,
+    await db.query<{ id: string; password: string; email: string }>(
+      `SELECT id, password, email FROM accounts_user ORDER BY email LIMIT 1`,
     )
   ).rows[0];
   await db.end();
@@ -101,6 +110,28 @@ async function main(): Promise<void> {
     },
     // Plain Django views are never throttled.
     { name: 'health, 70 requests', count: 70, path: '/api/health/' },
+    // The `auth` scope, 10/min, refuses before the anon budget does.
+    {
+      name: 'sign-in, 12 wrong passwords',
+      count: 12,
+      path: '/api/v1/auth/login/',
+      body: { email: user.email, password: 'not-the-password' },
+    },
+    // `throttle_classes = [ScopedRateThrottle]`: the `auth` scope alone, per account.
+    {
+      name: 'password change, 12 wrong guesses',
+      count: 12,
+      path: '/api/v1/auth/password/change/',
+      auth: true,
+      body: { current_password: 'not-the-password', new_password: 'Kantha-Stitch-77' },
+    },
+    // No throttle at all: a 429 would leave the session alive.
+    {
+      name: 'logout, 70 requests',
+      count: 70,
+      path: '/api/v1/auth/logout/',
+      body: { refresh: 'abc' },
+    },
   ];
 
   let failed = 0;
@@ -114,7 +145,7 @@ async function main(): Promise<void> {
         const headers: Record<string, string> = {};
         if (scenario.spoof) headers['x-forwarded-for'] = `198.51.100.${i % 250}`;
         if (scenario.auth) headers.authorization = `Bearer ${token}`;
-        const response = await get(base, scenario.path, headers);
+        const response = await call(base, scenario.path, headers, scenario.body);
         statuses.push(response.status);
         if (response.status === 429 && !refusal) {
           const error = (JSON.parse(response.body) as { error: { code: string; message: string } })

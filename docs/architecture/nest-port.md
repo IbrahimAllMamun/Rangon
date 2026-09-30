@@ -12,7 +12,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
-| 2 | Accounts: login, refresh, logout, me, password change; customer orders and addresses; guest order tracking; review submission | Next |
+| 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **In progress**: the six `auth/` endpoints done 2026-09-30, parity 283/283 |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
@@ -31,6 +31,20 @@ Phase 1 endpoints, all compared by the parity harness:
 | `GET /api/v1/shop/home/`, `navigation/`, `site/`, `pages/[<slug>/]` | `site/` creates the settings row on first read |
 | `GET /api/v1/shop/feed.xml`, `feed.csv` | cached 15 minutes; 503 without `RANGON_PUBLIC_URL` |
 
+Phase 2 so far (write cases: the rows each API writes are compared too):
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/auth/login/` | Argon2 and PBKDF2 hashes, PBKDF2 upgraded on sign-in; `LOGIN`/`LOGIN_FAILED` audit rows; `last_login` and its address |
+| `POST /api/v1/auth/refresh/` | rotation over SimpleJWT's `token_blacklist` tables; refused for a deactivated account or a changed password |
+| `POST /api/v1/auth/logout/` | no authentication and no throttle, always 204 |
+| `GET /api/v1/auth/me/` | |
+| `POST /api/v1/auth/register/` | links the guest customer with the same mobile, else creates one; one transaction |
+| `POST /api/v1/auth/password/change/` | the password validators, every session ended, a fresh pair for this one; throttled on the `auth` scope alone |
+
+Still to come in phase 2: `shop/account/orders/`, `shop/account/addresses/`,
+`shop/orders/<number>/` and `shop/products/<slug>/reviews/`.
+
 ## Running it
 
 ```bash
@@ -45,7 +59,8 @@ scripts/nest-parity.sh run
 ```
 
 Every case to both APIs; exits non-zero on any difference not listed below. `PARITY_ONLY=feed`
-runs the cases whose name contains `feed`. The rate limits, which the parity stack turns off, are
+runs the cases whose name contains `feed`; `PARITY_VERBOSE=1` prints each case's status and side
+effects, to check a case exercises what its name says. The rate limits, which the parity stack turns off, are
 compared on their own:
 
 ```bash
@@ -76,10 +91,14 @@ npm run db:pull        # re-introspect after a Django migration (DATABASE_URL to
    `+00:00` where the view calls `isoformat()`), which Decimal becomes a JSON number (a bare Decimal
    in a dict) and which a string (a serializer field).
 3. **Use the Python helpers** in `common/python.ts` wherever Python parses or formats something a
-   client sees.
+   client sees. Read a body with `requestData()` (`http/request-body.ts`), which parses it when the
+   view first asks, as DRF does, and validate it with `common/drf.ts`, which gives DRF's messages
+   in DRF's order.
 4. **Add parity cases and fixtures** for every branch: missing, inactive, unpublished, empty, a tie,
    a malformed parameter. A module is done when its cases pass and a spot check shows they exercise
-   what they claim to.
+   what they claim to. For an endpoint that writes, give the case a `reset` (both APIs start from
+   the same rows) and `effects` (queries whose rows, read after each request, must match); see
+   `parity/accounts-cases.ts`.
 5. **Writes** additionally need the service's transaction boundary, its `SELECT ... FOR UPDATE`, its
    idempotency handling and concurrency tests against the shared database, before any parity run.
 
@@ -92,12 +111,22 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | 401 message | the Python `repr` of SimpleJWT's error dict | the words inside it | Status and code match; a repr is not a message |
 | Rate-limit budgets | its own buckets | its own buckets | Route each path to one API and a client sees one budget |
 | Cached feeds | its own cache keys | its own cache keys | Both expire on the same schedule |
-| Session cookies | `SessionAuthentication` accepts a Django admin session | not read | No ported endpoint's answer depends on the user; revisit with phase 2 |
+| Session cookies | `SessionAuthentication` accepts a Django admin session | not read | The web app authenticates with bearer tokens only; a Django admin session reaching `auth/me/` is not a client |
+| Malformed JSON body | 400 `JSON parse error - ` and Python's `json` wording | the same, with V8's wording | Status, code and prefix match |
+| Form and multipart bodies | parsed | 415 | Nothing sends them: the web app posts JSON |
+| Two concurrent refreshes of one token | both succeed, each minting a pair | the second is refused (401) | `get_or_create` lets both pass; the port blacklists with `ON CONFLICT DO NOTHING` and refuses the loser. A fix for Django too |
+| `bcrypt_sha256$` password hashes | verified | read as a wrong password, and logged | No version of this project wrote one: Argon2 was first in PASSWORD_HASHERS from the first migration |
 | `OPTIONS` without CORS headers | DRF's view metadata | 405 | Nothing calls it |
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 
 One Django quirk is *not* copied because the harness cannot see it: gunicorn writes a body on
 `HEAD` responses. The Nest API sends none, as HTTP requires.
+
+Django defects that *are* copied, so the two agree until Django is fixed (fix Django first, then
+the port): a JSON body that is not an object is a 500 on login, refresh and logout
+(`request.data.get` on a list); first and last names of 80 characters each overflow the customer's
+160-character name at registration, also a 500; and registering with a guest customer's email and no
+mobile is a 409 rather than a link to that customer.
 
 ## Performance, measured 2026-09-30
 

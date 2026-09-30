@@ -9,7 +9,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { FastifyRequest } from 'fastify';
 
-import { AuthenticationRequired } from '../common/errors';
+import { AuthenticationRequired, PermissionDenied } from '../common/errors';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
@@ -25,6 +25,8 @@ export interface RequestUser {
   isSuperuser: boolean;
   status: string;
   roleId: string | null;
+  /** `user.role.code`, or null for an account without a role. */
+  roleCode: string | null;
   branchId: string | null;
   organizationId: string | null;
 }
@@ -38,6 +40,7 @@ declare module 'fastify' {
 
 const ALLOW_ANY = 'rangon:allow-any';
 const SKIP_AUTHENTICATION = 'rangon:skip-authentication';
+const CUSTOMER_ONLY = 'rangon:customer-only';
 
 /** DRF `permission_classes = [AllowAny]`: authentication still runs, and can still refuse. */
 export const AllowAny = () => SetMetadata(ALLOW_ANY, true);
@@ -48,6 +51,12 @@ export const AllowAny = () => SetMetadata(ALLOW_ANY, true);
  */
 export const SkipAuthentication = () =>
   applyDecorators(SetMetadata(SKIP_AUTHENTICATION, true), SetMetadata(ALLOW_ANY, true));
+
+/**
+ * `permission_classes = [IsAuthenticated, IsCustomer]`: a signed-in customer
+ * account (`accounts.permissions.IsCustomer`); anyone else signed in is 403.
+ */
+export const CustomerOnly = () => SetMetadata(CUSTOMER_ONLY, true);
 
 /** Python `bytes.split()`: runs of ASCII whitespace, empty pieces dropped. */
 function splitHeader(value: string): string[] {
@@ -104,12 +113,13 @@ export class Authenticator {
     if (!id) throw new AuthenticationRequired('User not found');
 
     const row = await this.db.one<RequestUser & { password: string }>(
-      `SELECT id, email, first_name AS "firstName", last_name AS "lastName",
-              is_active AS "isActive", is_staff AS "isStaff", is_superuser AS "isSuperuser",
-              status, role_id AS "roleId", branch_id AS "branchId",
-              organization_id AS "organizationId", password
-         FROM accounts_user
-        WHERE id = $1::uuid`,
+      `SELECT u.id, u.email, u.first_name AS "firstName", u.last_name AS "lastName",
+              u.is_active AS "isActive", u.is_staff AS "isStaff", u.is_superuser AS "isSuperuser",
+              u.status, u.role_id AS "roleId", r.code AS "roleCode", u.branch_id AS "branchId",
+              u.organization_id AS "organizationId", u.password
+         FROM accounts_user u
+         LEFT JOIN accounts_role r ON r.id = u.role_id
+        WHERE u.id = $1::uuid`,
       [id],
     );
     if (!row) throw new AuthenticationRequired('User not found');
@@ -149,6 +159,12 @@ export class AuthGuard implements CanActivate {
     // DRF's default: IsAuthenticated, and NotAuthenticated when nobody is.
     if (!request.user) {
       throw new AuthenticationRequired('Authentication credentials were not provided.');
+    }
+    if (
+      this.reflector.getAllAndOverride<boolean>(CUSTOMER_ONLY, targets) &&
+      request.user.roleCode !== 'CUSTOMER'
+    ) {
+      throw new PermissionDenied();
     }
     return true;
   }

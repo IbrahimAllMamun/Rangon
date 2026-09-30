@@ -6,6 +6,8 @@
  * page shows). Numbers compare numerically, so Python's `450.0` equals `450`.
  */
 
+import { createHmac } from 'node:crypto';
+
 export interface Captured {
   status: number;
   headers: Record<string, string>;
@@ -116,4 +118,57 @@ export function compare(django: Captured, nest: Captured, sentRequestId?: string
     out.push({ path: 'body', django: django.body.slice(0, 300), nest: nest.body.slice(0, 300) });
   }
   return out;
+}
+
+const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/**
+ * Every JWT in a body replaced by what it says: each API mints its own id,
+ * timestamps and (after a password upgrade) password fingerprint, so tokens
+ * are compared by their shape -- the claims present, in order, the type, the
+ * user, the lifetime, a valid signature -- not by their bytes. That a token
+ * one API issues is accepted by the other is checked by its own cases.
+ */
+export function describeTokens(value: unknown, key: string): unknown {
+  if (typeof value === 'string' && JWT.test(value)) {
+    const [header, payload, signature] = value.split('.') as [string, string, string];
+    let claims: Record<string, unknown>;
+    try {
+      const alg = (
+        JSON.parse(Buffer.from(header, 'base64url').toString('utf8')) as { alg?: unknown }
+      ).alg;
+      if (alg !== 'HS256') return value;
+      claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      return value;
+    }
+    const expected = createHmac('sha256', key).update(`${header}.${payload}`).digest('base64url');
+    const now = Date.now() / 1000;
+    return {
+      jwt: {
+        signed: expected === signature,
+        claims: Object.keys(claims).join(','),
+        token_type: claims.token_type,
+        user_id: claims.user_id,
+        fingerprint:
+          typeof claims.hash_password === 'string' && /^[0-9A-F]{32}$/.test(claims.hash_password),
+        jti: typeof claims.jti === 'string' && /^[0-9a-f]{32}$/.test(claims.jti),
+        lifetime: Number(claims.exp) - Number(claims.iat),
+        fresh: Math.abs(now - Number(claims.iat)) < 300,
+      },
+    };
+  }
+  if (Array.isArray(value)) return value.map((item) => describeTokens(item, key));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([name, item]) => [
+        name,
+        describeTokens(item, key),
+      ]),
+    );
+  }
+  return value;
 }

@@ -481,6 +481,38 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 2 part 1: sign-in and accounts, 2026-09-30
+
+Asked for: phase 2 of the port. This is its first part, the six `/api/v1/auth/` endpoints: login,
+refresh, logout, me, register and password change. Customer orders, addresses, guest order
+tracking and review submission are the rest of phase 2 and are not ported yet.
+
+**What shipped.** `apps/api-nest/src/accounts/`: Django's Argon2 and PBKDF2 hashes (a hash either API
+writes, the other verifies; a PBKDF2 one is upgraded on sign-in, as `check_password` does), the four
+AUTH_PASSWORD_VALIDATORS with Django's own common-password list, SimpleJWT's refresh tokens over the
+`token_blacklist` tables, and `core.audit.record`. Underneath: DRF's body parsing (on first use,
+with Python's int/float distinction) and field validation, with DRF's messages in DRF's order.
+
+**How it is proven.** 81 new parity cases, now 283/283. The harness gained write cases: both APIs
+start from the same rows, and what each *wrote* is read back and compared, not just the answer --
+audit rows (labels included: a JSON `4.0` sent as an email is audited as `"4.0"` by both), sign-in
+stamps, hash schemes, issued and blacklisted tokens, the new account and its customer row. Tokens
+are compared by their claims, and cases send each API a token the *other* one issued.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 283/283, 11 by the two documented differences
+throttle-check (limits on, both APIs) ......... 6/6 sequences identical (sign-in, password change, logout added)
+nest unit tests ............................... 128 passed (44 new, expected values printed by Django)
+tsc (API + harness) / eslint / prettier ....... clean
+```
+
+What the harness caught: `PasswordChangeView` names its own throttle class, so the parity settings
+(which empty only the *default* classes) leave it on -- the port had turned it off with the rest.
+Mirrored Django defects, to fix there first: a JSON body that is not an object (`[1]`, `null`) is a
+500 on login, refresh and logout (`request.data.get` on a list); a first and last name of 80
+characters each overflow the 160-character customer name, also a 500; and registering with the email
+of an existing guest customer, without a phone, is a 409 rather than linking that customer.
+
 ### A NestJS API beside Django, phase 1, 2026-09-30
 
 Asked for: a NestJS version of the API, built alongside Django rather than replacing it, full

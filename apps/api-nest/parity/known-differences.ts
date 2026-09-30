@@ -21,4 +21,15 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
       typeof difference.django === 'string' &&
       difference.django.startsWith("{'detail': ErrorDetail("),
   },
+  {
+    reason:
+      'Malformed JSON body: both answer 400 VALIDATION_ERROR with "JSON parse error - " and the parser\'s ' +
+      "own explanation, which is Python's json module's wording on one side and V8's on the other.",
+    appliesTo: (_testCase, difference) =>
+      difference.path === '$.error.message' &&
+      typeof difference.django === 'string' &&
+      typeof difference.nest === 'string' &&
+      difference.django.startsWith('JSON parse error - ') &&
+      difference.nest.startsWith('JSON parse error - '),
+  },
 ];

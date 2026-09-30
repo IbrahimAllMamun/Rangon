@@ -53,15 +53,20 @@ function claimInt(value: unknown): number | null {
 }
 
 /**
- * Decode and verify an access token, or throw `TokenError`.
+ * PyJWT's `decode`, as SimpleJWT's `TokenBackend` calls it: HS256 only, the
+ * signature, then `iat`, `nbf` and `exp` where present (leeway 0), then the
+ * type of `jti` and `sub`. Throws `TokenError`; any of these is SimpleJWT's
+ * "Token is invalid or expired".
  *
  * `now` is seconds since the epoch, with a fraction, as Python's `timestamp()`.
  */
-export function verifyAccessToken(
-  token: string,
+export function decodeToken(
+  token: unknown,
   key: string,
   now = Date.now() / 1000,
-): AccessClaims {
+): Record<string, unknown> {
+  // "Invalid token type. Token must be a <class 'bytes'>".
+  if (typeof token !== 'string') throw new TokenError('Token is invalid or expired');
   const parts = token.split('.');
   if (parts.length !== 3) throw new TokenError('Token is invalid or expired');
   const [encodedHeader, encodedPayload, encodedSignature] = parts as [string, string, string];
@@ -98,14 +103,31 @@ export function verifyAccessToken(
   if ('sub' in payload && typeof payload.sub !== 'string') {
     throw new TokenError('Token is invalid or expired');
   }
+  return payload;
+}
 
-  // SimpleJWT `Token.verify()`: exp is required here even though the spec
-  // makes it optional, then jti, then the token type.
+/**
+ * SimpleJWT `Token.verify()`, after decoding: `exp` is required here even
+ * though the spec makes it optional, then `jti`, then the token type.
+ */
+export function verifyClaims(
+  payload: Record<string, unknown>,
+  tokenType: 'access' | 'refresh',
+): void {
   if (!('exp' in payload)) throw new TokenError("Token has no 'exp' claim");
   if (!('jti' in payload)) throw new TokenError('Token has no id');
   if (!('token_type' in payload)) throw new TokenError('Token has no type');
-  if (payload.token_type !== 'access') throw new TokenError('Token has wrong type');
+  if (payload.token_type !== tokenType) throw new TokenError('Token has wrong type');
+}
 
+/** Decode and verify an access token (`AccessToken(token)`), or throw `TokenError`. */
+export function verifyAccessToken(
+  token: string,
+  key: string,
+  now = Date.now() / 1000,
+): AccessClaims {
+  const payload = decodeToken(token, key, now);
+  verifyClaims(payload, 'access');
   return payload as AccessClaims;
 }
 

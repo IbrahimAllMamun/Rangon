@@ -9,6 +9,27 @@ import * as tables from './schema';
 export const schema = { ...tables, ...relations };
 export type Orm = NodePgDatabase<typeof schema>;
 
+/** What a service needs to run SQL: the pool, or one transaction's connection. */
+export interface Queryable {
+  query<T extends QueryResultRow>(text: string, values?: unknown[]): Promise<T[]>;
+  one<T extends QueryResultRow>(text: string, values?: unknown[]): Promise<T | null>;
+}
+
+/** One connection inside `BEGIN ... COMMIT`, handed to `Database.transaction`'s callback. */
+export class Transaction implements Queryable {
+  constructor(private readonly client: PoolClient) {}
+
+  async query<T extends QueryResultRow>(text: string, values: unknown[] = []): Promise<T[]> {
+    const result = await this.client.query<T>(text, values);
+    return result.rows;
+  }
+
+  async one<T extends QueryResultRow>(text: string, values: unknown[] = []): Promise<T | null> {
+    const rows = await this.query<T>(text, values);
+    return rows[0] ?? null;
+  }
+}
+
 /**
  * Types that stay exactly as PostgreSQL printed them.
  *
@@ -42,7 +63,7 @@ const typeParsers = {
  * on ties. Drizzle is used where nothing that subtle is at stake.
  */
 @Injectable()
-export class Database implements OnModuleDestroy {
+export class Database implements OnModuleDestroy, Queryable {
   readonly pool: Pool;
   readonly orm: Orm;
 
@@ -82,6 +103,32 @@ export class Database implements OnModuleDestroy {
   /** A client for a transaction. The caller must release it. */
   async connect(): Promise<PoolClient> {
     return this.pool.connect();
+  }
+
+  /**
+   * `transaction.atomic()`: commit when `work` resolves, roll back when it
+   * throws. Statements outside one autocommit, as Django's do without
+   * ATOMIC_REQUESTS.
+   */
+  async transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    let broken = false;
+    try {
+      await client.query('BEGIN');
+      const result = await work(new Transaction(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // The connection itself failed: do not hand it back to the pool.
+        broken = true;
+      }
+      throw error;
+    } finally {
+      client.release(broken);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
