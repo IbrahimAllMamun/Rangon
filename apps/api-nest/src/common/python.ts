@@ -293,3 +293,70 @@ export function pyRepr(value: unknown): string {
   }
   return String(value);
 }
+
+/**
+ * Python `int(text)`: surrounding whitespace, one sign, digits of any script
+ * (`int("৫")` is 5) with single underscores between them. Exact, as a bigint;
+ * null where Python raises ValueError.
+ */
+export function pyIntText(text: string): bigint | null {
+  const match = /^([+-]?)(\p{Nd}(?:_?\p{Nd})*)$/u.exec(pyStrip(text));
+  if (!match) return null;
+  let value = 0n;
+  for (const char of (match[2] as string).replaceAll('_', '')) {
+    value = value * 10n + BigInt(decimalDigitValue(char));
+  }
+  return match[1] === '-' ? -value : value;
+}
+
+/**
+ * The value of a Unicode decimal digit. Every script's digits are encoded as
+ * contiguous runs of ten from zero, so the value is the distance from the
+ * start of the run, modulo ten.
+ */
+function decimalDigitValue(char: string): number {
+  let code = char.codePointAt(0) as number;
+  let distance = 0;
+  while (/\p{Nd}/u.test(String.fromCodePoint(code - 1))) {
+    code -= 1;
+    distance += 1;
+  }
+  return distance % 10;
+}
+
+/**
+ * `template.format(**fields)` for templates that name their fields:
+ * `{name}`, `{name!s}`, `{name!r}`, and `{{`/`}}` for braces. Anything Python
+ * would refuse -- an unknown or positional field, a stray brace -- throws, as
+ * Python raises; so does a format spec, which no template here uses.
+ */
+export function pyFormatNamed(template: string, fields: Record<string, string>): string {
+  let out = '';
+  for (let i = 0; i < template.length; i++) {
+    const char = template[i] as string;
+    if (char === '}') {
+      if (template[i + 1] !== '}') throw new Error("Single '}' encountered in format string");
+      out += '}';
+      i += 1;
+      continue;
+    }
+    if (char !== '{') {
+      out += char;
+      continue;
+    }
+    if (template[i + 1] === '{') {
+      out += '{';
+      i += 1;
+      continue;
+    }
+    const end = template.indexOf('}', i);
+    if (end === -1) throw new Error("expected '}' before end of string");
+    const field = template.slice(i + 1, end);
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)(?:!([rsa]))?$/.exec(field);
+    if (!match || !Object.hasOwn(fields, match[1] as string)) throw new Error(`KeyError: ${field}`);
+    const value = fields[match[1] as string] as string;
+    out += match[2] === 'r' || match[2] === 'a' ? pyReprStr(value) : value;
+    i = end;
+  }
+  return out;
+}

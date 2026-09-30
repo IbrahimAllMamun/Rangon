@@ -481,6 +481,42 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 2 part 2: orders, addresses, tracking, reviews, 2026-09-30
+
+Asked for: the rest of phase 2. Ported: the signed-in customer's orders (list and detail), guest
+order tracking, the account's addresses (list, add, edit, delete) and review submission. Phase 2 is
+done.
+
+**A security hole found by porting, fixed in Django first (D113).** Reading every branch of
+`OrderTrackingView` to port it: a blank guest token matched a request that sent none, and every
+counter order has a blank one, so any POS sale -- name, items, totals, payments -- was readable by
+counting up from `RGN-POS-000001`. On the demo data all 24 opened. Fixed on its own branch
+(`fix/order-tracking-blank-token`, full Django suite 1639 passed) so it can ship ahead of the port;
+the port implements the fixed rule.
+
+**How it is proven.**
+
+```text
+parity (scripts/nest-parity.sh run) ........... 370/370 (87 new), 13 by the two documented differences
+concurrency (parity/concurrency.ts) ........... 2/2: one default address after 20 simultaneous adds
+                                                across both APIs; one rotation from 8 simultaneous refreshes
+throttle-check ................................ 6/6
+nest unit tests ............................... 147 passed (19 new)
+tsc / eslint / prettier / build ............... clean
+```
+
+The address race check was run with the port's row lock removed: it failed on every run (up to five
+defaults, and deadlocks between the demoting UPDATEs), so it tests what it claims. The address and
+review cases compare the rows each API leaves, audit entries included; an order's detail compares
+the customer's timeline (hidden entries dropped, "placed" first, a return step named rather than
+staff's comment), the parcels and the courier link.
+
+Found and copied, to fix in Django first: the review endpoint ignores its own permission classes
+(`as_view({"post": "reviews"})` drops the action's `[IsAuthenticated, IsCustomer]`), so anonymous
+and staff callers get 400 where 401/403 were meant; and a JSON list sent to the address edit or the
+review is a 500, as on the sign-in endpoints. And one the harness caught in the port: DRF 3.15 words
+a bad boolean "Must be a valid boolean.", not the older quoted-value form.
+
 ### The NestJS API, phase 2 part 1: sign-in and accounts, 2026-09-30
 
 Asked for: phase 2 of the port. This is its first part, the six `/api/v1/auth/` endpoints: login,
@@ -2865,6 +2901,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D110~~ | ~~**Closing a register dialog with its button lost the scan field's focus.**~~ **Fixed 2026-09-28.** `focusScan()` ran inside the dialog's `onClose`, while Radix still trapped focus in it: the focus bounced back to the button that closed it, which then left the page, and `document.activeElement` was `<body>` — the next scan typed into nothing. Esc never showed it, because the register's window listener runs after Radix has unmounted the dialog. Measured in Chromium: the customer dialog's Close button and the new Discount dialog's Done both ended on `<body>`; both end on the scan field now. The focus is deferred to the next task | `apps/web/src/components/pos/register.tsx` | Barcode-first is the register's one promise. Found by the browser pass, after `tsc`, eslint and vitest were all green |
 | D111 | **Every modal's backdrop is transparent.** `bg-neutral-950/50` generates no CSS: `neutral-950` is defined as a bare `var(--neutral-950)`, and Tailwind 3 cannot apply an opacity modifier to that. Measured in Chromium on the POS customer dialog: the overlay's computed background is `rgba(0, 0, 0, 0)` and no stylesheet carries the rule. Affects the POS payment, customer and discount dialogs, quick view, the size guide and the admin shell's mobile menu. The dialogs still trap focus and block clicks; only the dimming is missing | `apps/web/tailwind.config.ts`, `apps/web/src/styles/tokens.css` | Not fixed: a design-token change felt across the whole product, and outside the change that found it. An `<alpha-value>`-aware colour definition, or a literal `bg-black/50`, would do it |
 | ~~D112~~ | ~~**A scan with focus away from the scan field went nowhere, or pressed a button.**~~ **Fixed 2026-09-29.** The register kept the field focused after its own actions, but a click anywhere else -- a line's **+**, the basket, the page -- took focus with it. The scanner then typed into nothing, and its Enter pressed whatever button still had focus: after **+**, the scan added one more of the *previous* item. Now a printable key outside a field or dialog goes to the scan field and the burst follows (`lib/commerce/scan-focus`), and a click on nothing in particular focuses it. Pinned by the Playwright spec "a scan lands in the scan field wherever focus has wandered", which fails on the old register |
+| ~~D113~~ | ~~**Any counter order could be read by its number alone.**~~ **Fixed 2026-09-30.** `OrderTrackingView` refused a request only when `token != order.guest_token`. Only online checkout mints a guest token, so every POS, phone and social order has a blank one -- and a request that sent no token matched it. The order numbers are sequential (`RGN-POS-000001` onwards), so every counter sale was enumerable by anyone, with the customer's name, the items, the totals and the payments. On the demo data all 24 POS orders opened. A blank token now opens nothing, and the comparison is constant-time. Two tests had passed only through the hole: their online order carried no token, as no real online order ever does. | `apps/api/orders/api/shop_views.py`, `tests/api/test_shop.py`, `tests/api/test_shipment_fulfilment.py` | Found while porting the endpoint to the NestJS API: porting a rule means reading every branch of it. A customer signed in still sees their own counter orders |
 
 ## Still API-only (no UI)
 

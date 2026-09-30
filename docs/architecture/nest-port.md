@@ -12,7 +12,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
-| 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **In progress**: the six `auth/` endpoints done 2026-09-30, parity 283/283 |
+| 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
@@ -31,7 +31,7 @@ Phase 1 endpoints, all compared by the parity harness:
 | `GET /api/v1/shop/home/`, `navigation/`, `site/`, `pages/[<slug>/]` | `site/` creates the settings row on first read |
 | `GET /api/v1/shop/feed.xml`, `feed.csv` | cached 15 minutes; 503 without `RANGON_PUBLIC_URL` |
 
-Phase 2 so far (write cases: the rows each API writes are compared too):
+Phase 2 (write cases: the rows each API writes are compared too):
 
 | Endpoint | Notes |
 |---|---|
@@ -41,9 +41,15 @@ Phase 2 so far (write cases: the rows each API writes are compared too):
 | `GET /api/v1/auth/me/` | |
 | `POST /api/v1/auth/register/` | links the guest customer with the same mobile, else creates one; one transaction |
 | `POST /api/v1/auth/password/change/` | the password validators, every session ended, a fresh pair for this one; throttled on the `auth` scope alone |
+| `GET /api/v1/shop/account/orders/[<number>/]` | the newest 50, and one order with its lines, payments, customer timeline and parcels; Django's statements, so ties order alike |
+| `GET /api/v1/shop/orders/<number>/?token=` | guest tracking: the order's customer signed in, or the link's token -- a blank one opens nothing (D113) |
+| `GET/POST/PATCH/DELETE /api/v1/shop/account/addresses/` | one default per customer, held by locking the customer row -- the same lock Django takes, so the two APIs queue behind each other |
+| `POST /api/v1/shop/products/<slug>/reviews/` | once per received purchase, pending moderation; the `search` throttle scope |
 
-Still to come in phase 2: `shop/account/orders/`, `shop/account/addresses/`,
-`shop/orders/<number>/` and `shop/products/<slug>/reviews/`.
+Two invariants are also checked under concurrency on every parity run (`parity/concurrency.ts`):
+twenty simultaneous "add as my default address" requests, split across both APIs, leave exactly one
+default -- and the check fails on every run with the port's lock removed; and eight simultaneous
+refreshes of one token rotate it once.
 
 ## Running it
 
@@ -101,6 +107,9 @@ npm run db:pull        # re-introspect after a Django migration (DATABASE_URL to
    `parity/accounts-cases.ts`.
 5. **Writes** additionally need the service's transaction boundary, its `SELECT ... FOR UPDATE`, its
    idempotency handling and concurrency tests against the shared database, before any parity run.
+   Drive the race across *both* APIs (`parity/concurrency.ts`): while paths are cut over one at a
+   time, a Django request and a Nest request will contend for the same rows. Then remove the lock
+   and check the test fails.
 
 ## Deliberate differences
 
@@ -123,10 +132,24 @@ One Django quirk is *not* copied because the harness cannot see it: gunicorn wri
 `HEAD` responses. The Nest API sends none, as HTTP requires.
 
 Django defects that *are* copied, so the two agree until Django is fixed (fix Django first, then
-the port): a JSON body that is not an object is a 500 on login, refresh and logout
-(`request.data.get` on a list); first and last names of 80 characters each overflow the customer's
-160-character name at registration, also a 500; and registering with a guest customer's email and no
-mobile is a 409 rather than a link to that customer.
+the port):
+
+- A JSON body that is not an object is a 500 on login, refresh, logout, the address edit and the
+  review (`request.data.get` on a list).
+- First and last names of 80 characters each overflow the customer's 160-character name at
+  registration, also a 500.
+- Registering with a guest customer's email and no mobile is a 409 rather than a link to that
+  customer.
+- The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
+  `as_view({"post": "reviews"})`, which drops the action's `[IsAuthenticated, IsCustomer]` (only a
+  router applies them), so anonymous and staff callers reach the view and are refused by its
+  customer check: 400, where 401 and 403 were meant.
+
+One defect found by porting was a security hole, and was fixed in Django first rather than copied:
+D113, a blank guest token opened any counter order to anyone with its sequential number.
+
+A courier's tracking-URL template is filled as Python's `str.format` fills it, except that a
+format spec (`{tracking_number:>12}`) is refused -- a 500 where Django would pad. No template uses one.
 
 ## Performance, measured 2026-09-30
 

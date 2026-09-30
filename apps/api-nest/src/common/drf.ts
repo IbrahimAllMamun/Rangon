@@ -224,7 +224,7 @@ export function booleanField(
       if (TRUE.has(key)) return true;
       if (FALSE.has(key)) return false;
       if (NULL.has(key) && allowNull) return null;
-      throw Invalid.of(`"${pyStr(data)}" is not a valid boolean.`);
+      throw Invalid.of('Must be a valid boolean.');
     },
   };
 }

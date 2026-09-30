@@ -14,8 +14,10 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
+import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
+import { orderCases } from './orders-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -399,6 +401,9 @@ async function buildCases(): Promise<Case[]> {
   // --- Accounts: sign-in, tokens, registration, password change -------------
   cases.push(...(await accountCases({ DJANGO, NEST, SIGNING_KEY })));
 
+  // --- Orders, addresses, tracking and reviews -----------------------------------
+  cases.push(...(await orderCases()));
+
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
 
@@ -518,12 +523,21 @@ async function main(): Promise<void> {
     }
   }
 
+  // Invariants that hold only under the right lock, driven concurrently.
+  let racesFailed = 0;
+  if (!ONLY || 'concurrency'.includes(ONLY)) {
+    for (const check of await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })) {
+      if (!check.passed) racesFailed += 1;
+      console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${check.name}: ${check.detail}`);
+    }
+  }
+
   console.log('');
   console.log(
     `${cases.length} cases: ${cases.length - failed} match (${known} only by documented differences), ${failed} differ`,
   );
   for (const [reason, count] of knownReasons) console.log(`  documented (${count}x): ${reason}`);
-  process.exitCode = failed ? 1 : 0;
+  process.exitCode = failed || racesFailed ? 1 : 0;
 }
 
 void main()
