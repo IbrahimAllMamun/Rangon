@@ -481,6 +481,42 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 2 part 2: orders, addresses, tracking, reviews, 2026-09-30
+
+Asked for: the rest of phase 2. Ported: the signed-in customer's orders (list and detail), guest
+order tracking, the account's addresses (list, add, edit, delete) and review submission. Phase 2 is
+done.
+
+**A security hole found by porting, fixed in Django first (D113).** Reading every branch of
+`OrderTrackingView` to port it: a blank guest token matched a request that sent none, and every
+counter order has a blank one, so any POS sale -- name, items, totals, payments -- was readable by
+counting up from `RGN-POS-000001`. On the demo data all 24 opened. Fixed on its own branch
+(`fix/order-tracking-blank-token`, full Django suite 1639 passed) so it can ship ahead of the port;
+the port implements the fixed rule.
+
+**How it is proven.**
+
+```text
+parity (scripts/nest-parity.sh run) ........... 370/370 (87 new), 13 by the two documented differences
+concurrency (parity/concurrency.ts) ........... 2/2: one default address after 20 simultaneous adds
+                                                across both APIs; one rotation from 8 simultaneous refreshes
+throttle-check ................................ 6/6
+nest unit tests ............................... 147 passed (19 new)
+tsc / eslint / prettier / build ............... clean
+```
+
+The address race check was run with the port's row lock removed: it failed on every run (up to five
+defaults, and deadlocks between the demoting UPDATEs), so it tests what it claims. The address and
+review cases compare the rows each API leaves, audit entries included; an order's detail compares
+the customer's timeline (hidden entries dropped, "placed" first, a return step named rather than
+staff's comment), the parcels and the courier link.
+
+Found and copied, to fix in Django first: the review endpoint ignores its own permission classes
+(`as_view({"post": "reviews"})` drops the action's `[IsAuthenticated, IsCustomer]`), so anonymous
+and staff callers get 400 where 401/403 were meant; and a JSON list sent to the address edit or the
+review is a 500, as on the sign-in endpoints. And one the harness caught in the port: DRF 3.15 words
+a bad boolean "Must be a valid boolean.", not the older quoted-value form.
+
 ### The NestJS API, phase 2 part 1: sign-in and accounts, 2026-09-30
 
 Asked for: phase 2 of the port. This is its first part, the six `/api/v1/auth/` endpoints: login,
