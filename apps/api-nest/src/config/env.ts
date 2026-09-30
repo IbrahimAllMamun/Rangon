@@ -60,6 +60,15 @@ const schema = z.object({
   DJANGO_TIME_ZONE: z.string().default('Asia/Dhaka'),
   RANGON_DEFAULT_TAX_RATE: z.string().default('0.00'),
   RANGON_CURRENCY: z.string().default('BDT'),
+  // `settings.RANGON["ALLOW_OVERSELL"]`: sell past what is on hand. Off
+  // everywhere this project runs; read so both APIs refuse the same sales.
+  RANGON_ALLOW_OVERSELL: flag(false),
+  // `settings.RANGON`: the reorder point a new inventory row starts with, and
+  // the provider recorded on an online payment.
+  RANGON_LOW_STOCK_THRESHOLD: z.coerce.number().int().default(5),
+  PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
+  // Django's Celery broker: jobs this API queues are run by Django's worker.
+  CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
   // The origin customers reach the shop on; the product feed refuses to render
   // without it rather than publish links nothing can follow.
   RANGON_PUBLIC_URL: z.string().default(''),

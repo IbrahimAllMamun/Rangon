@@ -132,7 +132,40 @@ async function main(): Promise<void> {
       path: '/api/v1/auth/logout/',
       body: { refresh: 'abc' },
     },
-  ];
+    // A webhook skips authentication, not throttling: the anonymous 60/min,
+    // keyed by address, as DRF applies it to a view with no authenticators.
+    {
+      name: 'payment webhook, 62 requests',
+      count: 62,
+      path: '/api/v1/shop/payments/manual/webhook/',
+      body: {},
+    },
+    // The `checkout` scope, 20/hour. The throttle runs before the body is
+    // read, so a refused body spends a try too. Nothing here writes.
+    {
+      name: 'checkout, 22 empty bodies',
+      count: 22,
+      path: '/api/v1/shop/checkout/',
+      body: {},
+    },
+    // Taking a lead spends from the same bucket: alternating buys no more tries.
+    // The fixture's empty cart, so no cart is made; no phone, so no lead is held.
+    {
+      name: 'lead and checkout alternating, 22 requests',
+      count: 22,
+      path: ['/api/v1/shop/checkout/lead/', '/api/v1/shop/checkout/'],
+      headers: { 'x-cart-token': 'parity-cart-empty' },
+      body: {},
+    },
+  ] as {
+    name: string;
+    count: number;
+    path: string | string[];
+    spoof?: boolean;
+    auth?: boolean;
+    headers?: Record<string, string>;
+    body?: unknown;
+  }[];
 
   let failed = 0;
   for (const scenario of scenarios) {
@@ -142,10 +175,13 @@ async function main(): Promise<void> {
       const statuses: number[] = [];
       let refusal = '';
       for (let i = 0; i < scenario.count; i++) {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { ...scenario.headers };
         if (scenario.spoof) headers['x-forwarded-for'] = `198.51.100.${i % 250}`;
         if (scenario.auth) headers.authorization = `Bearer ${token}`;
-        const response = await call(base, scenario.path, headers, scenario.body);
+        const path = Array.isArray(scenario.path)
+          ? (scenario.path[i % scenario.path.length] as string)
+          : scenario.path;
+        const response = await call(base, path, headers, scenario.body);
         statuses.push(response.status);
         if (response.status === 429 && !refusal) {
           const error = (JSON.parse(response.body) as { error: { code: string; message: string } })

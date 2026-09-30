@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { performance } from 'node:perf_hooks';
 
 import { Inject, Injectable } from '@nestjs/common';
 
@@ -29,9 +28,15 @@ export interface TokenPair {
   refresh: string;
 }
 
-/** `aware_utcnow()` in seconds, to the microsecond. */
+/**
+ * `aware_utcnow()` in seconds: the wall clock, which Django and Postgres read.
+ * Not `performance.timeOrigin + performance.now()`: that clock is monotonic,
+ * stops while the host sleeps and never takes a correction, so a long-lived
+ * process falls behind -- by 8 ms within minutes here -- and would stamp its
+ * tokens, and expire them, early.
+ */
 function nowSeconds(): number {
-  return (performance.timeOrigin + performance.now()) / 1000;
+  return Date.now() / 1000;
 }
 
 @Injectable()

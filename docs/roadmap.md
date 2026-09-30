@@ -481,6 +481,112 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 3 part 3: the payment webhook, 2026-10-01
+
+Asked for: phase 3 of the port, continued. Ported: `shop/payments/<provider>/webhook/` -- the
+provider registry, `handle_provider_event`, `capture_payment` and `fail_payment`, and the cash-book
+posting a capture makes (`resolve_account`, `check_named_account`, `record_movement`). **Phase 3 is
+done**: the cart, checkout and the webhook, the port's first stock and money writes.
+
+The only provider either API ships, `manual`, takes no webhooks. So the capture path is proven
+through a stand-in gateway both APIs install in the parity stack only, as Django's own tests use
+`StubPay`: a Django app that the parity settings alone install, from a directory only the parity
+compose file mounts, and a Nest twin registered by the parity stack's own entry point. To make that
+possible, the Nest app is now built by `createApp()` (`src/app.factory.ts`), and `main.ts` only
+listens.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 536/536 (38 new), 15 by the documented differences
+concurrency (parity/concurrency.ts) ........... 12/12 (4 new: a retried event, six capture events
+                                                for one payment, captures against failures, a
+                                                capture landing mid-webhook)
+throttle-check ................................ 9/9 (1 new: the webhook's anonymous 60/min)
+nest unit tests ............................... 190 passed (12 new)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover every branch of the view and service: an unknown provider, an encoded slash in its
+name, the body never parsed by the view, capture with and without an amount, a half cent that
+rounds past the payment, success and failure events, events it ignores, cash on delivery not
+captured by a gateway (D100), the older of two waiting payments, a named account of the wrong kind,
+closed or another branch's, no account to post to, the default bank closed, and replays. With the
+payment's `FOR UPDATE` removed from the port, the mid-flight check failed on every run, and the
+six-event and capture-against-failure races failed too. Once, a payment was left both captured and
+marked failed.
+
+Found on the way, in the harness: `pg` reads jsonb into JavaScript numbers, so a payload's `3.0`
+and a 20-digit integer looked equal to `3` and a rounded one. Payloads are now compared as
+jsonb's own text. And in the port: Python's `json.dumps` writes a float as `repr`, and the port's
+`PyFloat` had no JSON form at all.
+
+### The NestJS API, phase 3 part 2: checkout, 2026-10-01
+
+Asked for: phase 3 of the port, continued. Ported: `shop/checkout/` and `shop/checkout/lead/`,
+the first endpoints that reserve stock and take money. The order of work follows Django's
+`place_order` step for step, in one transaction: the idempotency lookup, the row-locked `order:WEB`
+number, every stock row locked `FOR UPDATE` in id order and every line checked before any is
+written, one `RESERVATION` per line, the coupon redeemed under its own lock, cash on delivery
+confirmed with a pending manual payment, then after commit the low-stock alerts, staff notices and
+the customer's email and SMS. The jobs go to Django's Celery worker: the owner chose that Nest writes
+Celery's own task message into Django's broker ([ADR-0014](architecture/decisions/0014-nest-enqueues-celery-jobs.md)).
+
+```text
+parity (scripts/nest-parity.sh run) ........... 498/498 (42 new), 15 by the documented differences
+concurrency (parity/concurrency.ts) ........... 8/8 (6 new: oversell, two double-clicks, POS against
+                                                online, a sale landing mid-checkout, a one-use coupon)
+throttle-check ................................ 8/8 (2 new: checkout's 20/hour, shared with the lead)
+nest unit tests ............................... 178 passed (26 new: DRF's decimal, UUID and dict
+                                                fields; the Celery message Celery itself wrote)
+tsc / eslint / prettier / build ............... clean
+```
+
+Each checkout case compares twelve kinds of row each API writes, plus the jobs it queued, so a
+wrong ledger row or a missing staff notice fails as surely as a wrong response. The first stock race
+passed even with the port's `FOR UPDATE` removed, because the number sequence's lock already
+serialises online checkouts. So a second check holds the stock row itself, lets a Nest checkout
+queue behind it, commits a counter sale and checks the checkout saw the sale. With the lock removed
+it fails on every run.
+
+**Three Django defects found, none fixed here.**
+
+- **D115: the counter can sell stock reserved for online orders.** Measured: an online order reserves
+  all 13 of a variant, then a counter sale of 13 succeeds and `available` is -13. Business rule 1.4
+  says that cannot happen with overselling off. This needs the owner's decision; the POS is phase 5.
+- **D114:** a first-time guest's double-click can get a 409 while the first click's order goes
+  through. Copied by the port.
+- **D116:** with the Celery broker down, a checkout that commits answers 500. The port logs instead.
+
+**Also fixed in the port: a clock that drifted.** A phase 2 refresh case failed one run in three.
+Nest stamped its tokens from `performance.timeOrigin + performance.now()`, a monotonic clock that
+stops while the host sleeps and takes no corrections. After seven minutes of uptime it ran 8 ms
+behind Postgres. After a night's sleep it would issue tokens that Django counts as already expired.
+It now reads the wall clock; a unit test with the process clock an hour behind fails on the old
+code. The race and parity checks now tell harness rows by id, not by time: `seed_demo` spreads
+today's demo sales over shop hours, so a seed run before 9 p.m. dates some of them later today.
+
+
+### The NestJS API, phase 3 part 1: the cart, 2026-09-30
+
+Asked for: phase 3 of the port. Phase 3 carries the first stock and money writes, so it goes in
+three parts: the cart (this one), checkout, then the payment webhook. Ported: `shop/cart/` (read,
+add, change, remove), `shop/cart/coupon/` and `shop/shipping-options/` -- the server-side
+re-pricing every basket goes through, which checkout will reuse.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 456/456 (86 new), 14 by the two documented differences
+concurrency ................................... 2/2 (unchanged)
+nest unit tests ............................... 152 passed (5 new: pricing against Django's own figures)
+tsc / eslint / prettier / build ............... clean
+```
+
+The cases cover both VAT modes at awkward rates (4410 x 0.0733 / 1.0733 -> 301.18 on both), a
+category's VAT override, every coupon refusal, a category coupon covering its descendants, a fixed
+coupon larger than the basket, the guest cart merged into a customer's on sign-in, a checked-out
+cart's token not reused, an unavailable and an unstocked line, and Python's `int()` on a quantity
+(`2.9` becomes 2; `"5.0"` is a 500, copied). Every cart read can write, so each case restores the
+fixture's carts and compares the carts and lines each API leaves. The stock check here is advisory
+in Django too: the one that decides is taken under a row lock at checkout, which is part 2.
+
 ### The NestJS API, phase 2 part 2: orders, addresses, tracking, reviews, 2026-09-30
 
 Asked for: the rest of phase 2. Ported: the signed-in customer's orders (list and detail), guest
@@ -2902,6 +3008,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D111 | **Every modal's backdrop is transparent.** `bg-neutral-950/50` generates no CSS: `neutral-950` is defined as a bare `var(--neutral-950)`, and Tailwind 3 cannot apply an opacity modifier to that. Measured in Chromium on the POS customer dialog: the overlay's computed background is `rgba(0, 0, 0, 0)` and no stylesheet carries the rule. Affects the POS payment, customer and discount dialogs, quick view, the size guide and the admin shell's mobile menu. The dialogs still trap focus and block clicks; only the dimming is missing | `apps/web/tailwind.config.ts`, `apps/web/src/styles/tokens.css` | Not fixed: a design-token change felt across the whole product, and outside the change that found it. An `<alpha-value>`-aware colour definition, or a literal `bg-black/50`, would do it |
 | ~~D112~~ | ~~**A scan with focus away from the scan field went nowhere, or pressed a button.**~~ **Fixed 2026-09-29.** The register kept the field focused after its own actions, but a click anywhere else -- a line's **+**, the basket, the page -- took focus with it. The scanner then typed into nothing, and its Enter pressed whatever button still had focus: after **+**, the scan added one more of the *previous* item. Now a printable key outside a field or dialog goes to the scan field and the burst follows (`lib/commerce/scan-focus`), and a click on nothing in particular focuses it. Pinned by the Playwright spec "a scan lands in the scan field wherever focus has wandered", which fails on the old register |
 | ~~D113~~ | ~~**Any counter order could be read by its number alone.**~~ **Fixed 2026-09-30.** `OrderTrackingView` refused a request only when `token != order.guest_token`. Only online checkout mints a guest token, so every POS, phone and social order has a blank one -- and a request that sent no token matched it. The order numbers are sequential (`RGN-POS-000001` onwards), so every counter sale was enumerable by anyone, with the customer's name, the items, the totals and the payments. On the demo data all 24 POS orders opened. A blank token now opens nothing, and the comparison is constant-time. Two tests had passed only through the hole: their online order carried no token, as no real online order ever does. | `apps/api/orders/api/shop_views.py`, `tests/api/test_shop.py`, `tests/api/test_shipment_fulfilment.py` | Found while porting the endpoint to the NestJS API: porting a rule means reading every branch of it. A customer signed in still sees their own counter orders |
+| D114 | **A first-time guest's double-click at checkout can be answered 409.** `_resolve_guest_customer` matches by phone, else inserts, and it runs before the order's savepoint. Two simultaneous checkouts with the same new mobile -- a double-click, one `Idempotency-Key` -- both find no customer and both insert. The loser's unique-phone violation aborts its whole transaction: 409 `CONFLICT`. One order is placed, correctly, but the shopper's other click is told it failed rather than given that order. A returning guest is unaffected. Measured by the parity race (`parity/concurrency.ts`): 1 order, 1 reservation, five 409s | `apps/api/orders/services/checkout.py` | Found writing the checkout race checks for the NestJS port, which copies it until Django is fixed. A savepoint around the insert that re-reads the winner would do it |
+| D115 | **The counter can sell stock that is reserved for online orders.** A POS sale goes `sell()` -> `_bulk()` -> `_check_can_reduce`, which refuses only when `on_hand` would go negative; it never looks at `reserved`. Measured on the parity database (rolled back): an online order reserves all 13 of `RGN-BLO-L-BEI` (on hand 13, reserved 13, available 0), then a counter sale of 13 succeeds -- on hand 0, reserved 13, **available -13**. Business rule 1.4 says `available` may never go negative with `RANGON_ALLOW_OVERSELL` off, and names a database constraint that does not exist (only `reserved >= 0` is enforced). The online order can then no longer be fulfilled from that shelf | `apps/api/inventory/services.py`, `docs/business-rules.md` §1.4 | **DECISION REQUIRED**: whether a counter sale may take reserved units (the goods are in the shop, and the customer is standing there). Either `sell` checks `available`, or the rule is rewritten to say reservations yield to the counter and what happens to the online order. Found writing the NestJS port's race checks |
+| D116 | **With the Celery broker down, a placed order answers 500.** Checkout queues the customer's email and SMS in `transaction.on_commit`, which runs after the commit and does not catch errors. `.delay()` raises `kombu.exceptions.OperationalError` after 0.7 s of retries when Redis is unreachable. Measured through the Django test client with the broker pointed at a closed port: **500 `SERVER_ERROR`, the order placed** and its staff notices written; a retry with the same `Idempotency-Key` returns 201. A shopper told the order failed who starts again gets a new key and a second order | `apps/api/notifications/services.py`, `apps/api/orders/services/checkout.py` | The NestJS port logs and answers 201 instead, a documented difference. `transaction.on_commit(..., robust=True)` (Django 5) logs rather than raises |
 
 ## Still API-only (no UI)
 

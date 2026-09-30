@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-import { Database } from '../database/database.service';
+import { Database, Queryable } from '../database/database.service';
 import { Params } from '../database/sql';
 
 export interface AvailabilitySnapshot {
@@ -23,11 +23,12 @@ export class AvailabilityService {
   async availability(
     branchId: string | null,
     variantIds: string[],
+    q: Queryable = this.db,
   ): Promise<Map<string, AvailabilitySnapshot>> {
     const snapshots = new Map<string, AvailabilitySnapshot>();
     if (branchId && variantIds.length) {
       const params = new Params();
-      const rows = await this.db.query<{
+      const rows = await q.query<{
         variant_id: string;
         on_hand: number;
         reserved: number;

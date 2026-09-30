@@ -158,6 +158,12 @@ export function slugParam(value: string): string {
   return value;
 }
 
+/** Django's `str` path converter, `[^/]+`, on the decoded path: an encoded slash is not one. */
+export function strParam(value: string): string {
+  if (value === '' || value.includes('/')) throw new RouteNotMatched();
+  return value;
+}
+
 /** Django's `ValidationError` from a UUID lookup, as `core.handlers` words it. */
 export function invalidUuid(text: string): ValidationError {
   return new ValidationError('Invalid input.', {

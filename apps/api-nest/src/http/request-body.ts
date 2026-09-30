@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { BusinessError, ValidationError } from '../common/errors';
-import { PyFloat } from '../common/python';
+import { PyFloat, pyIntText } from '../common/python';
 
 /**
  * Request bodies as DRF's `request.data` reads them.
@@ -143,4 +143,44 @@ export function pyTruthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === 'object') return Object.keys(value).length > 0;
   return true;
+}
+
+/**
+ * Python `int(value)` on a parsed JSON value, as `int(request.data.get(...))`
+ * applies it: exact (a bigint past 2^53), a float truncated toward zero, a
+ * bool as 0 or 1, a str by Python's own rules. Where Python raises -- None, a
+ * list, "5.0" -- this throws a plain error, and the request is a 500 as it is
+ * in the Django API.
+ */
+export function pyIntOf(value: unknown): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isInteger(value)) return BigInt(value);
+  if (typeof value === 'boolean') return value ? 1n : 0n;
+  if (value instanceof PyFloat) {
+    if (!Number.isFinite(value.value)) throw new Error('cannot convert float to integer');
+    return BigInt(Math.trunc(value.value));
+  }
+  if (typeof value === 'string') {
+    const parsed = pyIntText(value);
+    if (parsed === null)
+      throw new Error(`invalid literal for int() with base 10: ${JSON.stringify(value)}`);
+    return parsed;
+  }
+  throw new TypeError(
+    `int() argument must be a string or a number, not '${pythonTypeName(value)}'`,
+  );
+}
+
+/**
+ * Let a bigint reach a JSON response as the exact integer Python would write,
+ * not a TypeError: `JSON.rawJSON` emits its digits verbatim. Installed once, at start.
+ */
+export function installBigIntJson(): void {
+  const raw = (JSON as unknown as { rawJSON: (text: string) => unknown }).rawJSON;
+  Object.defineProperty(BigInt.prototype, 'toJSON', {
+    value(this: bigint) {
+      return raw(this.toString());
+    },
+    configurable: true,
+  });
 }

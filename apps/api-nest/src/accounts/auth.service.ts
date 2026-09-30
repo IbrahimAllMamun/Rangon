@@ -361,7 +361,8 @@ export class AuthService {
     if (!validated.ok) {
       // A wrong guess, not a blank field: only the check itself (and a value
       // that is not a string) carries the "invalid" code.
-      if ((validated.errors.current_password ?? []).some((error) => error.code === 'invalid')) {
+      const guesses = validated.errors.current_password;
+      if (Array.isArray(guesses) && guesses.some((error) => error.code === 'invalid')) {
         await recordAudit(this.db, context, {
           action: 'LOGIN_FAILED',
           entity: entity(user),
