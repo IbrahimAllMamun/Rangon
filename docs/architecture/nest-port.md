@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts), part 5a (site settings and social links) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts), part 5a (site settings and social links), part 5b (site pages and the page sanitiser) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -120,6 +120,9 @@ across both APIs where both serve the path:
 | 6 simultaneous retries of one transfer with one `Idempotency-Key`, across both APIs | one document, one unit moved, every answer that document |
 | A cancellation committed while an apply waits on the count's row (each API in turn) | the apply is refused and writes nothing -- deterministic; with the port's `FOR UPDATE` removed it never waits and applies the cancelled count |
 | Two applies of one count at once, one per API | one applies, the other is refused, the adjustments are written once; with the lock removed, both proceed |
+| 6 simultaneous creates of one page address, across both APIs | one page, one audit row; the other five are told the address is taken (409). The unique index holds this alone |
+| The same title committed while an edit waits on the page's row (each API in turn) | the edit finds nothing to change: no save, no audit row -- deterministic; with the port's `FOR UPDATE` removed it never waits, saves and audits a change already made |
+| The page made a standard one while a delete waits on its row (each API in turn) | the delete is refused and the page stays -- deterministic; with the port's `FOR UPDATE` removed it never waits and deletes it |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -287,6 +290,23 @@ it). The ports were compared with CPython on 30,000 generated addresses, and the
 | `PATCH /api/v1/social-links/<id>/` | `content.site_manage`. The body is validated before the link is looked up (a bad body for a missing link is a 400), then the row is locked and the address normalised for its platform: the platform's own domain or a subdomain, always `https://`, no credentials, no port; a WhatsApp number becomes `https://wa.me/<digits>`, Bengali digits and the country code included. A link cannot be shown without an address. A change saves `url`, `is_visible` and `updated_at`, and is audited |
 | `POST /api/v1/social-links/<id>/move/` | `content.site_manage`; `direction` `up` or `down` in any case (`str()` of what was sent, so a number is refused with the same 400; a body that is not an object is a 500). The run is locked in its order and renumbered 0..n, audited when it moved; the `site` revalidation job is queued every time, past the top too. A move that waits on the lock renumbers in the order PostgreSQL sorted before the wait, undoing a reorder committed meanwhile (D132, copied) |
 
+Then the site pages (part 5b), and with them the page sanitiser: every body goes through
+`content.rich_text.sanitize`, which calls nh3. nh3 is ammonia over html5ever, with rust-url and
+idna deciding which links stay, and the port follows that pipeline from its source
+([ADR-0015](decisions/0015-nest-ports-the-page-sanitiser.md)). `common/html5ever.ts` is html5ever's
+tree builder, driven by parse5's tokenizer. html5ever already follows the 2025 standard's
+`<select>` parsing, which parse5's own tree builder does not. `content/rich-text.ts` is ammonia's
+clean and html5ever's serializer. `common/rust-url.ts` decides whether rust-url parses a link,
+with its departures from the URL standard and idna's Punycode and Bidi checks. Compared with nh3
+on 150,000 generated fragments and 520,000 generated links before it was committed: no difference.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/site-pages/`, `GET /api/v1/site-pages/<slug>/` | `settings.view`; unpaginated, the standard pages first, then by title. `OrderingFilter` takes every serializer field the table holds (`path` is a property and `updated_by_name` a method, so both are ignored), on the detail too. `PUT` is a 403, or a 405 for an owner or superuser |
+| `POST /api/v1/site-pages/` | `content.site_manage`. `SitePageCreateSerializer`'s errors come in DRF's field order (the parent's fields first, then `slug` and `title`). The address is Django's `slugify` of the slug, else the title, cut at 64; nothing ASCII in it is a 400 (D134, copied), a standard page's address too. The titles' whitespace is collapsed, the body sanitised and refused past 100,000 characters once clean. The insert is its own transaction; a taken address is the unique index's violation, a 409 naming the slug. Audited after the commit, with the `site`, `pages` and `page:<slug>` revalidation job queued between them |
+| `PATCH /api/v1/site-pages/<slug>/` | `content.site_manage`. The body is validated before the page is looked up, the fields cleaned before the lock. The page is locked by slug, every field compared, and only a change saves (every column) and is audited; the revalidation job follows the commit |
+| `DELETE /api/v1/site-pages/<slug>/` | `content.site_manage`; a standard page is a 400. Locked, audited, then deleted with the navigation items that link to it and those nested under them (`CASCADE`): the page first, then the items. Each item queues the navigation revalidation job as it goes; the page's own job follows the commit |
+
 ## Running it
 
 ```bash
@@ -441,6 +461,9 @@ the port):
   before the wait, so a move or reorder committed meanwhile is undone (D132).
 - `?ordering=get_platform_display` on the social links is a 500 on the list, the detail, the edit
   and the move: `OrderingFilter` offers the `label` field's source, a model method (D133).
+- A page whose title spells nothing in ASCII -- one in Bengali -- cannot be created without an
+  address: `create_page` makes it with Django's `slugify`, which drops every other script, where
+  the catalogue transliterates (D134).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

@@ -481,6 +481,55 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 5b: site pages and the page sanitiser, 2026-10-01
+
+Asked for: phase 4 of the port, finished. Ported: `SitePageViewSet` (list, retrieve, create,
+partial update and delete, by slug), with `create_page`, `update_page` and `delete_page`, and the
+page sanitiser every body goes through. Django's `content.rich_text.sanitize` calls nh3 0.3.7:
+ammonia 4.1.4 over html5ever 0.39, with rust-url 2.5.8 and idna 1.1 for links. No JavaScript
+sanitiser answers as it does, so the pipeline is ported from its source
+([ADR-0015](architecture/decisions/0015-nest-ports-the-page-sanitiser.md)): html5ever's tree
+builder over parse5's tokenizer, ammonia's clean and html5ever's serializer, and rust-url's
+authority parsing with idna's Punycode and Bidi checks.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2348/2348 (128 new), 28 by the documented differences
+concurrency ................................... 47/47 (5 new: six creates of one address at once; an
+                                                edit and a delete that meet a change mid-flight,
+                                                each on both APIs)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 702 passed (64 new: the sanitiser on 59 inputs nh3
+                                                cleaned, idempotence, surrogates, length, depth)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+Before the cases, the sanitiser was compared with nh3 in the Django container: 150,000 generated
+fragments (tables and foster parenting, formatting soup and the adoption agency, the 2025
+`<select>` rules, SVG and MathML integration points, templates, raw-text elements, character
+references in text and attributes, CDATA, NULs, line feeds after `<pre>`) and 520,000 generated
+links (IDN and Punycode hosts, bidi labels, percent-escapes, IPv4 and IPv6, ports, user info,
+`mailto:` and `tel:` authorities). No difference. On hostile bodies within the 200,000-character
+limit the port is no slower than nh3: its worst case, 13,000 formatting tags with distinct
+attributes, takes 2.9 s against nh3's 8.9 s.
+
+The cases read and write as every role; list with every ordering `OrderingFilter` offers and some
+it ignores; read each page, a missing one and slugs with spaces and Bengali; create with a title
+alone, an address, everything at once, a taken address, a standard page's address, Bengali titles
+with and without an address, blank, null and over-long titles and addresses, bodies as numbers, null,
+past the sanitiser's limit, past the serializer's, and cleaning down to the limit, hostile markup,
+unknown fields and bodies that are not objects; edit titles, the same values, nothing, bodies that
+clean to the same, a standard page, blank and null titles, a missing page with good and bad bodies;
+and delete a page nothing links to, one the navigation links to (its two items go too), a draft, a
+standard page and a missing one. Each write is compared by the pages, the navigation items, the
+audit rows and the revalidation jobs.
+
+With the port's `FOR UPDATE` removed, the Nest edit that met the same edit mid-flight saved and
+audited it a second time, and the delete that met the page made standard deleted it.
+
+Found in the Node runtime and worked around: `URL.canParse` in Node 22 refuses some hosts that
+`new URL` parses (`https://ä.com`) once V8 has optimised the call. Found in Django, and copied:
+D134 (a page titled only in Bengali cannot be created without an address).
+
 ### The NestJS API, phase 4 part 5a: site settings and social links, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `SiteSettingsView` (the footer's brand block,
@@ -3367,6 +3416,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D131 | **Some malformed import files answer 500.** `Decimal("NaN") < 0` raises `InvalidOperation`; `csv.Error` (a carriage return inside an unquoted cell, a field over 131072 characters) is not caught; a NUL or a cell longer than its column fails in the database. An infinite price passes the preview and then fails the import with "“Infinity” value must be a decimal number.", naming no row. Measured on the parity stack for each | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Refusing non-finite numbers in `_decimal`, catching `csv.Error`, and checking lengths and NULs as row errors would do it |
 | D132 | **A content move that waited on the lock undoes what committed meanwhile.** `content.services.move` locks the run with `list(rows.select_for_update())` and renumbers it 0..n in list order, but PostgreSQL sorts a locking `SELECT` before it waits: a move that queued behind another write gets the rows in the order they had before it, and writes that order back. Measured on the parity stack: Instagram's move down that waited while Facebook and YouTube were sent to the end left the run as if they had never moved. Two simultaneous moves of one row down move it once. Social links, navigation items and the home carousel all use it | `apps/api/content/services.py` | Found porting the social links to NestJS, which copies it. Locking the run first and reading it again in order, inside the transaction, would do it |
 | D133 | **`?ordering=get_platform_display` on the social links answers 500.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field by its source, and `label`'s source is the model method `get_platform_display`, which `order_by` cannot use (`FieldError`). Every route of the viewset filters its queryset in `get_object()`, so the list, the detail, the edit and the move all fail. Measured on the parity stack for each | `apps/api/content/api/views.py` | Found porting the social links to NestJS, which copies it. Naming `ordering_fields` on the viewset would do it |
+| D134 | **A page titled only in Bengali cannot be created without an address.** `create_page` makes the address with Django's `slugify(slug or title)`, which drops every character outside ASCII, so a title such as "আমাদের কথা" with no `slug` leaves nothing and is refused: "Give the page an address, for example size-guide." The catalogue transliterates Bengali names into slugs (`core.slugs`); site pages do not. Measured on the parity stack | `apps/api/content/services.py` | Found porting site pages to NestJS, which copies it. Using the catalogue's `slug_text` would do it; an existing address would not change |
 
 ## Still API-only (no UI)
 
