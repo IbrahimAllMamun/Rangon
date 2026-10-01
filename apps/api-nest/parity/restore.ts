@@ -61,3 +61,19 @@ export async function restoreTables(client: pg.Client, tables: readonly string[]
     throw error;
   }
 }
+
+/** `core_numbersequence` (keyed by `key`): new sequences removed, the rest put back. */
+export async function restoreSequences(client: pg.Client): Promise<void> {
+  await client.query(
+    `CREATE TEMP TABLE IF NOT EXISTS "snap_core_numbersequence" AS SELECT * FROM core_numbersequence`,
+  );
+  await client.query(
+    `DELETE FROM core_numbersequence WHERE key NOT IN (SELECT key FROM "snap_core_numbersequence")`,
+  );
+  await client.query(
+    `UPDATE core_numbersequence n SET last_value = s.last_value, prefix = s.prefix,
+            padding = s.padding, updated_at = s.updated_at
+       FROM "snap_core_numbersequence" s
+      WHERE s.key = n.key AND (n.last_value, n.updated_at) IS DISTINCT FROM (s.last_value, s.updated_at)`,
+  );
+}

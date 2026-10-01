@@ -7,6 +7,7 @@ import { AuditContext, recordAudit } from '../common/audit';
 import { Dec } from '../common/decimal';
 import { InvalidStatusTransition, ValidationError } from '../common/errors';
 import { pySlice } from '../common/python';
+import { nextNumber } from '../common/sequence';
 import { Queryable } from '../database/database.service';
 
 /** What the order-side writes need to know about an order. */
@@ -53,23 +54,7 @@ export class OrderWritesService {
    * number. A rolled-back sale gives its number back with the transaction.
    */
   async nextNumber(tx: Queryable, key: string, prefix: string, padding = 6): Promise<string> {
-    await tx.query(
-      `INSERT INTO core_numbersequence (key, prefix, last_value, padding, updated_at)
-       VALUES ($1, $2, 0, $3, clock_timestamp()) ON CONFLICT (key) DO NOTHING`,
-      [key, prefix, padding],
-    );
-    const row = await tx.one<{ prefix: string; last_value: string; padding: number }>(
-      `SELECT prefix, last_value, padding FROM core_numbersequence WHERE key = $1 FOR UPDATE`,
-      [key],
-    );
-    const next = BigInt(row?.last_value ?? '0') + 1n;
-    await tx.query(
-      `UPDATE core_numbersequence SET last_value = $2, updated_at = clock_timestamp() WHERE key = $1`,
-      [key, next.toString()],
-    );
-    const effective = row?.prefix || prefix;
-    const digits = next.toString().padStart(row?.padding || padding, '0');
-    return effective ? `${effective}-${digits}` : digits;
+    return nextNumber(tx, key, prefix, padding);
   }
 
   /** `lifecycle.log_event`: one timeline entry, append-only. */

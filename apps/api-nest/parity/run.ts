@@ -24,6 +24,7 @@ import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
 import { orderCases } from './orders-cases.ts';
+import { productCases } from './product-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -538,6 +539,7 @@ async function buildCases(): Promise<Case[]> {
   // --- Staff: permissions, then the catalogue's admin --------------------------------------
   cases.push(...(await catalogAdminCases()));
   cases.push(...(await attributeCases()));
+  cases.push(...(await productCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }

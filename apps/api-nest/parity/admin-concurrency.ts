@@ -132,6 +132,101 @@ export async function adminConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
         detail: `move ${result.status}, ${result.waited ? 'waited on the lock' : 'never waited'}, left ${result.positions} (expected ${expected})`,
       });
     }
+
+    // 3. One single-version SKU per product. `create_single_variant` locks the
+    //    product row, so six simultaneous submits -- a double-click, split
+    //    across both APIs -- make one SKU, and the rest answer "nothing new".
+    const empty = (
+      await db.query<{ id: string }>(`SELECT id FROM catalog_product WHERE slug = 'parity-empty'`)
+    ).rows[0]?.id;
+    if (empty) {
+      const clean = async () => {
+        await db.query(
+          `DELETE FROM catalog_variantattributevalue WHERE variant_id IN
+             (SELECT id FROM catalog_productvariant WHERE product_id = $1)`,
+          [empty],
+        );
+        await db.query(`DELETE FROM catalog_productvariant WHERE product_id = $1`, [empty]);
+        await db.query(`DELETE FROM core_auditlog WHERE entity_id = $1::text`, [empty]);
+      };
+      const single = (api: URL) =>
+        send(api, {
+          name: 'single version',
+          method: 'POST',
+          path: `/api/v1/products/${empty}/generate-variants/`,
+          headers: { ...auth('manager'), 'content-type': 'application/json' },
+          body: JSON.stringify({ price: '10', single: true }),
+        });
+      const sequence = (
+        await db.query<{ last_value: string }>(`SELECT last_value FROM core_numbersequence WHERE key = 'barcode'`)
+      ).rows[0]?.last_value;
+      await clean();
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, (_, index) => single(index % 2 ? apis.NEST : apis.DJANGO)),
+      );
+      const made = responses.map((response) =>
+        response.status === 201 ? (JSON.parse(response.body) as { created: number }).created : -1,
+      );
+      const variants = Number(
+        (await db.query<{ n: string }>(`SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`, [empty]))
+          .rows[0]?.n,
+      );
+      checks.push({
+        name: 'products: 6 simultaneous single-version submits across both APIs make one SKU',
+        passed: variants === 1 && made.filter((n) => n === 1).length === 1 && made.every((n) => n === 0 || n === 1),
+        detail: `statuses ${responses.map((r) => r.status).join(',')}, created ${made.join(',')}, ${variants} SKU(s)`,
+      });
+
+      // 4. The same, made certain: the harness holds the product's lock, a
+      //    single-version submit queues on it, and the harness adds the SKU
+      //    itself and commits. The submit must see it and make nothing.
+      //    Without the lock it read "no SKU yet" first and made a second.
+      for (const [side, api] of [
+        ['Django', apis.DJANGO],
+        ['Nest', apis.NEST],
+      ] as const) {
+        await clean();
+        const holder = new pg.Client({ connectionString: process.env.DATABASE_URL });
+        await holder.connect();
+        await holder.query('BEGIN');
+        await holder.query(`SELECT id FROM catalog_product WHERE id = $1 FOR UPDATE`, [empty]);
+        const pending = single(api);
+        let waited = false;
+        for (let attempt = 0; attempt < 100 && !waited; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const row = await db.query<{ count: string }>(
+            `SELECT count(*) AS count FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND state = 'active'
+                AND query ILIKE '%catalog_product%FOR UPDATE%' AND query NOT ILIKE '%pg_stat_activity%'`,
+          );
+          waited = Number(row.rows[0]?.count ?? 0) > 0;
+        }
+        await holder.query(
+          `INSERT INTO catalog_productvariant (id, created_at, updated_at, product_id, sku, name, price, cost,
+             position, status, batch_number)
+           VALUES (gen_random_uuid(), now(), now(), $1, 'RGN-PAR-HELD', '', 10, 0, 0, 'ACTIVE', '')`,
+          [empty],
+        );
+        await holder.query('COMMIT');
+        await holder.end();
+        const response = await pending;
+        const created =
+          response.status === 201 ? (JSON.parse(response.body) as { created: number }).created : -1;
+        const count = Number(
+          (await db.query<{ n: string }>(`SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`, [empty]))
+            .rows[0]?.n,
+        );
+        checks.push({
+          name: `products: a single-version submit (${side}) that meets one committed mid-flight makes nothing -- the lock holds`,
+          passed: waited && created === 0 && count === 1,
+          detail: `${response.status}, ${waited ? 'waited on the lock' : 'never waited'}, created ${created}, ${count} SKU(s)`,
+        });
+      }
+      await clean();
+      if (sequence !== undefined) {
+        await db.query(`UPDATE core_numbersequence SET last_value = $1 WHERE key = 'barcode'`, [sequence]);
+      }
+    }
   } finally {
     await db.end();
   }

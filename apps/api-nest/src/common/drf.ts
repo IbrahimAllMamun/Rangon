@@ -421,10 +421,15 @@ export function bangladeshiPhoneField(options: CharOptions = {}): Field<string |
   });
 }
 
-/** `serializers.DictField()`: any dict, values unvalidated, keys as str. */
+/**
+ * `serializers.DictField(child=...)`: a JSON object, each value run through
+ * the child (any value, unvalidated, without one); the values' errors are
+ * keyed by their keys.
+ */
 export function dictField(
-  options: { required?: boolean } = {},
+  options: { required?: boolean; child?: Field<unknown> } = {},
 ): Field<Record<string, unknown> | null> {
+  const child = options.child;
   return {
     run(data, partial) {
       const settled = emptyValue<Record<string, unknown>>(data, partial, {
@@ -438,7 +443,32 @@ export function dictField(
           'not_a_dict',
         );
       }
-      return { ...data };
+      if (!child) return { ...data };
+      return (async () => {
+        const values: Record<string, unknown> = {};
+        const errors: Record<string, ErrorTree> = {};
+        for (const [key, item] of Object.entries(data)) {
+          try {
+            values[key] = await child.run(item, false);
+          } catch (error) {
+            if (error instanceof Invalid) errors[key] = error.details;
+            else if (error instanceof InvalidNested) errors[key] = error.detail;
+            else throw error;
+          }
+        }
+        if (Object.keys(errors).length) throw new InvalidNested(errors);
+        return values;
+      })();
+    },
+  };
+}
+
+/** A field with `default=`: a missing value is the default, not skipped (unless partial). */
+export function withDefault<T>(field: Field<T>, fallback: () => T): Field<T> {
+  return {
+    run(data, partial) {
+      if ((data === EMPTY || data === undefined) && !partial) return fallback();
+      return field.run(data, partial);
     },
   };
 }
