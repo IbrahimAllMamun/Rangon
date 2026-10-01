@@ -154,7 +154,7 @@ export interface UniqueCheck {
 }
 
 /** `Field.validate_empty_values`: the answer for a missing or null value, if it settles the field. */
-function emptyValue<T>(
+export function emptyValue<T>(
   data: unknown,
   partial: boolean,
   options: { required: boolean; allowNull: boolean },

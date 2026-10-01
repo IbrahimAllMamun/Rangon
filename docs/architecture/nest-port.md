@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts), part 5a (site settings and social links) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -120,6 +120,14 @@ across both APIs where both serve the path:
 | 6 simultaneous retries of one transfer with one `Idempotency-Key`, across both APIs | one document, one unit moved, every answer that document |
 | A cancellation committed while an apply waits on the count's row (each API in turn) | the apply is refused and writes nothing -- deterministic; with the port's `FOR UPDATE` removed it never waits and applies the cancelled count |
 | Two applies of one count at once, one per API | one applies, the other is refused, the adjustments are written once; with the lock removed, both proceed |
+| 6 simultaneous creates of one page address, across both APIs | one page, one audit row; the other five are told the address is taken (409). The unique index holds this alone |
+| The same title committed while an edit waits on the page's row (each API in turn) | the edit finds nothing to change: no save, no audit row -- deterministic; with the port's `FOR UPDATE` removed it never waits, saves and audits a change already made |
+| The page made a standard one while a delete waits on its row (each API in turn) | the delete is refused and the page stays -- deterministic; with the port's `FOR UPDATE` removed it never waits and deletes it |
+| 6 simultaneous carousel adds of one product, across both APIs | one row; the others 409. The unique index holds this alone |
+| A carousel add while another add commits, the run at 23 (each API in turn) | the add waited on the run's lock, then counted the 23 it read before the wait and made 25 (D135, copied); with the port's `FOR UPDATE` removed it never waits |
+| A carousel item removed while a remove waits on it (each API in turn) | 404 and no audit row -- deterministic; with the port's `FOR UPDATE` removed it never waits, audits and answers 204 |
+| A carousel move, and a header item's move, while their run is reordered (each API in turn) | each renumbers the order it read before the wait (D132, copied); with the port's `FOR UPDATE` removed neither waits |
+| A footer column added while a fourth is being added (each API in turn) | it goes in: five columns (D136, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -287,6 +295,40 @@ it). The ports were compared with CPython on 30,000 generated addresses, and the
 | `PATCH /api/v1/social-links/<id>/` | `content.site_manage`. The body is validated before the link is looked up (a bad body for a missing link is a 400), then the row is locked and the address normalised for its platform: the platform's own domain or a subdomain, always `https://`, no credentials, no port; a WhatsApp number becomes `https://wa.me/<digits>`, Bengali digits and the country code included. A link cannot be shown without an address. A change saves `url`, `is_visible` and `updated_at`, and is audited |
 | `POST /api/v1/social-links/<id>/move/` | `content.site_manage`; `direction` `up` or `down` in any case (`str()` of what was sent, so a number is refused with the same 400; a body that is not an object is a 500). The run is locked in its order and renumbered 0..n, audited when it moved; the `site` revalidation job is queued every time, past the top too. A move that waits on the lock renumbers in the order PostgreSQL sorted before the wait, undoing a reorder committed meanwhile (D132, copied) |
 
+Then the site pages (part 5b), and with them the page sanitiser: every body goes through
+`content.rich_text.sanitize`, which calls nh3. nh3 is ammonia over html5ever, with rust-url and
+idna deciding which links stay, and the port follows that pipeline from its source
+([ADR-0015](decisions/0015-nest-ports-the-page-sanitiser.md)). `common/html5ever.ts` is html5ever's
+tree builder, driven by parse5's tokenizer. html5ever already follows the 2025 standard's
+`<select>` parsing, which parse5's own tree builder does not. `content/rich-text.ts` is ammonia's
+clean and html5ever's serializer. `common/rust-url.ts` decides whether rust-url parses a link,
+with its departures from the URL standard and idna's Punycode and Bidi checks. Compared with nh3
+on 150,000 generated fragments and 520,000 generated links before it was committed: no difference.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/site-pages/`, `GET /api/v1/site-pages/<slug>/` | `settings.view`; unpaginated, the standard pages first, then by title. `OrderingFilter` takes every serializer field the table holds (`path` is a property and `updated_by_name` a method, so both are ignored), on the detail too. `PUT` is a 403, or a 405 for an owner or superuser |
+| `POST /api/v1/site-pages/` | `content.site_manage`. `SitePageCreateSerializer`'s errors come in DRF's field order (the parent's fields first, then `slug` and `title`). The address is Django's `slugify` of the slug, else the title, cut at 64; nothing ASCII in it is a 400 (D134, copied), a standard page's address too. The titles' whitespace is collapsed, the body sanitised and refused past 100,000 characters once clean. The insert is its own transaction; a taken address is the unique index's violation, a 409 naming the slug. Audited after the commit, with the `site`, `pages` and `page:<slug>` revalidation job queued between them |
+| `PATCH /api/v1/site-pages/<slug>/` | `content.site_manage`. The body is validated before the page is looked up, the fields cleaned before the lock. The page is locked by slug, every field compared, and only a change saves (every column) and is audited; the revalidation job follows the commit |
+| `DELETE /api/v1/site-pages/<slug>/` | `content.site_manage`; a standard page is a 400. Locked, audited, then deleted with the navigation items that link to it and those nested under them (`CASCADE`): the page first, then the items. Each item queues the navigation revalidation job as it goes; the page's own job follows the commit |
+
+Last, the merchandising (part 5c): the navbar's overrides and the footer's columns and links
+(`NavigationItemViewSet`), the announcement bar and homepage hero (`StorefrontBannerViewSet`) and
+the homepage carousel (`HomeCarouselViewSet`). The publish windows are DRF's `DateTimeField`
+(`common/datetime-field.ts`): Django's `parse_datetime` -- CPython's `fromisoformat`, then
+Django's own pattern, any script's digits -- and DRF's `enforce_timezone` in Asia/Dhaka, compared
+with DRF on 68,000 generated strings. DRF 3.15 accepts every wall-clock time, one the clocks
+skipped or showed twice in 2009 included, with zoneinfo's first offset; a naive time in the first
+hours of the year 1 overflows, uncaught (D137, copied). A value the request set answers as DRF
+validated it, and one read back as the database holds it.
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/navigation-items/`, `GET/PUT/PATCH/DELETE /api/v1/navigation-items/<id>/` | `settings.view` to read, `content.navigation_manage` to write. Unpaginated, by placement, position and label (`select_related` of the parent, category and page, as Django sends it); django-filter on placement, type, `is_active` and parent; `ordering` on position, label and `created_at`. Writes are `NavigationItemSerializer`: `validate_parent` (two levels at most), the window, then `NavigationItem.clean()` on a copy -- the type's category, page, URL and label, the link through `validate_link_url` (checked, saved as sent), and the footer's rules: a column holds links, at most four columns, counted with no lock (D136, copied). Forms and multipart are read, as the image takes an upload (`navigation/`). `Location` on a create is the answer's `url` -- DRF's `get_success_headers` reads the field by that name, here the item's link. A partial update's answer leaves out `category_name` and `page_title` when empty, as DRF will not fall back to a default then. Saves and deletes queue the navigation, categories and footer revalidation at once (one per row a delete takes with it); updates are audited for the label, URL, badge, position, active flag and layout only |
+| `POST /api/v1/navigation-items/<id>/move/` | among its siblings (placement and parent), the run locked and renumbered 0..n, then `navigation` and `site` revalidated. D132, copied |
+| `GET/POST /api/v1/storefront-banners/`, `GET/PUT/PATCH/DELETE /api/v1/storefront-banners/<id>/` | the same permissions; highest priority first, then newest; django-filter on placement and `is_active`, `ordering` on priority and `created_at`. `StorefrontBanner.clean()`: an announcement needs its message, a hero its title; the URL is not checked. Forms and multipart, the image under `banners/`; `Location` is the answer's `url`. Each save and delete queues `navigation` and `home` at once |
+| `GET/POST /api/v1/home-carousel/`, `DELETE /api/v1/home-carousel/<id>/`, `POST /api/v1/home-carousel/<id>/move/` | `settings.view` to read, `content.navigation_manage` to write; no detail read (405, or 403 for all but an owner or superuser). The list never filters, so `ordering` is ignored. Each row carries its product's primary image (the flagged one, else the first) and the range of its sellable variants' prices, and why it is hidden from the homepage. An add locks the run, refuses a missing or archived product, one already there (409, or the unique index's 409 under a race) and a 25th -- counted from the run as read before any wait (D135, copied). A remove locks the item and its product (`select_for_update` over a join). Adds and removes queue `home` after the commit; a move queues it at once, D132 copied |
+
 ## Running it
 
 ```bash
@@ -367,7 +409,7 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | Cached feeds | its own cache keys | its own cache keys | Both expire on the same schedule |
 | Session cookies | `SessionAuthentication` accepts a Django admin session | not read | The web app authenticates with bearer tokens only; a Django admin session reaching `auth/me/` is not a client |
 | Malformed JSON body | 400 `JSON parse error - ` and Python's `json` wording | the same, with V8's wording | Status, code and prefix match |
-| Form and multipart bodies | parsed by every view | parsed by the views that take uploads (product images); 415 elsewhere | The web app posts JSON everywhere else |
+| Form and multipart bodies | parsed by every view | parsed by the views that take uploads (product images, navigation items, banners); 415 elsewhere | The web app posts JSON everywhere else |
 | Image formats Pillow knows beyond JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF and ICO (PSD, TGA, QOI ...) | identified, then refused as "Upload a JPEG, PNG, WebP or AVIF image." | refused as "Upload a valid image." | Both 400 on the same field; reading forty formats to refuse them by another name is not worth it. A file Pillow opens but these readers judge corrupt (or the reverse) is the same kind of difference |
 | Multipart limits (`DATA_UPLOAD_MAX_NUMBER_FIELDS`, `_FILES`, base64 transfer encoding) | enforced, decoded | not enforced, not decoded | Browsers send neither; the proxy caps the body at 12 MB |
 | A body over 64 MB | read | 413 | Django sets no limit; the proxy caps bodies at 12 MB |
@@ -436,11 +478,20 @@ the port):
 - An import file with a `NaN`, a carriage return inside an unquoted cell, a NUL or a cell longer
   than its column answers 500, and an infinite price passes the preview and fails the import with
   an error that names no row (D131).
-- A move of a content row (a social link now; navigation items and the home carousel when they
-  are ported) that waited on the run's lock renumbers the run in the order PostgreSQL sorted it
-  before the wait, so a move or reorder committed meanwhile is undone (D132).
+- A move of a content row (a social link, a navigation item, a carousel product) that waited on
+  the run's lock renumbers the run in the order PostgreSQL sorted it before the wait, so a move or
+  reorder committed meanwhile is undone (D132).
 - `?ordering=get_platform_display` on the social links is a 500 on the list, the detail, the edit
   and the move: `OrderingFilter` offers the `label` field's source, a model method (D133).
+- A page whose title spells nothing in ASCII -- one in Bengali -- cannot be created without an
+  address: `create_page` makes it with Django's `slugify`, which drops every other script, where
+  the catalogue transliterates (D134).
+- A carousel add that waited on the run's lock counts the run it read before the wait, so two
+  adds at once can take it past 24 products (D135).
+- The footer's four columns are counted with no lock: two new columns at once can make five
+  (D136).
+- A naive publish window in the first hours of 1 January of the year 1 is a 500: DRF's
+  `valid_datetime` converts it to UTC, which overflows, and nothing catches it (D137).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
