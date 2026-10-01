@@ -26,6 +26,7 @@ import { KNOWN_DIFFERENCES } from './known-differences.ts';
 import { orderCases } from './orders-cases.ts';
 import { productCases } from './product-cases.ts';
 import { variantCases } from './variant-cases.ts';
+import { imageCases } from './image-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -42,8 +43,8 @@ export interface Case {
   method?: string;
   path: string;
   headers?: Record<string, string>;
-  /** Sent as is; give the Content-Type in `headers`. */
-  body?: string;
+  /** Sent as is (a string as UTF-8); give the Content-Type in `headers`. */
+  body?: string | Buffer;
   /** SQL run before the pair of requests, and undone by `teardown` after. */
   setup?: string[];
   teardown?: string[];
@@ -66,6 +67,8 @@ export interface Case {
   effects?: string[];
   /** Adjust a parsed JSON body before comparing: blank out a value each API mints (a new id). */
   normalize?: (body: unknown) => void;
+  /** Adjust the `Location` header the same way: a stored file's random suffix. */
+  normalizeLocation?: (location: string) => string;
   /**
    * Compare the Celery jobs each API queued (task and arguments, ids read as
    * the order number or the variant they name), emptying the queue around it.
@@ -114,7 +117,12 @@ async function queuedJobs(db: pg.Client): Promise<unknown[]> {
 
 export function send(base: URL, testCase: Case): Promise<Captured> {
   return new Promise((resolve, reject) => {
-    const body = testCase.body === undefined ? undefined : Buffer.from(testCase.body, 'utf8');
+    const body =
+      testCase.body === undefined
+        ? undefined
+        : Buffer.isBuffer(testCase.body)
+          ? testCase.body
+          : Buffer.from(testCase.body, 'utf8');
     const req = request(
       {
         host: base.hostname,
@@ -542,6 +550,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await attributeCases()));
   cases.push(...(await productCases()));
   cases.push(...(await variantCases()));
+  cases.push(...(await imageCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -595,6 +604,13 @@ async function undoWrites(db: pg.Client, since: string): Promise<void> {
 
 /** Tokens described rather than compared (each API mints its own), then the case's own adjustments. */
 function normalizeBody(response: Captured, testCase: Case): Captured {
+  const location = response.headers.location;
+  if (location !== undefined && testCase.normalizeLocation) {
+    response = {
+      ...response,
+      headers: { ...response.headers, location: testCase.normalizeLocation(location) },
+    };
+  }
   if (!(response.headers['content-type'] ?? '').startsWith('application/json')) return response;
   let body: unknown;
   try {

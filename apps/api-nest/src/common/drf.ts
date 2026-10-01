@@ -14,7 +14,9 @@
 import { isIP } from 'node:net';
 import { domainToASCII } from 'node:url';
 
+import { HtmlInput, isUploadedFile, type UploadedFile } from '../http/multipart';
 import { isDict, pythonTypeName } from '../http/request-body';
+import { identifyImage } from './images';
 import Decimal from 'decimal.js';
 
 import { Dec } from './decimal';
@@ -92,6 +94,35 @@ export function treeMessages(tree: ErrorTree): unknown {
 export interface Field<T> {
   /** Async where a check needs the database: a unique value, a related row. */
   run(data: unknown, partial: boolean): T | typeof SKIP | Promise<T | typeof SKIP>;
+  /**
+   * How DRF's `Field.get_value` reads it from form data: what a missing key
+   * is (`default_empty_html`), and whether a blank is null, blank or absent.
+   */
+  html?: HtmlMeta;
+}
+
+export interface HtmlMeta {
+  required: boolean;
+  allowNull: boolean;
+  allowBlank: boolean;
+  /** `default_empty_html`; undefined is DRF's `empty`. */
+  emptyHtml?: unknown;
+}
+
+/** `Field.get_value(dictionary)` for a `QueryDict` from a form body. */
+function htmlValue(
+  field: Field<unknown>,
+  name: string,
+  data: HtmlInput,
+  partial: boolean,
+): unknown {
+  const meta = field.html ?? { required: true, allowNull: false, allowBlank: false };
+  if (!data.has(name))
+    return partial ? EMPTY : meta.emptyHtml === undefined ? EMPTY : meta.emptyHtml;
+  const value = data.get(name);
+  if (value === '' && meta.allowNull) return meta.allowBlank ? '' : null;
+  if (value === '' && !meta.required) return meta.allowBlank ? '' : EMPTY;
+  return value;
 }
 
 type Validator = (value: string) => ErrorDetail | null;
@@ -173,6 +204,7 @@ export function charField(options: CharOptions = {}): Field<string | null> {
   const invalid = options.invalidMessage ?? 'Not a valid string.';
 
   return {
+    html: { required, allowNull: options.allowNull ?? false, allowBlank },
     run(data, partial) {
       // `CharField.run_validation`: blank is tested before anything else, and
       // only a str can be blank (`str(None).strip()` is "None").
@@ -302,6 +334,12 @@ export function booleanField(
   const NULL = new Set<unknown>(['null', 'Null', 'NULL', '']);
   const allowNull = options.allowNull ?? false;
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull,
+      allowBlank: false,
+      emptyHtml: allowNull ? null : false,
+    },
     run(data, partial) {
       const settled = emptyValue<boolean>(data, partial, {
         required: options.required ?? true,
@@ -324,6 +362,11 @@ export function choiceField(
   options: { required?: boolean; allowBlank?: boolean } = {},
 ): Field<string | null> {
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull: false,
+      allowBlank: options.allowBlank ?? false,
+    },
     run(data, partial) {
       const settled = emptyValue<string>(data, partial, {
         required: options.required ?? true,
@@ -381,10 +424,14 @@ export async function runSerializer<V extends Record<string, unknown>>(
   const errors: Errors = {};
   for (const [name, field] of Object.entries(fields)) {
     try {
-      let value = await field.run(
-        Object.hasOwn(data, name) ? data[name] : EMPTY,
-        options.partial ?? false,
-      );
+      const partial = options.partial ?? false;
+      const primitive =
+        data instanceof HtmlInput
+          ? htmlValue(field, name, data, partial)
+          : Object.hasOwn(data, name)
+            ? (data as Record<string, unknown>)[name]
+            : EMPTY;
+      let value = await field.run(primitive, partial);
       if (value === SKIP) continue;
       const hook = options.hooks?.[name];
       if (hook) value = await hook(value as never);
@@ -466,6 +513,13 @@ export function dictField(
 /** A field with `default=`: a missing value is the default, not skipped (unless partial). */
 export function withDefault<T>(field: Field<T>, fallback: () => T): Field<T> {
   return {
+    // A field whose class reads a missing form key as something (a boolean)
+    // reads it as the default instead.
+    html: field.html && {
+      ...field.html,
+      required: false,
+      emptyHtml: field.html.emptyHtml === undefined ? undefined : fallback(),
+    },
     run(data, partial) {
       if ((data === EMPTY || data === undefined) && !partial) return fallback();
       return field.run(data, partial);
@@ -478,6 +532,11 @@ export function uuidField(
   options: { required?: boolean; allowNull?: boolean } = {},
 ): Field<string | null> {
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull: options.allowNull ?? false,
+      allowBlank: false,
+    },
     run(data, partial) {
       const settled = emptyValue<string>(data, partial, {
         required: options.required ?? true,
@@ -517,6 +576,7 @@ export function decimalField(
 ): Field<string | null> {
   const allowNull = options.allowNull ?? false;
   return {
+    html: { required: options.required ?? true, allowNull, allowBlank: false },
     run(data, partial) {
       // `validate_empty_values`: a blank string is None when null is allowed.
       if (allowNull && data !== EMPTY && data !== undefined && pyStrip(pyStr(data)) === '')
@@ -614,6 +674,11 @@ export function integerField(
   options: { required?: boolean; allowNull?: boolean; minValue?: number; maxValue?: number } = {},
 ): Field<number | bigint | null> {
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull: options.allowNull ?? false,
+      allowBlank: false,
+    },
     run(data, partial) {
       const settled = emptyValue<number>(data, partial, {
         required: options.required ?? true,
@@ -669,6 +734,11 @@ export function pkRelatedField(
   options: { required?: boolean; allowNull?: boolean } = {},
 ): Field<string | null> {
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull: options.allowNull ?? false,
+      allowBlank: false,
+    },
     async run(input, partial) {
       // `RelatedField.run_validation`: "" is forced to None first.
       const data = input === '' ? null : input;
@@ -688,30 +758,61 @@ export function pkRelatedField(
   };
 }
 
-/** An upload, as `request.data` holds one from a multipart body. */
-export interface UploadedFile {
-  name: string;
-  size: number;
-  contentType: string;
-  bytes: Buffer;
+/** Django's `get_available_image_extensions()`, in the order a worker builds it (Pillow's preinit first). */
+export const IMAGE_EXTENSIONS =
+  'bmp, dib, gif, jfif, jpe, jpg, jpeg, pbm, pgm, ppm, pnm, pfm, png, apng, avif, avifs, blp, bufr, ' +
+  'cur, pcx, dcx, dds, ps, eps, fit, fits, fli, flc, ftc, ftu, gbr, grib, h5, hdf, jp2, j2k, jpc, jpf, ' +
+  'jpx, j2c, icns, ico, im, iim, mpg, mpeg, tif, tiff, mpo, msp, palm, pcd, pdf, pxr, psd, qoi, bw, rgb, ' +
+  'rgba, sgi, ras, tga, icb, vda, vst, webp, wmf, emf, xbm, xpm';
+const IMAGE_EXTENSION_SET = new Set(IMAGE_EXTENSIONS.split(', '));
+
+/** `pathlib.Path(name).suffix`. */
+export function pathSuffix(name: string): string {
+  const at = name.lastIndexOf('.');
+  return at > 0 && at < name.length - 1 ? name.slice(at) : '';
 }
 
 /**
- * `serializers.ImageField` (`RelativeImageField` too) for a body that is not
- * multipart: nothing in JSON is a file, so anything but null is refused.
- * `validate` is the serializer's `validate_<field>` for an actual file.
+ * `serializers.ImageField` (and `RelativeImageField`): DRF's file checks,
+ * then Django's `forms.ImageField` -- Pillow must identify and verify it,
+ * and its extension must be one Pillow registers. The upload comes back
+ * with Pillow's MIME type as its `contentType`, as Django sets it.
  */
 export function imageField(
   options: { required?: boolean; allowNull?: boolean } = {},
 ): Field<UploadedFile | null> {
+  const required = options.required ?? true;
+  const allowNull = options.allowNull ?? false;
   return {
+    html: { required, allowNull, allowBlank: false },
     run(data, partial) {
-      const settled = emptyValue<UploadedFile>(data, partial, {
-        required: options.required ?? true,
-        allowNull: options.allowNull ?? false,
-      });
-      if (settled.settled) return settled.value;
-      throw Invalid.of('The submitted data was not a file. Check the encoding type on the form.');
+      if (data === EMPTY || data === undefined) {
+        if (partial || !required) return SKIP;
+        throw Invalid.of('No file was submitted.', 'required');
+      }
+      if (data === null) {
+        if (!allowNull) throw Invalid.of('This field may not be null.', 'null');
+        return null;
+      }
+      if (!isUploadedFile(data))
+        throw Invalid.of('The submitted data was not a file. Check the encoding type on the form.');
+      if (!data.name) throw Invalid.of('No filename could be determined.', 'no_name');
+      if (!data.size) throw Invalid.of('The submitted file is empty.', 'empty');
+      const image = identifyImage(data.bytes);
+      if (!image) {
+        throw Invalid.of(
+          'Upload a valid image. The file you uploaded was either not an image or a corrupted image.',
+          'invalid_image',
+        );
+      }
+      const extension = pathSuffix(data.name).slice(1).toLowerCase();
+      if (!IMAGE_EXTENSION_SET.has(extension)) {
+        throw Invalid.of(
+          `File extension “${extension}” is not allowed. Allowed extensions are: ${IMAGE_EXTENSIONS}.`,
+          'invalid_extension',
+        );
+      }
+      return { ...data, contentType: image.mime };
     },
   };
 }

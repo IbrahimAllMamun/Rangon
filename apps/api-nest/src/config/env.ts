@@ -79,8 +79,11 @@ const schema = z.object({
   // without it rather than publish links nothing can follow.
   RANGON_PUBLIC_URL: z.string().default(''),
 
-  // Media is served root-relative from one origin (core/media.py).
+  // Media is served root-relative from one origin (core/media.py), and
+  // uploads are written under MEDIA_ROOT -- the directory Django's
+  // FileSystemStorage writes to, shared between the two processes.
   MEDIA_URL: z.string().default('/media/'),
+  MEDIA_ROOT: z.string().default('/app/media'),
   USE_S3: flag(false),
 });
 

@@ -12,6 +12,8 @@ import { BrandsService } from './brands.service';
 import { BrandsController, CategoriesController } from './catalog-admin.controller';
 import { CataloguePayloads } from './catalogue-payloads';
 import { CategoriesService } from './categories.service';
+import { ProductImagesController } from './product-images.controller';
+import { ProductImagesService } from './product-images.service';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { VariantsController } from './variants.controller';
@@ -29,6 +31,7 @@ import { SizeChartsService } from './size-charts.service';
     SizeChartsController,
     ProductsController,
     VariantsController,
+    ProductImagesController,
   ],
   providers: [
     BrandsService,
@@ -38,6 +41,7 @@ import { SizeChartsService } from './size-charts.service';
     CataloguePayloads,
     ProductsService,
     VariantsService,
+    ProductImagesService,
   ],
 })
 export class CatalogAdminModule {}

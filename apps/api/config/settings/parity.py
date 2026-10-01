@@ -17,3 +17,8 @@ REST_FRAMEWORK = {**REST_FRAMEWORK, "DEFAULT_THROTTLE_CLASSES": ()}
 # A stand-in payment gateway, so a webhook can reach the capture path at all:
 # `apps/api-nest/parity/gateway/`, mounted by docker-compose.nest.yml only.
 INSTALLED_APPS = [*INSTALLED_APPS, "parity_gateway"]
+
+# Both APIs write uploads into one media directory, as different users (the
+# dev image runs Django as root, the Nest image as `node`): directories
+# Django makes must take the other's files too. File modes are unchanged.
+FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o777

@@ -25,6 +25,8 @@ case "${1:-}" in
     wait_for http://127.0.0.1:8620/api/health/
     ;;
   seed)
+    # The media directory is shared with the Nest API, which runs as another user.
+    "${compose[@]}" exec -T django sh -c 'mkdir -p /app/media && chmod -R a+rwX /app/media'
     # Seeding saves categories and navigation items, whose signals would ping
     # the storefront's revalidation URL inline; nothing listens, so it is unset.
     "${compose[@]}" exec -T -e DJANGO_ALLOW_DEMO_SEED=1 -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py seed_demo --reset

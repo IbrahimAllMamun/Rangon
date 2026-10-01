@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { BusinessError, ValidationError } from '../common/errors';
 import { PyFloat, pyIntText } from '../common/python';
+import { HtmlInput, parseMultipart, parseUrlencoded } from './multipart';
 
 /**
  * Request bodies as DRF's `request.data` reads them.
@@ -49,20 +50,36 @@ export function installBodyCapture(fastify: FastifyInstance): void {
 
 const PARSED = Symbol('rangon.request-data');
 
-/** `request.data`: parsed on first use, then the same value every time. */
-export function requestData(request: FastifyRequest): unknown {
+/**
+ * `request.data`: parsed on first use, then the same value every time.
+ * `forms` lets a view that takes uploads read form bodies too (an
+ * `HtmlInput`), as every DRF view can; the others still refuse them.
+ */
+export function requestData(request: FastifyRequest, options: { forms?: boolean } = {}): unknown {
   const holder = request as FastifyRequest & { [PARSED]?: unknown };
-  if (!(PARSED in holder)) holder[PARSED] = parse(request.body);
+  if (!(PARSED in holder))
+    holder[PARSED] = parse(request.body, options.forms ?? false, request.headers['content-type']);
   return holder[PARSED];
 }
 
-function parse(body: unknown): unknown {
-  // GET and HEAD bodies are never read, by either API; a request without a
-  // body at all never reaches the parser.
-  if (!(body instanceof RawBody) || body.bytes.length === 0) return {};
-  const header = body.contentType ?? '';
+function isFormType(type: string): boolean {
+  return type === 'multipart/form-data' || type === 'application/x-www-form-urlencoded';
+}
+
+function parse(body: unknown, forms: boolean, requestType: string | undefined): unknown {
+  const header = body instanceof RawBody ? (body.contentType ?? '') : (requestType ?? '');
   const [type = '', ...params] = header.split(';');
-  if (type.trim().toLowerCase() !== 'application/json') throw new UnsupportedMediaType(header);
+  const mediaType = type.trim().toLowerCase();
+  // GET and HEAD bodies are never read, by either API; a request without a
+  // body at all never reaches the parser. An empty form body is an empty
+  // QueryDict, which a serializer reads with form rules.
+  if (!(body instanceof RawBody) || body.bytes.length === 0) {
+    return forms && isFormType(mediaType) ? new HtmlInput() : {};
+  }
+  if (forms && mediaType === 'multipart/form-data') return parseMultipart(header, body.bytes);
+  if (forms && mediaType === 'application/x-www-form-urlencoded')
+    return parseUrlencoded(body.bytes);
+  if (mediaType !== 'application/json') throw new UnsupportedMediaType(header);
 
   const charset = params
     .map((param) => param.split('='))

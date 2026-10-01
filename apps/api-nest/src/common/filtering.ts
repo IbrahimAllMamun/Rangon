@@ -180,7 +180,15 @@ export function orderingPlan(
     const descending = term.startsWith('-');
     const spec = terms[descending ? term.slice(1) : term] as OrderingTerm;
     const columns = typeof spec === 'string' ? [spec] : spec.columns;
-    plan.order.push(...columns.map((column) => `${column} ${descending ? 'DESC' : 'ASC'}`));
+    // A related model's ordering may itself run backwards ("-created_at"): its
+    // column carries " DESC", and a descending term flips it to ascending.
+    plan.order.push(
+      ...columns.map((column) => {
+        const natural = column.endsWith(' DESC');
+        const bare = natural ? column.slice(0, -5) : column;
+        return `${bare} ${natural !== descending ? 'DESC' : 'ASC'}`;
+      }),
+    );
     if (typeof spec !== 'string') {
       if (spec.join && !plan.joins.includes(spec.join)) plan.joins.push(spec.join);
       for (const column of spec.groupBy ?? [])
