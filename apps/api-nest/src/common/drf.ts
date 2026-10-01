@@ -875,7 +875,8 @@ export function listField<T>(
       const errors: Record<string, ErrorTree> = {};
       for (const [index, item] of data.entries()) {
         try {
-          const value = await child.run(item, false);
+          // `root.partial` reaches every nested field, a list's children included.
+          const value = await child.run(item, partial);
           if (value !== SKIP) values.push(value);
         } catch (error) {
           if (error instanceof Invalid) errors[String(index)] = error.details;
