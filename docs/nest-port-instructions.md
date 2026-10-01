@@ -1,8 +1,9 @@
 # Instructions for the NestJS port
 
 Everything needed to continue porting the Django API to NestJS (`apps/api-nest/`) without having been
-there for phases 1–3: the rules, the owner's decisions, the machine's traps, the exact commands, the
-method, the lessons that cost time, and what comes next. Written 2026-10-01, when phase 3 was done.
+there for phases 1–4: the rules, the owner's decisions, the machine's traps, the exact commands, the
+method, the lessons that cost time, and what comes next. Written 2026-10-01, when phase 3 was done;
+brought up to date when phase 4 was.
 
 Read these alongside it:
 
@@ -167,6 +168,7 @@ apps/api-nest/
       pycsv.ts, pyurl.ts      CPython's csv reader (from _csv.c); urlsplit, hostname, port, urlunsplit
       html5ever.ts            html5ever 0.39's tree builder over parse5's tokenizer (nh3's parser)
       rust-url.ts, bidi-class.ts  whether rust-url 2.5.8 parses a link, with idna 1.1's extra checks
+      datetime-field.ts       DRF's DateTimeField: Django's parse_datetime, enforce_timezone in Asia/Dhaka
       html-entities.ts        CPython's HTML5 entity table, generated; html.unescape is in python.ts
       decimal.ts, datetime.ts, pagination.ts, query-dict.ts, phone.ts, uuid.ts ...
     <domain>/                 accounts, catalog, checkout, content, customers, engagement,
@@ -317,7 +319,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D134**.
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D137**.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
 - **A security hole:** fixed in Django first, on `fix/<slug>`, with tests, ahead of the port.
 - **A rule the code breaks, or never had:** mark it `DECISION REQUIRED` in `business-rules.md`,
@@ -359,6 +361,10 @@ apps/api-nest/
 | A sanitiser port matched nh3 on 20,000 inputs, then not on the next 150,000 | the first corpus was random noise; tables, `<select>`, foreign content and links were barely in it | a corpus per area, each aimed at what can differ |
 | The same input cleaned differently on its second run in one process | Node 22's optimised `URL.canParse` refuses some hosts `new URL` parses (`https://ä.com`) | `new URL` in a try; never `canParse` |
 | Node's URL parser stood in for rust-url's and disagreed on 1 link in 400 | rust-url departs from the URL standard (`tel://@`, a backslash ends a port) and idna checks more than UTS #46 (Punycode labels, the Bidi Rule) | port the parser's failure points; layer idna's checks on Node's mapping |
+| A mid-flight check reported "never waited" for Django and passed for Nest | `pg_stat_activity` keeps 1024 bytes of a statement, and Django's locking `SELECT` over a join is longer, so `FOR UPDATE` was cut off | match the wait on the statement's start (the table, the join), not on `FOR UPDATE` |
+| A case that needs a state no fixture has polluted the cases after it | `reset` runs before each API's request and once after both | a reset that arranges the state on its first two calls and only restores on the third (`arranged` in `merchandising-cases.ts`) |
+| Creates differed only in `Location` | DRF's `get_success_headers` puts the answer's `url` field in `Location`, whatever that field means -- a navigation item's link, a banner's | copy it wherever a serializer has a `url` |
+| A DRF `DateTimeField` port refused 2009's skipped hour, where DRF took it | DRF 3.15's `valid_datetime` never refuses: under PEP 495 such a time is never equal to itself in UTC, so its "exists" test short-circuits its "ambiguous" one | read DRF's code, not its message list; compare on a generated corpus |
 | A 40,000-deep page took 24 s, all of it in the event loop | html5ever walks the whole stack of open elements for every block tag; Django's thread just waits, Node's process does not | count open elements by name, so the walk ends at once when none matches |
 
 ## 9. Documentation, per part
@@ -401,14 +407,14 @@ Every part of a phase updates, in the same branch:
 | Phase | Scope | Notes before starting |
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
-| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3d, 4a, 4b, 5a and 5b (site pages and the page sanitiser, ADR-0015) done. Next: 5c navigation items, banners and the home carousel, whose moves carry D132 |
+| 4 | done 2026-10-01 | on `phase/nest-4-catalogue-admin`; the content admin's parts 5a-5c (settings and social links; site pages and the page sanitiser, ADR-0015; navigation items, banners and the carousel) finished it. Its PR waits for the owner |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | **D115 must be decided first**; POS sales, refunds and the cash drawer each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 4 (5c), then open its PR when the owner asks.
+1. Open phase 4's PR when the owner asks.
 2. Settle D115 with the owner before phase 5.
 
 ### Checklist for a part

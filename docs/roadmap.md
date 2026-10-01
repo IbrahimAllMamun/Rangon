@@ -481,6 +481,53 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 5c: navigation, banners and the home carousel -- phase 4 done, 2026-10-01
+
+Asked for: phase 4 of the port, finished. Ported: `NavigationItemViewSet` (the navbar's
+overrides and the footer's columns and links, with `move`), `StorefrontBannerViewSet` and
+`HomeCarouselViewSet` (list, add, remove, move) with `content.services`. Their publish windows
+needed DRF's `DateTimeField`, ported with Django's `parse_datetime` and DRF's `enforce_timezone`
+(`common/datetime-field.ts`) and compared with DRF on 68,000 generated strings before the cases.
+Navigation items and banners read forms and multipart, as their images take uploads.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2737/2737 (389 new), 29 by the documented
+                                                differences; the two D137 cases, added during the
+                                                run, checked after it: 2/2
+concurrency ................................... 58/58 (11 new: six adds of one carousel product; an
+                                                add, a remove and a move of the carousel and a
+                                                header item's move, each meeting a change
+                                                mid-flight on both APIs; a fifth footer column)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 747 passed (45 new: DateTimeField on values DRF
+                                                printed)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases read and write as every role; list navigation with every filter and ordering, valid
+and not; read every item; create links, categories, pages (by slug, missing, numeric, with a NUL),
+promo cards, footer columns and links in and out of place, items under nested parents, bad
+choices, positions out of range, every kind of link (paths, web, mail, phone, `javascript:`,
+protocol-relative), over-long text, windows (naive, aware, UTC, crossing zones, ending first,
+Bengali digits, 2009's skipped and repeated hours, out of range), uploads as forms and multipart
+(PNG, GIF, a fake image); edit, PUT, clear images, re-parent, break the footer's rules; delete with
+children and columns with their links; move in every direction and body; the same for banners;
+and add to the carousel drafts, counter-only and variant-less products, an archived one, a
+duplicate, a missing one, malformed ids, and a 25th; move and remove. Each write is compared by
+the three tables, the audit rows and the revalidation jobs.
+
+With the port's `FOR UPDATE` removed, the Nest remove that met the item deleted mid-flight audited
+and answered 204, and the add and both moves never waited on their lock.
+
+Found in Django, and copied: D135 (two carousel adds at once can pass 24 products: the locking
+`SELECT` counts the snapshot it took before it waited), D136 (the footer's four columns are
+counted with no lock), D137 (a naive publish window in the first hours of the year 1 is a 500,
+DRF's own). Also copied: a create's `Location` is the answer's `url` field -- here a link, not the
+item's address -- as DRF's `get_success_headers` does.
+
+Phase 4 is done: the catalogue, inventory and content admin answer as Django does. Phase 5 (the
+POS) waits on D115.
+
 ### The NestJS API, phase 4 part 5b: site pages and the page sanitiser, 2026-10-01
 
 Asked for: phase 4 of the port, finished. Ported: `SitePageViewSet` (list, retrieve, create,
@@ -3417,6 +3464,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D132 | **A content move that waited on the lock undoes what committed meanwhile.** `content.services.move` locks the run with `list(rows.select_for_update())` and renumbers it 0..n in list order, but PostgreSQL sorts a locking `SELECT` before it waits: a move that queued behind another write gets the rows in the order they had before it, and writes that order back. Measured on the parity stack: Instagram's move down that waited while Facebook and YouTube were sent to the end left the run as if they had never moved. Two simultaneous moves of one row down move it once. Social links, navigation items and the home carousel all use it | `apps/api/content/services.py` | Found porting the social links to NestJS, which copies it. Locking the run first and reading it again in order, inside the transaction, would do it |
 | D133 | **`?ordering=get_platform_display` on the social links answers 500.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field by its source, and `label`'s source is the model method `get_platform_display`, which `order_by` cannot use (`FieldError`). Every route of the viewset filters its queryset in `get_object()`, so the list, the detail, the edit and the move all fail. Measured on the parity stack for each | `apps/api/content/api/views.py` | Found porting the social links to NestJS, which copies it. Naming `ordering_fields` on the viewset would do it |
 | D134 | **A page titled only in Bengali cannot be created without an address.** `create_page` makes the address with Django's `slugify(slug or title)`, which drops every character outside ASCII, so a title such as "আমাদের কথা" with no `slug` leaves nothing and is refused: "Give the page an address, for example size-guide." The catalogue transliterates Bengali names into slugs (`core.slugs`); site pages do not. Measured on the parity stack | `apps/api/content/services.py` | Found porting site pages to NestJS, which copies it. Using the catalogue's `slug_text` would do it; an existing address would not change |
+| D135 | **Two carousel adds at once can take it past 24 products.** `add_carousel_product` locks the run with `list(HomeCarouselItem.objects.select_for_update()...)` and then counts it, but PostgreSQL's locking `SELECT` returns the rows of the snapshot it took before it waited: an add that queued behind another add counts the run without the row the first one inserted. Measured on the parity stack with the run at 23: an add that waited while another committed counted 23 and made 25. Both adds also take the same position (the code says so; `created_at` breaks the tie) | `apps/api/content/services.py` | Found porting the carousel to NestJS, which copies it. Counting again after the lock (`HomeCarouselItem.objects.count()`, a fresh statement) or locking a parent row would do it |
+| D136 | **The footer can get a fifth column.** `NavigationItem._clean_placement` counts the footer's columns with no lock and the view saves after it, so two new columns at once both see three and both go in. Measured on the parity stack: a column added while a fourth was being inserted (not yet committed) answered 201, and the footer then had five | `apps/api/content/models.py`, `apps/api/content/api/views.py` | Found porting navigation items to NestJS, which copies it. The storefront renders the first four; a lock on the settings row, or a constraint, would close it |
+| D137 | **A naive publish window in the first hours of 1 January of the year 1 is a 500.** DRF 3.15's `DateTimeField` makes a naive value aware in Asia/Dhaka (local mean time, +06:01:40) and then calls `valid_datetime`, whose `astimezone(timezone.utc)` overflows below the year 1; the `OverflowError` is not caught. Measured with `starts_at: "0001-01-01T00:00"` on navigation items and banners | `rest_framework/utils/timezone.py` (DRF) | Found porting the content windows to NestJS, which copies it. Harmless beyond the 500; DRF's own bug |
 
 ## Still API-only (no UI)
 
