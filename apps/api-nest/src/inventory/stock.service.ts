@@ -5,8 +5,15 @@ import { Inject, Injectable } from '@nestjs/common';
 import { quantize } from '../checkout/pricing';
 import { AuditActor, AuditContext, recordAudit } from '../common/audit';
 import { Dec } from '../common/decimal';
-import { InsufficientStock, NotFound, NotReceived, ValidationError } from '../common/errors';
+import {
+  Conflict,
+  InsufficientStock,
+  NotFound,
+  NotReceived,
+  ValidationError,
+} from '../common/errors';
 import { pyRepr, pyStrip } from '../common/python';
+import { nextNumber } from '../common/sequence';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
 import { CeleryService } from '../jobs/celery.service';
@@ -54,6 +61,14 @@ export const TRANSACTION_LABELS: Readonly<Record<string, string>> = {
   RESERVATION: 'Reserved for an order',
   RESERVATION_RELEASE: 'Reservation released',
   PURCHASE_RETURN: 'Returned to supplier',
+};
+
+/** `StockCountStatus` labels: `get_status_display()`. */
+export const COUNT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  DRAFT: 'Draft',
+  COUNTING: 'Counting',
+  APPLIED: 'Applied',
+  CANCELLED: 'Cancelled',
 };
 
 export const RESERVATION_AFFECTING: ReadonlySet<string> = new Set([
@@ -564,7 +579,7 @@ export class StockService {
     receipt: {
       branch: Branch;
       variantId: string;
-      quantity: number;
+      quantity: Count;
       unitCost: string;
       actor: AuditActor | null;
       referenceType: string;
@@ -578,13 +593,13 @@ export class StockService {
     const inventory = (await this.lock(tx, receipt.branch.id, [receipt.variantId])).get(
       receipt.variantId,
     ) as LockedInventory;
-    const previous = Math.max(inventory.on_hand, 0);
-    const total = previous + receipt.quantity;
+    const previous = new Dec(Math.max(inventory.on_hand, 0));
+    const quantity = new Dec(receipt.quantity.toString());
     inventory.average_cost = quantize(
-      new Dec(previous)
+      previous
         .times(inventory.average_cost)
-        .plus(new Dec(receipt.quantity).times(unitCost))
-        .div(total),
+        .plus(quantity.times(unitCost))
+        .div(previous.plus(quantity)),
     ).toFixed(2);
     const entry = await this.writeLedger(tx, inventory, {
       type: 'PURCHASE',
@@ -601,5 +616,250 @@ export class StockService {
       unitCost.toFixed(2),
     ]);
     return entry;
+  }
+  /**
+   * `transfer`: stock out of one branch and into another in one transaction,
+   * at the source's average cost (ADR-0006). Idempotent on its key, claimed
+   * by the transfer document -- written, number and all, in a savepoint
+   * before any stock moves -- so a retry that loses the race leaves both
+   * shelves alone. The source rows are locked first, all of them; each
+   * target row is locked as its line is received. Answers the transfer's id.
+   */
+  async transfer(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    transfer: {
+      source: Branch;
+      target: Branch;
+      lines: [variantId: string, quantity: Count][];
+      actor: AuditActor | null;
+      notes: string;
+      idempotencyKey: string | null;
+    },
+  ): Promise<string> {
+    const key = transfer.idempotencyKey || null;
+    const claimed = async () =>
+      (
+        await tx.one<{ id: string }>(
+          `SELECT id FROM inventory_stocktransfer WHERE idempotency_key = $1
+            ORDER BY created_at DESC LIMIT 1`,
+          [key],
+        )
+      )?.id ?? null;
+    if (key) {
+      const existing = await claimed();
+      if (existing) return existing;
+    }
+    if (transfer.source.id === transfer.target.id)
+      throw new ValidationError('Source and destination branches must differ.');
+    const lines = transfer.lines.filter(([, quantity]) => quantity > 0);
+    if (!lines.length) throw new ValidationError('A transfer needs at least one line.');
+
+    const id = randomUUID();
+    let number: string;
+    await tx.query('SAVEPOINT stock_transfer');
+    try {
+      number = await nextNumber(tx, 'stock_transfer', 'TRF');
+      await tx.query(
+        `INSERT INTO inventory_stocktransfer
+           (id, created_at, updated_at, number, source_branch_id, target_branch_id, status, notes,
+            created_by_id, received_at, received_by_id, idempotency_key)
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2, $3::uuid, $4::uuid, 'RECEIVED', $5,
+                 $6::uuid, NULL, NULL, $7)`,
+        [
+          id,
+          number,
+          transfer.source.id,
+          transfer.target.id,
+          transfer.notes,
+          transfer.actor?.id ?? null,
+          key,
+        ],
+      );
+      await tx.query('RELEASE SAVEPOINT stock_transfer');
+    } catch (error) {
+      await tx.query('ROLLBACK TO SAVEPOINT stock_transfer');
+      if (key && String((error as { code?: unknown }).code ?? '').startsWith('23')) {
+        const existing = await claimed();
+        if (existing) return existing;
+      }
+      throw error;
+    }
+
+    const source = await this.lock(
+      tx,
+      transfer.source.id,
+      lines.map(([variantId]) => variantId),
+    );
+    for (const [variantId, quantity] of lines)
+      this.checkCanReduce(source.get(variantId) as LockedInventory, -quantity);
+
+    for (const [variantId, quantity] of lines) {
+      const inventory = source.get(variantId) as LockedInventory;
+      const unitCost = inventory.average_cost;
+      await tx.query(
+        `INSERT INTO inventory_stocktransferitem
+           (id, created_at, updated_at, transfer_id, variant_id, quantity, unit_cost)
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4, $5)`,
+        [randomUUID(), id, variantId, quantity.toString(), unitCost],
+      );
+      await this.writeLedger(tx, inventory, {
+        type: 'TRANSFER_OUT',
+        delta: -quantity,
+        actor: transfer.actor,
+        referenceType: 'stock_transfer',
+        referenceId: id,
+        reason: '',
+        notes: transfer.notes,
+        unitCost,
+      });
+      after.lowStockCheck(inventory);
+      await this.receiveStock(tx, {
+        branch: transfer.target,
+        variantId,
+        quantity,
+        unitCost,
+        actor: transfer.actor,
+        referenceType: 'stock_transfer',
+        referenceId: id,
+        notes: transfer.notes,
+      });
+      await tx.query(
+        `UPDATE inventory_inventorytransaction SET transaction_type = 'TRANSFER_IN'
+          WHERE reference_id = $1 AND reference_type = 'stock_transfer'
+            AND transaction_type = 'PURCHASE' AND variant_id = $2::uuid`,
+        [id, variantId],
+      );
+    }
+
+    await recordAudit(tx, context, {
+      action: 'STOCK_TRANSFER',
+      entity: {
+        type: 'StockTransfer',
+        id,
+        label: `${number}: ${transfer.source.id} -> ${transfer.target.id}`,
+      },
+      actor: transfer.actor,
+      newValues: { from: transfer.source.code, to: transfer.target.code, lines: lines.length },
+      reason: transfer.notes,
+      branchId: transfer.source.id,
+    });
+    return id;
+  }
+
+  /**
+   * `apply_stock_count`: a count sheet's figures as adjustments, all or none.
+   * The count is locked with its branch (Django's `select_for_update()`
+   * over a `select_related` join locks both rows) and its status read under
+   * the lock; the whole sheet is checked before any line is written. Answers
+   * how many lines moved stock.
+   */
+  async applyStockCount(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    countId: string,
+    actor: AuditActor | null,
+  ): Promise<number> {
+    const count = await tx.one<{
+      id: string;
+      number: string;
+      status: string;
+      branch_id: string;
+      code: string;
+    }>(
+      `SELECT "inventory_stockcount"."id", "inventory_stockcount"."number",
+              "inventory_stockcount"."status", "inventory_stockcount"."branch_id", "accounts_branch"."code"
+         FROM "inventory_stockcount"
+         INNER JOIN "accounts_branch" ON ("inventory_stockcount"."branch_id" = "accounts_branch"."id")
+        WHERE "inventory_stockcount"."id" = $1::uuid LIMIT 21 FOR UPDATE`,
+      [countId],
+    );
+    if (!count) throw new NotFound();
+    if (count.status !== 'COUNTING') {
+      const label = (COUNT_STATUS_LABELS[count.status] ?? count.status).toLowerCase();
+      throw new Conflict(`${count.number} is ${label} and cannot be applied.`, {
+        details: { status: count.status },
+      });
+    }
+    // Django's statement: the lines are adjusted in the order it returns them.
+    const counted = await tx.query<{ variant_id: string; counted_quantity: number; sku: string }>(
+      `SELECT "inventory_stockcountitem"."id", "inventory_stockcountitem"."created_at",
+              "inventory_stockcountitem"."updated_at", "inventory_stockcountitem"."stock_count_id",
+              "inventory_stockcountitem"."variant_id", "inventory_stockcountitem"."expected_quantity",
+              "inventory_stockcountitem"."counted_quantity", "inventory_stockcountitem"."notes",
+              "catalog_productvariant"."id" AS "v_id", "catalog_productvariant"."created_at" AS "v_created_at",
+              "catalog_productvariant"."updated_at" AS "v_updated_at",
+              "catalog_productvariant"."product_id", "catalog_productvariant"."sku",
+              "catalog_productvariant"."barcode", "catalog_productvariant"."name",
+              "catalog_productvariant"."price", "catalog_productvariant"."compare_at_price",
+              "catalog_productvariant"."cost", "catalog_productvariant"."weight_grams",
+              "catalog_productvariant"."position", "catalog_productvariant"."status",
+              "catalog_productvariant"."batch_number", "catalog_productvariant"."expiry_date"
+         FROM "inventory_stockcountitem"
+         INNER JOIN "catalog_productvariant"
+           ON ("inventory_stockcountitem"."variant_id" = "catalog_productvariant"."id")
+        WHERE ("inventory_stockcountitem"."stock_count_id" = $1::uuid
+          AND "inventory_stockcountitem"."counted_quantity" IS NOT NULL)`,
+      [count.id],
+    );
+    if (!counted.length) {
+      throw new ValidationError(
+        `Nothing has been counted on ${count.number} yet, so there is nothing to apply.`,
+      );
+    }
+    const branch = { id: count.branch_id, code: count.code };
+    const inventories = await this.lock(
+      tx,
+      branch.id,
+      counted.map((line) => line.variant_id),
+    );
+    const onHand = (line: { variant_id: string }) =>
+      (inventories.get(line.variant_id) as LockedInventory).on_hand;
+    const rising = counted.filter((line) => line.counted_quantity > onHand(line));
+    const received = await this.receivedVariantIds(
+      tx,
+      branch.id,
+      rising.map((line) => line.variant_id),
+    );
+    const refused = rising.filter((line) => !received.has(line.variant_id));
+    if (refused.length) {
+      throw new NotReceived(
+        `${count.number} counts stock ${branch.code} has never received: ` +
+          `${refused.map((line) => line.sku).join(', ')}. ` +
+          'Receive it on a purchase order, then apply the count.',
+        {
+          details: {
+            lines: refused.map((line) => ({
+              variant_id: line.variant_id,
+              sku: line.sku,
+              counted: line.counted_quantity,
+              on_hand: onHand(line),
+            })),
+          },
+        },
+      );
+    }
+
+    let applied = 0;
+    for (const line of counted) {
+      const entry = await this.adjust(tx, after, context, {
+        branch,
+        variantId: line.variant_id,
+        newOnHand: line.counted_quantity,
+        reason: `Stock count ${count.number}`,
+        actor,
+        referenceType: 'stock_count',
+        referenceId: count.id,
+      });
+      if (entry) applied += 1;
+    }
+    await tx.query(
+      `UPDATE inventory_stockcount SET updated_at = clock_timestamp(), status = 'APPLIED',
+              applied_at = clock_timestamp(), applied_by_id = $2::uuid WHERE id = $1::uuid`,
+      [count.id, actor?.id ?? null],
+    );
+    return applied;
   }
 }

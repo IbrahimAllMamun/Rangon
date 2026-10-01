@@ -20,6 +20,11 @@ cached rows agree. What each row is for:
 - At DHK1: a stock count applied (a `stock_count` document), and two
   adjustments whose references resolve to nothing -- one not a UUID, one a
   real order's id in capitals.
+- For the transfer and count admin: a transfer of one RGN-LIN-M-WHI from DHK1
+  to PAR3 whose idempotency key stays claimed; counts being counted at DHK1
+  (two lines counted, one up and one down, a third not), at PAR3 (one line
+  counted up on a variant PAR3 never received, so applying it is refused)
+  and at DHK1 with nothing counted; and a cancelled one.
 """
 
 from django.db import transaction
@@ -142,6 +147,46 @@ def apply() -> None:
         reference_id=str(order.pk).upper(),
         reason="Reference in capitals",
     )
+    stock.transfer(
+        source_branch=home,
+        target_branch=mirpur,
+        lines=[(variant("RGN-LIN-M-WHI"), 1)],
+        actor=owner,
+        notes="One for the window",
+        idempotency_key="parity-fixture-transfer",
+    )
+
+    def sheet(branch: Branch, notes: str, lines: dict[str, int | None], status: str) -> None:
+        sheet = StockCount.objects.create(
+            number=next_number("stock_count", prefix="SC"),
+            branch=branch,
+            created_by=owner,
+            status=status,
+            notes=notes,
+        )
+        for sku, change in lines.items():
+            row = Inventory.objects.get(branch=branch, variant=variant(sku))
+            StockCountItem.objects.create(
+                stock_count=sheet,
+                variant_id=row.variant_id,
+                expected_quantity=row.on_hand,
+                counted_quantity=None if change is None else row.on_hand + change,
+            )
+
+    sheet(
+        home,
+        "Parity counting",
+        {"RGN-CLA-L-WHI": 2, "RGN-BLO-L-BEI": -1, "RGN-ESS-XL-WHI": None},
+        StockCountStatus.COUNTING,
+    )
+    sheet(
+        mirpur,
+        "Parity Mirpur counting",
+        {"RGN-BLO-L-BEI": -1, "PAR-FREE": 2, "PAR-TEE-S-WHT": None},
+        StockCountStatus.COUNTING,
+    )
+    sheet(home, "Parity nothing counted", {"RGN-CLA-L-WHI": None}, StockCountStatus.COUNTING)
+    sheet(home, "Parity abandoned", {"RGN-BLO-L-BEI": None}, StockCountStatus.CANCELLED)
     print(f"parity inventory fixture applied at {timezone.now().isoformat()}")
 
 

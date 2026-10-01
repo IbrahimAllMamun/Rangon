@@ -1,4 +1,4 @@
-import { Get, HttpCode, Inject, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
+import { Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { RequestUser } from '../../auth/authentication';
@@ -9,8 +9,10 @@ import { absoluteUri } from '../../common/http';
 import { Params, QueryDict } from '../../common/query-dict';
 import { ENV, Env } from '../../config/env';
 import { requestData } from '../../http/request-body';
+import { CountsService } from './counts.service';
 import { InventoryAdminService } from './inventory-admin.service';
 import { LedgerEntries } from './ledger-entries.service';
+import { TransfersService } from './transfers.service';
 
 function actor(request: FastifyRequest): AuditActor {
   const user = request.user as RequestUser;
@@ -144,5 +146,126 @@ export class LedgerController {
   @Action('retrieve')
   retrieve(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
     return this.ledger.retrieve(request.user as RequestUser, lookupParam(pk), query);
+  }
+}
+
+/** `StockTransferViewSet`: list, retrieve, create. */
+@StaffView('stock-transfers', {
+  list: ['inventory.view'],
+  retrieve: ['inventory.view'],
+  create: ['inventory.transfer'],
+})
+export class StockTransfersController {
+  constructor(
+    private readonly transfers: TransfersService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('stock-transfers/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.transfers.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Post('stock-transfers/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.transfers.create(
+      request.user as RequestUser,
+      requestData(request),
+      idempotencyKey(request),
+      actor(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Get('stock-transfers/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    return this.transfers.retrieve(request.user as RequestUser, lookupParam(pk));
+  }
+}
+
+/**
+ * `StockCountViewSet`, a `ModelViewSet` with `record`, `cancel` and
+ * `apply`. `destroy` is routed but declares no requirement: only an owner or
+ * a superuser passes (D127, copied).
+ */
+@StaffView('stock-counts', {
+  list: ['inventory.view'],
+  retrieve: ['inventory.view'],
+  create: ['inventory.count'],
+  update: ['inventory.count'],
+  partial_update: ['inventory.count'],
+  apply: ['inventory.count'],
+  record: ['inventory.count'],
+  cancel: ['inventory.count'],
+})
+export class StockCountsController {
+  constructor(
+    private readonly counts: CountsService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('stock-counts/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.counts.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Post('stock-counts/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.counts.create(request.user as RequestUser, requestData(request), actor(request));
+  }
+
+  @Get('stock-counts/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    return this.counts.retrieve(request.user as RequestUser, lookupParam(pk));
+  }
+
+  @Put('stock-counts/:pk/')
+  @Action('update')
+  async update(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    const row = await this.counts.find(request.user as RequestUser, lookupParam(pk));
+    return this.counts.update(row, requestData(request), false);
+  }
+
+  @Patch('stock-counts/:pk/')
+  @Action('partial_update')
+  async partialUpdate(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    const row = await this.counts.find(request.user as RequestUser, lookupParam(pk));
+    return this.counts.update(row, requestData(request), true);
+  }
+
+  @Delete('stock-counts/:pk/')
+  @Action('destroy')
+  @HttpCode(204)
+  async destroy(@Param('pk') pk: string, @Req() request: FastifyRequest): Promise<void> {
+    await this.counts.destroy(await this.counts.find(request.user as RequestUser, lookupParam(pk)));
+  }
+
+  @Post('stock-counts/:pk/record/')
+  @Action('record')
+  @HttpCode(200)
+  async record(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    const row = await this.counts.find(request.user as RequestUser, lookupParam(pk));
+    return this.counts.record(row, requestData(request));
+  }
+
+  @Post('stock-counts/:pk/cancel/')
+  @Action('cancel')
+  @HttpCode(200)
+  async cancel(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    return this.counts.cancel(await this.counts.find(request.user as RequestUser, lookupParam(pk)));
+  }
+
+  @Post('stock-counts/:pk/apply/')
+  @Action('apply')
+  @HttpCode(200)
+  async apply(@Param('pk') pk: string, @Req() request: FastifyRequest) {
+    const row = await this.counts.find(request.user as RequestUser, lookupParam(pk));
+    return this.counts.apply(row, actor(request), auditContext(request, this.env));
   }
 }

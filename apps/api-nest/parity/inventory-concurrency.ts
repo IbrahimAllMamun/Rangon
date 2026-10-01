@@ -16,8 +16,8 @@
 import pg from 'pg';
 
 import { staffHeaders } from './catalog-admin-cases.ts';
-import { STOCK_TABLES } from './inventory-cases.ts';
-import { restoreTables } from './restore.ts';
+import { restoreSequences, restoreTables } from './restore.ts';
+import { DOCUMENT_TABLES } from './stock-document-cases.ts';
 import { send } from './run.ts';
 
 interface Check {
@@ -56,9 +56,11 @@ export async function inventoryConcurrencyChecks(apis: {
     const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
       ?.now as string;
     const restore = async () => {
-      await restoreTables(db, STOCK_TABLES);
+      await restoreTables(db, DOCUMENT_TABLES);
+      await restoreSequences(db);
       await db.query(
-        `DELETE FROM core_auditlog WHERE created_at >= $1 AND action = 'STOCK_ADJUSTMENT'`,
+        `DELETE FROM core_auditlog WHERE created_at >= $1
+            AND action IN ('STOCK_ADJUSTMENT', 'STOCK_TRANSFER')`,
         [since],
       );
     };
@@ -251,6 +253,170 @@ export async function inventoryConcurrencyChecks(apis: {
         afterBurst.ledger === 0,
       detail: `statuses ${burst.map((r) => r.status).join(',')}, shelf ${afterBurst.on_hand}, ledger ${afterBurst.ledger}`,
     });
+
+    // 5. A transfer that meets a movement mid-flight is checked against the
+    //    committed shelf at its source: 6 at PAR3, the harness takes 4, the
+    //    transfer's 4 is refused. Without the lock it took them as well.
+    const home = rows.get('DHK1 RGN-CLA-L-WHI');
+    for (const [side, api] of SIDES(apis)) {
+      await restore();
+      const { waited, response, committed } = await midFlight(shelf, 4, () =>
+        post(api, '/api/v1/stock-transfers/', {
+          source_branch: shelf.branch_id,
+          target_branch: home?.branch_id,
+          lines: [{ variant: shelf.variant_id, quantity: 4 }],
+        }),
+      );
+      const { on_hand, ledger } = await state(shelf.id);
+      checks.push({
+        name: `transfers: a transfer (${side}) that meets a movement at its source mid-flight is refused -- the lock holds`,
+        passed: waited && response.status === 409 && on_hand === committed && ledger === on_hand,
+        detail: `${response.status}, ${waited ? 'waited on the lock' : 'never waited'}, shelf ${on_hand} (expected ${committed}), ledger ${ledger}`,
+      });
+    }
+
+    // 6. Six transfers of 2 from a shelf of 6, across both APIs at once:
+    //    three move, three are refused; both ends agree with their ledgers.
+    if (home) {
+      await restore();
+      const homeBefore = (await state(home.id)).on_hand;
+      const moves = await Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          post(index % 2 ? apis.NEST : apis.DJANGO, '/api/v1/stock-transfers/', {
+            source_branch: shelf.branch_id,
+            target_branch: home.branch_id,
+            lines: [{ variant: shelf.variant_id, quantity: 2 }],
+          }),
+        ),
+      );
+      const from = await state(shelf.id);
+      const to = await state(home.id);
+      const numbers = new Set(
+        moves
+          .filter((response) => response.status === 201)
+          .map((response) => (JSON.parse(response.body) as { number: string }).number),
+      );
+      checks.push({
+        name: 'transfers: 6 simultaneous transfers of 2 from a shelf of 6 across both APIs: 3 move, 3 refused',
+        passed:
+          numbers.size === 3 &&
+          moves.filter((response) => response.status === 409).length === 3 &&
+          from.on_hand === 0 &&
+          from.ledger === 0 &&
+          to.on_hand === homeBefore + 6 &&
+          to.ledger === to.on_hand,
+        detail: `statuses ${moves.map((r) => r.status).join(',')}, ${numbers.size} number(s), source ${from.on_hand} (ledger ${from.ledger}), target ${homeBefore} -> ${to.on_hand} (ledger ${to.ledger})`,
+      });
+
+      // 7. Six retries of one transfer: one document, the stock moved once.
+      await restore();
+      const retried = await Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          post(
+            index % 2 ? apis.NEST : apis.DJANGO,
+            '/api/v1/stock-transfers/',
+            {
+              source_branch: shelf.branch_id,
+              target_branch: home.branch_id,
+              lines: [{ variant: shelf.variant_id, quantity: 1 }],
+            },
+            'parity-race-transfer',
+          ),
+        ),
+      );
+      const answers = new Set(
+        retried.map((response) =>
+          response.status === 201 ? (JSON.parse(response.body) as { id: string }).id : null,
+        ),
+      );
+      const documents = Number(
+        (
+          await db.query<{ n: string }>(
+            `SELECT count(*) AS n FROM inventory_stocktransfer WHERE idempotency_key = 'parity-race-transfer'`,
+          )
+        ).rows[0]?.n,
+      );
+      const after = await state(shelf.id);
+      checks.push({
+        name: 'transfers: 6 simultaneous retries of one transfer across both APIs make one document and move one unit',
+        passed:
+          retried.every((response) => response.status === 201) &&
+          answers.size === 1 &&
+          documents === 1 &&
+          after.on_hand === 5 &&
+          after.ledger === 5,
+        detail: `statuses ${retried.map((r) => r.status).join(',')}, ${answers.size} answer(s), ${documents} document(s), shelf ${after.on_hand}, ledger ${after.ledger}`,
+      });
+    }
+
+    // 8. An apply that meets a cancellation mid-flight: the harness holds the
+    //    count's row, an apply queues on it, the harness cancels the count
+    //    and commits. The apply must see the cancellation and refuse.
+    //    Without the lock it read "counting" first and adjusted the stock.
+    const sheet = (
+      await db.query<{ id: string }>(
+        `SELECT id FROM inventory_stockcount WHERE notes = 'Parity counting'`,
+      )
+    ).rows[0]?.id;
+    if (sheet) {
+      const adjustments = async () =>
+        Number(
+          (
+            await db.query<{ n: string }>(
+              `SELECT count(*) AS n FROM inventory_inventorytransaction
+                WHERE reference_type = 'stock_count' AND reference_id = $1`,
+              [sheet],
+            )
+          ).rows[0]?.n,
+        );
+      for (const [side, api] of SIDES(apis)) {
+        await restore();
+        const holder = new pg.Client({ connectionString: process.env.DATABASE_URL });
+        await holder.connect();
+        await holder.query('BEGIN');
+        await holder.query(`SELECT id FROM inventory_stockcount WHERE id = $1 FOR UPDATE`, [sheet]);
+        const pending = post(api, `/api/v1/stock-counts/${sheet}/apply/`, {});
+        let waited = false;
+        for (let attempt = 0; attempt < 100 && !waited; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const found = await db.query<{ count: string }>(
+            `SELECT count(*) AS count FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND state = 'active'
+                AND query ILIKE '%inventory_stockcount%FOR UPDATE%' AND query NOT ILIKE '%pg_stat_activity%'`,
+          );
+          waited = Number(found.rows[0]?.count ?? 0) > 0;
+        }
+        await holder.query(`UPDATE inventory_stockcount SET status = 'CANCELLED' WHERE id = $1`, [
+          sheet,
+        ]);
+        await holder.query('COMMIT');
+        await holder.end();
+        const response = await pending;
+        const written = await adjustments();
+        checks.push({
+          name: `counts: an apply (${side}) that meets a cancellation mid-flight refuses -- the lock holds`,
+          passed: waited && response.status === 409 && written === 0,
+          detail: `${response.status} ${response.body.slice(0, 70)}, ${waited ? 'waited on the lock' : 'never waited'}, ${written} adjustment(s)`,
+        });
+      }
+
+      // 9. Two applies of one count at once, one per API: one applies, the
+      //    other is refused, and the adjustments are written once.
+      await restore();
+      const both = await Promise.all([
+        post(apis.DJANGO, `/api/v1/stock-counts/${sheet}/apply/`, {}),
+        post(apis.NEST, `/api/v1/stock-counts/${sheet}/apply/`, {}),
+      ]);
+      const written = await adjustments();
+      checks.push({
+        name: 'counts: two simultaneous applies of one count, one per API: one applies, once',
+        passed:
+          both.filter((response) => response.status === 200).length === 1 &&
+          both.filter((response) => response.status === 409).length === 1 &&
+          written === 2,
+        detail: `statuses ${both.map((r) => r.status).join(',')}, ${written} adjustment(s)`,
+      });
+    }
     await restore();
   } finally {
     await db.end();

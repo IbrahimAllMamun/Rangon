@@ -26,7 +26,11 @@ export const STOCK_EFFECTS = [
      LEFT JOIN catalog_productvariant v ON v.id = i.variant_id
     ORDER BY b.code, v.sku NULLS LAST, i.variant_id`,
   `SELECT b.code, v.sku, t.transaction_type, t.quantity, t.unit_cost::text AS unit_cost,
-          t.on_hand_after, t.reserved_after, t.reference_type, t.reference_id, t.reason, t.notes,
+          t.on_hand_after, t.reserved_after, t.reference_type,
+          -- A document each API made itself reads as its number.
+          COALESCE((SELECT d.number FROM inventory_stocktransfer d WHERE d.id::text = t.reference_id),
+                   (SELECT d.number FROM inventory_stockcount d WHERE d.id::text = t.reference_id),
+                   t.reference_id) AS reference, t.reason, t.notes,
           u.email AS created_by, t.idempotency_key
      FROM inventory_inventorytransaction t JOIN accounts_branch b ON b.id = t.branch_id
      LEFT JOIN catalog_productvariant v ON v.id = t.variant_id
@@ -39,6 +43,7 @@ export const STOCK_EFFECTS = [
           COALESCE((SELECT v.sku FROM inventory_inventory i JOIN catalog_productvariant v ON v.id = i.variant_id
                      WHERE i.id::text = a.entity_id),
                    (SELECT v.sku FROM catalog_productvariant v WHERE v.id::text = a.entity_id),
+                   (SELECT d.number FROM inventory_stocktransfer d WHERE d.id::text = a.entity_id),
                    a.entity_id) AS entity
      FROM core_auditlog a LEFT JOIN accounts_branch b ON b.id = a.branch_id
     WHERE a.created_at >= $1 ORDER BY a.created_at, a.action`,
@@ -647,7 +652,7 @@ export async function inventoryCases(): Promise<Case[]> {
   );
   off('the whole shelf', {
     variant: V('RGN-LIN-M-WHI'),
-    quantity: 6,
+    quantity: onHand.get('DHK1 RGN-LIN-M-WHI'),
     transaction_type: 'LOSS',
     reason: 'Flood',
   });
