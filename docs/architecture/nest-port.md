@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts), part 5a (site settings and social links) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -269,6 +269,24 @@ so they are read with Django's statements.
 | `POST /api/v1/stock-counts/<id>/cancel/` | any count not yet applied, one already cancelled included |
 | `POST /api/v1/stock-counts/<id>/apply/` | `apply_stock_count`: the count locked together with its branch's row (`select_for_update()` over a `select_related` join locks both), its status read under the lock; the whole sheet refused when a line counts up stock the branch never received; each line through `adjust`, in the order Django's statement returns them |
 
+Then the content admin, starting with the site settings and the social links (part 5a). The
+settings are one row, made on first read when no migration made it (its save queues the `site`
+revalidation job, as every save of it does once committed); the social links are one row per
+platform, made by migration, with no create or delete. Every pasted address goes through
+`content.validators` (`content/validators.ts`), which decide with Python's `urlsplit`,
+`hostname` and `port` -- ported line by line from `Lib/urllib/parse.py`, IPv6, IPvFuture and NFKC
+checks included (`common/pyurl.ts`) -- with the Unicode `\b` and `\s` of Python's `re`, and with
+`html.unescape` over CPython's own HTML5 entity table (`common/html-entities.ts`, generated from
+it). The ports were compared with CPython on 30,000 generated addresses, and the validators on
+48,000 inputs, before they were committed.
+
+| Endpoint | Notes |
+|---|---|
+| `GET/PATCH /api/v1/site-settings/` | `settings.view` to read, `content.site_manage` to write. No other method: `RolePermission` runs before the method is looked up, so `PUT` or `DELETE` is a 403 for all but an owner or superuser, who get the 405. A partial write: text trimmed (the email as typed, checked by `EmailField`; `null` refused), the opening hours cleaned to at most seven rows of `days` and `hours` (`partial` reaches the rows, so a row may leave a column out), the map embed reduced to Google's `https://www.google.com/maps/embed` address -- from Google's `<iframe>` code too -- and the map link kept to Google Maps. The row is locked, every field compared with Python's `==`, and only a change saves (the whole row) and is audited `SETTINGS_CHANGED` with what changed |
+| `GET /api/v1/social-links/`, `GET /api/v1/social-links/<id>/` | `settings.view`; unpaginated, by position then platform; `POST` is a 403, or a 405 for an owner or superuser. `ordering` takes the serializer's fields as `OrderingFilter` offers them -- `label` as its source, `get_platform_display`, which the database cannot order by: a 500 on every route of the viewset, the edit and the move included (D133, copied) |
+| `PATCH /api/v1/social-links/<id>/` | `content.site_manage`. The body is validated before the link is looked up (a bad body for a missing link is a 400), then the row is locked and the address normalised for its platform: the platform's own domain or a subdomain, always `https://`, no credentials, no port; a WhatsApp number becomes `https://wa.me/<digits>`, Bengali digits and the country code included. A link cannot be shown without an address. A change saves `url`, `is_visible` and `updated_at`, and is audited |
+| `POST /api/v1/social-links/<id>/move/` | `content.site_manage`; `direction` `up` or `down` in any case (`str()` of what was sent, so a number is refused with the same 400; a body that is not an object is a 500). The run is locked in its order and renumbered 0..n, audited when it moved; the `site` revalidation job is queued every time, past the top too. A move that waits on the lock renumbers in the order PostgreSQL sorted before the wait, undoing a reorder committed meanwhile (D132, copied) |
+
 ## Running it
 
 ```bash
@@ -393,8 +411,8 @@ the port):
   moves at once can leave two values on one position (D118).
 - A size chart PATCH whose nested row names no size is a 500: `partial` reaches the nested rows,
   and the view then reads a key the row never had (D119).
-- `request.data.get` on a JSON body that is not an object is a 500 on `move` and
-  `verify-integrity` too.
+- `request.data.get` on a JSON body that is not an object is a 500 on `move` (attribute values and
+  social links) and `verify-integrity` too.
 - Renaming a product without sending its slug gives it a new one, `-2` and so on: the product
   serializer makes a slug on every save that names the product (D120).
 - An inventory row's reorder point and bin are saved with no serializer: a reorder point sent as
@@ -418,6 +436,11 @@ the port):
 - An import file with a `NaN`, a carriage return inside an unquoted cell, a NUL or a cell longer
   than its column answers 500, and an infinite price passes the preview and fails the import with
   an error that names no row (D131).
+- A move of a content row (a social link now; navigation items and the home carousel when they
+  are ported) that waited on the run's lock renumbers the run in the order PostgreSQL sorted it
+  before the wait, so a move or reorder committed meanwhile is undone (D132).
+- `?ordering=get_platform_display` on the social links is a 500 on the list, the detail, the edit
+  and the move: `OrderingFilter` offers the `label` field's source, a model method (D133).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

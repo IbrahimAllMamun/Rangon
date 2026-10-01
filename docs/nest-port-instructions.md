@@ -164,14 +164,17 @@ apps/api-nest/
       audit.ts                core_auditlog rows, with the request's address, agent and id
       filtering.ts            django-filter, OrderingFilter and SearchFilter, as the admin views use them
       isoformat.ts, dates.ts  CPython's fromisoformat (from the C), and core.dates' window parser
+      pycsv.ts, pyurl.ts      CPython's csv reader (from _csv.c); urlsplit, hostname, port, urlunsplit
+      html-entities.ts        CPython's HTML5 entity table, generated; html.unescape is in python.ts
       decimal.ts, datetime.ts, pagination.ts, query-dict.ts, phone.ts, uuid.ts ...
     <domain>/                 accounts, catalog, checkout, content, customers, engagement,
                               finance, inventory, jobs, orders, payments, shop (the controllers)
     inventory/stock.service.ts  inventory.services: the one place stock moves (checkout and admin)
+    content/validators.ts     content.validators: links, social profiles and maps a merchandiser pastes
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
-    concurrency.ts            the race checks; admin-concurrency.ts and inventory-concurrency.ts for staff writes
+    concurrency.ts            the race checks; admin-, inventory- and content-concurrency.ts for staff writes
     restore.ts                snapshot-and-restore of whole tables for the admin write cases
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
@@ -347,6 +350,8 @@ apps/api-nest/
 | The transfer burst passed with the stock lock removed | every document that takes a number takes the sequence's row lock first, which serialises them | the mid-flight check, again |
 | A same-key retry race passed with the stock lock removed | the idempotency key's unique index protects retries on its own | prove a lock with a race only the lock can win: the mid-flight checks, an oversell burst |
 | The Nest stand-in gateway answered 400 where Django's answered 500 | it reused the API's JSON parser, which raises DRF's parse error; `json.loads` in the Django twin raises a plain exception | a stand-in fails exactly as its twin does |
+| The content move's race passed with the run's lock removed | PostgreSQL sorts a locking `SELECT` before it waits, so a renumbering move ends the same with or without the lock (D132) | a check also asserts that the request waited on a `FOR UPDATE`; with no outcome to prove, the wait is the proof |
+| A harness edit made mid-run was not in the run | the parity container reads `parity/` when it starts | start the run after the last edit |
 
 ## 9. Documentation, per part
 
@@ -388,14 +393,14 @@ Every part of a phase updates, in the same branch:
 | Phase | Scope | Notes before starting |
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
-| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3c (permissions, catalogue, images), 4a (inventory rows and the stock ledger) and 4b (transfers and counts) and 3d (the products CSV import) done. Next: 5 the content admin -- navigation items, banners (an upload), the home carousel, social links, site settings and pages; it needs ports of Python's `urlsplit` and of the `nh3`/ammonia page sanitiser (a dependency for HTML parsing, to be stated in an ADR) |
+| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3c (permissions, catalogue, images), 4a (inventory rows and the stock ledger) and 4b (transfers and counts), 3d (the products CSV import) and 5a (site settings and social links) done. Next: 5b site pages, which needs a port of the `nh3`/ammonia page sanitiser (a dependency for HTML parsing, to be stated in an ADR); then 5c navigation items, banners (an upload) and the home carousel, whose moves carry D132 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | **D115 must be decided first**; POS sales, refunds and the cash drawer each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 4 (4b, 3d, 5), then open its PR when the owner asks.
+1. Finish phase 4 (5b, 5c), then open its PR when the owner asks.
 2. Settle D115 with the owner before phase 5.
 
 ### Checklist for a part

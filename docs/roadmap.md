@@ -481,6 +481,54 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 5a: site settings and social links, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `SiteSettingsView` (the footer's brand block,
+contact details, opening hours and map) and `SocialLinkViewSet` (read, edit, `move`), with
+`content.validators`, which reduce every pasted address to a few safe shapes. They decide with
+Python's `urlsplit`, `hostname` and `port` (`common/pyurl.ts`, from `Lib/urllib/parse.py`), the
+Unicode classes of Python's `re`, and `html.unescape` over CPython's HTML5 entity table
+(`common/html-entities.ts`, generated from it). Site pages are part 5b; navigation, banners and
+the home carousel 5c.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2220/2220 (192 new), 27 by the documented differences
+concurrency ................................... 42/42 (7 new: a settings edit and a social link edit
+                                                that meet a change mid-flight, and a move that meets
+                                                a reorder, each on both APIs; two moves that queue
+                                                together)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 638 passed (46 new: urlsplit, hostname, port and
+                                                urlunsplit, html.unescape, the four validators)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+Before the cases, the ports were compared with CPython on generated input: 30,000 addresses for
+`urlsplit` and its helpers, 48,000 values for the validators (every platform, map embeds and
+links, site paths, `mailto:` and `tel:`). The cases read and write as every role; read the links
+with every ordering `OrderingFilter` offers, one of which Django cannot run; patch the settings with
+padded, blank, null and over-long text, good and bad emails, booleans in every spelling, opening
+hours in every shape (blank rows, a missing column, seven and eight rows, not a list), Google embed
+URLs and iframe code (quoted either way, in capitals, with entities, without a `src`), keyless
+embeds, map links with and without a scheme, other hosts, ports, credentials and fragments, and
+bodies that are a list, `null` or broken JSON; patch the links with each platform's addresses,
+look-alike hosts, credentials, ports, `javascript:`, WhatsApp numbers in every form (Bengali digits,
+a country code, too short, a `wa.me` link), over-long addresses, visibility with and without an
+address, and nothing at all; and move links up, down, past the top, in capitals, sideways and with
+bodies that are not objects. Each write is compared by both tables, its audit entry and the `site`
+revalidation job it queues.
+
+With the port's `FOR UPDATE` removed, the Nest settings edit that met another mid-flight wrote the
+old address back over it, the link edit wrote the old visibility back, and the move never waited
+on the lock -- though it ended where the locked move ends, which is D132.
+
+Found in the port and fixed in its own commit: DRF's `ListField` hands `partial` on to its child,
+so a PATCH's opening-hours row may leave a column out; the port's `listField` did not. Found in
+Django, and copied: D132 (a content move that waited on the lock renumbers the run in the order
+PostgreSQL sorted before the wait: a reorder committed meanwhile is undone, and two moves that queue
+together move a row once), D133 (`?ordering=get_platform_display` is a 500 on every social link
+route).
+
 ### The NestJS API, phase 4 part 3d: the products CSV import, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `POST /products/import/` and
@@ -3317,6 +3365,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D129 | **The import preview names a new category once per product.** `_category_for` and `_brand_for` append to the plan's `categories_created` / `brands_created` each time a product needs one that does not exist; in a dry run nothing is created, so the next product that names the same category reports it again. Measured: two products in `Parity New > Deep` preview `Parity New`, `Parity New > Deep` twice each; the import itself creates each once | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Appending only names not already in the list would do it |
 | D130 | **An import row whose price cleans to nothing is dropped without a word.** `_decimal` strips `,`, `৳` and `Tk` and treats what is left as blank, so a price of `Tk` is neither a number error nor "Required." (that check reads the raw cell, which is not blank), and `parse` then skips the row as incoherent. Measured: a file whose only row has price `Tk` answers "The file has a header but no rows." | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Reporting "Required." when the cleaned value is blank would do it |
 | D131 | **Some malformed import files answer 500.** `Decimal("NaN") < 0` raises `InvalidOperation`; `csv.Error` (a carriage return inside an unquoted cell, a field over 131072 characters) is not caught; a NUL or a cell longer than its column fails in the database. An infinite price passes the preview and then fails the import with "“Infinity” value must be a decimal number.", naming no row. Measured on the parity stack for each | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Refusing non-finite numbers in `_decimal`, catching `csv.Error`, and checking lengths and NULs as row errors would do it |
+| D132 | **A content move that waited on the lock undoes what committed meanwhile.** `content.services.move` locks the run with `list(rows.select_for_update())` and renumbers it 0..n in list order, but PostgreSQL sorts a locking `SELECT` before it waits: a move that queued behind another write gets the rows in the order they had before it, and writes that order back. Measured on the parity stack: Instagram's move down that waited while Facebook and YouTube were sent to the end left the run as if they had never moved. Two simultaneous moves of one row down move it once. Social links, navigation items and the home carousel all use it | `apps/api/content/services.py` | Found porting the social links to NestJS, which copies it. Locking the run first and reading it again in order, inside the transaction, would do it |
+| D133 | **`?ordering=get_platform_display` on the social links answers 500.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field by its source, and `label`'s source is the model method `get_platform_display`, which `order_by` cannot use (`FieldError`). Every route of the viewset filters its queryset in `get_object()`, so the list, the detail, the edit and the move all fail. Measured on the parity stack for each | `apps/api/content/api/views.py` | Found porting the social links to NestJS, which copies it. Naming `ordering_fields` on the viewset would do it |
 
 ## Still API-only (no UI)
 
