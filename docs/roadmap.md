@@ -481,6 +481,45 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 3d: the products CSV import, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `POST /products/import/` and
+`catalog.importers` -- the dry run and the import, products, variants, options, categories,
+brands and opening stock through `receive_stock`. The file is read with a port of CPython's csv
+reader (`common/pycsv.ts`, from `_csv.c`) and its cells with Python's `Decimal` and `int`.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2028/2028 (88 new: 81 here, 7 with its two fixes),
+                                                26 by the documented differences
+concurrency ................................... 35/35 (none new: the import takes no lock of its own;
+                                                its stock goes through `receive_stock`)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 592 passed (34 new across the part and its two fixes:
+                                                CPython's csv reader and DictReader, Decimal())
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases upload a catalogue that does everything (a new product in a new category under an old
+one with a new brand, an old product re-described by slug, an old SKU re-priced, options old and
+new, opening stock at DHK1 or PAR3), as a dry run by default, asked for, blank and malformed, and
+for real at each branch, a blank, an inactive and a malformed one, by every role. Then the file:
+empty, only a byte-order mark, two of them, a blank first line, a header alone or with blank rows,
+missing columns, headers in capitals with spaces, a repeated header, short and long rows, quoted
+commas and new lines, a quote left open, a stray carriage return, carriage returns only, a NUL, the
+same SKU twice, blank required cells, bad and negative numbers, `NaN`, infinity, Bengali digits,
+a fraction of stock, a product with no category, one new category for two products, a brand and a
+SKU in another case, a barcode the shop has, cells past their columns, over 5000 rows, Latin-1,
+not UTF-8, over 5 MB; and the upload: no file, text for the file, an empty file name, JSON and
+urlencoded bodies, GET. Each is compared by what it leaves in eleven tables, its audit entry and
+the revalidation jobs a new category queues.
+
+Found in the port and fixed in their own commits: `pyDecimal` refused `১২৯০` and `_1_5_0_`,
+which Django's `Decimal()` reads (it is also behind DRF's `DecimalField`); and the multipart parser
+skipped a part with `filename=""`, which Django reads as a text field. Found in Django, and copied:
+D129 (the preview names a new category once per product), D130 (a row whose price cleans to
+nothing is dropped without a word), D131 (`NaN`, a stray carriage return, a NUL or a cell past its
+column answers 500; an infinite price passes the preview and fails the import).
+
 ### The NestJS API, phase 4 part 4b: stock transfers and counts, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `StockTransferViewSet` and `StockCountViewSet`
@@ -3275,6 +3314,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D126 | **A stock count can be edited onto another branch, applied or not.** `StockCountViewSet` is a `ModelViewSet`, and `StockCountSerializer` leaves `branch` writable over `Branch.objects.all()`: a PATCH moves a count to any branch -- an inactive one, one the user may not act on -- whatever its status. The save is a full `instance.save()`, writing every column back from the row as read, so an edit that races an apply can put an applied count back to "counting". Measured on the parity stack: the PAR3 manager moved their own count to DHK1, and an applied count was moved after its adjustments were in the ledger | `apps/api/inventory/api/views.py`, `apps/api/inventory/api/serializers.py` | Found porting the counts to NestJS, which copies it. A read-only `branch` after creation, edits refused once a count is applied, and `update_fields` would do it |
 | D127 | **An applied stock count can be deleted.** `required_permissions` names no `destroy`, so `RolePermission` refuses everyone but an owner or a superuser -- who may delete any count, an applied one included. Its lines go with it, and the ledger's adjustments then name a document that no longer exists: the ledger screen shows them with no link. Measured: `DELETE /stock-counts/<applied>/` as the owner is 204 | `apps/api/inventory/api/views.py` | Found porting the counts to NestJS, which copies it. Refusing to delete an applied count would do it; whether anyone should delete one at all is the owner's call |
 | D128 | **A transfer that names one variant twice is a bare 409.** `transfer` writes a `StockTransferItem` per line, and the second line for a variant hits the `(transfer, variant)` unique constraint; the handler answers "The request conflicts with the current state of the data." Measured on the parity stack | `apps/api/inventory/services.py` | Found porting the transfers to NestJS, which copies it. Refusing the payload with a 400 that names the line, or merging the lines, would do it |
+| D129 | **The import preview names a new category once per product.** `_category_for` and `_brand_for` append to the plan's `categories_created` / `brands_created` each time a product needs one that does not exist; in a dry run nothing is created, so the next product that names the same category reports it again. Measured: two products in `Parity New > Deep` preview `Parity New`, `Parity New > Deep` twice each; the import itself creates each once | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Appending only names not already in the list would do it |
+| D130 | **An import row whose price cleans to nothing is dropped without a word.** `_decimal` strips `,`, `৳` and `Tk` and treats what is left as blank, so a price of `Tk` is neither a number error nor "Required." (that check reads the raw cell, which is not blank), and `parse` then skips the row as incoherent. Measured: a file whose only row has price `Tk` answers "The file has a header but no rows." | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Reporting "Required." when the cleaned value is blank would do it |
+| D131 | **Some malformed import files answer 500.** `Decimal("NaN") < 0` raises `InvalidOperation`; `csv.Error` (a carriage return inside an unquoted cell, a field over 131072 characters) is not caught; a NUL or a cell longer than its column fails in the database. An infinite price passes the preview and then fails the import with "“Infinity” value must be a decimal number.", naming no row. Measured on the parity stack for each | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Refusing non-finite numbers in `_decimal`, catching `csv.Error`, and checking lengths and NULs as row errors would do it |
 
 ## Still API-only (no UI)
 

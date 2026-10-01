@@ -341,6 +341,7 @@ apps/api-nest/
 | A per-case change had no effect | `setup` runs before the per-side `reset`, which undid it | use `prepare` |
 | Negative zero | DRF prints `-0.00`; decimal.js drops the sign | `money()` and `decimalField` keep it |
 | `DELETE /variants/lookup/` answered 404 where Django answered 405 | Fastify picks a route by method first; Django resolves the path first, and the router lists `lookup/` before `<pk>/` | `RouteRegistry.resolve` ranks a literal segment over a parameter, and the auth guard sends a mismatch to the no-route answer |
+| `pyDecimal` passed its tests for a year of the port and still refused `১২৯০` | it was written from the docs, not from `numeric_as_ascii` | the same differential test as the date parser; the csv reader got one before it was used |
 | The `DateField` port passed its tests and still refused what Django took | CPython's `fromisoformat` is looser than its docs: it never checks it reached the end, and any character separates date and time | port the C, then compare against a generated corpus: Python prints `parse_moment` for tens of thousands of strings in the container, a throwaway jest spec runs the port over the same file |
 | A phase 3 race broke when a fixture added a second branch | it set one SKU's stock at every branch, and a reserved count went negative | harness statements name the branch |
 | The transfer burst passed with the stock lock removed | every document that takes a number takes the sequence's row lock first, which serialises them | the mid-flight check, again |
@@ -387,7 +388,7 @@ Every part of a phase updates, in the same branch:
 | Phase | Scope | Notes before starting |
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
-| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3c (permissions, catalogue, images), 4a (inventory rows and the stock ledger) and 4b (transfers and counts) done. Next: 3d the products CSV import (opening stock through `receive_stock`), then 5 the content admin |
+| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3c (permissions, catalogue, images), 4a (inventory rows and the stock ledger) and 4b (transfers and counts) and 3d (the products CSV import) done. Next: 5 the content admin -- navigation items, banners (an upload), the home carousel, social links, site settings and pages; it needs ports of Python's `urlsplit` and of the `nh3`/ammonia page sanitiser (a dependency for HTML parsing, to be stated in an ADR) |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | **D115 must be decided first**; POS sales, refunds and the cash drawer each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |

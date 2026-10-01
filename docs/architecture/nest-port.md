@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 4a (inventory and the stock ledger), part 4b (transfers and counts) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 3d (the products CSV import), part 4a (inventory and the stock ledger), part 4b (transfers and counts) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -192,6 +192,12 @@ Then product images (part 3c), the first endpoint that takes a form:
 |---|---|
 | `GET/POST /api/v1/product-images/`, `GET/PUT/PATCH/DELETE /api/v1/product-images/<id>/` | an upload is a multipart form (`http/multipart.ts`: Django's `MultiPartParser` -- the boundary rule, file names unescaped, cut to their last path part and stripped of unprintable characters, a file with no name skipped), read by the serializer with DRF's form rules (a missing boolean is false, a blank optional field absent, a blank relation null). The image passes DRF's `ImageField` -- no file, not a file, empty -- then Pillow's identification (`common/images.ts`), then Django's extension list, then `validate_image_upload` (10 MB; JPEG, PNG, WebP or AVIF by the decoded type and by name). The colour must be a variant-defining one the product comes in, re-checked on every edit. The file is stored as `FileSystemStorage` stores it (`common/storage.ts`: `products/%Y/%m/` on the shop's clock, `get_valid_filename`, a random suffix when the name is taken) under `MEDIA_ROOT`, which the two processes share; the first image of a product becomes its primary one. A create answers with `Location` set to the image's URL, as DRF's `get_success_headers` does for any payload with a `url`. The list is Django's statement, joins and all: an ordering that ties falls to the plan |
 
+Then the products CSV import (part 3d):
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/products/import/` | `products.create` and `inventory.adjust`; multipart only (`parser_classes=[MultiPartParser]`: JSON or a urlencoded body is a 415). The upload is DRF's `FileField`, within 5 MB, decoded as `utf-8-sig`. `dry_run` defaults to true -- in a form too, as DRF's `default` replaces a boolean's empty form value -- and answers 200 with the plan; `dry_run=false` imports in one transaction at the branch `resolve_branch` allows and answers 201, or 400 with the same body when a row is wrong. The file is read with Python's `csv.DictReader` (`common/pycsv.ts`, ported from CPython's `_csv.c` state machine and checked against 20,000 generated files) and its cells with Python's `Decimal` and `int`. Rows group into products by slug, else by name in any case; missing categories and brands are created (a category queues the navigation revalidation job at once, as its signal does, even when the import then fails); an existing SKU is re-priced with every column saved back; a new one gets its size and colour options and its opening stock through `receive_stock`. Every quirk is copied: a price that cleans to nothing drops its row without a word (D130), the preview names a missing category once per product that uses it (D129), and a `NaN`, a stray carriage return, a NUL or a cell past its column is a 500 (D131) |
+
 The parity stack mounts `apps/api/media` into the Nest container as its `MEDIA_ROOT`. Each API
 stores its own copy of an upload; when the name is taken the second gets a random suffix, which
 the harness takes off before comparing names and URLs.
@@ -235,6 +241,12 @@ services: a transfer, a write-off whose key stays claimed, a count, opening stoc
 variants (their labels come from their attributes), a row with no history, and references that
 open nothing. The phase 3 checkout races set one SKU's stock at every branch; they now set it at
 the default branch only.
+
+Two more port bugs were found porting the import, each fixed in its own commit: `pyDecimal`
+(behind DRF's `DecimalField`) allowed only single underscores between ASCII digits, where
+CPython's `Decimal()` strips whitespace, then drops every underscore and reads any script's digits
+(`১২৯০` is 1290); and the multipart parser skipped a part with `filename=""`, which Django reads as a
+text field (`TYPE = FILE` only for a non-empty name).
 
 Three port bugs were found on the way and fixed in their own commit. Django resolves a path
 before the method, and the router puts a list-level action before `<pk>`: `DELETE
@@ -399,6 +411,13 @@ the port):
 - An owner or superuser may delete a stock count, an applied one too; the ledger's adjustments
   then name a document that is gone (D127).
 - A transfer that names one variant twice is a bare 409 from the database (D128).
+- The import's preview names a category or brand it would create once per product that uses
+  it (D129).
+- An import row whose price cleans to nothing (`Tk`, `৳`, `,`) is dropped without an error
+  (D130).
+- An import file with a `NaN`, a carriage return inside an unquoted cell, a NUL or a cell longer
+  than its column answers 500, and an infinite price passes the preview and fails the import with
+  an error that names no row (D131).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
