@@ -243,8 +243,148 @@ export async function contentConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
       detail: `statuses ${statuses.join(',')}, ${queued} queued on the lock, left ${left}${left === expected ? '' : ` (expected ${expected})`}`,
     });
     await restore();
+    checks.push(...(await pageChecks(db, sides, call, midFlight, since)));
   } finally {
     await db.end();
   }
+  return checks;
+}
+
+type Call = (
+  api: URL,
+  method: string,
+  path: string,
+  body: unknown,
+) => Promise<{ status: number; body: string }>;
+type MidFlight = (
+  lock: string,
+  lockValues: unknown[],
+  waitsOn: string,
+  request: () => Promise<{ status: number; body: string }>,
+  change: (holder: pg.Client) => Promise<void>,
+) => Promise<{ waited: boolean; response: { status: number; body: string } }>;
+
+/**
+ * The site pages (part 5b). A create relies on the slug's unique index, in a
+ * transaction of its own: of six at once, one is created and the rest are
+ * told the address is taken. An edit and a delete lock the page by slug
+ * before they read it; the harness proves each lock by changing the page
+ * while the request waits on it.
+ */
+async function pageChecks(
+  db: pg.Client,
+  sides: readonly (readonly [string, URL])[],
+  call: Call,
+  midFlight: MidFlight,
+  since: string,
+): Promise<Check[]> {
+  const checks: Check[] = [];
+  const restore = async () => {
+    await restoreTables(db, ['content_sitepage', 'content_navigationitem']);
+    await db.query(
+      `DELETE FROM core_auditlog WHERE created_at >= $1 AND action = 'SETTINGS_CHANGED'`,
+      [since],
+    );
+  };
+  const audits = async (label: string) =>
+    Number(
+      (
+        await db.query<{ count: string }>(
+          `SELECT count(*) AS count FROM core_auditlog
+            WHERE created_at >= $1 AND entity_type = 'SitePage' AND entity_label = $2`,
+          [since, label],
+        )
+      ).rows[0]?.count ?? 0,
+    );
+
+  // 1. Six creates of one address at once, three per API.
+  await restore();
+  const creates = await Promise.all(
+    Array.from({ length: 6 }, (_, i) =>
+      call((sides[i % 2] as readonly [string, URL])[1], 'POST', '/api/v1/site-pages/', {
+        title: 'Raced page',
+        slug: 'raced-page',
+      }),
+    ),
+  );
+  const statuses = creates.map((response) => response.status);
+  const rows = Number(
+    (
+      await db.query<{ count: string }>(
+        `SELECT count(*) AS count FROM content_sitepage WHERE slug = 'raced-page'`,
+      )
+    ).rows[0]?.count ?? 0,
+  );
+  const created = await audits('Raced page');
+  checks.push({
+    name: 'pages: 6 simultaneous creates of one address across both APIs make one page',
+    passed:
+      rows === 1 &&
+      created === 1 &&
+      statuses.filter((status) => status === 201).length === 1 &&
+      statuses.filter((status) => status === 409).length === 5,
+    detail: `statuses ${statuses.join(',')}, ${rows} page(s), ${created} audit row(s)`,
+  });
+
+  // 2. An edit that meets the same edit mid-flight: the request sets the title
+  //    the harness has just committed, so it finds nothing to change -- no
+  //    save, no audit row. Without the lock it reads the old title, saves and
+  //    audits a change that has already been made.
+  for (const [side, api] of sides) {
+    await restore();
+    const { waited, response } = await midFlight(
+      `SELECT id FROM content_sitepage WHERE slug = 'parity-faq' FOR UPDATE`,
+      [],
+      'content_sitepage',
+      () => call(api, 'PATCH', '/api/v1/site-pages/parity-faq/', { title: 'Raced title' }),
+      async (holder) => {
+        await holder.query(
+          `UPDATE content_sitepage SET title = 'Raced title' WHERE slug = 'parity-faq'`,
+        );
+      },
+    );
+    const page = (
+      await db.query<{ updated_by_id: string | null }>(
+        `SELECT updated_by_id FROM content_sitepage WHERE slug = 'parity-faq'`,
+      )
+    ).rows[0];
+    const audited = await audits('Raced title');
+    checks.push({
+      name: `pages: an edit (${side}) that meets the same edit mid-flight changes nothing -- the lock holds`,
+      passed: waited && response.status === 200 && audited === 0 && page?.updated_by_id === null,
+      detail: `${response.status}, ${waited ? 'waited on the lock' : 'never waited'}, ${audited} audit row(s), updated by ${page?.updated_by_id ?? 'nobody'}`,
+    });
+  }
+
+  // 3. A delete that meets the page made one of the standard pages
+  //    mid-flight is refused and leaves it. Without the lock it reads the
+  //    page as it was and deletes it.
+  for (const [side, api] of sides) {
+    await restore();
+    const { waited, response } = await midFlight(
+      `SELECT id FROM content_sitepage WHERE slug = 'parity-faq' FOR UPDATE`,
+      [],
+      'content_sitepage',
+      () => call(api, 'DELETE', '/api/v1/site-pages/parity-faq/', undefined),
+      async (holder) => {
+        await holder.query(
+          `UPDATE content_sitepage SET is_system = true WHERE slug = 'parity-faq'`,
+        );
+      },
+    );
+    const left = Number(
+      (
+        await db.query<{ count: string }>(
+          `SELECT count(*) AS count FROM content_sitepage WHERE slug = 'parity-faq'`,
+        )
+      ).rows[0]?.count ?? 0,
+    );
+    checks.push({
+      name: `pages: a delete (${side}) that meets the page made standard mid-flight is refused -- the lock holds`,
+      passed: waited && response.status === 400 && left === 1 && (await audits('FAQ')) === 0,
+      detail: `${response.status}, ${waited ? 'waited on the lock' : 'never waited'}, ${left} page(s) left`,
+    });
+  }
+  await restore();
   return checks;
 }

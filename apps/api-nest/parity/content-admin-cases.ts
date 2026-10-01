@@ -299,5 +299,174 @@ export async function contentAdminCases(): Promise<Case[]> {
     { direction: 'up' },
     'cashier',
   );
+  cases.push(...pageCases(auth));
+  return cases;
+}
+
+const PAGE_TABLES = ['content_sitepage', 'content_navigationitem'];
+
+const PAGE_EFFECTS = [
+  `SELECT p.slug, p.title, p.meta_description, p.body, p.is_published, p.is_system,
+          u.email AS updated_by, p.updated_at >= $1 AS touched, p.created_at >= $1 AS created
+     FROM content_sitepage p LEFT JOIN accounts_user u ON u.id = p.updated_by_id
+    ORDER BY p.slug`,
+  `SELECT n.placement, n.type, n.label, p.slug AS page FROM content_navigationitem n
+     LEFT JOIN content_sitepage p ON p.id = n.page_id ORDER BY n.placement, n.type, n.label, p.slug`,
+  `SELECT action, entity_type, entity_label, actor_label, old_values::text AS old_values,
+          new_values::text AS new_values, reason
+     FROM core_auditlog WHERE created_at >= $1 ORDER BY created_at, action`,
+];
+
+/**
+ * The site pages (part 5b): who may read and write them, every refusal of
+ * `create_page`, `update_page` and `delete_page`, and the page sanitiser on
+ * what an editor sends -- each write compared by the pages, the navigation
+ * items a delete takes with it, the audit rows and the revalidation jobs.
+ */
+function pageCases(auth: (who: Who) => Record<string, string>): Case[] {
+  const cases: Case[] = [];
+  const P = '/api/v1/site-pages/';
+  const read = (name: string, path: string, who: Who = 'owner', method = 'GET') =>
+    cases.push({ name: `admin pages: ${name}`, method, path, headers: auth(who) });
+  const write = (name: string, method: string, path: string, body: unknown, who: Who = 'owner') =>
+    cases.push({
+      name: `admin pages: ${name}`,
+      method,
+      path,
+      headers: { ...auth(who), 'content-type': 'application/json' },
+      body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+      reset: (client) => restoreTables(client, PAGE_TABLES),
+      effects: PAGE_EFFECTS,
+      jobs: true,
+      normalize: (response) => {
+        const row = response as Record<string, unknown> | null;
+        if (row && typeof row === 'object' && 'updated_at' in row) {
+          row.updated_at = '<time>';
+          row.created_at = '<time>';
+          if (typeof row.id === 'string' && row.slug !== undefined && row.is_system === false)
+            row.id = '<id>';
+        }
+      },
+    });
+
+  // --- Who may read and write ----------------------------------------------------------
+  for (const who of [
+    'anon',
+    'customer',
+    'cashier',
+    'stock',
+    'accountant',
+    'manager',
+    'admin',
+    'super',
+    'norole',
+  ] as Who[]) {
+    read(`[${who}] list`, P, who);
+    read(`[${who}] a page`, `${P}about/`, who);
+    read(`[${who}] PUT a page`, `${P}about/`, who, 'PUT');
+    read(`[${who}] PUT the list`, P, who, 'PUT');
+    write(`[${who}] create`, 'POST', P, { title: `By ${who}` }, who);
+    write(`[${who}] edit`, 'PATCH', `${P}parity-faq/`, { title: `FAQ by ${who}` }, who);
+    write(`[${who}] delete`, 'DELETE', `${P}parity-faq/`, undefined, who);
+  }
+
+  // --- Reads ----------------------------------------------------------------------------
+  for (const query of [
+    '',
+    '?ordering=-title',
+    '?ordering=slug,-created_at',
+    '?ordering=path',
+    '?ordering=updated_by_name,-is_published',
+    '?ordering=body',
+    '?ordering=-id',
+  ])
+    read(`list ${query || '(all)'}`, `${P}${query}`);
+  for (const slug of [
+    'about',
+    'contact',
+    'privacy',
+    'parity-size-guide',
+    'parity-draft-page',
+    'parity-faq',
+  ])
+    read(`page ${slug}`, `${P}${slug}/`);
+  read('a page not there', `${P}nothing-here/`);
+  read('a page by a slug with a space', `${P}about%20us/`);
+  read('a page by a Bengali slug', `${P}${encodeURIComponent('পাতা')}/`);
+  read('a page through an ordering', `${P}about/?ordering=-title`);
+
+  // --- Create -----------------------------------------------------------------------------
+  const create = (name: string, body: unknown, who: Who = 'owner') =>
+    write(`create ${name}`, 'POST', P, body, who);
+  create('a title only', { title: 'Size chart for kids' });
+  create('a title and an address', { title: 'Gift cards', slug: 'Gift Cards!! 2026' });
+  create('everything', {
+    title: '  Care   guide ',
+    slug: 'care',
+    meta_description: '  How to\n wash \t things ',
+    body: '<h2>Wash</h2><p>Cold <strong>only</strong></p><script>alert(1)</script><p><br></p>',
+    is_published: false,
+  });
+  create('an address that is taken', { title: 'Another size guide', slug: 'parity-size-guide' });
+  create('a standard address', { title: 'About' });
+  create('a standard address, spelled out', { title: 'x', slug: 'Privacy' });
+  create('a Bengali title', { title: 'আমাদের কথা' });
+  create('a Bengali title and an address', { title: 'আমাদের কথা', slug: 'amader-kotha' });
+  create('a title of spaces', { title: '   ' });
+  create('a title of a zero-width space', { title: '\u200b' });
+  create('no title', { slug: 'no-title' });
+  create('a null title', { title: null });
+  create('a title past 120 characters', { title: 't'.repeat(121) });
+  create('an address past 64 characters', { title: 'x', slug: 's'.repeat(65) });
+  create('an address of 64 characters with a hyphen at the cut', {
+    title: 'x',
+    slug: `${'a'.repeat(63)} b`,
+  });
+  create('a body as a number', { title: 'Numbers', body: 5 });
+  create('a null body', { title: 'Null body', body: null });
+  create("a body past the sanitiser's limit", { title: 'Long', body: 'x'.repeat(100_001) });
+  create("a body past the serializer's limit", { title: 'Longer', body: 'x'.repeat(200_001) });
+  create('a body that cleans down to the limit', {
+    title: 'Trimmed',
+    body: `${'x'.repeat(100_000)}<script>${'y'.repeat(50)}</script>`,
+  });
+  create('a body of hostile markup', {
+    title: 'Hostile',
+    body: '<a href="javascript:alert(1)" onclick="x">a</a><img src=x onerror=y><iframe></iframe><a href="https://ok.test/" title="t">b</a>',
+  });
+  create('publish as text', { title: 'Text flag', is_published: 'no' });
+  create('unknown fields', { title: 'Extra', is_system: true, id: 'x', updated_by: 'y' });
+  create('a list', []);
+  create('null', 'null');
+  create('broken JSON', '{"title":');
+
+  // --- Edit -------------------------------------------------------------------------------
+  const edit = (name: string, slug: string, body: unknown, who: Who = 'owner') =>
+    write(`edit ${name}`, 'PATCH', `${P}${slug}/`, body, who);
+  edit('a title', 'parity-faq', { title: '  Questions   answered ' });
+  edit('the same values', 'parity-faq', { title: 'FAQ', meta_description: 'Questions' });
+  edit('nothing', 'parity-faq', {});
+  edit('a body', 'parity-faq', { body: '<p>Ask <em>us</em>.</p><p></p>' });
+  edit('a body that cleans to the same', 'parity-faq', { body: '<p>Ask.</p><p><br></p>' });
+  edit('a standard page unpublished', 'about', { is_published: false });
+  edit('a standard page retitled', 'returns', { title: 'Returns & exchanges' });
+  edit('a blank title', 'parity-faq', { title: '' });
+  edit('a title of spaces', 'parity-faq', { title: '  ' });
+  edit('a null title', 'parity-faq', { title: null });
+  edit('a description past 300 characters', 'parity-faq', { meta_description: 'd'.repeat(301) });
+  edit("a body past the sanitiser's limit", 'parity-faq', { body: 'x'.repeat(100_001) });
+  edit('a page not there', 'nothing-here', { title: 'x' });
+  edit('a page not there, a bad body', 'nothing-here', { title: '' });
+  edit('a list', 'parity-faq', []);
+  edit('through an ordering', 'parity-faq?ordering=-title', { title: 'Ordered' });
+
+  // --- Delete -----------------------------------------------------------------------------
+  const remove = (name: string, slug: string, who: Who = 'owner') =>
+    write(`delete ${name}`, 'DELETE', `${P}${slug}/`, undefined, who);
+  remove('a page nothing links to', 'parity-faq');
+  remove('a page the navigation links to', 'parity-size-guide');
+  remove('an unpublished page', 'parity-draft-page');
+  remove('a standard page', 'about');
+  remove('a page not there', 'nothing-here');
   return cases;
 }
