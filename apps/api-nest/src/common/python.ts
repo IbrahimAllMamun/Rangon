@@ -7,6 +7,8 @@
  * size that parses " 12" differently, is a visible difference between the APIs.
  */
 
+import { HTML5_ENTITIES, INVALID_CHARREFS, INVALID_CODEPOINTS } from './html-entities';
+
 /** Python `int(text)` for the base-10 strings a query string can carry, or null where Python raises. */
 export function pyInt(text: string): number | null {
   // int() strips surrounding whitespace, takes one sign, and allows single
@@ -380,4 +382,36 @@ export function pyFormatNamed(template: string, fields: Record<string, string>):
     i = end;
   }
   return out;
+}
+
+const CHARREF = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/gu;
+
+/**
+ * Python's `html.unescape`: numeric references (the Windows-1252 remapping,
+ * U+FFFD for surrogates and beyond U+10FFFF, nothing for the code points
+ * Python treats as invalid) and HTML5's named ones, the longest legacy name
+ * matched when no semicolon follows.
+ */
+export function pyHtmlUnescape(text: string): string {
+  if (!text.includes('&')) return text;
+  return text.replace(CHARREF, (_match, ref: string) => {
+    if (ref.startsWith('#')) {
+      const hex = ref[1] === 'x' || ref[1] === 'X';
+      const digits = ref.slice(hex ? 2 : 1).replace(/;$/, '');
+      const num = parseInt(digits, hex ? 16 : 10);
+      const remapped = INVALID_CHARREFS[num];
+      if (remapped !== undefined) return remapped;
+      if ((num >= 0xd800 && num <= 0xdfff) || num > 0x10ffff) return '�';
+      if (INVALID_CODEPOINTS.has(num)) return '';
+      return String.fromCodePoint(num);
+    }
+    if (Object.hasOwn(HTML5_ENTITIES, ref)) return HTML5_ENTITIES[ref] as string;
+    const chars = Array.from(ref);
+    for (let x = chars.length - 1; x > 1; x--) {
+      const name = chars.slice(0, x).join('');
+      if (Object.hasOwn(HTML5_ENTITIES, name))
+        return (HTML5_ENTITIES[name] as string) + chars.slice(x).join('');
+    }
+    return `&${ref}`;
+  });
 }

@@ -12,6 +12,7 @@ import { HealthController } from './health/health.controller';
 import { CeleryService } from './jobs/celery.service';
 import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
+import { ContentAdminModule } from './content/admin/content-admin.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
@@ -58,6 +59,7 @@ export class AppModule {
         ShopModule,
         CatalogAdminModule,
         InventoryAdminModule,
+        ContentAdminModule,
       ],
       controllers: [HealthController],
       providers: [
