@@ -481,6 +481,35 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 3a: products, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductViewSet` -- the list with its filters,
+search and pages, the detail with stock at a branch, the form with `set_product_specs` and
+`set_product_size_chart`, archive-or-delete, `generate_variants`, `create_single_variant`,
+`publish_product` and unpublish. The variant and image viewsets and the CSV import follow.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1170/1170 (120 new), 22 by the documented differences
+concurrency ................................... 19/19 (3 new: six single-version submits for one
+                                                product, and one committed mid-flight on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 474 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover the list's pages, every filter and its refusals, `never_ordered`, the search's
+branches (an exact SKU or barcode, a fragment, `%` and `_` taken literally, blank), the detail of
+every product at its own, an inactive, a missing and a malformed branch, each validation branch of
+the form (a draft published, a variant axis stated as a specification, a chart the category does
+not use and one its variants keep), the audit rows of specifications, charts and the product, the
+three outcomes of a delete (archived, cascaded with a cart line and a carousel entry, refused by a
+purchase order after its audit entry), every refusal of `generate-variants` (a negative cost
+reaches the database's check: 409 on both), and the publishing gates.
+
+With the port's `FOR UPDATE` on the product removed, the mid-flight check made a second SKU and the
+simultaneous submits drew unique-SKU 409s. Found: D120 (a rename gives the product a new URL),
+copied.
+
 ### The NestJS API, phase 4 part 2: attributes, values and size charts, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `AttributeViewSet`, `AttributeValueViewSet`
@@ -3089,6 +3118,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D117 | **A manager cannot reorder attribute values.** `AttributeValueViewSet.required_permissions` is `PRODUCT_PERMISSIONS`, which has no entry for the `move` action, so `RolePermission` fails closed: everyone but an owner or a superuser -- an administrator included, who holds every code -- gets 403 from `POST /attribute-values/<id>/move/`, which the attribute screen's up and down buttons call. Measured on the parity stack: manager 403, administrator 403, owner 200 | `apps/api/catalog/api/views.py` | Found porting the attribute admin to NestJS, which copies it. `"move": ["products.update"]` on the viewset would do it -- the navigation, carousel and social-link moves each declare theirs |
 | D118 | **Two moves of attribute values at once can leave two values on one position.** `move` reads the value with `get_object()` before it locks the attribute's values, and swaps from that position, not the locked one. If another move shifted the value in between, the neighbour is given a position some third value still holds. Measured deterministically by the parity harness (it holds the lock, starts a move of `c` down, and moves `c` up past `b` itself): from `a0 b1 c2 d3` the result is `a0 b2 d2 c3`. The storefront then breaks the tie alphabetically | `apps/api/catalog/api/views.py` | Found writing the NestJS port's race checks; the port copies it. Reading the value's position from the locked rows (`ordered[index]`) would do it |
 | D119 | **A size chart edited with a row that names no size answers 500.** On a PATCH, DRF reads `partial` from the root serializer, so a nested row may leave out `attribute_value`; `SizeChartViewSet._service_data` then reads `row["attribute_value_id"]` and raises `KeyError`. Measured: `PATCH /size-charts/<id>/` with `{"rows": [{"cells": ["1"]}]}` is a 500 | `apps/api/catalog/api/views.py` | Found porting the size charts to NestJS, which copies it. A `.get()` there would send the row on to `_clean_rows`, which refuses it in words |
+| D120 | **Renaming a product changes its URL.** `ProductWriteSerializer.validate` makes a slug whenever the payload has a name and no slug -- on an update too, unlike the category and brand serializers, which do it on create only for exactly this reason. `unique_slug` then finds the product's own slug taken and appends a number. Measured: `PATCH /products/<id>/` with `{"name": "Parity Cotton Tee"}` moved `parity-cotton-tee` to `parity-cotton-tee-2`, so every link to the old page 404s; the admin form sends the name on every save | `apps/api/catalog/api/serializers.py` | Found porting the product admin to NestJS, which copies it. `if self.instance is None and ...`, as the category serializer has, would do it |
 
 ## Still API-only (no UI)
 
