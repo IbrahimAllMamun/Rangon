@@ -4,6 +4,8 @@ import type { IncomingMessage } from 'node:http';
 import type { FastifyInstance, FastifyReply, FastifyRequest, HTTPMethods } from 'fastify';
 
 import type { Env } from '../config/env';
+import { csrfFailurePage, csrfRejection } from './csrf';
+import type { RouteRegistry } from './routes';
 import {
   acceptedHost,
   BAD_REQUEST_PAGE,
@@ -60,7 +62,7 @@ function isShortCircuit(request: FastifyRequest): boolean {
   return Boolean((request as FastifyRequest & { shortCircuit?: boolean }).shortCircuit);
 }
 
-export function installPipeline(fastify: FastifyInstance, env: Env): void {
+export function installPipeline(fastify: FastifyInstance, env: Env, routes: RouteRegistry): void {
   const allowCache = new Map<string, string | null>();
 
   fastify.addHook('onRequest', async (request, reply) => {
@@ -95,16 +97,18 @@ export function installPipeline(fastify: FastifyInstance, env: Env): void {
       return badRequest(reply);
     }
 
-    // CommonMiddleware again: APPEND_SLASH. Nest registers paths without their
-    // trailing slash and Fastify is told to ignore it, so the redirect Django
-    // gives `/api/v1/shop/products` is given here. Every Django route ends in
-    // `/` except the product feeds, whose last segment is a file name.
-    const pattern = request.routeOptions.url;
-    if (pattern !== undefined) {
-      const url = request.raw.url ?? request.url;
-      const question = url.indexOf('?');
-      const path = question === -1 ? url : url.slice(0, question);
-      const fileRoute = /\.[a-z0-9]+$/i.test(pattern);
+    // CommonMiddleware again: APPEND_SLASH, for any method -- it runs before
+    // the resolver knows whether the view takes the method. Nest registers
+    // paths without their trailing slash and Fastify is told to ignore it,
+    // so a path any route matches is one Django knows with the slash. Every
+    // Django route ends in `/` except the product feeds, whose last segment
+    // is a file name.
+    const url = request.raw.url ?? request.url;
+    const question = url.indexOf('?');
+    const path = question === -1 ? url : url.slice(0, question);
+    const matched = routes.match(path);
+    if (matched.length) {
+      const fileRoute = matched.some((route) => FILE_ROUTE.test(route.pattern));
       if (!fileRoute && !path.endsWith('/')) {
         markShortCircuit(request);
         return permanentRedirect(reply, `${path}/${question === -1 ? '' : url.slice(question)}`);
@@ -115,6 +119,12 @@ export function installPipeline(fastify: FastifyInstance, env: Env): void {
           .status(404)
           .header('content-type', 'text/html; charset=utf-8')
           .send(NOT_FOUND_PAGE);
+      }
+      // `require_GET`: Fastify answers HEAD with the GET route; Django's
+      // plain views refuse it. (Other methods reach no route at all and are
+      // answered by the exception filter, with `plainViewRefusal`.)
+      if (request.method === 'HEAD' && matched.some((route) => PLAIN_VIEWS.has(route.pattern))) {
+        return plainViewRefusal(request, reply, env);
       }
     }
   });
@@ -199,6 +209,40 @@ function applyCors(
     reply.header('access-control-allow-methods', CORS_ALLOW_METHODS);
     reply.header('access-control-max-age', '86400');
   }
+}
+
+const FILE_ROUTE = /\.[a-z0-9]+$/i;
+
+/**
+ * The plain Django views: function views under `require_GET`, not DRF
+ * views, so CSRF-checked and answering nothing but GET.
+ */
+export const PLAIN_VIEWS = new Set(['/api/health', '/api/ready']);
+
+/**
+ * A plain view asked for anything but GET: an unsafe method meets
+ * `CsrfViewMiddleware` first (403, Django's page), and whatever passes it
+ * meets `require_GET` -- 405, an empty HTML body, `Allow: GET`.
+ */
+export function plainViewRefusal(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  env: Env,
+): FastifyReply {
+  markShortCircuit(request);
+  const safe = ['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(request.method);
+  const rejection = safe ? null : csrfRejection(request, env);
+  if (rejection) {
+    return reply
+      .status(403)
+      .header('content-type', 'text/html; charset=utf-8')
+      .send(csrfFailurePage(rejection));
+  }
+  return reply
+    .status(405)
+    .header('allow', 'GET')
+    .header('content-type', 'text/html; charset=utf-8')
+    .send('');
 }
 
 const DRF_METHOD_ORDER: HTTPMethods[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];

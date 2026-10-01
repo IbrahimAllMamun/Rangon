@@ -87,13 +87,18 @@ function formatOffset(offsetSeconds: number): string {
 
 const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
 
-/** The zone's UTC offset at that instant, from the platform's tz database. */
+/**
+ * The zone's UTC offset at that instant, from the platform's tz database.
+ * Read through the wall clock the zone shows then, era and all: a year
+ * below 100 or before Christ is still that year.
+ */
 export function zoneOffsetSeconds(epochSeconds: number, timeZone: string): number {
   let formatter = offsetFormatters.get(timeZone);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-US', {
       timeZone,
       hourCycle: 'h23',
+      era: 'short',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -103,16 +108,26 @@ export function zoneOffsetSeconds(epochSeconds: number, timeZone: string): numbe
     });
     offsetFormatters.set(timeZone, formatter);
   }
+  const whole = Math.floor(epochSeconds);
   const parts = Object.fromEntries(
-    formatter.formatToParts(new Date(epochSeconds * 1000)).map((part) => [part.type, part.value]),
+    formatter.formatToParts(new Date(whole * 1000)).map((part) => [part.type, part.value]),
   );
-  const local = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second),
-  );
-  return local / 1000 - epochSeconds;
+  const year = parts.era?.startsWith('B') ? 1 - Number(parts.year) : Number(parts.year);
+  const local = new Date(0);
+  local.setUTCFullYear(year, Number(parts.month) - 1, Number(parts.day));
+  local.setUTCHours(Number(parts.hour), Number(parts.minute), Number(parts.second), 0);
+  return local.getTime() / 1000 - whole;
+}
+
+/**
+ * The offset `make_aware(naive, zone)` gives a wall-clock time (seconds
+ * since the epoch as if it were UTC): zoneinfo's `fold=0`, so a time the
+ * clocks skipped, or showed twice, takes the offset from before the change.
+ */
+export function wallOffsetSeconds(wallSeconds: number, timeZone: string): number {
+  const before = zoneOffsetSeconds(wallSeconds - 86_400, timeZone);
+  if (zoneOffsetSeconds(wallSeconds - before, timeZone) === before) return before;
+  const after = zoneOffsetSeconds(wallSeconds + 86_400, timeZone);
+  if (zoneOffsetSeconds(wallSeconds - after, timeZone) === after) return after;
+  return before;
 }

@@ -3,6 +3,7 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,9 +12,17 @@ import { HttpAdapterHost } from '@nestjs/core';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { Authenticator } from '../auth/authentication';
-import { allowedMethods, markShortCircuit } from '../http/pipeline';
+import { RolePermissions, staffViewFor } from '../auth/permissions';
+import { allowedMethods, markShortCircuit, PLAIN_VIEWS, plainViewRefusal } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
-import { BusinessError, MethodNotAllowed, RouteNotMatched } from './errors';
+import { ENV, Env } from '../config/env';
+import {
+  AuthenticationRequired,
+  BusinessError,
+  MethodNotAllowed,
+  PermissionDenied,
+  RouteNotMatched,
+} from './errors';
 import { NOT_FOUND_PAGE } from './http';
 
 /**
@@ -37,6 +46,8 @@ export class EnvelopeFilter implements ExceptionFilter {
     private readonly adapterHost: HttpAdapterHost,
     private readonly routes: RouteRegistry,
     private readonly authenticator: Authenticator,
+    private readonly permissions: RolePermissions,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -75,19 +86,33 @@ export class EnvelopeFilter implements ExceptionFilter {
     const question = url.indexOf('?');
     const path = question === -1 ? url : url.slice(0, question);
 
-    // The path exists for some other method: 405, but only after
-    // authentication, which DRF runs first.
+    // The path exists for some other method: DRF still runs the view's
+    // authentication and permission checks first, and puts `Allow` on
+    // whatever it answers. A staff view's `RolePermission` sees no action
+    // here, so it reads the method's name, and a signed-in owner reaches
+    // the 405 where a manager is refused with a 403.
     const pattern = this.routes.match(path)[0]?.pattern;
+    if (pattern !== undefined && PLAIN_VIEWS.has(pattern)) {
+      plainViewRefusal(request, reply, this.env);
+      return;
+    }
     if (pattern !== undefined) {
+      const fastify = this.adapterHost.httpAdapter.getInstance<FastifyInstance>();
+      const allow = allowedMethods(fastify, pattern, this.allowCache);
+      if (allow) reply.header('allow', allow);
       try {
-        await this.authenticator.authenticate(request);
+        const user = await this.authenticator.authenticate(request);
+        const view = staffViewFor(pattern);
+        if (view) {
+          if (!user)
+            throw new AuthenticationRequired('Authentication credentials were not provided.');
+          if (!(await this.permissions.allows(user, view.required, null, request.method)))
+            throw new PermissionDenied();
+        }
       } catch (error) {
         this.send(request, reply, error);
         return;
       }
-      const fastify = this.adapterHost.httpAdapter.getInstance<FastifyInstance>();
-      const allow = allowedMethods(fastify, pattern, this.allowCache);
-      if (allow) reply.header('allow', allow);
       this.send(request, reply, new MethodNotAllowed(request.method));
       return;
     }

@@ -162,13 +162,20 @@ apps/api-nest/
       drf.ts                  DRF serializer fields with DRF's messages, in DRF's order
       errors.ts               the error envelope's classes; slugParam/strParam (Django path converters)
       audit.ts                core_auditlog rows, with the request's address, agent and id
+      filtering.ts            django-filter, OrderingFilter and SearchFilter, as the admin views use them
+      isoformat.ts, dates.ts  CPython's fromisoformat (from the C), and core.dates' window parser
+      pycsv.ts, pyurl.ts      CPython's csv reader (from _csv.c); urlsplit, hostname, port, urlunsplit
+      html-entities.ts        CPython's HTML5 entity table, generated; html.unescape is in python.ts
       decimal.ts, datetime.ts, pagination.ts, query-dict.ts, phone.ts, uuid.ts ...
     <domain>/                 accounts, catalog, checkout, content, customers, engagement,
                               finance, inventory, jobs, orders, payments, shop (the controllers)
+    inventory/stock.service.ts  inventory.services: the one place stock moves (checkout and admin)
+    content/validators.ts     content.validators: links, social profiles and maps a merchandiser pastes
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
-    concurrency.ts            the race checks
+    concurrency.ts            the race checks; admin-, inventory- and content-concurrency.ts for staff writes
+    restore.ts                snapshot-and-restore of whole tables for the admin write cases
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
     fixture*.py               Django shell scripts that add what the demo seed lacks
@@ -238,6 +245,9 @@ apps/api-nest/
   `IntegrityError`, do the same: `SAVEPOINT x` → insert → on error code `23505`,
   `ROLLBACK TO SAVEPOINT x` and re-read the winner. That is how idempotency keys and webhook
   replays survive a race.
+- **Every stock change goes through `StockService`** (`inventory/stock.service.ts`): `run()` for the
+  transaction and its after-commit jobs, `lock()` for the rows. Never write `on_hand` or
+  `reserved` anywhere else.
 - **Reads Django makes before its transaction stay outside yours.** The webhook's payment lookup
   is one. Races depend on it.
 - **Timestamps:** `clock_timestamp()`, not `now()`, where Django stamps each row as it saves. When
@@ -333,7 +343,15 @@ apps/api-nest/
 | A race showed 409 CONFLICT for shoppers | every shopper shared one phone, so they raced to create one guest customer | distinct phones per shopper; the same-phone case kept, as D114 |
 | A per-case change had no effect | `setup` runs before the per-side `reset`, which undid it | use `prepare` |
 | Negative zero | DRF prints `-0.00`; decimal.js drops the sign | `money()` and `decimalField` keep it |
+| `DELETE /variants/lookup/` answered 404 where Django answered 405 | Fastify picks a route by method first; Django resolves the path first, and the router lists `lookup/` before `<pk>/` | `RouteRegistry.resolve` ranks a literal segment over a parameter, and the auth guard sends a mismatch to the no-route answer |
+| `pyDecimal` passed its tests for a year of the port and still refused `১২৯০` | it was written from the docs, not from `numeric_as_ascii` | the same differential test as the date parser; the csv reader got one before it was used |
+| The `DateField` port passed its tests and still refused what Django took | CPython's `fromisoformat` is looser than its docs: it never checks it reached the end, and any character separates date and time | port the C, then compare against a generated corpus: Python prints `parse_moment` for tens of thousands of strings in the container, a throwaway jest spec runs the port over the same file |
+| A phase 3 race broke when a fixture added a second branch | it set one SKU's stock at every branch, and a reserved count went negative | harness statements name the branch |
+| The transfer burst passed with the stock lock removed | every document that takes a number takes the sequence's row lock first, which serialises them | the mid-flight check, again |
+| A same-key retry race passed with the stock lock removed | the idempotency key's unique index protects retries on its own | prove a lock with a race only the lock can win: the mid-flight checks, an oversell burst |
 | The Nest stand-in gateway answered 400 where Django's answered 500 | it reused the API's JSON parser, which raises DRF's parse error; `json.loads` in the Django twin raises a plain exception | a stand-in fails exactly as its twin does |
+| The content move's race passed with the run's lock removed | PostgreSQL sorts a locking `SELECT` before it waits, so a renumbering move ends the same with or without the lock (D132) | a check also asserts that the request waited on a `FOR UPDATE`; with no outcome to prove, the wait is the proof |
+| A harness edit made mid-run was not in the run | the parity container reads `parity/` when it starts | start the run after the last edit |
 
 ## 9. Documentation, per part
 
@@ -374,17 +392,16 @@ Every part of a phase updates, in the same branch:
 
 | Phase | Scope | Notes before starting |
 |---|---|---|
-| 3 | done 2026-10-01 | branch `phase/nest-3-checkout`, committed, **no PR yet** |
-| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | the first staff endpoints: port `accounts.permissions` (role → permission codes, branch scoping) first, with its parity cases; every stock change goes through the ledger service with its `FOR UPDATE`; uploads must match Django's validation of type, extension and size |
+| 3 | done 2026-10-01 | merged to `main` |
+| 4 | Catalogue, inventory and content admin: the ledger, transfers, counts, image uploads | in progress on `phase/nest-4-catalogue-admin`: parts 1-3c (permissions, catalogue, images), 4a (inventory rows and the stock ledger) and 4b (transfers and counts), 3d (the products CSV import) and 5a (site settings and social links) done. Next: 5b site pages, which needs a port of the `nh3`/ammonia page sanitiser (a dependency for HTML parsing, to be stated in an ADR); then 5c navigation items, banners (an upload) and the home carousel, whose moves carry D132 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | **D115 must be decided first**; POS sales, refunds and the cash drawer each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Open the phase 3 PR when the owner asks.
-2. Settle D115 with the owner.
-3. Start phase 4 from `main` once phase 3 is merged.
+1. Finish phase 4 (5b, 5c), then open its PR when the owner asks.
+2. Settle D115 with the owner before phase 5.
 
 ### Checklist for a part
 

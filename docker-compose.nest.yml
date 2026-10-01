@@ -37,6 +37,9 @@ x-django-env: &django-env
   RANGON_ALLOW_OVERSELL: "0"
   # The product feed needs an origin to make links absolute.
   RANGON_PUBLIC_URL: https://shop.parity.test
+  # Set, so a navigation or category change queues its revalidation job on
+  # both sides for the harness to compare. Nothing ever calls it: no worker.
+  WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
 
 services:
   db:
@@ -110,11 +113,15 @@ services:
       # Django's broker: jobs this API queues are for Django's worker.
       CELERY_BROKER_URL: redis://redis:6379/1
       RANGON_PUBLIC_URL: https://shop.parity.test
+      WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
+      MEDIA_ROOT: /media
       PORT: "3000"
     # The image's own app, plus the stand-in payment gateway the Django side
     # installs too (parity/serve.ts). The image's command runs without it.
+    # Uploads go where Django's go: one media directory for both processes.
     volumes:
       - ./apps/api-nest/parity:/app/parity:ro
+      - ./apps/api/media:/media
     command: ["node", "parity/serve.ts"]
     depends_on:
       db: {condition: service_healthy}

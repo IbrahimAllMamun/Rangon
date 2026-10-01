@@ -7,6 +7,8 @@
  * size that parses " 12" differently, is a visible difference between the APIs.
  */
 
+import { HTML5_ENTITIES, INVALID_CHARREFS, INVALID_CODEPOINTS } from './html-entities';
+
 /** Python `int(text)` for the base-10 strings a query string can carry, or null where Python raises. */
 export function pyInt(text: string): number | null {
   // int() strips surrounding whitespace, takes one sign, and allows single
@@ -22,29 +24,41 @@ export function pyInt(text: string): number | null {
 /**
  * Python's `Decimal(text)`: null where it raises `InvalidOperation`, else the
  * value as text -- a finite number as a literal PostgreSQL's `numeric` input
- * accepts, a special value as Python prints it (`NaN`, `-NaN`, `sNaN`,
- * `Infinity`, `-Infinity`). Use `isFiniteDecimal` before sending one to SQL.
+ * accepts, a special value as Python names it (`NaN`, `-NaN`, `sNaN`,
+ * `Infinity`, `-Infinity`; a NaN's payload digits are dropped). Use
+ * `isFiniteDecimal` before sending one to SQL.
  *
- * Python accepts surrounding whitespace, one sign, exponents, underscores
- * between digits, and `inf`/`infinity`/`nan`/`snan` in any case.
+ * CPython's `numeric_as_ascii` first: Python whitespace stripped from both
+ * ends of the text as given; then every underscore dropped, wherever it is
+ * (`"_1__0_"` is 10), any script's digits made ASCII (`"১২৯০"` is 1290) and
+ * any other whitespace a space, which the grammar refuses. Then the decimal
+ * specification's grammar, the special values in any case.
  */
 export function pyDecimal(text: string): string | null {
-  const trimmed = text.trim();
-  const special = /^([+-]?)(inf|infinity|nan|snan)$/i.exec(trimmed);
+  let ascii = '';
+  for (const char of pyStrip(text)) {
+    if (char === '_') continue;
+    const code = char.codePointAt(0) as number;
+    if (code > 0 && code <= 127) ascii += char;
+    else if (PY_SPACE.test(char)) ascii += ' ';
+    else if (/\p{Nd}/u.test(char)) ascii += String(decimalDigitValue(char));
+    else return null;
+  }
+  const trimmed = ascii;
+  const special = /^([+-]?)(inf|infinity|nan\d*|snan\d*)$/i.exec(trimmed);
   if (special) {
     const sign = special[1] === '-' ? '-' : '';
     const word = (special[2] ?? '').toLowerCase();
-    if (word === 'snan') return `${sign}sNaN`;
-    if (word === 'nan') return `${sign}NaN`;
+    if (word.startsWith('snan')) return `${sign}sNaN`;
+    if (word.startsWith('nan')) return `${sign}NaN`;
     return `${sign}Infinity`;
   }
-  const digits = '\\d+(?:_\\d+)*';
-  const pattern = new RegExp(
-    `^[+-]?(?:${digits}(?:\\.(?:${digits})?)?|\\.${digits})(?:[eE][+-]?${digits})?$`,
-  );
-  if (!pattern.test(trimmed)) return null;
-  return trimmed.replaceAll('_', '');
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return null;
+  return trimmed;
 }
+
+/** `str.isspace()` for one character past ASCII. */
+const PY_SPACE = /^[\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/;
 
 /** False for the special values `pyDecimal` can answer. */
 export function isFiniteDecimal(value: string): boolean {
@@ -174,7 +188,7 @@ function joinUrl(head: string, query: string, fragment: string): string {
  * ways: Python counts the ASCII separators U+001C-U+001F and U+0085, and does
  * not count U+FEFF.
  */
-const PY_WHITESPACE =
+export const PY_WHITESPACE =
   // eslint-disable-next-line no-control-regex -- the separators are the point: Python splits on them.
   /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
 
@@ -368,4 +382,36 @@ export function pyFormatNamed(template: string, fields: Record<string, string>):
     i = end;
   }
   return out;
+}
+
+const CHARREF = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/gu;
+
+/**
+ * Python's `html.unescape`: numeric references (the Windows-1252 remapping,
+ * U+FFFD for surrogates and beyond U+10FFFF, nothing for the code points
+ * Python treats as invalid) and HTML5's named ones, the longest legacy name
+ * matched when no semicolon follows.
+ */
+export function pyHtmlUnescape(text: string): string {
+  if (!text.includes('&')) return text;
+  return text.replace(CHARREF, (_match, ref: string) => {
+    if (ref.startsWith('#')) {
+      const hex = ref[1] === 'x' || ref[1] === 'X';
+      const digits = ref.slice(hex ? 2 : 1).replace(/;$/, '');
+      const num = parseInt(digits, hex ? 16 : 10);
+      const remapped = INVALID_CHARREFS[num];
+      if (remapped !== undefined) return remapped;
+      if ((num >= 0xd800 && num <= 0xdfff) || num > 0x10ffff) return '�';
+      if (INVALID_CODEPOINTS.has(num)) return '';
+      return String.fromCodePoint(num);
+    }
+    if (Object.hasOwn(HTML5_ENTITIES, ref)) return HTML5_ENTITIES[ref] as string;
+    const chars = Array.from(ref);
+    for (let x = chars.length - 1; x > 1; x--) {
+      const name = chars.slice(0, x).join('');
+      if (Object.hasOwn(HTML5_ENTITIES, name))
+        return (HTML5_ENTITIES[name] as string) + chars.slice(x).join('');
+    }
+    return `&${ref}`;
+  });
 }

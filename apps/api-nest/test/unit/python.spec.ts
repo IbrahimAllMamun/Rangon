@@ -74,3 +74,28 @@ describe('query strings as DRF rebuilds them', () => {
     expect(removeQueryParam('http://h/p/?page=2', 'page')).toBe('http://h/p/');
   });
 });
+
+describe('pyDecimal, as CPython 3.12 converts a string', () => {
+  // Printed by the Django API's container: `Decimal(text)`.
+  it.each([
+    ['1_0', '10'],
+    ['_10', '10'],
+    ['10_', '10'],
+    ['1__0', '10'],
+    ['১২৯০', '1290'],
+    ['১_২', '12'],
+    [' 12 ', '12'],
+    ['\x1c5\x1f', '5'],
+    ['٣.٥', '3.5'],
+    ['1e_5', '1e5'],
+    ['inf_', 'Infinity'],
+    ['-nan12', '-NaN'],
+    ['1.2_3', '1.23'],
+  ])('%j is %s', (text, expected) => {
+    expect(pyDecimal(text)).toBe(expected);
+  });
+
+  it.each(['1,0', '1 0', '0x10', '①', '_ 0.5', ' ১\n_\t', ''])('refuses %j', (text) => {
+    expect(pyDecimal(text)).toBeNull();
+  });
+});

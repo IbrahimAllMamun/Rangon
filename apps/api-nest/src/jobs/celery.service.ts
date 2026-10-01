@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Redis } from 'ioredis';
 
-import { pyReprStr } from '../common/python';
+import { pyRepr } from '../common/python';
 import { ENV, Env } from '../config/env';
 
 /**
@@ -16,8 +16,8 @@ import { ENV, Env } from '../config/env';
  *
  * Celery 5.4, message protocol 2, over kombu's Redis transport: the envelope
  * below, JSON, pushed onto the queue's list (`celery`). Only the default
- * queue and positional string arguments are needed -- every task the ported
- * endpoints queue takes ids and a notification type.
+ * queue and positional JSON arguments are needed -- the ported endpoints'
+ * tasks take ids, a notification type, or a list of cache tags.
  *
  * Like Django's `transaction.on_commit`, callers enqueue only after their
  * transaction commits: a rolled-back sale must send nothing.
@@ -28,7 +28,7 @@ import { ENV, Env } from '../config/env';
  */
 export function celeryMessage(
   task: string,
-  args: string[],
+  args: unknown[],
   meta: { id: string; origin: string; replyTo: string; deliveryTag: string },
 ): Record<string, unknown> {
   const body = JSON.stringify([
@@ -37,7 +37,7 @@ export function celeryMessage(
     { callbacks: null, errbacks: null, chain: null, chord: null },
   ]);
   // Python's repr of the args tuple: a lone element keeps its trailing comma.
-  const argsrepr = `(${args.map(pyReprStr).join(', ')}${args.length === 1 ? ',' : ''})`;
+  const argsrepr = `(${args.map(pyRepr).join(', ')}${args.length === 1 ? ',' : ''})`;
   return {
     body: Buffer.from(body, 'utf8').toString('base64'),
     'content-encoding': 'utf-8',
@@ -98,7 +98,7 @@ export class CeleryService implements OnModuleDestroy {
    * caller's transaction has committed by now, so raising would answer 500
    * for an order that was placed -- which is what Django does (D116).
    */
-  async delay(task: string, args: string[]): Promise<void> {
+  async delay(task: string, args: unknown[]): Promise<void> {
     const message = celeryMessage(task, args, {
       id: randomUUID(),
       origin: this.origin,

@@ -15,12 +15,24 @@ import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
 import { cartCases } from './cart-cases.ts';
+import { attributeCases } from './attribute-cases.ts';
+import { catalogAdminCases } from './catalog-admin-cases.ts';
 import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
+import { adminConcurrencyChecks } from './admin-concurrency.ts';
+import { inventoryConcurrencyChecks } from './inventory-concurrency.ts';
+import { contentConcurrencyChecks } from './content-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
 import { orderCases } from './orders-cases.ts';
+import { productCases } from './product-cases.ts';
+import { variantCases } from './variant-cases.ts';
+import { imageCases } from './image-cases.ts';
+import { inventoryCases } from './inventory-cases.ts';
+import { stockDocumentCases } from './stock-document-cases.ts';
+import { importCases } from './import-cases.ts';
+import { contentAdminCases } from './content-admin-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -37,8 +49,8 @@ export interface Case {
   method?: string;
   path: string;
   headers?: Record<string, string>;
-  /** Sent as is; give the Content-Type in `headers`. */
-  body?: string;
+  /** Sent as is (a string as UTF-8); give the Content-Type in `headers`. */
+  body?: string | Buffer;
   /** SQL run before the pair of requests, and undone by `teardown` after. */
   setup?: string[];
   teardown?: string[];
@@ -61,6 +73,8 @@ export interface Case {
   effects?: string[];
   /** Adjust a parsed JSON body before comparing: blank out a value each API mints (a new id). */
   normalize?: (body: unknown) => void;
+  /** Adjust the `Location` header the same way: a stored file's random suffix. */
+  normalizeLocation?: (location: string) => string;
   /**
    * Compare the Celery jobs each API queued (task and arguments, ids read as
    * the order number or the variant they name), emptying the queue around it.
@@ -109,7 +123,12 @@ async function queuedJobs(db: pg.Client): Promise<unknown[]> {
 
 export function send(base: URL, testCase: Case): Promise<Captured> {
   return new Promise((resolve, reject) => {
-    const body = testCase.body === undefined ? undefined : Buffer.from(testCase.body, 'utf8');
+    const body =
+      testCase.body === undefined
+        ? undefined
+        : Buffer.isBuffer(testCase.body)
+          ? testCase.body
+          : Buffer.from(testCase.body, 'utf8');
     const req = request(
       {
         host: base.hostname,
@@ -195,6 +214,70 @@ async function buildCases(): Promise<Case[]> {
   add('wrong method', '/api/v1/shop/categories/', { method: 'POST' });
   add('wrong method on detail', '/api/v1/shop/products/classic-oxford-shirt/', {
     method: 'DELETE',
+  });
+  // DRF authenticates before it refuses the method, and puts `Allow` on the 401.
+  add('wrong method, bad token', '/api/v1/shop/categories/', {
+    method: 'PUT',
+    headers: { authorization: 'Bearer abc' },
+  });
+  // APPEND_SLASH runs before the resolver asks whether the view takes the method.
+  add('append slash, a method with no handler', '/api/v1/shop/categories?x=1', { method: 'PUT' });
+  add('append slash, a plain view', '/api/health', { method: 'POST' });
+  // The health checks are plain Django views: `require_GET`, and CSRF-checked.
+  const csrfChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const secret = 'parityCsrfSecret0123456789abcdef';
+  const mask = 'Zy9Xw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe';
+  const masked =
+    mask +
+    [...secret]
+      .map(
+        (char, i) =>
+          csrfChars[(csrfChars.indexOf(char) + csrfChars.indexOf(mask[i] as string)) % 62],
+      )
+      .join('');
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    add(`health: ${method}, no CSRF cookie`, '/api/health/', { method });
+  }
+  add('ready: OPTIONS', '/api/ready/', { method: 'OPTIONS' });
+  add('health: an untrusted Origin', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'https://evil.example' },
+  });
+  add('health: a trusted Origin, no cookie', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'http://localhost:3000' },
+  });
+  add('health: its own origin', '/api/health/', {
+    method: 'POST',
+    headers: { origin: 'http://localhost', cookie: `csrftoken=${secret}`, 'x-csrftoken': secret },
+  });
+  add('health: cookie and header agree', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: `a=b; csrftoken=${secret}`, 'x-csrftoken': secret },
+  });
+  add('health: a masked token for the cookie', '/api/health/', {
+    method: 'DELETE',
+    headers: { cookie: `csrftoken=${masked}`, 'x-csrftoken': masked },
+  });
+  add('health: cookie, no token', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: `csrftoken=${secret}` },
+  });
+  add('health: a token that does not match', '/api/health/', {
+    method: 'PUT',
+    headers: { cookie: `csrftoken=${secret}`, 'x-csrftoken': 'x'.repeat(32) },
+  });
+  add('health: a malformed cookie', '/api/health/', {
+    method: 'POST',
+    headers: { cookie: 'csrftoken=short', 'x-csrftoken': 'short' },
+  });
+  add('health: the token in a form', '/api/health/', {
+    method: 'POST',
+    headers: {
+      cookie: `csrftoken=${secret}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: `csrfmiddlewaretoken=${masked}`,
   });
   // No HEAD case: gunicorn writes a body on HEAD responses, which Node's HTTP
   // client rightly refuses to parse. HEAD is checked with curl instead.
@@ -422,8 +505,16 @@ async function buildCases(): Promise<Case[]> {
   // With every header override switched off, navigation falls back to the
   // category tree (ADR-0009 path 2) -- both paths checked in one run.
   add('navigation: category fallback', '/api/v1/shop/navigation/', {
-    setup: [`UPDATE content_navigationitem SET is_active = false WHERE placement = 'HEADER'`],
-    teardown: [`UPDATE content_navigationitem SET is_active = true WHERE placement = 'HEADER'`],
+    // Only the rows that were on come back on: fixture_staff.py keeps some off.
+    setup: [
+      `CREATE TEMP TABLE parity_header_on AS SELECT id FROM content_navigationitem
+        WHERE placement = 'HEADER' AND is_active`,
+      `UPDATE content_navigationitem SET is_active = false WHERE placement = 'HEADER'`,
+    ],
+    teardown: [
+      `UPDATE content_navigationitem SET is_active = true WHERE id IN (SELECT id FROM parity_header_on)`,
+      `DROP TABLE parity_header_on`,
+    ],
   });
   add('site', '/api/v1/shop/site/');
   add('pages', '/api/v1/shop/pages/');
@@ -459,6 +550,17 @@ async function buildCases(): Promise<Case[]> {
 
   // --- A payment provider's webhook: capture, the cash book, replays ---------------------
   cases.push(...(await paymentCases()));
+
+  // --- Staff: permissions, then the catalogue's admin --------------------------------------
+  cases.push(...(await catalogAdminCases()));
+  cases.push(...(await attributeCases()));
+  cases.push(...(await productCases()));
+  cases.push(...(await variantCases()));
+  cases.push(...(await imageCases()));
+  cases.push(...(await inventoryCases()));
+  cases.push(...(await stockDocumentCases()));
+  cases.push(...(await importCases()));
+  cases.push(...(await contentAdminCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -512,6 +614,13 @@ async function undoWrites(db: pg.Client, since: string): Promise<void> {
 
 /** Tokens described rather than compared (each API mints its own), then the case's own adjustments. */
 function normalizeBody(response: Captured, testCase: Case): Captured {
+  const location = response.headers.location;
+  if (location !== undefined && testCase.normalizeLocation) {
+    response = {
+      ...response,
+      headers: { ...response.headers, location: testCase.normalizeLocation(location) },
+    };
+  }
   if (!(response.headers['content-type'] ?? '').startsWith('application/json')) return response;
   let body: unknown;
   try {
@@ -588,7 +697,13 @@ async function main(): Promise<void> {
   // Invariants that hold only under the right lock, driven concurrently.
   let racesFailed = 0;
   if (!ONLY || 'concurrency'.includes(ONLY)) {
-    for (const check of await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })) {
+    const checks = [
+      ...(await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })),
+      ...(await adminConcurrencyChecks({ DJANGO, NEST })),
+      ...(await inventoryConcurrencyChecks({ DJANGO, NEST })),
+      ...(await contentConcurrencyChecks({ DJANGO, NEST })),
+    ];
+    for (const check of checks) {
       if (!check.passed) racesFailed += 1;
       console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${check.name}: ${check.detail}`);
     }

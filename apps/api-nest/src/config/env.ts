@@ -51,6 +51,8 @@ const schema = z.object({
 
   DJANGO_ALLOWED_HOSTS: list('localhost,127.0.0.1,api'),
   DJANGO_CORS_ALLOWED_ORIGINS: list('http://localhost:3000'),
+  // CSRF_TRUSTED_ORIGINS: only the plain (non-DRF) views are CSRF-checked.
+  DJANGO_CSRF_TRUSTED_ORIGINS: list('http://localhost:3000'),
   DJANGO_SECURE_SSL_REDIRECT: flag(true),
   // Proxy hops whose X-Forwarded-For entries are believed (core/ip.py).
   DJANGO_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
@@ -69,12 +71,19 @@ const schema = z.object({
   PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
   // Django's Celery broker: jobs this API queues are run by Django's worker.
   CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
+  // The storefront's cache-revalidation endpoint (`content.tasks`): when set,
+  // a navigation, category or content change queues a job asking it to drop
+  // the cached pages. Unset, nothing is queued.
+  WEB_REVALIDATE_URL: z.string().default(''),
   // The origin customers reach the shop on; the product feed refuses to render
   // without it rather than publish links nothing can follow.
   RANGON_PUBLIC_URL: z.string().default(''),
 
-  // Media is served root-relative from one origin (core/media.py).
+  // Media is served root-relative from one origin (core/media.py), and
+  // uploads are written under MEDIA_ROOT -- the directory Django's
+  // FileSystemStorage writes to, shared between the two processes.
   MEDIA_URL: z.string().default('/media/'),
+  MEDIA_ROOT: z.string().default('/app/media'),
   USE_S3: flag(false),
 });
 

@@ -481,6 +481,345 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 5a: site settings and social links, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `SiteSettingsView` (the footer's brand block,
+contact details, opening hours and map) and `SocialLinkViewSet` (read, edit, `move`), with
+`content.validators`, which reduce every pasted address to a few safe shapes. They decide with
+Python's `urlsplit`, `hostname` and `port` (`common/pyurl.ts`, from `Lib/urllib/parse.py`), the
+Unicode classes of Python's `re`, and `html.unescape` over CPython's HTML5 entity table
+(`common/html-entities.ts`, generated from it). Site pages are part 5b; navigation, banners and
+the home carousel 5c.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2220/2220 (192 new), 27 by the documented differences
+concurrency ................................... 42/42 (7 new: a settings edit and a social link edit
+                                                that meet a change mid-flight, and a move that meets
+                                                a reorder, each on both APIs; two moves that queue
+                                                together)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 638 passed (46 new: urlsplit, hostname, port and
+                                                urlunsplit, html.unescape, the four validators)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+Before the cases, the ports were compared with CPython on generated input: 30,000 addresses for
+`urlsplit` and its helpers, 48,000 values for the validators (every platform, map embeds and
+links, site paths, `mailto:` and `tel:`). The cases read and write as every role; read the links
+with every ordering `OrderingFilter` offers, one of which Django cannot run; patch the settings with
+padded, blank, null and over-long text, good and bad emails, booleans in every spelling, opening
+hours in every shape (blank rows, a missing column, seven and eight rows, not a list), Google embed
+URLs and iframe code (quoted either way, in capitals, with entities, without a `src`), keyless
+embeds, map links with and without a scheme, other hosts, ports, credentials and fragments, and
+bodies that are a list, `null` or broken JSON; patch the links with each platform's addresses,
+look-alike hosts, credentials, ports, `javascript:`, WhatsApp numbers in every form (Bengali digits,
+a country code, too short, a `wa.me` link), over-long addresses, visibility with and without an
+address, and nothing at all; and move links up, down, past the top, in capitals, sideways and with
+bodies that are not objects. Each write is compared by both tables, its audit entry and the `site`
+revalidation job it queues.
+
+With the port's `FOR UPDATE` removed, the Nest settings edit that met another mid-flight wrote the
+old address back over it, the link edit wrote the old visibility back, and the move never waited
+on the lock -- though it ended where the locked move ends, which is D132.
+
+Found in the port and fixed in its own commit: DRF's `ListField` hands `partial` on to its child,
+so a PATCH's opening-hours row may leave a column out; the port's `listField` did not. Found in
+Django, and copied: D132 (a content move that waited on the lock renumbers the run in the order
+PostgreSQL sorted before the wait: a reorder committed meanwhile is undone, and two moves that queue
+together move a row once), D133 (`?ordering=get_platform_display` is a 500 on every social link
+route).
+
+### The NestJS API, phase 4 part 3d: the products CSV import, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `POST /products/import/` and
+`catalog.importers` -- the dry run and the import, products, variants, options, categories,
+brands and opening stock through `receive_stock`. The file is read with a port of CPython's csv
+reader (`common/pycsv.ts`, from `_csv.c`) and its cells with Python's `Decimal` and `int`.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 2028/2028 (88 new: 81 here, 7 with its two fixes),
+                                                26 by the documented differences
+concurrency ................................... 35/35 (none new: the import takes no lock of its own;
+                                                its stock goes through `receive_stock`)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 592 passed (34 new across the part and its two fixes:
+                                                CPython's csv reader and DictReader, Decimal())
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases upload a catalogue that does everything (a new product in a new category under an old
+one with a new brand, an old product re-described by slug, an old SKU re-priced, options old and
+new, opening stock at DHK1 or PAR3), as a dry run by default, asked for, blank and malformed, and
+for real at each branch, a blank, an inactive and a malformed one, by every role. Then the file:
+empty, only a byte-order mark, two of them, a blank first line, a header alone or with blank rows,
+missing columns, headers in capitals with spaces, a repeated header, short and long rows, quoted
+commas and new lines, a quote left open, a stray carriage return, carriage returns only, a NUL, the
+same SKU twice, blank required cells, bad and negative numbers, `NaN`, infinity, Bengali digits,
+a fraction of stock, a product with no category, one new category for two products, a brand and a
+SKU in another case, a barcode the shop has, cells past their columns, over 5000 rows, Latin-1,
+not UTF-8, over 5 MB; and the upload: no file, text for the file, an empty file name, JSON and
+urlencoded bodies, GET. Each is compared by what it leaves in eleven tables, its audit entry and
+the revalidation jobs a new category queues.
+
+Found in the port and fixed in their own commits: `pyDecimal` refused `১২৯০` and `_1_5_0_`,
+which Django's `Decimal()` reads (it is also behind DRF's `DecimalField`); and the multipart parser
+skipped a part with `filename=""`, which Django reads as a text field. Found in Django, and copied:
+D129 (the preview names a new category once per product), D130 (a row whose price cleans to
+nothing is dropped without a word), D131 (`NaN`, a stray carriage return, a NUL or a cell past its
+column answers 500; an infinite price passes the preview and fails the import).
+
+### The NestJS API, phase 4 part 4b: stock transfers and counts, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `StockTransferViewSet` and `StockCountViewSet`
+with `record`, `cancel` and `apply`, through two new `StockService` paths, `transfer` and
+`apply_stock_count`. The inventory fixture gains a transfer whose key stays claimed and a count in
+each state.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1940/1940 (185 new), 26 by the documented differences
+concurrency ................................... 35/35 (7 new: a transfer that meets a movement at its
+                                                source mid-flight and an apply that meets a
+                                                cancellation, each on both APIs; six transfers of 2
+                                                from a shelf of 6; six retries of one transfer; two
+                                                applies at once)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 558 passed (none new: the paths are services the
+                                                harness drives end to end)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases read transfers and counts as every role and as the PAR3 manager, with every ordering
+`OrderingFilter` allows -- among them `items`, which returns a document once per line -- and every
+page. Transfers go both ways, into low stock and to a branch that never held the variant, with a
+new key, a replayed one and one past the column, and meet every refusal: the same branch, an
+inactive or missing end, the PAR3 manager acting for DHK1, a short shelf, a variant that is not
+there, one named twice, no lines, bad lines, a huge quantity. Counts are created at each branch and
+refused at an inactive one, edited (notes, branch, PUT, null, as the PAR3 manager), deleted by
+owner, superuser, manager and administrator, recorded (a variant twice, off the sheet, an empty
+list, bad figures), cancelled, and applied in every state. Each write is compared by the stock and
+ledger rows, both documents and their lines, the variants' latest cost, the number sequences, the
+audit entries and the low-stock jobs.
+
+With the port's `FOR UPDATE` removed from the stock lock and the count's, the Nest transfer that met
+a movement mid-flight moved four units its source no longer had (the row at 2, its ledger at -2),
+an apply went through a committed cancellation, and two applies at once both proceeded. The
+six-transfer burst still held: the `stock_transfer` number sequence's row lock serialises
+transfers by itself, which is why the mid-flight check is the proof.
+
+Found in Django, and copied: D126 (a count can be edited onto any branch, applied or not, and an
+edit writes every column back), D127 (an applied count can be deleted), D128 (a transfer that names
+one variant twice is a bare 409).
+
+### The NestJS API, phase 4 part 4a: inventory and the stock ledger, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `InventoryViewSet` (stock positions by
+branch, the reorder point and bin, `adjust`, `write-off`, `low-stock`, `valuation`,
+`verify-integrity`) and `InventoryTransactionViewSet` (the ledger with its date window, movement
+families and documents). Every stock movement now goes through one service,
+`inventory/stock.service.ts`, which checkout's reservation also uses; `core.dates` is ported over
+CPython's `fromisoformat`, taken from the C. Transfers and counts are part 4b.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1755/1755 (386 new: 381 here, 5 with the fix),
+                                                25 by the documented differences
+concurrency ................................... 28/28 (4 new: a write-off and an adjustment that meet
+                                                a movement mid-flight on each API, six retries of one
+                                                write-off, six write-offs of 2 from a shelf of 6)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 558 passed (35 new: parse_moment's quirks, DateField,
+                                                zone offsets before the year 100, route ranking)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases read the list, low stock, valuation and the ledger as every role and as a manager bound
+to the new branch, PAR3 (`fixture_inventory.py`); every filter, ordering (ties included: the
+statements are Django's), search and page; each row's detail inside and outside its filters; the
+integrity check clean, with drift, at a branch and with every bad body; the ledger's date window
+over CPython's quirks (`2026010112`, `T10:00:00.1234567x+05:00`, `+05:99`, the year 1, the summer
+of 2009) and its refusals, movement families, filters, searches and every kind of document. The
+writes: an update with every type JSON has for each field, adjustments down, up, to the same
+figure, at a branch that never received the variant, for a variant that does not exist, at
+another branch and with every bad field; write-offs with and without a key, a replayed key from
+another branch, a key past the column, an empty shelf and a huge quantity. Each write is compared
+by the stock rows, ledger rows and audit entries it leaves and the low-stock jobs it queues.
+
+With the port's `FOR UPDATE` removed from the stock lock, the Nest write-off that met a movement
+mid-flight took its units as well (the row at 2, its ledger at -2), the adjustment landed with its
+ledger 2 short, six write-offs of 2 took 5 from a shelf of 6 (ledger -4), and phase 3's checkout
+check failed too, since checkout now takes the same lock. Six retries of one key still wrote one
+row: the unique index holds that alone.
+
+Found in Django, and copied: D121 (the reorder point and bin are saved with no serializer; a
+string is saved and then fails the response), D122 (adjust and write-off take any UUID as the
+variant: a 404, or a 409 at the commit), D123 (the low-stock list is `[]` when empty and the
+envelope otherwise), D124 (an `Idempotency-Key` past 80 characters is a 500), D125 (a NUL in the
+inventory searches is a 500). Found in the port and fixed in its own commit: `DELETE
+/variants/lookup/` answered 404 where Django answers 405 (Django resolves the path before the
+method), the variant form refused the `2026010112` that Django's `DateField` takes, and the zone
+offset of an instant before the year 100 was read in the wrong century.
+
+### The NestJS API, phase 4 part 3c: product images, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductImageViewSet` -- the port's first
+upload. That needed DRF's multipart parsing and form semantics (`http/multipart.ts`, and
+`runSerializer` reading an `HtmlInput` as `Field.get_value` reads a `QueryDict`), DRF's
+`ImageField` with Pillow's identification of the formats an upload is in (`common/images.ts`) and
+Django's extension list, `validate_image_upload`, and `FileSystemStorage`'s naming and writing
+(`common/storage.ts`) under a `MEDIA_ROOT` the parity stack now shares between the two APIs.
+The CSV import, which receives opening stock through the inventory ledger, follows part 4.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1369/1369 (52 new), 22 by the documented differences
+concurrency ................................... 22/22 (none new: an upload takes no lock)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 523 passed (24 new: Pillow's verdicts on its own
+                                                images and broken ones, Django's file-name rules,
+                                                multipart parsing)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases upload a JPEG, a PNG named `.jpg`, WebP, AVIF, GIF, BMP and TIFF, text, a PNG with a
+broken checksum, a JPEG cut before its scan, an empty file, a `.txt` name, no extension, an image
+over 10 MB, a path and a Bengali name for a file name, no file, text for the file, blank fields,
+colours the product does and does not come in and a size for a colour, a product's first image,
+a form with no boundary and a urlencoded one; then edits as JSON and as a form, an image whose
+colour lost its variant (every edit re-checks it), and delete. The list is sent as Django sends
+it: three orderings that tie came back in another order until the statement matched.
+
+Found on the way, in the port, and fixed: it refused any body over 10 MB with a 413 before it
+authenticated, on the reading that `DATA_UPLOAD_MAX_MEMORY_SIZE` caps a request. DRF reads past
+it; Django parses an 11 MB JSON body. Also found: DRF answers a create with `Location` set to the
+payload's `url`, whatever that URL is.
+
+### The NestJS API, phase 4 part 3b: variants, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductVariantViewSet` -- the paginated list
+with DRF's `SearchFilter`, the form, archive-or-delete, `lookup` (`orders.services.pos
+.lookup_variant` with stock at a branch) and `barcode` under the variant's row lock.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1317/1317 (147 new), 22 by the documented differences
+concurrency ................................... 22/22 (3 new: eight barcode requests for one SKU, and
+                                                a label committed mid-flight on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 499 passed (25 new: DateField, search_smart_split)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover the search's splitting (whitespace, commas, quoted phrases, a lone quote that
+matches everything, a NUL refused with a bare list of details), the filters and orderings, every
+variant's detail, `lookup` by barcode, by SKU in any case, padded, blank, at an inactive and a
+malformed branch, and as a customer; the form's unique SKU and barcode, a blank barcode stored as
+NULL, a price of `-0.00` (allowed, as `MinValueValidator(0)` allows it), the dates DRF accepts
+(ISO weeks, `2027-1-5`, a trailing newline) and refuses, and archive-or-delete as for products.
+
+With the port's `FOR UPDATE` removed from `barcode`, eight simultaneous requests printed four
+different numbers for one SKU, and the mid-flight check minted a fifth.
+
+### The NestJS API, phase 4 part 3a: products, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductViewSet` -- the list with its filters,
+search and pages, the detail with stock at a branch, the form with `set_product_specs` and
+`set_product_size_chart`, archive-or-delete, `generate_variants`, `create_single_variant`,
+`publish_product` and unpublish. The variant and image viewsets and the CSV import follow.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1170/1170 (120 new), 22 by the documented differences
+concurrency ................................... 19/19 (3 new: six single-version submits for one
+                                                product, and one committed mid-flight on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 474 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover the list's pages, every filter and its refusals, `never_ordered`, the search's
+branches (an exact SKU or barcode, a fragment, `%` and `_` taken literally, blank), the detail of
+every product at its own, an inactive, a missing and a malformed branch, each validation branch of
+the form (a draft published, a variant axis stated as a specification, a chart the category does
+not use and one its variants keep), the audit rows of specifications, charts and the product, the
+three outcomes of a delete (archived, cascaded with a cart line and a carousel entry, refused by a
+purchase order after its audit entry), every refusal of `generate-variants` (a negative cost
+reaches the database's check: 409 on both), and the publishing gates.
+
+With the port's `FOR UPDATE` on the product removed, the mid-flight check made a second SKU and the
+simultaneous submits drew unique-SKU 409s. Found: D120 (a rename gives the product a new URL),
+copied.
+
+### The NestJS API, phase 4 part 2: attributes, values and size charts, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `AttributeViewSet`, `AttributeValueViewSet`
+with its `move` action, and `SizeChartViewSet` over `save_size_chart` and `delete_size_chart` --
+the whole-chart rules, the audit entries and the `products` revalidation job.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1050/1050 (212 new), 22 by the documented differences
+concurrency (parity/concurrency.ts,
+             parity/admin-concurrency.ts) ..... 16/16 (4 new: a reorder committed while a move waits,
+                                                and the stale-position duplicate, on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 474 passed (4 new: ListField and nested-list error
+                                                shapes as DRF prints them, relation ordering)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover each serializer's branches (unique names and codes, the kind and variant-axis
+rules against charts, variants and specifications, the swatch, the unique pair on create and on an
+update that fills half of it from the row), every refusal of a delete and each cascade (values,
+category links, an image's colour), `move` up, down, at the edge, through a run that shares a
+position, and refused, and for size charts every rule of the finished chart, DRF's nested error
+shapes, and the audit rows each save writes or does not. Orderings include the relations DRF
+allows by default: `?ordering=values` repeats each attribute once per value, as Django does.
+
+With the port's `FOR UPDATE` removed from `move`, its mid-flight check failed: the move never
+waited and wrote a lost update. Writing those checks found that PostgreSQL sorts a locking
+`SELECT` before it waits, so a queued move sees committed positions in the old order -- and found
+D118 in Django. Also found: D117 (only an owner may reorder values) and D119 (a nested row with
+no size is a 500). All three are copied.
+
+### The NestJS API, phase 4 part 1: staff permissions, brands and categories, 2026-10-01
+
+Asked for: phase 4 of the port, now that phase 3 is merged. Ported first: the check every staff
+endpoint makes, `accounts.permissions.RolePermission` (role to permission codes, owner and
+superuser bypass, per-action and per-method requirements, fail closed), with the branch rules
+`resolve_branch` and `branch_queryset` beside it; the router's shape (list, detail and action
+routes, a 403 or a 405 for a method with no handler depending on who asks); and DRF's two default
+filter backends, django-filter over `filterset_fields` and `OrderingFilter`. Then the first two
+staff viewsets on top of them: brands and categories, reads and writes, and a category's inherited
+attributes.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 838/838 (302 new), 22 by the documented differences
+concurrency (parity/concurrency.ts) ........... 12/12 (none new: nothing here takes a row lock)
+throttle-check ................................ 9/9 (none new: no scope changed; rerun because
+                                                the pipeline before the throttles changed)
+nest unit tests ............................... 470 passed (280 new: RolePermission's decision for
+                                                six declarations x six actions x six methods, the
+                                                slugs, IntegerField, the boolean filter, cookies,
+                                                CSRF tokens, the pipeline by method)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases run every role -- anonymous, customer, cashier, manager, inventory manager, accountant,
+owner, administrator, a superuser with a cashier's role, and staff with no role -- through a list,
+a create, a delete, a method with no handler on a list, a detail and an action route. Then every
+filter value django-filter treats differently (`TRUE`, `1`, `yes`, a blank, a repeated key, a
+malformed or unknown parent), the ordering terms, the lookups (upper case, braces, no hyphens, a
+filter that hides the row itself), and each validation branch of both serializers, their unique
+checks, the slug (Bengali transliterated, a name that spells nothing, a collision), the tax rate,
+the position, the parent and its cycles. Writes compare every brand and category row, the
+navigation items and attribute links a delete removes, and the revalidation jobs queued: the
+parity stack now sets `WEB_REVALIDATE_URL` so both APIs queue them.
+
+Found on the way, in the port, and fixed: a request with no handler for its method, answered
+with a 401, lacked the view's `Allow` header -- DRF puts it on every answer a view gives, a refusal
+included. `APPEND_SLASH` redirected only a method some route took, where Django redirects any
+method before it asks the view (`PUT /api/v1/shop/categories` was a 405, not a 301). And the health
+checks, plain `require_GET` views, answered HEAD with 200 and an unsafe method with JSON 405: Django
+answers HEAD and OPTIONS with an empty 405 and runs `CsrfViewMiddleware` first on an unsafe
+method, whose 403 page explains a missing cookie or Referer. That check is ported
+(`http/csrf.ts`): the Origin, the Referer over HTTPS, the cookie against a plain or masked token
+from the header or a form field; 20 cases walk its branches.
+
 ### The NestJS API, phase 3 part 3: the payment webhook, 2026-10-01
 
 Asked for: phase 3 of the port, continued. Ported: `shop/payments/<provider>/webhook/` -- the
@@ -3011,6 +3350,23 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D114 | **A first-time guest's double-click at checkout can be answered 409.** `_resolve_guest_customer` matches by phone, else inserts, and it runs before the order's savepoint. Two simultaneous checkouts with the same new mobile -- a double-click, one `Idempotency-Key` -- both find no customer and both insert. The loser's unique-phone violation aborts its whole transaction: 409 `CONFLICT`. One order is placed, correctly, but the shopper's other click is told it failed rather than given that order. A returning guest is unaffected. Measured by the parity race (`parity/concurrency.ts`): 1 order, 1 reservation, five 409s | `apps/api/orders/services/checkout.py` | Found writing the checkout race checks for the NestJS port, which copies it until Django is fixed. A savepoint around the insert that re-reads the winner would do it |
 | D115 | **The counter can sell stock that is reserved for online orders.** A POS sale goes `sell()` -> `_bulk()` -> `_check_can_reduce`, which refuses only when `on_hand` would go negative; it never looks at `reserved`. Measured on the parity database (rolled back): an online order reserves all 13 of `RGN-BLO-L-BEI` (on hand 13, reserved 13, available 0), then a counter sale of 13 succeeds -- on hand 0, reserved 13, **available -13**. Business rule 1.4 says `available` may never go negative with `RANGON_ALLOW_OVERSELL` off, and names a database constraint that does not exist (only `reserved >= 0` is enforced). The online order can then no longer be fulfilled from that shelf | `apps/api/inventory/services.py`, `docs/business-rules.md` §1.4 | **DECISION REQUIRED**: whether a counter sale may take reserved units (the goods are in the shop, and the customer is standing there). Either `sell` checks `available`, or the rule is rewritten to say reservations yield to the counter and what happens to the online order. Found writing the NestJS port's race checks |
 | D116 | **With the Celery broker down, a placed order answers 500.** Checkout queues the customer's email and SMS in `transaction.on_commit`, which runs after the commit and does not catch errors. `.delay()` raises `kombu.exceptions.OperationalError` after 0.7 s of retries when Redis is unreachable. Measured through the Django test client with the broker pointed at a closed port: **500 `SERVER_ERROR`, the order placed** and its staff notices written; a retry with the same `Idempotency-Key` returns 201. A shopper told the order failed who starts again gets a new key and a second order | `apps/api/notifications/services.py`, `apps/api/orders/services/checkout.py` | The NestJS port logs and answers 201 instead, a documented difference. `transaction.on_commit(..., robust=True)` (Django 5) logs rather than raises |
+| D117 | **A manager cannot reorder attribute values.** `AttributeValueViewSet.required_permissions` is `PRODUCT_PERMISSIONS`, which has no entry for the `move` action, so `RolePermission` fails closed: everyone but an owner or a superuser -- an administrator included, who holds every code -- gets 403 from `POST /attribute-values/<id>/move/`, which the attribute screen's up and down buttons call. Measured on the parity stack: manager 403, administrator 403, owner 200 | `apps/api/catalog/api/views.py` | Found porting the attribute admin to NestJS, which copies it. `"move": ["products.update"]` on the viewset would do it -- the navigation, carousel and social-link moves each declare theirs |
+| D118 | **Two moves of attribute values at once can leave two values on one position.** `move` reads the value with `get_object()` before it locks the attribute's values, and swaps from that position, not the locked one. If another move shifted the value in between, the neighbour is given a position some third value still holds. Measured deterministically by the parity harness (it holds the lock, starts a move of `c` down, and moves `c` up past `b` itself): from `a0 b1 c2 d3` the result is `a0 b2 d2 c3`. The storefront then breaks the tie alphabetically | `apps/api/catalog/api/views.py` | Found writing the NestJS port's race checks; the port copies it. Reading the value's position from the locked rows (`ordered[index]`) would do it |
+| D119 | **A size chart edited with a row that names no size answers 500.** On a PATCH, DRF reads `partial` from the root serializer, so a nested row may leave out `attribute_value`; `SizeChartViewSet._service_data` then reads `row["attribute_value_id"]` and raises `KeyError`. Measured: `PATCH /size-charts/<id>/` with `{"rows": [{"cells": ["1"]}]}` is a 500 | `apps/api/catalog/api/views.py` | Found porting the size charts to NestJS, which copies it. A `.get()` there would send the row on to `_clean_rows`, which refuses it in words |
+| D120 | **Renaming a product changes its URL.** `ProductWriteSerializer.validate` makes a slug whenever the payload has a name and no slug -- on an update too, unlike the category and brand serializers, which do it on create only for exactly this reason. `unique_slug` then finds the product's own slug taken and appends a number. Measured: `PATCH /products/<id>/` with `{"name": "Parity Cotton Tee"}` moved `parity-cotton-tee` to `parity-cotton-tee-2`, so every link to the old page 404s; the admin form sends the name on every save | `apps/api/catalog/api/serializers.py` | Found porting the product admin to NestJS, which copies it. `if self.instance is None and ...`, as the category serializer has, would do it |
+| D121 | **An inventory row's reorder point and bin are saved unvalidated.** `InventoryViewSet.update` copies `reorder_point` and `bin_location` from the body onto the model with no serializer, so only the model's `int()` and `str()` stand between the request and the row. Measured on the parity stack: `{"reorder_point": "12"}` is saved and the response then fails comparing an int with a str -- a 500 for a change that committed; `null` for either field is a 409 from the NOT NULL constraint; a reorder point that is not a number or does not fit `integer`, or a bin over 64 characters, is a 500; a JSON body that is not an object is a 500 (`"reorder_point" in [...]`), and a list that names the field is too | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. A two-field serializer (`IntegerField(min_value=0)`, `CharField(max_length=64, allow_blank=True)`) would do it |
+| D122 | **Adjust and write-off take any UUID as the variant.** `AdjustStockSerializer` and `WriteOffSerializer` declare `variant` a `UUIDField`, not a related field, so a variant that does not exist reaches the service. `_lock_inventories` inserts an inventory row for it (the foreign key is checked only at commit), and the request fails wherever the variant is first read. Measured: an adjustment upwards or a write-off is a 404, and an adjustment to 0 a 409 "conflicts with the current state of the data" when the commit itself fails. A 400 naming the field is meant | `apps/api/inventory/api/serializers.py` | Found porting the inventory admin to NestJS, which copies it. `PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())` would do it |
+| D123 | **The low-stock list changes shape when it is empty.** `InventoryViewSet.low_stock` answers `get_paginated_response(...) if page else Response(serializer.data)`; an empty page is falsy, so no low stock is a bare `[]` and any low stock the `{count, next, previous, results}` envelope. Measured on the parity stack: a DHK1 manager, whose branch has nothing low, gets `[]`; an owner, who also sees PAR3's low rows, gets the envelope | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. `if page is not None` would do it |
+| D124 | **An `Idempotency-Key` longer than 80 characters is a 500.** The views pass `request.headers.get("Idempotency-Key")` straight to services whose key column (`idempotency_key_field`) is 80 characters, and the insert raises `DataError`. Measured on `POST /inventory/write-off/` with an 81-character key; the purchasing and finance views read the header the same way | `apps/api/inventory/api/views.py`, `apps/api/purchasing/api/views.py`, `apps/api/finance/api/views.py` | Found porting the inventory admin to NestJS, which copies it. One shared helper that refuses a longer key with a 400 would do it |
+| D125 | **A NUL in an inventory search is a 500.** The inventory list filters on its raw `search` and `category` parameters, and the stock ledger on its raw `search`; psycopg refuses a string with a NUL. Measured: `GET /inventory/?search=a%00b`, `?category=a%00b` and `GET /inventory-transactions/?search=a%00b` are 500s, where the admin lists that use DRF's `SearchFilter` answer 400 | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. Reading the value through `CharField().run_validation`, as `SearchFilter` does, would do it |
+| D126 | **A stock count can be edited onto another branch, applied or not.** `StockCountViewSet` is a `ModelViewSet`, and `StockCountSerializer` leaves `branch` writable over `Branch.objects.all()`: a PATCH moves a count to any branch -- an inactive one, one the user may not act on -- whatever its status. The save is a full `instance.save()`, writing every column back from the row as read, so an edit that races an apply can put an applied count back to "counting". Measured on the parity stack: the PAR3 manager moved their own count to DHK1, and an applied count was moved after its adjustments were in the ledger | `apps/api/inventory/api/views.py`, `apps/api/inventory/api/serializers.py` | Found porting the counts to NestJS, which copies it. A read-only `branch` after creation, edits refused once a count is applied, and `update_fields` would do it |
+| D127 | **An applied stock count can be deleted.** `required_permissions` names no `destroy`, so `RolePermission` refuses everyone but an owner or a superuser -- who may delete any count, an applied one included. Its lines go with it, and the ledger's adjustments then name a document that no longer exists: the ledger screen shows them with no link. Measured: `DELETE /stock-counts/<applied>/` as the owner is 204 | `apps/api/inventory/api/views.py` | Found porting the counts to NestJS, which copies it. Refusing to delete an applied count would do it; whether anyone should delete one at all is the owner's call |
+| D128 | **A transfer that names one variant twice is a bare 409.** `transfer` writes a `StockTransferItem` per line, and the second line for a variant hits the `(transfer, variant)` unique constraint; the handler answers "The request conflicts with the current state of the data." Measured on the parity stack | `apps/api/inventory/services.py` | Found porting the transfers to NestJS, which copies it. Refusing the payload with a 400 that names the line, or merging the lines, would do it |
+| D129 | **The import preview names a new category once per product.** `_category_for` and `_brand_for` append to the plan's `categories_created` / `brands_created` each time a product needs one that does not exist; in a dry run nothing is created, so the next product that names the same category reports it again. Measured: two products in `Parity New > Deep` preview `Parity New`, `Parity New > Deep` twice each; the import itself creates each once | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Appending only names not already in the list would do it |
+| D130 | **An import row whose price cleans to nothing is dropped without a word.** `_decimal` strips `,`, `৳` and `Tk` and treats what is left as blank, so a price of `Tk` is neither a number error nor "Required." (that check reads the raw cell, which is not blank), and `parse` then skips the row as incoherent. Measured: a file whose only row has price `Tk` answers "The file has a header but no rows." | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Reporting "Required." when the cleaned value is blank would do it |
+| D131 | **Some malformed import files answer 500.** `Decimal("NaN") < 0` raises `InvalidOperation`; `csv.Error` (a carriage return inside an unquoted cell, a field over 131072 characters) is not caught; a NUL or a cell longer than its column fails in the database. An infinite price passes the preview and then fails the import with "“Infinity” value must be a decimal number.", naming no row. Measured on the parity stack for each | `apps/api/catalog/importers.py` | Found porting the import to NestJS, which copies it. Refusing non-finite numbers in `_decimal`, catching `csv.Error`, and checking lengths and NULs as row errors would do it |
+| D132 | **A content move that waited on the lock undoes what committed meanwhile.** `content.services.move` locks the run with `list(rows.select_for_update())` and renumbers it 0..n in list order, but PostgreSQL sorts a locking `SELECT` before it waits: a move that queued behind another write gets the rows in the order they had before it, and writes that order back. Measured on the parity stack: Instagram's move down that waited while Facebook and YouTube were sent to the end left the run as if they had never moved. Two simultaneous moves of one row down move it once. Social links, navigation items and the home carousel all use it | `apps/api/content/services.py` | Found porting the social links to NestJS, which copies it. Locking the run first and reading it again in order, inside the transaction, would do it |
+| D133 | **`?ordering=get_platform_display` on the social links answers 500.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field by its source, and `label`'s source is the model method `get_platform_display`, which `order_by` cannot use (`FieldError`). Every route of the viewset filters its queryset in `get_object()`, so the list, the detail, the edit and the move all fail. Measured on the parity stack for each | `apps/api/content/api/views.py` | Found porting the social links to NestJS, which copies it. Naming `ordering_fields` on the viewset would do it |
 
 ## Still API-only (no UI)
 

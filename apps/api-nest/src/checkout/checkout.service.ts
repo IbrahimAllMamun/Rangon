@@ -24,7 +24,7 @@ import { canonicalPhone, INVALID_PHONE_MESSAGE, normalizePhone } from '../common
 import { pyStr, pyStrip } from '../common/python';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable, Transaction } from '../database/database.service';
-import { InventoryLedgerService } from '../inventory/ledger.service';
+import { StockService } from '../inventory/stock.service';
 import { CeleryService } from '../jobs/celery.service';
 import { OrderRef, OrderWritesService } from '../orders/order-writes.service';
 import { CartRow, CartService, ShippingMethodRow } from './cart.service';
@@ -110,7 +110,7 @@ export class CheckoutService {
     private readonly db: Database,
     private readonly carts: CartService,
     private readonly organization: OrganizationService,
-    private readonly ledger: InventoryLedgerService,
+    private readonly ledger: StockService,
     private readonly orders: OrderWritesService,
     private readonly notices: NoticesService,
     private readonly celery: CeleryService,

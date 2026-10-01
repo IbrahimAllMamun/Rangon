@@ -219,7 +219,8 @@ async function checkoutRaces(
   await resetCheckout(db);
   await db.query(
     `UPDATE inventory_inventory SET reserved = on_hand - 7
-      WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')`,
+      WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')
+        AND branch_id = (SELECT id FROM accounts_branch WHERE is_default LIMIT 1)`,
   );
   const shelf = await raceCarts(db, 'parity-race-shelf', 10, 'RGN-CLA-L-WHI', 3);
   const shelfResults = await Promise.all(
@@ -230,7 +231,8 @@ async function checkoutRaces(
   const left = await count(
     db,
     `SELECT on_hand - reserved AS count FROM inventory_inventory
-      WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')`,
+      WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')
+        AND branch_id = (SELECT id FROM accounts_branch WHERE is_default LIMIT 1)`,
   );
   const reservations = await count(
     db,
@@ -311,12 +313,14 @@ async function checkoutRaces(
   if (cashier) {
     await db.query(
       `UPDATE inventory_inventory SET reserved = on_hand - 7
-        WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')`,
+        WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')
+        AND branch_id = (SELECT id FROM accounts_branch WHERE is_default LIMIT 1)`,
     );
     const before = (
       await db.query<{ on_hand: number; reserved: number }>(
         `SELECT on_hand, reserved FROM inventory_inventory
-          WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')`,
+          WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')
+        AND branch_id = (SELECT id FROM accounts_branch WHERE is_default LIMIT 1)`,
       )
     ).rows[0] as { on_hand: number; reserved: number };
     const white = (
@@ -355,7 +359,8 @@ async function checkoutRaces(
     const after = (
       await db.query<{ on_hand: number; reserved: number }>(
         `SELECT on_hand, reserved FROM inventory_inventory
-          WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')`,
+          WHERE variant_id = (SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI')
+        AND branch_id = (SELECT id FROM accounts_branch WHERE is_default LIMIT 1)`,
       )
     ).rows[0] as { on_hand: number; reserved: number };
     // The cached row must equal what the ledger says happened to it.

@@ -25,14 +25,22 @@ case "${1:-}" in
     wait_for http://127.0.0.1:8620/api/health/
     ;;
   seed)
-    "${compose[@]}" exec -T -e DJANGO_ALLOW_DEMO_SEED=1 -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py seed_demo --reset
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_content.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_nav.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_accounts.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_orders.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_cart.py
-    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 django python manage.py shell < apps/api-nest/parity/fixture_payments.py
+    # The media directory is shared with the Nest API, which runs as another user.
+    "${compose[@]}" exec -T django sh -c 'mkdir -p /app/media && chmod -R a+rwX /app/media'
+    # Seeding saves categories and navigation items, whose signals would ping
+    # the storefront's revalidation URL inline; nothing listens, so it is unset.
+    "${compose[@]}" exec -T -e DJANGO_ALLOW_DEMO_SEED=1 -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py seed_demo --reset
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_content.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_nav.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_accounts.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_orders.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_cart.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_payments.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_staff.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_attributes.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_products.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_inventory.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity

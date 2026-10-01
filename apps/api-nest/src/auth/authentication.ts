@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  NotFoundException,
   SetMetadata,
   applyDecorators,
 } from '@nestjs/common';
@@ -13,7 +14,14 @@ import { AuthenticationRequired, PermissionDenied } from '../common/errors';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { RouteRegistry } from '../http/routes';
 import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
+import {
+  ACTION_METADATA,
+  RolePermissions,
+  STAFF_VIEW_METADATA,
+  type StaffViewMeta,
+} from './permissions';
 
 export interface RequestUser {
   id: string;
@@ -144,11 +152,22 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly authenticator: Authenticator,
+    private readonly permissions: RolePermissions,
+    private readonly routes: RouteRegistry,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<FastifyRequest>();
     const targets = [context.getHandler(), context.getClass()];
+
+    // Fastify chose this route by method; Django would have resolved the
+    // path to a more literal one that does not take the method. Answered as
+    // a path with no route for it (`EnvelopeFilter.noRoute`).
+    const url = request.raw.url ?? request.url;
+    const question = url.indexOf('?');
+    const resolved = this.routes.resolve(question === -1 ? url : url.slice(0, question));
+    if (resolved !== undefined && resolved !== request.routeOptions.url)
+      throw new NotFoundException();
 
     request.user = null;
     if (this.reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)) return true;
@@ -165,6 +184,23 @@ export class AuthGuard implements CanActivate {
       request.user.roleCode !== 'CUSTOMER'
     ) {
       throw new PermissionDenied();
+    }
+    // `RolePermission`, after `IsAuthenticated`, on every staff view.
+    const view = this.reflector.get<StaffViewMeta | undefined>(
+      STAFF_VIEW_METADATA,
+      context.getClass(),
+    );
+    if (view) {
+      const action = this.reflector.get<string | undefined>(ACTION_METADATA, context.getHandler());
+      if (
+        !(await this.permissions.allows(
+          request.user,
+          view.required,
+          action ?? null,
+          request.method,
+        ))
+      )
+        throw new PermissionDenied();
     }
     return true;
   }
