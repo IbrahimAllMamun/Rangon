@@ -12,6 +12,7 @@ import { HealthController } from './health/health.controller';
 import { CeleryService } from './jobs/celery.service';
 import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
+import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
 import { ShopModule } from './shop/shop.module';
@@ -51,7 +52,13 @@ export class AppModule {
   static forRoot(env: Env, routes: RouteRegistry) {
     return {
       module: AppModule,
-      imports: [CoreModule.forRoot(env, routes), AccountsModule, ShopModule, CatalogAdminModule],
+      imports: [
+        CoreModule.forRoot(env, routes),
+        AccountsModule,
+        ShopModule,
+        CatalogAdminModule,
+        InventoryAdminModule,
+      ],
       controllers: [HealthController],
       providers: [
         // In DRF's order: authenticate and check permissions, then throttle.

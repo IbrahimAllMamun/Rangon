@@ -40,6 +40,7 @@ case "${1:-}" in
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_staff.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_attributes.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_products.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_inventory.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity

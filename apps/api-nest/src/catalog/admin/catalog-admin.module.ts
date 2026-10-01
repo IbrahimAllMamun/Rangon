@@ -43,5 +43,6 @@ import { SizeChartsService } from './size-charts.service';
     VariantsService,
     ProductImagesService,
   ],
+  exports: [CataloguePayloads],
 })
 export class CatalogAdminModule {}

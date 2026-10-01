@@ -20,6 +20,7 @@ import { catalogAdminCases } from './catalog-admin-cases.ts';
 import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
 import { adminConcurrencyChecks } from './admin-concurrency.ts';
+import { inventoryConcurrencyChecks } from './inventory-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
@@ -27,6 +28,7 @@ import { orderCases } from './orders-cases.ts';
 import { productCases } from './product-cases.ts';
 import { variantCases } from './variant-cases.ts';
 import { imageCases } from './image-cases.ts';
+import { inventoryCases } from './inventory-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -551,6 +553,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await productCases()));
   cases.push(...(await variantCases()));
   cases.push(...(await imageCases()));
+  cases.push(...(await inventoryCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -690,6 +693,7 @@ async function main(): Promise<void> {
     const checks = [
       ...(await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })),
       ...(await adminConcurrencyChecks({ DJANGO, NEST })),
+      ...(await inventoryConcurrencyChecks({ DJANGO, NEST })),
     ];
     for (const check of checks) {
       if (!check.passed) racesFailed += 1;

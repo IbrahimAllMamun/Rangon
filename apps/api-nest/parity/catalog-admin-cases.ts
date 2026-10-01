@@ -25,6 +25,8 @@ export const STAFF = {
   admin: 'parity.admin@rangon.test',
   super: 'parity.super@rangon.test',
   norole: 'parity.norole@rangon.test',
+  /** A MANAGER at PAR3 (fixture_inventory.py): branch-scoped. */
+  mirpur: 'parity.mirpur@rangon.test',
 } as const;
 export type Who = keyof typeof STAFF;
 
