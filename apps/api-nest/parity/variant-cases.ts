@@ -40,8 +40,8 @@ export async function variantCases(): Promise<Case[]> {
   const Vp = (sku: string) => `/api/v1/variants/${variants.get(sku)}/`;
 
   const cases: Case[] = [];
-  const read = (name: string, path: string, who: Who = 'manager') =>
-    cases.push({ name: `admin variants: ${name}`, path, headers: auth(who) });
+  const read = (name: string, path: string, who: Who = 'manager', method = 'GET') =>
+    cases.push({ name: `admin variants: ${name}`, method, path, headers: auth(who) });
   const write = (name: string, method: string, path: string, body: unknown, who: Who = 'manager') =>
     cases.push({
       name: `admin variants: ${name}`,
@@ -106,6 +106,11 @@ export async function variantCases(): Promise<Case[]> {
     read(`lookup ${label}`, `/api/v1/variants/lookup/?code=${encodeURIComponent(code)}`);
   }
   read('lookup, no code at all', '/api/v1/variants/lookup/');
+  // Django resolves the path before the method: these reach the lookup
+  // route, which takes only GET, not the detail route with `lookup` as a key.
+  read('DELETE lookup', '/api/v1/variants/lookup/', 'manager', 'DELETE');
+  read('DELETE lookup as an owner', '/api/v1/variants/lookup/', 'owner', 'DELETE');
+  read('PATCH lookup as an owner', '/api/v1/variants/lookup/', 'owner', 'PATCH');
   read(
     'lookup at own branch',
     `/api/v1/variants/lookup/?code=${barcode}&branch=${branches.get('DHK1')}`,
@@ -145,6 +150,9 @@ export async function variantCases(): Promise<Case[]> {
     5,
     '2027-01-05T00:00',
     '2027-01-05\n',
+    // `date.fromisoformat` stops after the day: the trailing digits are ignored.
+    '2027010512',
+    '2027W0112',
   ]) {
     write(`create variant, expiry ${JSON.stringify(date)}`, 'POST', list, {
       product: empty,

@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  NotFoundException,
   SetMetadata,
   applyDecorators,
 } from '@nestjs/common';
@@ -13,6 +14,7 @@ import { AuthenticationRequired, PermissionDenied } from '../common/errors';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { RouteRegistry } from '../http/routes';
 import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
 import {
   ACTION_METADATA,
@@ -151,11 +153,21 @@ export class AuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly authenticator: Authenticator,
     private readonly permissions: RolePermissions,
+    private readonly routes: RouteRegistry,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<FastifyRequest>();
     const targets = [context.getHandler(), context.getClass()];
+
+    // Fastify chose this route by method; Django would have resolved the
+    // path to a more literal one that does not take the method. Answered as
+    // a path with no route for it (`EnvelopeFilter.noRoute`).
+    const url = request.raw.url ?? request.url;
+    const question = url.indexOf('?');
+    const resolved = this.routes.resolve(question === -1 ? url : url.slice(0, question));
+    if (resolved !== undefined && resolved !== request.routeOptions.url)
+      throw new NotFoundException();
 
     request.user = null;
     if (this.reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)) return true;

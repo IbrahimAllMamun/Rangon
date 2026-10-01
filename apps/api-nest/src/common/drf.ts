@@ -17,6 +17,7 @@ import { domainToASCII } from 'node:url';
 import { HtmlInput, isUploadedFile, type UploadedFile } from '../http/multipart';
 import { isDict, pythonTypeName } from '../http/request-body';
 import { identifyImage } from './images';
+import { dateFromIsoformat } from './isoformat';
 import Decimal from 'decimal.js';
 
 import { Dec } from './decimal';
@@ -926,60 +927,6 @@ function gregorian(year: number, month: number, day: number): string | null {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-/** `_isoweek_to_gregorian`: the date of ISO week `week`, day `day` (Monday is 1). */
-function isoWeek(year: number, week: number, day: number): string | null {
-  if (year < 1 || year > 9999 || day < 1 || day > 7 || week < 1) return null;
-  const jan4 = new Date(Date.UTC(2000, 0, 4));
-  jan4.setUTCFullYear(year);
-  const monday = new Date(jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86400000);
-  // A year has 53 ISO weeks when it starts on a Thursday, or a Wednesday in a leap year.
-  const jan1 = new Date(Date.UTC(2000, 0, 1));
-  jan1.setUTCFullYear(year);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const weeks = jan1.getUTCDay() === 4 || (leap && jan1.getUTCDay() === 3) ? 53 : 52;
-  if (week > weeks) return null;
-  const date = new Date(monday.getTime() + ((week - 1) * 7 + (day - 1)) * 86400000);
-  const y = date.getUTCFullYear();
-  if (y < 1 || y > 9999) return null;
-  return gregorian(y, date.getUTCMonth() + 1, date.getUTCDate());
-}
-
-/** Python's `date.fromisoformat` (CPython's C parser): ASCII digits, lengths 7, 8 and 10. */
-function fromIsoFormat(text: string): string | null {
-  if (![7, 8, 10].includes(text.length) || !/^[\x20-\x7e]*$/.test(text)) return null;
-  const digits = (from: number, count: number) => {
-    const part = text.slice(from, from + count);
-    return /^[0-9]+$/.test(part) && part.length === count ? Number(part) : null;
-  };
-  const year = digits(0, 4);
-  if (year === null) return null;
-  const dash = text[4] === '-';
-  let pos = dash ? 5 : 4;
-  if (text[pos] === 'W') {
-    pos += 1;
-    const week = digits(pos, 2);
-    if (week === null) return null;
-    pos += 2;
-    let day = 1;
-    if (text.length > pos) {
-      if ((text[pos] === '-') !== dash) return null;
-      pos += dash ? 1 : 0;
-      const parsed = digits(pos, 1);
-      if (parsed === null || pos + 1 !== text.length) return null;
-      day = parsed;
-    }
-    return isoWeek(year, week, day);
-  }
-  const month = digits(pos, 2);
-  if (month === null) return null;
-  pos += 2;
-  if ((text[pos] === '-') !== dash) return null;
-  pos += dash ? 1 : 0;
-  const day = digits(pos, 2);
-  if (day === null || pos + 2 !== text.length) return null;
-  return gregorian(year, month, day);
-}
-
 /**
  * `serializers.DateField()`: Django's `parse_date` -- `date.fromisoformat`,
  * else `YYYY-M-D` in any script's digits (a trailing newline allowed, as
@@ -998,8 +945,8 @@ export function dateField(
       });
       if (settled.settled) return settled.value;
       if (typeof data !== 'string') throw invalid();
-      const iso = fromIsoFormat(data);
-      if (iso) return iso;
+      const iso = dateFromIsoformat(data);
+      if (iso) return gregorian(iso.year, iso.month, iso.day) as string;
       const match = /^(\p{Nd}{4})-(\p{Nd}{1,2})-(\p{Nd}{1,2})\n?$/u.exec(data);
       if (!match) throw invalid();
       const [year, month, day] = match.slice(1).map((part) => Number(pyIntText(part as string)));
