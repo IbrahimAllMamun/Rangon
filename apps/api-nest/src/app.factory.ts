@@ -21,8 +21,12 @@ export async function createApp(): Promise<{ app: NestFastifyApplication; env: E
 
   const adapter = new FastifyAdapter({
     genReqId: genRequestId,
-    // DATA_UPLOAD_MAX_MEMORY_SIZE in config/settings/base.py.
-    bodyLimit: 10 * 1024 * 1024,
+    // Django sets no limit a client meets: DRF's parsers read the stream
+    // past DATA_UPLOAD_MAX_MEMORY_SIZE, and an upload is refused by the
+    // serializer, by name ("smaller than 10 MB"). The proxy in front caps
+    // bodies at 12 MB (infrastructure/docker/nginx/nginx.conf); this only
+    // has to be wider than that.
+    bodyLimit: 64 * 1024 * 1024,
     routerOptions: { ignoreTrailingSlash: true, maxParamLength: 500 },
     // Not Fastify's trustProxy: the client address is `core.ip`'s rule
     // (auth/throttle.ts), and the scheme is `SECURE_PROXY_SSL_HEADER`'s

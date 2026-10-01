@@ -213,6 +213,10 @@ export async function catalogAdminCases(): Promise<Case[]> {
   write('create brand, logo blank', 'POST', '/api/v1/brands/', { name: 'X', logo: '' });
   write('create brand, bad boolean', 'POST', '/api/v1/brands/', { name: 'X', is_active: 'maybe' });
   write('create brand, list body', 'POST', '/api/v1/brands/', []);
+  // DRF reads a JSON body whole, past DATA_UPLOAD_MAX_MEMORY_SIZE; the proxy caps at 12 MB.
+  write('create brand, an 11 MB body', 'POST', '/api/v1/brands/', {
+    description: 'x'.repeat(11 * 1024 * 1024),
+  });
   write('create brand, null body', 'POST', '/api/v1/brands/', 'null');
   write('create brand, malformed body', 'POST', '/api/v1/brands/', '{"name":');
 
