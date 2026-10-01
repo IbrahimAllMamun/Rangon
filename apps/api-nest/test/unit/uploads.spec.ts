@@ -115,9 +115,13 @@ describe('multipart/form-data', () => {
       '',
       'JPEGDATA',
       '--xyz',
-      'Content-Disposition: form-data; name="skipped"; filename=""',
+      'Content-Disposition: form-data; name="blank"; filename=""',
       '',
       'nothing',
+      '--xyz',
+      'Content-Disposition: form-data; name="skipped"; filename="../"',
+      '',
+      'gone',
       '--xyz',
       'Content-Disposition: form-data; name="alt"',
       '',
@@ -128,10 +132,13 @@ describe('multipart/form-data', () => {
   );
 
   it('reads fields (the last of a name winning) and files, a nameless file skipped', () => {
+    // Django: `TYPE = FILE` only when `filename` is not empty -- an empty one
+    // is a field; a name that sanitises to nothing is a file, skipped.
     const data = parseMultipart(`multipart/form-data; boundary=${boundary}`, body);
     expect(data).toBeInstanceOf(HtmlInput);
     expect(data.get('alt')).toBe('second');
     expect(data.getlist('alt')).toEqual(['café', 'second']);
+    expect(data.get('blank')).toBe('nothing');
     expect(data.has('skipped')).toBe(false);
     const image = data.get('image');
     expect(isUploadedFile(image)).toBe(true);

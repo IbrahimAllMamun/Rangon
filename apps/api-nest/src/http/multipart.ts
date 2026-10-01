@@ -161,7 +161,8 @@ export function parseMultipart(contentType: string, body: Buffer): HtmlInput {
     );
     const fieldName = dispositionParams.get('name');
     if (disposition !== 'form-data' || !fieldName) continue;
-    if (dispositionParams.has('filename')) {
+    // `TYPE = FILE` only for a non-empty `filename`: `filename=""` is a field.
+    if (dispositionParams.get('filename')) {
       const fileName = sanitizeFileName(dispositionParams.get('filename') ?? '');
       if (!fileName) continue;
       const [type] = headerParameters(headers.get('content-type') ?? '');

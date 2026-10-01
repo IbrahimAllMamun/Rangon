@@ -19,7 +19,7 @@ import type { Case } from './run.ts';
 
 const BOUNDARY = 'ParityBoundary7MA4YWxkTrZu0gW';
 
-type Part = [string, string] | [string, { filename: string; type: string; bytes: Buffer }];
+export type Part = [string, string] | [string, { filename: string; type: string; bytes: Buffer }];
 
 /** A `multipart/form-data` body, as a browser builds one. */
 export function multipart(parts: Part[], boundary = BOUNDARY): Buffer {
@@ -194,6 +194,8 @@ export async function imageCases(): Promise<Case[]> {
   upload('a path for a name', [['product', tee], file('../../etc/parity-up.jpg', bytes('jpeg'))]);
   upload('a Bengali name', [['product', tee], file('ছবি নতুন.jpg', bytes('jpeg'))]);
   upload('no image', [['product', tee]]);
+  // Django reads a part as a file only when its `filename` is not empty.
+  upload('an image with an empty file name', [['product', tee], file('', bytes('jpeg'))]);
   upload('the image as text', [
     ['product', tee],
     ['image', 'abc'],
