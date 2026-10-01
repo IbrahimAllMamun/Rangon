@@ -7,6 +7,7 @@
 import { type RequiredPermissions, requiredCodes } from '../../src/auth/permissions';
 import {
   charField,
+  dateField,
   errorMessages,
   integerField,
   Invalid,
@@ -15,7 +16,7 @@ import {
   runSerializer,
   uuidField,
 } from '../../src/common/drf';
-import { booleanValue, orderingPlan } from '../../src/common/filtering';
+import { booleanValue, orderingPlan, searchTerms } from '../../src/common/filtering';
 import { PyFloat } from '../../src/common/python';
 import { QueryDict } from '../../src/common/query-dict';
 import { slugify, slugText } from '../../src/common/slugs';
@@ -250,4 +251,59 @@ describe('OrderingFilter', () => {
     expect(orderingPlan(new QueryDict('ordering=bogus,-'), terms)).toBeNull();
     expect(orderingPlan(new QueryDict(''), terms)).toBeNull();
   });
+});
+
+describe('DateField(allow_null=True)', () => {
+  // `serializers.DateField(allow_null=True, required=False).run_validation(v)`, printed by DRF.
+  const field = dateField({ allowNull: true, required: false });
+  const wrong = ['Date has wrong format. Use one of these formats instead: YYYY-MM-DD.'];
+  const cases: [unknown, unknown][] = [
+    ['2026-01-05', '2026-01-05'],
+    ['2026-1-5', '2026-01-05'],
+    ['20260105', '2026-01-05'],
+    ['2026-W01-1', '2025-12-29'],
+    ['2026W011', '2025-12-29'],
+    ['2026-02-30', wrong],
+    ['', wrong],
+    [null, null],
+    [5, wrong],
+    ['2026-01-05T00:00', wrong],
+    ['٢٠٢٦-٠١-٠٥', '2026-01-05'],
+    [' 2026-01-05', wrong],
+    ['2026-01-05\n', '2026-01-05'],
+    ['2026-001', wrong],
+    ['+2026-01-05', wrong],
+    ['2026-01-05 ', wrong],
+  ];
+  for (const [value, expected] of cases) {
+    it(`reads ${JSON.stringify(value)}`, () => {
+      let got: unknown;
+      try {
+        got = field.run(value, false);
+      } catch (error) {
+        got = (error as Invalid).details.map((detail) => detail.message);
+      }
+      expect(got).toEqual(expected);
+    });
+  }
+});
+
+describe("SearchFilter's search_smart_split", () => {
+  // `rest_framework.filters.search_smart_split(t)`, printed by DRF.
+  const cases: [string, string[]][] = [
+    ['a b', ['a', 'b']],
+    ['a,b', ['a', 'b']],
+    ['"a b" c', ['a b', 'c']],
+    ["'x y'", ['x y']],
+    ['"', ['']],
+    ['""', ['']],
+    ['a"b c"d', ['a"b c"d']],
+    [',,a,,', ['a']],
+    ['RGN-CLA,  WHI', ['RGN-CLA', 'WHI']],
+  ];
+  for (const [value, expected] of cases) {
+    it(`splits ${JSON.stringify(value)}`, () => {
+      expect(searchTerms(new QueryDict(`search=${encodeURIComponent(value)}`))).toEqual(expected);
+    });
+  }
 });

@@ -14,6 +14,8 @@ import { CataloguePayloads } from './catalogue-payloads';
 import { CategoriesService } from './categories.service';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
+import { VariantsController } from './variants.controller';
+import { VariantsService } from './variants.service';
 import { SizeChartsService } from './size-charts.service';
 
 /** The catalogue's staff endpoints: `catalog/api/views.py`. */
@@ -26,6 +28,7 @@ import { SizeChartsService } from './size-charts.service';
     AttributeValuesController,
     SizeChartsController,
     ProductsController,
+    VariantsController,
   ],
   providers: [
     BrandsService,
@@ -34,6 +37,7 @@ import { SizeChartsService } from './size-charts.service';
     SizeChartsService,
     CataloguePayloads,
     ProductsService,
+    VariantsService,
   ],
 })
 export class CatalogAdminModule {}

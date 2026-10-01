@@ -513,7 +513,7 @@ function decimalTuple(text: string): { digits: string; exponent: number } {
 export function decimalField(
   maxDigits: number,
   decimalPlaces: number,
-  options: { required?: boolean; allowNull?: boolean } = {},
+  options: { required?: boolean; allowNull?: boolean; minValue?: string } = {},
 ): Field<string | null> {
   const allowNull = options.allowNull ?? false;
   return {
@@ -569,6 +569,13 @@ export function decimalField(
         );
       }
       const value = new Dec(parsed).toDecimalPlaces(decimalPlaces, Decimal.ROUND_HALF_EVEN);
+      // `MinValueValidator(min_value)`, on the quantized value.
+      if (options.minValue !== undefined && value.lt(options.minValue)) {
+        throw Invalid.of(
+          `Ensure this value is greater than or equal to ${options.minValue}.`,
+          'min_value',
+        );
+      }
       const shown = value.toFixed(decimalPlaces);
       // Python keeps a negative zero's sign: `Decimal("-0")` quantizes to -0.00.
       return value.isZero() && value.isNeg() && !shown.startsWith('-') ? `-${shown}` : shown;
@@ -804,6 +811,103 @@ export function nestedListField(
       }
       if (failed) throw new InvalidNested(errors);
       return values;
+    },
+  };
+}
+
+/** A Gregorian date from its parts, or null where Python's `date()` raises. */
+function gregorian(year: number, month: number, day: number): string | null {
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1) return null;
+  const last = new Date(Date.UTC(2000, month, 0)).getUTCDate();
+  const days =
+    month === 2 && !(year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 28 : last;
+  if (day > days) return null;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** `_isoweek_to_gregorian`: the date of ISO week `week`, day `day` (Monday is 1). */
+function isoWeek(year: number, week: number, day: number): string | null {
+  if (year < 1 || year > 9999 || day < 1 || day > 7 || week < 1) return null;
+  const jan4 = new Date(Date.UTC(2000, 0, 4));
+  jan4.setUTCFullYear(year);
+  const monday = new Date(jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86400000);
+  // A year has 53 ISO weeks when it starts on a Thursday, or a Wednesday in a leap year.
+  const jan1 = new Date(Date.UTC(2000, 0, 1));
+  jan1.setUTCFullYear(year);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const weeks = jan1.getUTCDay() === 4 || (leap && jan1.getUTCDay() === 3) ? 53 : 52;
+  if (week > weeks) return null;
+  const date = new Date(monday.getTime() + ((week - 1) * 7 + (day - 1)) * 86400000);
+  const y = date.getUTCFullYear();
+  if (y < 1 || y > 9999) return null;
+  return gregorian(y, date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+/** Python's `date.fromisoformat` (CPython's C parser): ASCII digits, lengths 7, 8 and 10. */
+function fromIsoFormat(text: string): string | null {
+  if (![7, 8, 10].includes(text.length) || !/^[\x20-\x7e]*$/.test(text)) return null;
+  const digits = (from: number, count: number) => {
+    const part = text.slice(from, from + count);
+    return /^[0-9]+$/.test(part) && part.length === count ? Number(part) : null;
+  };
+  const year = digits(0, 4);
+  if (year === null) return null;
+  const dash = text[4] === '-';
+  let pos = dash ? 5 : 4;
+  if (text[pos] === 'W') {
+    pos += 1;
+    const week = digits(pos, 2);
+    if (week === null) return null;
+    pos += 2;
+    let day = 1;
+    if (text.length > pos) {
+      if ((text[pos] === '-') !== dash) return null;
+      pos += dash ? 1 : 0;
+      const parsed = digits(pos, 1);
+      if (parsed === null || pos + 1 !== text.length) return null;
+      day = parsed;
+    }
+    return isoWeek(year, week, day);
+  }
+  const month = digits(pos, 2);
+  if (month === null) return null;
+  pos += 2;
+  if ((text[pos] === '-') !== dash) return null;
+  pos += dash ? 1 : 0;
+  const day = digits(pos, 2);
+  if (day === null || pos + 2 !== text.length) return null;
+  return gregorian(year, month, day);
+}
+
+/**
+ * `serializers.DateField()`: Django's `parse_date` -- `date.fromisoformat`,
+ * else `YYYY-M-D` in any script's digits (a trailing newline allowed, as
+ * Python's `$` allows it) -- or "Date has wrong format". Answers `YYYY-MM-DD`.
+ */
+export function dateField(
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<string | null> {
+  const invalid = () =>
+    Invalid.of('Date has wrong format. Use one of these formats instead: YYYY-MM-DD.');
+  return {
+    run(data, partial) {
+      const settled = emptyValue<string>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      if (typeof data !== 'string') throw invalid();
+      const iso = fromIsoFormat(data);
+      if (iso) return iso;
+      const match = /^(\p{Nd}{4})-(\p{Nd}{1,2})-(\p{Nd}{1,2})\n?$/u.exec(data);
+      if (!match) throw invalid();
+      const [year, month, day] = match.slice(1).map((part) => Number(pyIntText(part as string)));
+      return (
+        gregorian(year as number, month as number, day as number) ??
+        (() => {
+          throw invalid();
+        })()
+      );
     },
   };
 }

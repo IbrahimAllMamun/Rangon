@@ -70,7 +70,9 @@ export async function productCases(): Promise<Case[]> {
     ),
   );
   const ids = async (sql: string) =>
-    new Map((await db.query<{ key: string; id: string }>(sql)).rows.map((row) => [row.key, row.id]));
+    new Map(
+      (await db.query<{ key: string; id: string }>(sql)).rows.map((row) => [row.key, row.id]),
+    );
   const categories = await ids(`SELECT slug AS key, id FROM catalog_category`);
   const brands = await ids(`SELECT slug AS key, id FROM catalog_brand`);
   const values = await ids(
@@ -79,7 +81,9 @@ export async function productCases(): Promise<Case[]> {
   const charts = await ids(`SELECT name AS key, id FROM catalog_sizechart`);
   const branches = await ids(`SELECT code AS key, id FROM accounts_branch`);
   const barcode = (
-    await db.query<{ barcode: string }>(`SELECT barcode FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI'`)
+    await db.query<{ barcode: string }>(
+      `SELECT barcode FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-WHI'`,
+    )
   ).rows[0]?.barcode;
   await db.end();
   if (!products.has('parity-freebie')) {
@@ -108,7 +112,8 @@ export async function productCases(): Promise<Case[]> {
         if (row && typeof row === 'object' && typeof row.id === 'string' && !known.has(row.id))
           row.id = '<minted>';
         // Variants minted by generate-variants.
-        const created = (response as { variants?: { id?: unknown; product?: unknown }[] } | null)?.variants;
+        const created = (response as { variants?: { id?: unknown; product?: unknown }[] } | null)
+          ?.variants;
         if (Array.isArray(created) && 'created' in (response as object))
           for (const variant of created) variant.id = '<minted>';
       },
@@ -163,7 +168,11 @@ export async function productCases(): Promise<Case[]> {
   read('product at an inactive branch', `${shirt}?branch=${branches.get('PAR2')}`);
   read('product at a missing branch', `${shirt}?branch=${missing}`);
   read('product at a malformed branch', `${shirt}?branch=nope`);
-  read('product at an inactive branch, as the owner', `${shirt}?branch=${branches.get('PAR2')}`, 'owner');
+  read(
+    'product at an inactive branch, as the owner',
+    `${shirt}?branch=${branches.get('PAR2')}`,
+    'owner',
+  );
   read('product filtered out', `${shirt}?status=DRAFT`);
   read('product searched out', `${shirt}?search=lipstick`);
   read('product, not a uuid', '/api/v1/products/abc/');
@@ -192,12 +201,19 @@ export async function productCases(): Promise<Case[]> {
     spec_values: [values.get('material:Cotton'), values.get('fit:Slim')],
     size_chart: charts.get("Men's tops"),
   });
-  write('create product, Bengali name', 'POST', products_, { name: 'জামদানি শাড়ি', category: leaf });
+  write('create product, Bengali name', 'POST', products_, {
+    name: 'জামদানি শাড়ি',
+    category: leaf,
+  });
   write('create product, name of an existing one', 'POST', products_, {
     name: 'Classic Oxford Shirt',
     category: leaf,
   });
-  write('create product, slug taken', 'POST', products_, { name: 'X', slug: 'matte-lipstick', category: leaf });
+  write('create product, slug taken', 'POST', products_, {
+    name: 'X',
+    slug: 'matte-lipstick',
+    category: leaf,
+  });
   write('create product, a draft published', 'POST', products_, {
     name: 'X',
     category: leaf,
@@ -241,7 +257,10 @@ export async function productCases(): Promise<Case[]> {
   const tee = P('parity-cotton-tee');
   write('rename product', 'PATCH', tee, { name: 'Parity Cotton Tee' });
   write('rename product with a slug', 'PATCH', tee, { name: 'Parity Tee', slug: 'parity-tee' });
-  write('product to active and published', 'PATCH', P('parity-empty'), { status: 'ACTIVE', published: true });
+  write('product to active and published', 'PATCH', P('parity-empty'), {
+    status: 'ACTIVE',
+    published: true,
+  });
   write('product published alone while a draft', 'PATCH', P('parity-freebie'), { published: true });
   write('product status draft and published', 'PATCH', tee, { status: 'DRAFT', published: true });
   write('product specs set', 'PATCH', tee, {
@@ -252,7 +271,9 @@ export async function productCases(): Promise<Case[]> {
     spec_values: [],
     featured: false,
   });
-  write('product chart set', 'PATCH', P('classic-oxford-shirt'), { size_chart: charts.get("Women's tops") });
+  write('product chart set', 'PATCH', P('classic-oxford-shirt'), {
+    size_chart: charts.get("Women's tops"),
+  });
   write('product chart cleared', 'PATCH', P('classic-oxford-shirt'), { size_chart: null });
   write('product moved to a category its chart misses', 'PATCH', P('classic-oxford-shirt'), {
     category: categories.get('lipstick'),
@@ -287,8 +308,14 @@ export async function productCases(): Promise<Case[]> {
     price: 900,
     selections: { size: ['S', 'M', 'L'], color: ['Black'] },
   });
-  write('generate a single version', 'POST', generate('parity-empty'), { price: '99.99', single: true });
-  write('generate a single version again', 'POST', generate('parity-twin-a'), { price: '1', single: 'true' });
+  write('generate a single version', 'POST', generate('parity-empty'), {
+    price: '99.99',
+    single: true,
+  });
+  write('generate a single version again', 'POST', generate('parity-twin-a'), {
+    price: '1',
+    single: 'true',
+  });
   write('generate a single version beside sizes', 'POST', generate('parity-cotton-tee'), {
     price: '1',
     single: true,
@@ -306,7 +333,10 @@ export async function productCases(): Promise<Case[]> {
     price: '1',
     selections: { material: ['Cotton'] },
   });
-  write('generate, no values', 'POST', generate('parity-empty'), { price: '1', selections: { size: [] } });
+  write('generate, no values', 'POST', generate('parity-empty'), {
+    price: '1',
+    selections: { size: [] },
+  });
   write('generate, unknown values', 'POST', generate('parity-empty'), {
     price: '1',
     selections: { size: ['XXXL', 'S', 'ABC'] },
@@ -321,9 +351,20 @@ export async function productCases(): Promise<Case[]> {
     single: 'maybe',
     selections: { size: 'S', color: [''] },
   });
-  write('generate, selections not a dict', 'POST', generate('parity-empty'), { price: '1', selections: [] });
-  write('generate as a cashier', 'POST', generate('parity-empty'), { price: '1', single: true }, 'cashier');
-  write('generate, missing product', 'POST', `/api/v1/products/${missing}/generate-variants/`, { price: 'x' });
+  write('generate, selections not a dict', 'POST', generate('parity-empty'), {
+    price: '1',
+    selections: [],
+  });
+  write(
+    'generate as a cashier',
+    'POST',
+    generate('parity-empty'),
+    { price: '1', single: true },
+    'cashier',
+  );
+  write('generate, missing product', 'POST', `/api/v1/products/${missing}/generate-variants/`, {
+    price: 'x',
+  });
 
   // --- Publishing -----------------------------------------------------------------------------------
   write('publish a product with nothing to sell', 'POST', `${P('parity-empty')}publish/`, {});

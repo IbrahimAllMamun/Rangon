@@ -158,7 +158,9 @@ export async function adminConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
           body: JSON.stringify({ price: '10', single: true }),
         });
       const sequence = (
-        await db.query<{ last_value: string }>(`SELECT last_value FROM core_numbersequence WHERE key = 'barcode'`)
+        await db.query<{ last_value: string }>(
+          `SELECT last_value FROM core_numbersequence WHERE key = 'barcode'`,
+        )
       ).rows[0]?.last_value;
       await clean();
       const responses = await Promise.all(
@@ -168,12 +170,19 @@ export async function adminConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
         response.status === 201 ? (JSON.parse(response.body) as { created: number }).created : -1,
       );
       const variants = Number(
-        (await db.query<{ n: string }>(`SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`, [empty]))
-          .rows[0]?.n,
+        (
+          await db.query<{ n: string }>(
+            `SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`,
+            [empty],
+          )
+        ).rows[0]?.n,
       );
       checks.push({
         name: 'products: 6 simultaneous single-version submits across both APIs make one SKU',
-        passed: variants === 1 && made.filter((n) => n === 1).length === 1 && made.every((n) => n === 0 || n === 1),
+        passed:
+          variants === 1 &&
+          made.filter((n) => n === 1).length === 1 &&
+          made.every((n) => n === 0 || n === 1),
         detail: `statuses ${responses.map((r) => r.status).join(',')}, created ${made.join(',')}, ${variants} SKU(s)`,
       });
 
@@ -213,8 +222,12 @@ export async function adminConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
         const created =
           response.status === 201 ? (JSON.parse(response.body) as { created: number }).created : -1;
         const count = Number(
-          (await db.query<{ n: string }>(`SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`, [empty]))
-            .rows[0]?.n,
+          (
+            await db.query<{ n: string }>(
+              `SELECT count(*) AS n FROM catalog_productvariant WHERE product_id = $1`,
+              [empty],
+            )
+          ).rows[0]?.n,
         );
         checks.push({
           name: `products: a single-version submit (${side}) that meets one committed mid-flight makes nothing -- the lock holds`,
@@ -224,8 +237,117 @@ export async function adminConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
       }
       await clean();
       if (sequence !== undefined) {
-        await db.query(`UPDATE core_numbersequence SET last_value = $1 WHERE key = 'barcode'`, [sequence]);
+        await db.query(`UPDATE core_numbersequence SET last_value = $1 WHERE key = 'barcode'`, [
+          sequence,
+        ]);
       }
+    }
+
+    // 5. One barcode per SKU. Eight simultaneous requests for an unlabelled
+    //    SKU, across both APIs, must all be handed the same number: the
+    //    variant's row lock makes the later ones read the first one's.
+    const unlabelled = (
+      await db.query<{ id: string }>(`SELECT id FROM catalog_productvariant WHERE sku = 'PAR-TWA'`)
+    ).rows[0]?.id;
+    if (unlabelled) {
+      const sequence = (
+        await db.query<{ last_value: string }>(
+          `SELECT last_value FROM core_numbersequence WHERE key = 'barcode'`,
+        )
+      ).rows[0]?.last_value;
+      const restore = async () => {
+        await db.query(`UPDATE catalog_productvariant SET barcode = NULL WHERE id = $1`, [
+          unlabelled,
+        ]);
+        await db.query(`DELETE FROM core_auditlog WHERE entity_id = $1::text`, [unlabelled]);
+        if (sequence !== undefined)
+          await db.query(`UPDATE core_numbersequence SET last_value = $1 WHERE key = 'barcode'`, [
+            sequence,
+          ]);
+      };
+      const label = (api: URL) =>
+        send(api, {
+          name: 'barcode',
+          method: 'POST',
+          path: `/api/v1/variants/${unlabelled}/barcode/`,
+          headers: { ...auth('manager'), 'content-type': 'application/json' },
+          body: '{}',
+        });
+      await restore();
+      const responses = await Promise.all(
+        Array.from({ length: 8 }, (_, index) => label(index % 2 ? apis.NEST : apis.DJANGO)),
+      );
+      const answers = responses.map((response) =>
+        response.status === 200
+          ? (JSON.parse(response.body) as { barcode: string; created: boolean })
+          : null,
+      );
+      const stored = (
+        await db.query<{ barcode: string }>(
+          `SELECT barcode FROM catalog_productvariant WHERE id = $1`,
+          [unlabelled],
+        )
+      ).rows[0]?.barcode;
+      const audits = Number(
+        (
+          await db.query<{ n: string }>(
+            `SELECT count(*) AS n FROM core_auditlog WHERE entity_id = $1::text`,
+            [unlabelled],
+          )
+        ).rows[0]?.n,
+      );
+      checks.push({
+        name: 'variants: 8 simultaneous barcode requests for one SKU across both APIs print one number',
+        passed:
+          answers.every((answer) => answer?.barcode === stored) &&
+          answers.filter((answer) => answer?.created).length === 1 &&
+          audits === 1,
+        detail: `statuses ${responses.map((r) => r.status).join(',')}, ${new Set(answers.map((a) => a?.barcode)).size} number(s), ${answers.filter((a) => a?.created).length} created, ${audits} audit row(s)`,
+      });
+
+      // 6. The same, made certain: the harness holds the variant's lock, a
+      //    barcode request queues on it, and the harness labels the SKU itself
+      //    and commits. The request must hand back that number, not mint one.
+      for (const [side, api] of [
+        ['Django', apis.DJANGO],
+        ['Nest', apis.NEST],
+      ] as const) {
+        await restore();
+        const holder = new pg.Client({ connectionString: process.env.DATABASE_URL });
+        await holder.connect();
+        await holder.query('BEGIN');
+        await holder.query(`SELECT id FROM catalog_productvariant WHERE id = $1 FOR UPDATE`, [
+          unlabelled,
+        ]);
+        const pending = label(api);
+        let waited = false;
+        for (let attempt = 0; attempt < 100 && !waited; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const row = await db.query<{ count: string }>(
+            `SELECT count(*) AS count FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND state = 'active'
+                AND query ILIKE '%catalog_productvariant%FOR UPDATE%' AND query NOT ILIKE '%pg_stat_activity%'`,
+          );
+          waited = Number(row.rows[0]?.count ?? 0) > 0;
+        }
+        await holder.query(
+          `UPDATE catalog_productvariant SET barcode = '2999999999992' WHERE id = $1`,
+          [unlabelled],
+        );
+        await holder.query('COMMIT');
+        await holder.end();
+        const response = await pending;
+        const answer =
+          response.status === 200
+            ? (JSON.parse(response.body) as { barcode: string; created: boolean })
+            : null;
+        checks.push({
+          name: `variants: a barcode request (${side}) that meets a label committed mid-flight hands that label back -- the lock holds`,
+          passed: waited && answer?.barcode === '2999999999992' && answer.created === false,
+          detail: `${response.status} ${response.body.slice(0, 60)}, ${waited ? 'waited on the lock' : 'never waited'}`,
+        });
+      }
+      await restore();
     }
   } finally {
     await db.end();

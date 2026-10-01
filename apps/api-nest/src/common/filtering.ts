@@ -197,3 +197,35 @@ export function orderingFrom(
 ): string[] | null {
   return orderingPlan(query, columns)?.order ?? null;
 }
+
+/** Python's `\s`, and its complement, for `smart_split`. */
+const WS =
+  '\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+const SMART_SPLIT = new RegExp(
+  `((?:[^${WS}'"]*(?:(?:"(?:[^"\\\\]|\\\\[^\\n])*"|'(?:[^'\\\\]|\\\\[^\\n])*')[^${WS}'"]*)+)|[^${WS}]+)`,
+  'gu',
+);
+
+/**
+ * `SearchFilter.get_search_terms`: the `search` parameter split as DRF's
+ * `search_smart_split` does -- on whitespace and commas, a quoted phrase kept
+ * whole. A NUL is refused, as its `CharField` refuses one.
+ */
+export function searchTerms(query: QueryDict): string[] {
+  const value = query.get('search') ?? '';
+  if (value.includes('\x00')) {
+    throw new ValidationError('Invalid input.', { details: ['Null characters are not allowed.'] });
+  }
+  const terms: string[] = [];
+  for (const [bit] of value.matchAll(SMART_SPLIT)) {
+    const term = bit.replace(/^,+|,+$/g, '');
+    if ((term.startsWith('"') || term.startsWith("'")) && term[0] === term[term.length - 1]) {
+      // `unescape_string_literal`.
+      const quote = term[0] as string;
+      terms.push(term.slice(1, -1).replaceAll(`\\${quote}`, quote).replaceAll('\\\\', '\\'));
+    } else {
+      for (const part of term.split(',')) if (part) terms.push(pyStrip(part));
+    }
+  }
+  return terms;
+}

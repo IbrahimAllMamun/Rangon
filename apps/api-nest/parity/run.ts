@@ -25,6 +25,7 @@ import { type Captured, compare, describeTokens, type Difference, diffJson } fro
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
 import { orderCases } from './orders-cases.ts';
 import { productCases } from './product-cases.ts';
+import { variantCases } from './variant-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -540,6 +541,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await catalogAdminCases()));
   cases.push(...(await attributeCases()));
   cases.push(...(await productCases()));
+  cases.push(...(await variantCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
