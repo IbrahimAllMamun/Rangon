@@ -481,6 +481,54 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 4a: inventory and the stock ledger, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `InventoryViewSet` (stock positions by
+branch, the reorder point and bin, `adjust`, `write-off`, `low-stock`, `valuation`,
+`verify-integrity`) and `InventoryTransactionViewSet` (the ledger with its date window, movement
+families and documents). Every stock movement now goes through one service,
+`inventory/stock.service.ts`, which checkout's reservation also uses; `core.dates` is ported over
+CPython's `fromisoformat`, taken from the C. Transfers and counts are part 4b.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1755/1755 (386 new: 381 here, 5 with the fix),
+                                                25 by the documented differences
+concurrency ................................... 28/28 (4 new: a write-off and an adjustment that meet
+                                                a movement mid-flight on each API, six retries of one
+                                                write-off, six write-offs of 2 from a shelf of 6)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 558 passed (35 new: parse_moment's quirks, DateField,
+                                                zone offsets before the year 100, route ranking)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases read the list, low stock, valuation and the ledger as every role and as a manager bound
+to the new branch, PAR3 (`fixture_inventory.py`); every filter, ordering (ties included: the
+statements are Django's), search and page; each row's detail inside and outside its filters; the
+integrity check clean, with drift, at a branch and with every bad body; the ledger's date window
+over CPython's quirks (`2026010112`, `T10:00:00.1234567x+05:00`, `+05:99`, the year 1, the summer
+of 2009) and its refusals, movement families, filters, searches and every kind of document. The
+writes: an update with every type JSON has for each field, adjustments down, up, to the same
+figure, at a branch that never received the variant, for a variant that does not exist, at
+another branch and with every bad field; write-offs with and without a key, a replayed key from
+another branch, a key past the column, an empty shelf and a huge quantity. Each write is compared
+by the stock rows, ledger rows and audit entries it leaves and the low-stock jobs it queues.
+
+With the port's `FOR UPDATE` removed from the stock lock, the Nest write-off that met a movement
+mid-flight took its units as well (the row at 2, its ledger at -2), the adjustment landed with its
+ledger 2 short, six write-offs of 2 took 5 from a shelf of 6 (ledger -4), and phase 3's checkout
+check failed too, since checkout now takes the same lock. Six retries of one key still wrote one
+row: the unique index holds that alone.
+
+Found in Django, and copied: D121 (the reorder point and bin are saved with no serializer; a
+string is saved and then fails the response), D122 (adjust and write-off take any UUID as the
+variant: a 404, or a 409 at the commit), D123 (the low-stock list is `[]` when empty and the
+envelope otherwise), D124 (an `Idempotency-Key` past 80 characters is a 500), D125 (a NUL in the
+inventory searches is a 500). Found in the port and fixed in its own commit: `DELETE
+/variants/lookup/` answered 404 where Django answers 405 (Django resolves the path before the
+method), the variant form refused the `2026010112` that Django's `DateField` takes, and the zone
+offset of an instant before the year 100 was read in the wrong century.
+
 ### The NestJS API, phase 4 part 3c: product images, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `ProductImageViewSet` -- the port's first
@@ -3177,6 +3225,11 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D118 | **Two moves of attribute values at once can leave two values on one position.** `move` reads the value with `get_object()` before it locks the attribute's values, and swaps from that position, not the locked one. If another move shifted the value in between, the neighbour is given a position some third value still holds. Measured deterministically by the parity harness (it holds the lock, starts a move of `c` down, and moves `c` up past `b` itself): from `a0 b1 c2 d3` the result is `a0 b2 d2 c3`. The storefront then breaks the tie alphabetically | `apps/api/catalog/api/views.py` | Found writing the NestJS port's race checks; the port copies it. Reading the value's position from the locked rows (`ordered[index]`) would do it |
 | D119 | **A size chart edited with a row that names no size answers 500.** On a PATCH, DRF reads `partial` from the root serializer, so a nested row may leave out `attribute_value`; `SizeChartViewSet._service_data` then reads `row["attribute_value_id"]` and raises `KeyError`. Measured: `PATCH /size-charts/<id>/` with `{"rows": [{"cells": ["1"]}]}` is a 500 | `apps/api/catalog/api/views.py` | Found porting the size charts to NestJS, which copies it. A `.get()` there would send the row on to `_clean_rows`, which refuses it in words |
 | D120 | **Renaming a product changes its URL.** `ProductWriteSerializer.validate` makes a slug whenever the payload has a name and no slug -- on an update too, unlike the category and brand serializers, which do it on create only for exactly this reason. `unique_slug` then finds the product's own slug taken and appends a number. Measured: `PATCH /products/<id>/` with `{"name": "Parity Cotton Tee"}` moved `parity-cotton-tee` to `parity-cotton-tee-2`, so every link to the old page 404s; the admin form sends the name on every save | `apps/api/catalog/api/serializers.py` | Found porting the product admin to NestJS, which copies it. `if self.instance is None and ...`, as the category serializer has, would do it |
+| D121 | **An inventory row's reorder point and bin are saved unvalidated.** `InventoryViewSet.update` copies `reorder_point` and `bin_location` from the body onto the model with no serializer, so only the model's `int()` and `str()` stand between the request and the row. Measured on the parity stack: `{"reorder_point": "12"}` is saved and the response then fails comparing an int with a str -- a 500 for a change that committed; `null` for either field is a 409 from the NOT NULL constraint; a reorder point that is not a number or does not fit `integer`, or a bin over 64 characters, is a 500; a JSON body that is not an object is a 500 (`"reorder_point" in [...]`), and a list that names the field is too | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. A two-field serializer (`IntegerField(min_value=0)`, `CharField(max_length=64, allow_blank=True)`) would do it |
+| D122 | **Adjust and write-off take any UUID as the variant.** `AdjustStockSerializer` and `WriteOffSerializer` declare `variant` a `UUIDField`, not a related field, so a variant that does not exist reaches the service. `_lock_inventories` inserts an inventory row for it (the foreign key is checked only at commit), and the request fails wherever the variant is first read. Measured: an adjustment upwards or a write-off is a 404, and an adjustment to 0 a 409 "conflicts with the current state of the data" when the commit itself fails. A 400 naming the field is meant | `apps/api/inventory/api/serializers.py` | Found porting the inventory admin to NestJS, which copies it. `PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())` would do it |
+| D123 | **The low-stock list changes shape when it is empty.** `InventoryViewSet.low_stock` answers `get_paginated_response(...) if page else Response(serializer.data)`; an empty page is falsy, so no low stock is a bare `[]` and any low stock the `{count, next, previous, results}` envelope. Measured on the parity stack: a DHK1 manager, whose branch has nothing low, gets `[]`; an owner, who also sees PAR3's low rows, gets the envelope | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. `if page is not None` would do it |
+| D124 | **An `Idempotency-Key` longer than 80 characters is a 500.** The views pass `request.headers.get("Idempotency-Key")` straight to services whose key column (`idempotency_key_field`) is 80 characters, and the insert raises `DataError`. Measured on `POST /inventory/write-off/` with an 81-character key; the purchasing and finance views read the header the same way | `apps/api/inventory/api/views.py`, `apps/api/purchasing/api/views.py`, `apps/api/finance/api/views.py` | Found porting the inventory admin to NestJS, which copies it. One shared helper that refuses a longer key with a 400 would do it |
+| D125 | **A NUL in an inventory search is a 500.** The inventory list filters on its raw `search` and `category` parameters, and the stock ledger on its raw `search`; psycopg refuses a string with a NUL. Measured: `GET /inventory/?search=a%00b`, `?category=a%00b` and `GET /inventory-transactions/?search=a%00b` are 500s, where the admin lists that use DRF's `SearchFilter` answer 400 | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. Reading the value through `CharField().run_validation`, as `SearchFilter` does, would do it |
 
 ## Still API-only (no UI)
 

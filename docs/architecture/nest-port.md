@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 4a (inventory and the stock ledger) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -111,9 +111,16 @@ across both APIs where both serve the path:
 | A single-version SKU committed while a submit waits on the product's lock (each API in turn) | the submit makes nothing -- deterministic; with the port's `FOR UPDATE` removed it never waits and makes a second SKU |
 | 8 simultaneous barcode requests for one unlabelled SKU, across both APIs | one number, handed to all eight, one audit row; with the port's lock removed, four numbers |
 | A label committed while a barcode request waits on the variant's lock (each API in turn) | the request hands that label back -- deterministic |
+| A movement committed while a write-off waits on the inventory row (each API in turn) | the write-off is checked against the committed shelf and refused -- deterministic; with the port's `FOR UPDATE` removed it never waits, takes its units as well, and the row disagrees with its ledger |
+| A movement committed while an adjustment waits on the row (each API in turn) | the adjustment writes the difference from the committed figure and lands on the count, its ledger agreeing; without the lock the ledger is the harness's units short |
+| 6 simultaneous retries of one write-off with one `Idempotency-Key`, across both APIs | one ledger row, one unit off the shelf, every answer that row. The unique key holds this alone: it passes with the lock removed |
+| 6 simultaneous write-offs of 2 from a shelf of 6, across both APIs | 3 taken, 3 refused, nothing below zero; with the lock removed, 5 taken and the ledger at -4 |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
+
+With the port's `FOR UPDATE` removed from the stock lock, the checkout check above (a counter sale
+committed mid-flight) fails too: checkout now takes the same lock.
 
 PostgreSQL sorts a locking `SELECT ... ORDER BY ... FOR UPDATE` before it waits on the lock, so
 a request that queued gets the committed rows in the order they had before. The move checks are
@@ -187,6 +194,49 @@ the harness takes off before comparing names and URLs.
 The parity stack now sets `WEB_REVALIDATE_URL` on both APIs (nothing listens), so the
 `content.tasks.revalidate_storefront` jobs a write queues are compared like checkout's. Seeding
 unsets it: the demo seed saves categories, and its signals would otherwise ping the URL inline.
+
+Then the inventory admin (part 4a). Every stock movement now goes through one service,
+`inventory/stock.service.ts`, as `inventory.services` has it: the inventory rows locked
+`FOR UPDATE` in id order (created first when the branch never held the variant), every line
+checked under the lock, the cached row and its ledger row written together, low-stock jobs queued
+after the commit. Checkout's reservation, ported in phase 3 with its own copy of the lock, uses it
+too. A variant that does not exist still gets an inventory row inside the transaction -- Django
+creates its foreign keys `DEFERRABLE INITIALLY DEFERRED` -- so an adjustment to 0 fails at the
+commit (409) and anything that reads the SKU first fails there (404), as in Django (D122).
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/inventory/`, `GET /api/v1/inventory/<id>/` | `inventory.view`; a branch-bound user sees their own branch. `filter=low-stock`, `out-of-stock` or `expiring` (ordered by expiry), `category` (a slug), `search` (SKU or product name containing it, barcode equal to it), django-filter on branch and variant, and `ordering` on `on_hand` or `updated_at` -- which replaces the order whole, so rows that tie come back as the plan gives them. The statement is therefore Django's, every column of all five tables. Each row says whether its branch has ever received the variant at a cost (`received`); `stock_value` is `average_cost * on_hand` with Python's signs, so nothing times a shortfall is `-0.00` |
+| `PUT/PATCH /api/v1/inventory/<id>/` | `inventory.adjust`. Only `reorder_point` and `bin_location`, taken from the body as sent, with no serializer: `int()` and `str()` on the way to the database, and the answer read from the values as set. A reorder point sent as a string is saved, then fails the response (D121, copied) |
+| `POST /api/v1/inventory/adjust/` | `inventory.adjust`; `resolve_branch`. The count is written as the difference, at the row's average cost, and audited; upwards only where the branch has received the variant (`NOT_RECEIVED`). 200 and a sentence when the shelf already holds the figure. A count past 2^53 is exact, as in Python, until PostgreSQL refuses it |
+| `POST /api/v1/inventory/write-off/` | `inventory.adjust`; damage or loss, with a reason. Idempotent on `Idempotency-Key`: looked up before the lock, again under it, then claimed by the ledger row in a savepoint (D89, D90). A replay answers the first row -- whatever its branch or variant -- and is audited again with the replay's figures, as Django does it |
+| `GET /api/v1/inventory/low-stock/` | `inventory.view`; `get_queryset()` at or below the reorder point, without the list's django-filter and ordering. An empty result is a bare `[]`, any other the paginated envelope (D123, copied) |
+| `GET /api/v1/inventory/valuation/` | `reports.financial`; units, value at cost and at retail, in total and per branch (in the plan's order: Django's statement), as JSON numbers -- bare Decimals through DRF's encoder |
+| `POST /api/v1/inventory/verify-integrity/` | `settings.manage`; replays the ledger against the cached columns, everywhere or at one branch; the issues in the plan's order (Django's statement) |
+| `GET /api/v1/inventory-transactions/[<id>/]` | `inventory.view`; the ledger, newest first. The shop's date window (`core.dates`, below), a family of movement types (`types=DAMAGE,LOSS`, unknown ones refused in code-point order), a search over SKU and product name, django-filter on branch, variant, type and reference type, `ordering=created_at`. Each row names the document that caused it -- an order, a return, a purchase order (for a receipt or a supplier return), a count or a transfer -- one query per kind on the page; a reference that is not a UUID in its canonical spelling opens nothing |
+
+`core.dates.parse_moment` is `common/dates.ts`: CPython's `date.fromisoformat`, then
+`datetime.fromisoformat`, both ported byte for byte from `_datetimemodule.c`
+(`common/isoformat.ts`) and checked against 96,000 generated strings. Their quirks are Django's:
+`2026010112` is a day, any character of any byte length separates the date from the time, and
+`+05:99` is an offset of 6:39. A naive value is made aware in Asia/Dhaka as zoneinfo does it
+(`fold=0`: a time the clocks skipped in June 2009 takes the offset from before), and the result
+goes to PostgreSQL as the text psycopg sends -- `str()` of the aware datetime, local mean time
+`+06:01:40` for the year 1 included -- so the database reads the same instant from the same text.
+
+`fixture_inventory.py` adds a second active branch, PAR3 (which does not fulfil online orders, so
+checkout still ships from DHK1), a manager bound to it, and stock moved there by Django's own
+services: a transfer, a write-off whose key stays claimed, a count, opening stock for two unnamed
+variants (their labels come from their attributes), a row with no history, and references that
+open nothing. The phase 3 checkout races set one SKU's stock at every branch; they now set it at
+the default branch only.
+
+Three port bugs were found on the way and fixed in their own commit. Django resolves a path
+before the method, and the router puts a list-level action before `<pk>`: `DELETE
+/variants/lookup/` is the lookup route's 405, where the port's detail route answered 404
+(`RouteRegistry.resolve` now ranks a literal segment first, and the auth guard hands such a
+request to the no-route answer). DRF's `DateField` takes `2026010112`, which the port refused.
+And the zone offset of an instant before the year 100 was read in the wrong century.
 
 ## Running it
 
@@ -312,9 +362,19 @@ the port):
   moves at once can leave two values on one position (D118).
 - A size chart PATCH whose nested row names no size is a 500: `partial` reaches the nested rows,
   and the view then reads a key the row never had (D119).
-- `request.data.get` on a JSON body that is not an object is a 500 on `move` too.
+- `request.data.get` on a JSON body that is not an object is a 500 on `move` and
+  `verify-integrity` too.
 - Renaming a product without sending its slug gives it a new one, `-2` and so on: the product
   serializer makes a slug on every save that names the product (D120).
+- An inventory row's reorder point and bin are saved with no serializer: a reorder point sent as
+  a string is saved and then fails the response, a 500 for a change that committed; `null` is a
+  409 from the database; a body that is not an object is a 500 (D121).
+- Adjust and write-off take any UUID as the variant, so one that does not exist fails where it
+  is first read -- 404 -- or, for an adjustment to 0, at the commit -- 409 (D122).
+- The low-stock list is a bare `[]` when empty and the paginated envelope otherwise (D123).
+- An `Idempotency-Key` longer than the column's 80 characters is a 500 (D124).
+- A NUL in the inventory list's `search` or `category`, or in the ledger's `search`, is a 500:
+  those views filter on the raw parameter, where `SearchFilter` would refuse it (D125).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
