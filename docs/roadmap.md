@@ -481,6 +481,39 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 3c: product images, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductImageViewSet` -- the port's first
+upload. That needed DRF's multipart parsing and form semantics (`http/multipart.ts`, and
+`runSerializer` reading an `HtmlInput` as `Field.get_value` reads a `QueryDict`), DRF's
+`ImageField` with Pillow's identification of the formats an upload is in (`common/images.ts`) and
+Django's extension list, `validate_image_upload`, and `FileSystemStorage`'s naming and writing
+(`common/storage.ts`) under a `MEDIA_ROOT` the parity stack now shares between the two APIs.
+The CSV import, which receives opening stock through the inventory ledger, follows part 4.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1369/1369 (52 new), 22 by the documented differences
+concurrency ................................... 22/22 (none new: an upload takes no lock)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 523 passed (24 new: Pillow's verdicts on its own
+                                                images and broken ones, Django's file-name rules,
+                                                multipart parsing)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases upload a JPEG, a PNG named `.jpg`, WebP, AVIF, GIF, BMP and TIFF, text, a PNG with a
+broken checksum, a JPEG cut before its scan, an empty file, a `.txt` name, no extension, an image
+over 10 MB, a path and a Bengali name for a file name, no file, text for the file, blank fields,
+colours the product does and does not come in and a size for a colour, a product's first image,
+a form with no boundary and a urlencoded one; then edits as JSON and as a form, an image whose
+colour lost its variant (every edit re-checks it), and delete. The list is sent as Django sends
+it: three orderings that tie came back in another order until the statement matched.
+
+Found on the way, in the port, and fixed: it refused any body over 10 MB with a 413 before it
+authenticated, on the reading that `DATA_UPLOAD_MAX_MEMORY_SIZE` caps a request. DRF reads past
+it; Django parses an 11 MB JSON body. Also found: DRF answers a create with `Location` set to the
+payload's `url`, whatever that URL is.
+
 ### The NestJS API, phase 4 part 3b: variants, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `ProductVariantViewSet` -- the paginated list

@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -174,6 +174,16 @@ Then variants (part 3b):
 | `GET /api/v1/variants/lookup/?code=&branch=` | the barcode exactly, else the SKU in any case, with stock at the branch; not found is the view's own hand-written envelope, with no request id |
 | `POST /api/v1/variants/<id>/barcode/` | the variant's in-store barcode, assigned under its row lock when it has none, audited |
 
+Then product images (part 3c), the first endpoint that takes a form:
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/product-images/`, `GET/PUT/PATCH/DELETE /api/v1/product-images/<id>/` | an upload is a multipart form (`http/multipart.ts`: Django's `MultiPartParser` -- the boundary rule, file names unescaped, cut to their last path part and stripped of unprintable characters, a file with no name skipped), read by the serializer with DRF's form rules (a missing boolean is false, a blank optional field absent, a blank relation null). The image passes DRF's `ImageField` -- no file, not a file, empty -- then Pillow's identification (`common/images.ts`), then Django's extension list, then `validate_image_upload` (10 MB; JPEG, PNG, WebP or AVIF by the decoded type and by name). The colour must be a variant-defining one the product comes in, re-checked on every edit. The file is stored as `FileSystemStorage` stores it (`common/storage.ts`: `products/%Y/%m/` on the shop's clock, `get_valid_filename`, a random suffix when the name is taken) under `MEDIA_ROOT`, which the two processes share; the first image of a product becomes its primary one. A create answers with `Location` set to the image's URL, as DRF's `get_success_headers` does for any payload with a `url`. The list is Django's statement, joins and all: an ordering that ties falls to the plan |
+
+The parity stack mounts `apps/api/media` into the Nest container as its `MEDIA_ROOT`. Each API
+stores its own copy of an upload; when the name is taken the second gets a random suffix, which
+the harness takes off before comparing names and URLs.
+
 The parity stack now sets `WEB_REVALIDATE_URL` on both APIs (nothing listens), so the
 `content.tasks.revalidate_storefront` jobs a write queues are compared like checkout's. Seeding
 unsets it: the demo seed saves categories, and its signals would otherwise ping the URL inline.
@@ -258,13 +268,21 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | Cached feeds | its own cache keys | its own cache keys | Both expire on the same schedule |
 | Session cookies | `SessionAuthentication` accepts a Django admin session | not read | The web app authenticates with bearer tokens only; a Django admin session reaching `auth/me/` is not a client |
 | Malformed JSON body | 400 `JSON parse error - ` and Python's `json` wording | the same, with V8's wording | Status, code and prefix match |
-| Form and multipart bodies | parsed | 415 | Nothing sends them: the web app posts JSON |
+| Form and multipart bodies | parsed by every view | parsed by the views that take uploads (product images); 415 elsewhere | The web app posts JSON everywhere else |
+| Image formats Pillow knows beyond JPEG, PNG, WebP, AVIF, GIF, BMP, TIFF and ICO (PSD, TGA, QOI ...) | identified, then refused as "Upload a JPEG, PNG, WebP or AVIF image." | refused as "Upload a valid image." | Both 400 on the same field; reading forty formats to refuse them by another name is not worth it. A file Pillow opens but these readers judge corrupt (or the reverse) is the same kind of difference |
+| Multipart limits (`DATA_UPLOAD_MAX_NUMBER_FIELDS`, `_FILES`, base64 transfer encoding) | enforced, decoded | not enforced, not decoded | Browsers send neither; the proxy caps the body at 12 MB |
+| A body over 64 MB | read | 413 | Django sets no limit; the proxy caps bodies at 12 MB |
 | Two concurrent refreshes of one token | both succeed, each minting a pair | the second is refused (401) | `get_or_create` lets both pass; the port blacklists with `ON CONFLICT DO NOTHING` and refuses the loser. A fix for Django too |
 | `bcrypt_sha256$` password hashes | verified | read as a wrong password, and logged | No version of this project wrote one: Argon2 was first in PASSWORD_HASHERS from the first migration |
 | `OPTIONS` without CORS headers | DRF's view metadata | 405 | Nothing calls it |
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
+
+**Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
+images run as different users (`appuser`, uid 1001, and `node`, uid 1000). The shared volume needs
+a common group with group-writable directories, or one uid for both. The parity stack runs Django
+with `FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o777` for the same reason.
 
 One Django quirk is *not* copied because the harness cannot see it: gunicorn writes a body on
 `HEAD` responses. The Nest API sends none, as HTTP requires. Nor is a second, which the harness
