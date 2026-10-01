@@ -13,6 +13,7 @@ import { BrandsController, CategoriesController } from './catalog-admin.controll
 import { CataloguePayloads } from './catalogue-payloads';
 import { CategoriesService } from './categories.service';
 import { ProductImagesController } from './product-images.controller';
+import { ProductImportService } from './product-import.service';
 import { ProductImagesService } from './product-images.service';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
@@ -42,6 +43,7 @@ import { SizeChartsService } from './size-charts.service';
     ProductsService,
     VariantsService,
     ProductImagesService,
+    ProductImportService,
   ],
   exports: [CataloguePayloads],
 })

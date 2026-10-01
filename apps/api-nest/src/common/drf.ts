@@ -774,6 +774,35 @@ export function pathSuffix(name: string): string {
 }
 
 /**
+ * `serializers.FileField()`: an upload, by DRF's checks -- no file, not a
+ * file, no name, empty -- and nothing more.
+ */
+export function fileField(
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<UploadedFile | null> {
+  const required = options.required ?? true;
+  const allowNull = options.allowNull ?? false;
+  return {
+    html: { required, allowNull, allowBlank: false },
+    run(data, partial) {
+      if (data === EMPTY || data === undefined) {
+        if (partial || !required) return SKIP;
+        throw Invalid.of('No file was submitted.', 'required');
+      }
+      if (data === null) {
+        if (!allowNull) throw Invalid.of('This field may not be null.', 'null');
+        return null;
+      }
+      if (!isUploadedFile(data))
+        throw Invalid.of('The submitted data was not a file. Check the encoding type on the form.');
+      if (!data.name) throw Invalid.of('No filename could be determined.', 'no_name');
+      if (!data.size) throw Invalid.of('The submitted file is empty.', 'empty');
+      return data;
+    },
+  };
+}
+
+/**
  * `serializers.ImageField` (and `RelativeImageField`): DRF's file checks,
  * then Django's `forms.ImageField` -- Pillow must identify and verify it,
  * and its extension must be one Pillow registers. The upload comes back

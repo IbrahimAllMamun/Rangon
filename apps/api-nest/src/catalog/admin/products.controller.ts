@@ -1,5 +1,5 @@
-import { Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import { Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { RequestUser } from '../../auth/authentication';
 import { Action, StaffView } from '../../auth/permissions';
@@ -9,6 +9,7 @@ import { Params, QueryDict } from '../../common/query-dict';
 import { ENV, Env } from '../../config/env';
 import { requestData } from '../../http/request-body';
 import { lookupParam, PRODUCT_PERMISSIONS } from './catalog-admin.controller';
+import { ProductImportService } from './product-import.service';
 import { ProductsService } from './products.service';
 
 function actor(request: FastifyRequest): AuditActor {
@@ -28,8 +29,23 @@ function actor(request: FastifyRequest): AuditActor {
 export class ProductsController {
   constructor(
     private readonly products: ProductsService,
+    private readonly imports: ProductImportService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  /** A spreadsheet of products: a dry run unless `dry_run` is false. Multipart only. */
+  @Post('products/import/')
+  @Action('import_csv')
+  async importCsv(@Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
+    const { status, body } = await this.imports.handle(
+      request.user as RequestUser,
+      requestData(request, { multipartOnly: true }),
+      actor(request),
+      auditContext(request, this.env),
+    );
+    reply.status(status);
+    return body;
+  }
 
   @Get('products/')
   @Action('list')

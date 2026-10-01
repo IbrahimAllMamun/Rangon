@@ -55,10 +55,18 @@ const PARSED = Symbol('rangon.request-data');
  * `forms` lets a view that takes uploads read form bodies too (an
  * `HtmlInput`), as every DRF view can; the others still refuse them.
  */
-export function requestData(request: FastifyRequest, options: { forms?: boolean } = {}): unknown {
+export function requestData(
+  request: FastifyRequest,
+  options: { forms?: boolean; multipartOnly?: boolean } = {},
+): unknown {
   const holder = request as FastifyRequest & { [PARSED]?: unknown };
   if (!(PARSED in holder))
-    holder[PARSED] = parse(request.body, options.forms ?? false, request.headers['content-type']);
+    holder[PARSED] = parse(
+      request.body,
+      options.forms ?? false,
+      request.headers['content-type'],
+      options.multipartOnly ?? false,
+    );
   return holder[PARSED];
 }
 
@@ -66,7 +74,12 @@ function isFormType(type: string): boolean {
   return type === 'multipart/form-data' || type === 'application/x-www-form-urlencoded';
 }
 
-function parse(body: unknown, forms: boolean, requestType: string | undefined): unknown {
+function parse(
+  body: unknown,
+  forms: boolean,
+  requestType: string | undefined,
+  multipartOnly = false,
+): unknown {
   const header = body instanceof RawBody ? (body.contentType ?? '') : (requestType ?? '');
   const [type = '', ...params] = header.split(';');
   const mediaType = type.trim().toLowerCase();
@@ -74,7 +87,12 @@ function parse(body: unknown, forms: boolean, requestType: string | undefined): 
   // body at all never reaches the parser. An empty form body is an empty
   // QueryDict, which a serializer reads with form rules.
   if (!(body instanceof RawBody) || body.bytes.length === 0) {
-    return forms && isFormType(mediaType) ? new HtmlInput() : {};
+    return (forms || multipartOnly) && isFormType(mediaType) ? new HtmlInput() : {};
+  }
+  // `parser_classes=[MultiPartParser]`: nothing else is read.
+  if (multipartOnly) {
+    if (mediaType === 'multipart/form-data') return parseMultipart(header, body.bytes);
+    throw new UnsupportedMediaType(header);
   }
   if (forms && mediaType === 'multipart/form-data') return parseMultipart(header, body.bytes);
   if (forms && mediaType === 'application/x-www-form-urlencoded')
