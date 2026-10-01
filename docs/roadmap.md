@@ -481,6 +481,31 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 3b: variants, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `ProductVariantViewSet` -- the paginated list
+with DRF's `SearchFilter`, the form, archive-or-delete, `lookup` (`orders.services.pos
+.lookup_variant` with stock at a branch) and `barcode` under the variant's row lock.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1317/1317 (147 new), 22 by the documented differences
+concurrency ................................... 22/22 (3 new: eight barcode requests for one SKU, and
+                                                a label committed mid-flight on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 499 passed (25 new: DateField, search_smart_split)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover the search's splitting (whitespace, commas, quoted phrases, a lone quote that
+matches everything, a NUL refused with a bare list of details), the filters and orderings, every
+variant's detail, `lookup` by barcode, by SKU in any case, padded, blank, at an inactive and a
+malformed branch, and as a customer; the form's unique SKU and barcode, a blank barcode stored as
+NULL, a price of `-0.00` (allowed, as `MinValueValidator(0)` allows it), the dates DRF accepts
+(ISO weeks, `2027-1-5`, a trailing newline) and refuses, and archive-or-delete as for products.
+
+With the port's `FOR UPDATE` removed from `barcode`, eight simultaneous requests printed four
+different numbers for one SKU, and the mid-flight check minted a fifth.
+
 ### The NestJS API, phase 4 part 3a: products, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `ProductViewSet` -- the list with its filters,

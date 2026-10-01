@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -109,6 +109,8 @@ across both APIs where both serve the path:
 | A value moved by someone else while its own move waits (each API in turn) | both leave the same duplicate position, from the position read before the lock (D118, copied) |
 | 6 simultaneous single-version submits for one product, across both APIs | one SKU; the others answer `created: 0` |
 | A single-version SKU committed while a submit waits on the product's lock (each API in turn) | the submit makes nothing -- deterministic; with the port's `FOR UPDATE` removed it never waits and makes a second SKU |
+| 8 simultaneous barcode requests for one unlabelled SKU, across both APIs | one number, handed to all eight, one audit row; with the port's lock removed, four numbers |
+| A label committed while a barcode request waits on the variant's lock (each API in turn) | the request hands that label back -- deterministic |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -163,6 +165,14 @@ Then products (part 3a):
 | `POST/PUT/PATCH/DELETE /api/v1/products/[<id>/]` | specifications and size chart through their services, each audited when it changes something; a draft cannot be published in the same payload; a chart must be one the category offers, unless the product's variants are built on it. A product ever sold or stocked is archived; any other is deleted with what only pointed at it (variants, links, images, specifications, cart lines, offers, carousel entries -- each of those a `home` revalidation job); a purchase order line refuses it (409), after the audit entry is written, as Django writes it first |
 | `POST /api/v1/products/<id>/generate-variants/` | the cartesian product of the chosen values, combinations the product has skipped, SKUs and in-store barcodes from the `barcode` sequence; or one SKU with no options under the product's row lock, so a retried submit makes nothing. A negative cost reaches the database's check constraint: 409, as in Django |
 | `POST /api/v1/products/<id>/publish/`, `unpublish/` | publishing needs an active variant priced above zero |
+
+Then variants (part 3b):
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/variants/`, `GET/PUT/PATCH/DELETE /api/v1/variants/<id>/` | paginated, ordered by the product (newest first), position and SKU; filtered by product and status; DRF's `SearchFilter` over SKU, barcode and product name -- every term must match one of them, terms split on whitespace and commas, a quoted phrase kept whole, a NUL refused with the details as a bare list. Unique SKU and barcode, a blank barcode stored as NULL, `DateField` with Python's `date.fromisoformat` and Django's fallback (ISO weeks, `2026-1-5`, any script's digits). Archive-or-delete as for products |
+| `GET /api/v1/variants/lookup/?code=&branch=` | the barcode exactly, else the SKU in any case, with stock at the branch; not found is the view's own hand-written envelope, with no request id |
+| `POST /api/v1/variants/<id>/barcode/` | the variant's in-store barcode, assigned under its row lock when it has none, audited |
 
 The parity stack now sets `WEB_REVALIDATE_URL` on both APIs (nothing listens), so the
 `content.tasks.revalidate_storefront` jobs a write queues are compared like checkout's. Seeding
