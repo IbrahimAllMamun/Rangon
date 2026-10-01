@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 4a (inventory and the stock ledger) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts), part 3a (products), part 3b (variants), part 3c (product images), part 4a (inventory and the stock ledger), part 4b (transfers and counts) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -115,6 +115,11 @@ across both APIs where both serve the path:
 | A movement committed while an adjustment waits on the row (each API in turn) | the adjustment writes the difference from the committed figure and lands on the count, its ledger agreeing; without the lock the ledger is the harness's units short |
 | 6 simultaneous retries of one write-off with one `Idempotency-Key`, across both APIs | one ledger row, one unit off the shelf, every answer that row. The unique key holds this alone: it passes with the lock removed |
 | 6 simultaneous write-offs of 2 from a shelf of 6, across both APIs | 3 taken, 3 refused, nothing below zero; with the lock removed, 5 taken and the ledger at -4 |
+| A movement committed while a transfer waits on its source row (each API in turn) | the transfer is refused -- deterministic; with the port's `FOR UPDATE` removed it moves the units anyway and the source row disagrees with its ledger |
+| 6 simultaneous transfers of 2 from a shelf of 6, across both APIs | 3 move with 3 numbers, 3 are refused, both ends agree with their ledgers. The `stock_transfer` number sequence's lock serialises transfers on its own, so this passes with the row lock removed: the check above is the proof |
+| 6 simultaneous retries of one transfer with one `Idempotency-Key`, across both APIs | one document, one unit moved, every answer that document |
+| A cancellation committed while an apply waits on the count's row (each API in turn) | the apply is refused and writes nothing -- deterministic; with the port's `FOR UPDATE` removed it never waits and applies the cancelled count |
+| Two applies of one count at once, one per API | one applies, the other is refused, the adjustments are written once; with the lock removed, both proceed |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -237,6 +242,20 @@ before the method, and the router puts a list-level action before `<pk>`: `DELET
 (`RouteRegistry.resolve` now ranks a literal segment first, and the auth guard hands such a
 request to the no-route answer). DRF's `DateField` takes `2026010112`, which the port refused.
 And the zone offset of an instant before the year 100 was read in the wrong century.
+
+Then transfers and counts (part 4b), both through `StockService` (`transfer`,
+`apply_stock_count`). Neither view names `ordering_fields`, so `OrderingFilter` takes every field
+the serializer reads: a branch orders by its name, and `items` by the lines through a join that
+returns each document once per line, as Django returns it. Lines have no ordering of their own,
+so they are read with Django's statements.
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/stock-transfers/`, `GET /api/v1/stock-transfers/<id>/` | `inventory.view` to read, `inventory.transfer` to create; a branch-bound user sees transfers from or to their branch (D94). The source is the acting branch (`resolve_branch`), the target any active one. Idempotent on `Idempotency-Key`: looked up first, then claimed by the document, numbered `TRF-`, in a savepoint. Every source row is locked and checked; then per line the item, `TRANSFER_OUT` at the source's average cost, `receive_stock` at the target (which locks that row, moves its average and sets the variant's latest cost), and the receipt renamed `TRANSFER_IN`; audited; low-stock jobs for the source. A transfer naming a variant twice is a bare 409 (D128, copied); `received_at` stays empty though the status is `RECEIVED` |
+| `GET/POST /api/v1/stock-counts/`, `GET/PUT/PATCH/DELETE /api/v1/stock-counts/<id>/` | `inventory.view`, `inventory.count`. A create validates `branch` as any branch, then acts on the one `resolve_branch` allows, numbers the count `SC-` and writes a line per inventory row of that branch, in the order PostgreSQL returns them. An edit may move a count to any branch whatever its state, and writes every column back from the row as read (D126, copied); only an owner or superuser may delete one, an applied one included (D127, copied) |
+| `POST /api/v1/stock-counts/<id>/record/` | the figures, while the count is being counted: one per variant, each on the sheet |
+| `POST /api/v1/stock-counts/<id>/cancel/` | any count not yet applied, one already cancelled included |
+| `POST /api/v1/stock-counts/<id>/apply/` | `apply_stock_count`: the count locked together with its branch's row (`select_for_update()` over a `select_related` join locks both), its status read under the lock; the whole sheet refused when a line counts up stock the branch never received; each line through `adjust`, in the order Django's statement returns them |
 
 ## Running it
 
@@ -375,6 +394,11 @@ the port):
 - An `Idempotency-Key` longer than the column's 80 characters is a 500 (D124).
 - A NUL in the inventory list's `search` or `category`, or in the ledger's `search`, is a 500:
   those views filter on the raw parameter, where `SearchFilter` would refuse it (D125).
+- A stock count may be edited onto any branch, whatever its status or the user's branch, and an
+  edit writes every column back from the row as read (D126).
+- An owner or superuser may delete a stock count, an applied one too; the ledger's adjustments
+  then name a document that is gone (D127).
+- A transfer that names one variant twice is a bare 409 from the database (D128).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

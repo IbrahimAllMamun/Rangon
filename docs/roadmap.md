@@ -481,6 +481,48 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 4b: stock transfers and counts, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `StockTransferViewSet` and `StockCountViewSet`
+with `record`, `cancel` and `apply`, through two new `StockService` paths, `transfer` and
+`apply_stock_count`. The inventory fixture gains a transfer whose key stays claimed and a count in
+each state.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1940/1940 (185 new), 26 by the documented differences
+concurrency ................................... 35/35 (7 new: a transfer that meets a movement at its
+                                                source mid-flight and an apply that meets a
+                                                cancellation, each on both APIs; six transfers of 2
+                                                from a shelf of 6; six retries of one transfer; two
+                                                applies at once)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 558 passed (none new: the paths are services the
+                                                harness drives end to end)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases read transfers and counts as every role and as the PAR3 manager, with every ordering
+`OrderingFilter` allows -- among them `items`, which returns a document once per line -- and every
+page. Transfers go both ways, into low stock and to a branch that never held the variant, with a
+new key, a replayed one and one past the column, and meet every refusal: the same branch, an
+inactive or missing end, the PAR3 manager acting for DHK1, a short shelf, a variant that is not
+there, one named twice, no lines, bad lines, a huge quantity. Counts are created at each branch and
+refused at an inactive one, edited (notes, branch, PUT, null, as the PAR3 manager), deleted by
+owner, superuser, manager and administrator, recorded (a variant twice, off the sheet, an empty
+list, bad figures), cancelled, and applied in every state. Each write is compared by the stock and
+ledger rows, both documents and their lines, the variants' latest cost, the number sequences, the
+audit entries and the low-stock jobs.
+
+With the port's `FOR UPDATE` removed from the stock lock and the count's, the Nest transfer that met
+a movement mid-flight moved four units its source no longer had (the row at 2, its ledger at -2),
+an apply went through a committed cancellation, and two applies at once both proceeded. The
+six-transfer burst still held: the `stock_transfer` number sequence's row lock serialises
+transfers by itself, which is why the mid-flight check is the proof.
+
+Found in Django, and copied: D126 (a count can be edited onto any branch, applied or not, and an
+edit writes every column back), D127 (an applied count can be deleted), D128 (a transfer that names
+one variant twice is a bare 409).
+
 ### The NestJS API, phase 4 part 4a: inventory and the stock ledger, 2026-10-01
 
 Asked for: phase 4 of the port, continued. Ported: `InventoryViewSet` (stock positions by
@@ -3230,6 +3272,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D123 | **The low-stock list changes shape when it is empty.** `InventoryViewSet.low_stock` answers `get_paginated_response(...) if page else Response(serializer.data)`; an empty page is falsy, so no low stock is a bare `[]` and any low stock the `{count, next, previous, results}` envelope. Measured on the parity stack: a DHK1 manager, whose branch has nothing low, gets `[]`; an owner, who also sees PAR3's low rows, gets the envelope | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. `if page is not None` would do it |
 | D124 | **An `Idempotency-Key` longer than 80 characters is a 500.** The views pass `request.headers.get("Idempotency-Key")` straight to services whose key column (`idempotency_key_field`) is 80 characters, and the insert raises `DataError`. Measured on `POST /inventory/write-off/` with an 81-character key; the purchasing and finance views read the header the same way | `apps/api/inventory/api/views.py`, `apps/api/purchasing/api/views.py`, `apps/api/finance/api/views.py` | Found porting the inventory admin to NestJS, which copies it. One shared helper that refuses a longer key with a 400 would do it |
 | D125 | **A NUL in an inventory search is a 500.** The inventory list filters on its raw `search` and `category` parameters, and the stock ledger on its raw `search`; psycopg refuses a string with a NUL. Measured: `GET /inventory/?search=a%00b`, `?category=a%00b` and `GET /inventory-transactions/?search=a%00b` are 500s, where the admin lists that use DRF's `SearchFilter` answer 400 | `apps/api/inventory/api/views.py` | Found porting the inventory admin to NestJS, which copies it. Reading the value through `CharField().run_validation`, as `SearchFilter` does, would do it |
+| D126 | **A stock count can be edited onto another branch, applied or not.** `StockCountViewSet` is a `ModelViewSet`, and `StockCountSerializer` leaves `branch` writable over `Branch.objects.all()`: a PATCH moves a count to any branch -- an inactive one, one the user may not act on -- whatever its status. The save is a full `instance.save()`, writing every column back from the row as read, so an edit that races an apply can put an applied count back to "counting". Measured on the parity stack: the PAR3 manager moved their own count to DHK1, and an applied count was moved after its adjustments were in the ledger | `apps/api/inventory/api/views.py`, `apps/api/inventory/api/serializers.py` | Found porting the counts to NestJS, which copies it. A read-only `branch` after creation, edits refused once a count is applied, and `update_fields` would do it |
+| D127 | **An applied stock count can be deleted.** `required_permissions` names no `destroy`, so `RolePermission` refuses everyone but an owner or a superuser -- who may delete any count, an applied one included. Its lines go with it, and the ledger's adjustments then name a document that no longer exists: the ledger screen shows them with no link. Measured: `DELETE /stock-counts/<applied>/` as the owner is 204 | `apps/api/inventory/api/views.py` | Found porting the counts to NestJS, which copies it. Refusing to delete an applied count would do it; whether anyone should delete one at all is the owner's call |
+| D128 | **A transfer that names one variant twice is a bare 409.** `transfer` writes a `StockTransferItem` per line, and the second line for a variant hits the `(transfer, variant)` unique constraint; the handler answers "The request conflicts with the current state of the data." Measured on the parity stack | `apps/api/inventory/services.py` | Found porting the transfers to NestJS, which copies it. Refusing the payload with a 400 that names the line, or merging the lines, would do it |
 
 ## Still API-only (no UI)
 
