@@ -57,9 +57,36 @@ export class Invalid extends Error {
  * errors are a dict of their own (`{"shipping_address": {"city": [...]}}`).
  */
 export class InvalidNested extends Error {
-  constructor(readonly detail: Record<string, ErrorDetail[]>) {
+  constructor(readonly detail: ErrorTree) {
     super('Invalid input.');
   }
+}
+
+/**
+ * A DRF error detail in any of its shapes: a field's messages, a nested
+ * serializer's errors by field, a `ListField`'s by index (`{"0": [...]}`),
+ * or a `ListSerializer`'s, one entry per item (`[{}, {"cells": [...]}]`).
+ */
+export type ErrorTree = ErrorDetail[] | { [key: string]: ErrorTree } | ErrorTree[];
+
+function isDetailList(tree: ErrorTree): tree is ErrorDetail[] {
+  return (
+    Array.isArray(tree) &&
+    tree.every(
+      (item) =>
+        !Array.isArray(item) &&
+        typeof (item as ErrorDetail).message === 'string' &&
+        typeof (item as ErrorDetail).code === 'string',
+    ) &&
+    tree.length > 0
+  );
+}
+
+/** An `ErrorTree` as the envelope carries it: messages only. */
+export function treeMessages(tree: ErrorTree): unknown {
+  if (isDetailList(tree)) return tree.map((detail) => detail.message);
+  if (Array.isArray(tree)) return tree.map(treeMessages);
+  return Object.fromEntries(Object.entries(tree).map(([key, value]) => [key, treeMessages(value)]));
 }
 
 export interface Field<T> {
@@ -314,7 +341,7 @@ export function choiceField(
 }
 
 export type Fields = Record<string, Field<unknown>>;
-export type Errors = Record<string, ErrorDetail[] | Record<string, ErrorDetail[]>>;
+export type Errors = Record<string, ErrorTree>;
 
 export interface SerializerOptions<V> {
   partial?: boolean;
@@ -382,15 +409,7 @@ export async function runSerializer<V extends Record<string, unknown>>(
 
 /** `serializer.errors` as the envelope's `details`: messages only. */
 export function errorMessages(errors: Errors): Record<string, unknown> {
-  const messages = (details: ErrorDetail[]) => details.map((detail) => detail.message);
-  return Object.fromEntries(
-    Object.entries(errors).map(([name, details]) => [
-      name,
-      Array.isArray(details)
-        ? messages(details)
-        : Object.fromEntries(Object.entries(details).map(([key, value]) => [key, messages(value)])),
-    ]),
-  );
+  return treeMessages(errors) as Record<string, unknown>;
 }
 
 /** `core.fields.BangladeshiPhoneField`: blank stays blank, a mobile becomes canonical, else refused. */
@@ -656,6 +675,105 @@ export function imageField(
       });
       if (settled.settled) return settled.value;
       throw Invalid.of('The submitted data was not a file. Check the encoding type on the form.');
+    },
+  };
+}
+
+/**
+ * `serializers.ListField(child=...)`: a JSON array (a string or an object
+ * is refused, by type name), each item run through the child; the items'
+ * errors are keyed by index.
+ */
+export function listField<T>(
+  child: Field<T>,
+  options: { required?: boolean; allowNull?: boolean; allowEmpty?: boolean } = {},
+): Field<T[] | null> {
+  return {
+    async run(data, partial) {
+      const settled = emptyValue<T[]>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      if (!Array.isArray(data)) {
+        throw Invalid.of(
+          `Expected a list of items but got type "${pythonTypeName(data)}".`,
+          'not_a_list',
+        );
+      }
+      if (options.allowEmpty === false && data.length === 0)
+        throw Invalid.of('This list may not be empty.', 'empty');
+      const values: T[] = [];
+      const errors: Record<string, ErrorTree> = {};
+      for (const [index, item] of data.entries()) {
+        try {
+          const value = await child.run(item, false);
+          if (value !== SKIP) values.push(value);
+        } catch (error) {
+          if (error instanceof Invalid) errors[String(index)] = error.details;
+          else if (error instanceof InvalidNested) errors[String(index)] = error.detail;
+          else throw error;
+        }
+      }
+      if (Object.keys(errors).length) throw new InvalidNested(errors);
+      return values;
+    },
+  };
+}
+
+/**
+ * A nested serializer with `many=True` (a `ListSerializer`): a JSON array
+ * of objects, each validated by `fields` with the outer serializer's
+ * `partial` -- DRF reads it from the root, so a PATCH lets a nested item
+ * leave out a required field. Errors come back one entry per item, `{}`
+ * for an item that passed; an item that is null is refused as a field is.
+ */
+export function nestedListField(
+  fields: Fields,
+  options: { required?: boolean; allowEmpty?: boolean } = {},
+): Field<Record<string, unknown>[] | null> {
+  return {
+    async run(data, partial) {
+      const settled = emptyValue<Record<string, unknown>[]>(data, partial, {
+        required: options.required ?? true,
+        allowNull: false,
+      });
+      if (settled.settled) return settled.value;
+      if (!Array.isArray(data)) {
+        throw new InvalidNested({
+          non_field_errors: [
+            {
+              message: `Expected a list of items but got type "${pythonTypeName(data)}".`,
+              code: 'not_a_list',
+            },
+          ],
+        });
+      }
+      if (options.allowEmpty === false && data.length === 0) {
+        throw new InvalidNested({
+          non_field_errors: [{ message: 'This list may not be empty.', code: 'empty' }],
+        });
+      }
+      const values: Record<string, unknown>[] = [];
+      const errors: ErrorTree[] = [];
+      let failed = false;
+      for (const item of data) {
+        if (item === null) {
+          errors.push([{ message: 'This field may not be null.', code: 'null' }]);
+          failed = true;
+          continue;
+        }
+        const result = await runSerializer(fields, item, { partial });
+        if (result.ok) {
+          values.push(result.values);
+          errors.push({});
+        } else {
+          errors.push(result.errors);
+          failed = true;
+        }
+      }
+      if (failed) throw new InvalidNested(errors);
+      return values;
     },
   };
 }

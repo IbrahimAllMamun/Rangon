@@ -146,21 +146,54 @@ export async function applyFilters(
 }
 
 /**
- * `OrderingFilter.get_ordering`: the requested terms the view allows, or null
- * to keep its own ordering. `columns` maps each allowed field to its SQL.
+ * One term `OrderingFilter` allows. A plain column, or -- for a relation --
+ * what Django orders by in its place: the related model's own
+ * `Meta.ordering`, through a join the term adds (and, on an aggregated
+ * query, the columns it adds to the GROUP BY). A descending term flips
+ * every column.
  */
+export type OrderingTerm = string | { columns: string[]; join?: string; groupBy?: string[] };
+
+export interface OrderingPlan {
+  order: string[];
+  joins: string[];
+  groupBy: string[];
+}
+
+/**
+ * `OrderingFilter.get_ordering`: the requested terms the view allows, or null
+ * to keep its own ordering.
+ */
+export function orderingPlan(
+  query: QueryDict,
+  terms: Readonly<Record<string, OrderingTerm>>,
+): OrderingPlan | null {
+  const requested = query.get('ordering');
+  if (!requested) return null;
+  const valid = requested
+    .split(',')
+    .map((term) => pyStrip(term))
+    .filter((term) => Object.hasOwn(terms, term.startsWith('-') ? term.slice(1) : term));
+  if (!valid.length) return null;
+  const plan: OrderingPlan = { order: [], joins: [], groupBy: [] };
+  for (const term of valid) {
+    const descending = term.startsWith('-');
+    const spec = terms[descending ? term.slice(1) : term] as OrderingTerm;
+    const columns = typeof spec === 'string' ? [spec] : spec.columns;
+    plan.order.push(...columns.map((column) => `${column} ${descending ? 'DESC' : 'ASC'}`));
+    if (typeof spec !== 'string') {
+      if (spec.join && !plan.joins.includes(spec.join)) plan.joins.push(spec.join);
+      for (const column of spec.groupBy ?? [])
+        if (!plan.groupBy.includes(column)) plan.groupBy.push(column);
+    }
+  }
+  return plan;
+}
+
+/** `orderingPlan` for a view whose allowed terms are all plain columns. */
 export function orderingFrom(
   query: QueryDict,
   columns: Readonly<Record<string, string>>,
 ): string[] | null {
-  const requested = query.get('ordering');
-  if (!requested) return null;
-  const terms = requested
-    .split(',')
-    .map((term) => pyStrip(term))
-    .filter((term) => Object.hasOwn(columns, term.startsWith('-') ? term.slice(1) : term));
-  if (!terms.length) return null;
-  return terms.map((term) =>
-    term.startsWith('-') ? `${columns[term.slice(1)]} DESC` : `${columns[term]} ASC`,
-  );
+  return orderingPlan(query, columns)?.order ?? null;
 }

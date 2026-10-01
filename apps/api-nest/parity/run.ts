@@ -15,9 +15,11 @@ import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
 import { cartCases } from './cart-cases.ts';
+import { attributeCases } from './attribute-cases.ts';
 import { catalogAdminCases } from './catalog-admin-cases.ts';
 import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
+import { adminConcurrencyChecks } from './admin-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
@@ -535,6 +537,7 @@ async function buildCases(): Promise<Case[]> {
 
   // --- Staff: permissions, then the catalogue's admin --------------------------------------
   cases.push(...(await catalogAdminCases()));
+  cases.push(...(await attributeCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -664,7 +667,11 @@ async function main(): Promise<void> {
   // Invariants that hold only under the right lock, driven concurrently.
   let racesFailed = 0;
   if (!ONLY || 'concurrency'.includes(ONLY)) {
-    for (const check of await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })) {
+    const checks = [
+      ...(await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })),
+      ...(await adminConcurrencyChecks({ DJANGO, NEST })),
+    ];
+    for (const check of checks) {
       if (!check.passed) racesFailed += 1;
       console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${check.name}: ${check.detail}`);
     }

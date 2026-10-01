@@ -5,9 +5,19 @@
  * DRF 3.15, django-filter 24.3), not worked out by hand.
  */
 import { type RequiredPermissions, requiredCodes } from '../../src/auth/permissions';
-import { integerField, Invalid } from '../../src/common/drf';
-import { booleanValue } from '../../src/common/filtering';
+import {
+  charField,
+  errorMessages,
+  integerField,
+  Invalid,
+  listField,
+  nestedListField,
+  runSerializer,
+  uuidField,
+} from '../../src/common/drf';
+import { booleanValue, orderingPlan } from '../../src/common/filtering';
 import { PyFloat } from '../../src/common/python';
+import { QueryDict } from '../../src/common/query-dict';
 import { slugify, slugText } from '../../src/common/slugs';
 
 describe('RolePermission', () => {
@@ -147,4 +157,97 @@ describe("django-filter's BooleanWidget", () => {
   for (const [value, expected] of cases) {
     it(`reads ${JSON.stringify(value)}`, () => expect(booleanValue(value)).toBe(expected));
   }
+});
+
+describe('ListField and a nested serializer with many=True', () => {
+  // `SizeChartSerializer(data=...).errors`, printed by Django.
+  const cell = () => charField({ allowBlank: true, trimWhitespace: false });
+  const fields = {
+    columns: listField(cell(), { required: false }),
+    rows: nestedListField(
+      { attribute_value: uuidField(), cells: listField(cell()) },
+      { required: false },
+    ),
+  };
+  const errors = async (data: unknown, partial = false) => {
+    const result = await runSerializer(fields, data, { partial });
+    return result.ok ? result.values : errorMessages(result.errors);
+  };
+
+  it("keys a ListField's errors by index", async () => {
+    expect(await errors({ columns: [1, true, null, '', ' a ', [1]] })).toEqual({
+      columns: {
+        '1': ['Not a valid string.'],
+        '2': ['This field may not be null.'],
+        '5': ['Not a valid string.'],
+      },
+    });
+    expect(await errors({ columns: 'abc' })).toEqual({
+      columns: ['Expected a list of items but got type "str".'],
+    });
+    expect(await errors({ columns: { a: 1 } })).toEqual({
+      columns: ['Expected a list of items but got type "dict".'],
+    });
+  });
+
+  it('gives a nested list one entry per item', async () => {
+    const id = 'e8328b3c-43e1-4161-8f28-117a7ababfe6';
+    expect(
+      await errors({
+        rows: [
+          null,
+          5,
+          's',
+          {},
+          { attribute_value: 'nope', cells: 'x' },
+          { attribute_value: id, cells: [null, 3, new PyFloat(4.5)] },
+        ],
+      }),
+    ).toEqual({
+      rows: [
+        ['This field may not be null.'],
+        { non_field_errors: ['Invalid data. Expected a dictionary, but got int.'] },
+        { non_field_errors: ['Invalid data. Expected a dictionary, but got str.'] },
+        { attribute_value: ['This field is required.'], cells: ['This field is required.'] },
+        {
+          attribute_value: ['Must be a valid UUID.'],
+          cells: ['Expected a list of items but got type "str".'],
+        },
+        { cells: { '0': ['This field may not be null.'] } },
+      ],
+    });
+    expect(await errors({ rows: 'x' })).toEqual({
+      rows: { non_field_errors: ['Expected a list of items but got type "str".'] },
+    });
+  });
+
+  it("lets a partial update's nested item leave out a required field", async () => {
+    expect(await errors({ rows: [{ cells: ['1'] }] }, true)).toEqual({ rows: [{ cells: ['1'] }] });
+  });
+});
+
+describe('OrderingFilter', () => {
+  const terms = {
+    name: '"t"."name"',
+    rows: {
+      columns: ['"v"."position"', '"v"."value"'],
+      join: 'JOIN v',
+      groupBy: ['"v"."position"'],
+    },
+  };
+  it("keeps the allowed terms, flips a relation's columns, and adds its join once", () => {
+    expect(orderingPlan(new QueryDict('ordering=bogus,-rows,%20name%20,rows'), terms)).toEqual({
+      order: [
+        '"v"."position" DESC',
+        '"v"."value" DESC',
+        '"t"."name" ASC',
+        '"v"."position" ASC',
+        '"v"."value" ASC',
+      ],
+      joins: ['JOIN v'],
+      groupBy: ['"v"."position"'],
+    });
+    expect(orderingPlan(new QueryDict('ordering=bogus,-'), terms)).toBeNull();
+    expect(orderingPlan(new QueryDict(''), terms)).toBeNull();
+  });
 });
