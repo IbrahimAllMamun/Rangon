@@ -160,6 +160,14 @@ export async function variantCases(): Promise<Case[]> {
       expiry_date: date,
     });
   }
+  // Python's `Decimal()` drops every underscore and reads any script's digits.
+  for (const price of ['১২৯০', '_1_5_0_', ' 1__0.5 ', '\u00a0250\u2003', '1 0', '১,২৯০']) {
+    write(`create variant, price ${JSON.stringify(price)}`, 'POST', list, {
+      product: empty,
+      sku: 'PAR-PRICED',
+      price,
+    });
+  }
   write('create variant, taken SKU and barcode', 'POST', list, {
     product: empty,
     sku: 'RGN-CLA-L-WHI',
