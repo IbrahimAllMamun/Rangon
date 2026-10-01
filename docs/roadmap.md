@@ -481,6 +481,37 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 4 part 2: attributes, values and size charts, 2026-10-01
+
+Asked for: phase 4 of the port, continued. Ported: `AttributeViewSet`, `AttributeValueViewSet`
+with its `move` action, and `SizeChartViewSet` over `save_size_chart` and `delete_size_chart` --
+the whole-chart rules, the audit entries and the `products` revalidation job.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 1050/1050 (212 new), 22 by the documented differences
+concurrency (parity/concurrency.ts,
+             parity/admin-concurrency.ts) ..... 16/16 (4 new: a reorder committed while a move waits,
+                                                and the stale-position duplicate, on each API)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 474 passed (4 new: ListField and nested-list error
+                                                shapes as DRF prints them, relation ordering)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The cases cover each serializer's branches (unique names and codes, the kind and variant-axis
+rules against charts, variants and specifications, the swatch, the unique pair on create and on an
+update that fills half of it from the row), every refusal of a delete and each cascade (values,
+category links, an image's colour), `move` up, down, at the edge, through a run that shares a
+position, and refused, and for size charts every rule of the finished chart, DRF's nested error
+shapes, and the audit rows each save writes or does not. Orderings include the relations DRF
+allows by default: `?ordering=values` repeats each attribute once per value, as Django does.
+
+With the port's `FOR UPDATE` removed from `move`, its mid-flight check failed: the move never
+waited and wrote a lost update. Writing those checks found that PostgreSQL sorts a locking
+`SELECT` before it waits, so a queued move sees committed positions in the old order -- and found
+D118 in Django. Also found: D117 (only an owner may reorder values) and D119 (a nested row with
+no size is a 500). All three are copied.
+
 ### The NestJS API, phase 4 part 1: staff permissions, brands and categories, 2026-10-01
 
 Asked for: phase 4 of the port, now that phase 3 is merged. Ported first: the check every staff
@@ -3055,6 +3086,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D114 | **A first-time guest's double-click at checkout can be answered 409.** `_resolve_guest_customer` matches by phone, else inserts, and it runs before the order's savepoint. Two simultaneous checkouts with the same new mobile -- a double-click, one `Idempotency-Key` -- both find no customer and both insert. The loser's unique-phone violation aborts its whole transaction: 409 `CONFLICT`. One order is placed, correctly, but the shopper's other click is told it failed rather than given that order. A returning guest is unaffected. Measured by the parity race (`parity/concurrency.ts`): 1 order, 1 reservation, five 409s | `apps/api/orders/services/checkout.py` | Found writing the checkout race checks for the NestJS port, which copies it until Django is fixed. A savepoint around the insert that re-reads the winner would do it |
 | D115 | **The counter can sell stock that is reserved for online orders.** A POS sale goes `sell()` -> `_bulk()` -> `_check_can_reduce`, which refuses only when `on_hand` would go negative; it never looks at `reserved`. Measured on the parity database (rolled back): an online order reserves all 13 of `RGN-BLO-L-BEI` (on hand 13, reserved 13, available 0), then a counter sale of 13 succeeds -- on hand 0, reserved 13, **available -13**. Business rule 1.4 says `available` may never go negative with `RANGON_ALLOW_OVERSELL` off, and names a database constraint that does not exist (only `reserved >= 0` is enforced). The online order can then no longer be fulfilled from that shelf | `apps/api/inventory/services.py`, `docs/business-rules.md` §1.4 | **DECISION REQUIRED**: whether a counter sale may take reserved units (the goods are in the shop, and the customer is standing there). Either `sell` checks `available`, or the rule is rewritten to say reservations yield to the counter and what happens to the online order. Found writing the NestJS port's race checks |
 | D116 | **With the Celery broker down, a placed order answers 500.** Checkout queues the customer's email and SMS in `transaction.on_commit`, which runs after the commit and does not catch errors. `.delay()` raises `kombu.exceptions.OperationalError` after 0.7 s of retries when Redis is unreachable. Measured through the Django test client with the broker pointed at a closed port: **500 `SERVER_ERROR`, the order placed** and its staff notices written; a retry with the same `Idempotency-Key` returns 201. A shopper told the order failed who starts again gets a new key and a second order | `apps/api/notifications/services.py`, `apps/api/orders/services/checkout.py` | The NestJS port logs and answers 201 instead, a documented difference. `transaction.on_commit(..., robust=True)` (Django 5) logs rather than raises |
+| D117 | **A manager cannot reorder attribute values.** `AttributeValueViewSet.required_permissions` is `PRODUCT_PERMISSIONS`, which has no entry for the `move` action, so `RolePermission` fails closed: everyone but an owner or a superuser -- an administrator included, who holds every code -- gets 403 from `POST /attribute-values/<id>/move/`, which the attribute screen's up and down buttons call. Measured on the parity stack: manager 403, administrator 403, owner 200 | `apps/api/catalog/api/views.py` | Found porting the attribute admin to NestJS, which copies it. `"move": ["products.update"]` on the viewset would do it -- the navigation, carousel and social-link moves each declare theirs |
+| D118 | **Two moves of attribute values at once can leave two values on one position.** `move` reads the value with `get_object()` before it locks the attribute's values, and swaps from that position, not the locked one. If another move shifted the value in between, the neighbour is given a position some third value still holds. Measured deterministically by the parity harness (it holds the lock, starts a move of `c` down, and moves `c` up past `b` itself): from `a0 b1 c2 d3` the result is `a0 b2 d2 c3`. The storefront then breaks the tie alphabetically | `apps/api/catalog/api/views.py` | Found writing the NestJS port's race checks; the port copies it. Reading the value's position from the locked rows (`ordered[index]`) would do it |
+| D119 | **A size chart edited with a row that names no size answers 500.** On a PATCH, DRF reads `partial` from the root serializer, so a nested row may leave out `attribute_value`; `SizeChartViewSet._service_data` then reads `row["attribute_value_id"]` and raises `KeyError`. Measured: `PATCH /size-charts/<id>/` with `{"rows": [{"cells": ["1"]}]}` is a 500 | `apps/api/catalog/api/views.py` | Found porting the size charts to NestJS, which copies it. A `.get()` there would send the row on to `_clean_rows`, which refuses it in words |
 
 ## Still API-only (no UI)
 

@@ -17,7 +17,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 1 | Foundation; storefront catalogue, content and feeds; rate limits | **Done** 2026-09-30, parity 202/202 |
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
-| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories) 2026-10-01 |
+| 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | In progress: part 1 (staff permissions, brands, categories), part 2 (attributes, values, size charts) 2026-10-01 |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
@@ -105,9 +105,15 @@ across both APIs where both serve the path:
 | 6 different capture events for one payment | one posting, one capture on the timeline and in the audit log |
 | 3 captures and 3 failures for one payment | one outcome: captured with its posting, or failed with none; the losers 409 or find nothing to act on |
 | A capture committed while a Nest webhook waits on the payment row | the webhook sees it and stops -- deterministic, and it fails on every run with the port's `FOR UPDATE` removed (as do the two before it, sometimes) |
+| A reorder committed while a move of an attribute value waits on the values' lock (each API in turn) | the move swaps from the committed positions -- deterministic; with the port's `FOR UPDATE` removed it never waits and writes back a lost update |
+| A value moved by someone else while its own move waits (each API in turn) | both leave the same duplicate position, from the position read before the lock (D118, copied) |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
+
+PostgreSQL sorts a locking `SELECT ... ORDER BY ... FOR UPDATE` before it waits on the lock, so
+a request that queued gets the committed rows in the order they had before. The move checks are
+built on that, as Django's `move` meets it too.
 
 The concurrent stock race alone could not prove the lock: the `order:WEB` sequence's row lock
 already serialises online checkouts, and with the port's `FOR UPDATE` removed it still passed.
@@ -136,6 +142,15 @@ lookup too, as `get_object` applies them.
 | `GET/POST /api/v1/brands/`, `GET/PUT/PATCH/DELETE /api/v1/brands/<id>/` | `products.*` codes; unpaginated; `is_active`/`is_featured` filters, `ordering=name`. Unique name and slug (DRF's `UniqueValidator`, run first, then every other validator); a slug made on create only, from the name, Bengali transliterated (`common/slugs.ts`); a missing file is stored as `""`. A brand with products is not deleted (`PROTECT`: 409) |
 | `GET/POST /api/v1/categories/`, `GET/PUT/PATCH/DELETE /api/v1/categories/<id>/` | `?tree=true` lists the roots with their active children nested, and narrows detail lookups to roots; each annotated row counts its published products, and an unannotated one (a new category, a nested child) has no `product_count` at all. `validate_parent` refuses a cycle. A partial update's response leaves out `parent_name` for a root: DRF skips a field's default when the serializer is partial. Every save and delete queues the storefront revalidation job, and a delete takes the category's navigation items (and their children) with it, one job each. With children or products, 409 |
 | `GET /api/v1/categories/<id>/attributes/` | the attributes a category uses, inherited down the tree; the nearest category's link wins |
+
+Then the attribute admin (part 2):
+
+| Endpoint | Notes |
+|---|---|
+| `/api/v1/attributes/[<id>/]` | `products.*`; unpaginated; each attribute with its values and the number of variants built on it. No `ordering_fields`, so `OrderingFilter` allows every field the serializer reads from the model -- `values` among them, which Django orders by through a join, one result per value. A lookup drops the ordering (`QuerySet.get()` clears it), so it never repeats. A Size attribute with charts stays a Size; a variant axis stays one while variants use it, and a specification cannot become one while products state it. Deleting is refused in words for variants, specifications or charts; otherwise its values, its category links and its images' colour go with it |
+| `/api/v1/attribute-values/[<id>/]` | filtered by `attribute`; unique per attribute (DRF's `UniqueTogetherValidator`, which on an update fills a missing half from the row and skips the check when nothing changed); a swatch is a hex colour or nothing. Deleting is refused while variants, specifications or charts use the value; an image grouped under it keeps the photograph and loses the colour (`SET_NULL`) |
+| `POST /api/v1/attribute-values/<id>/move/` | the direction is read before the value; every value of the attribute is locked `ORDER BY position, value FOR UPDATE`, then swapped with its neighbour, or the whole run renumbered where the two share a position. No requirement is declared for `move`, so only an owner or superuser may (D117, copied); the value's own position is the one read before the lock (D118, copied) |
+| `/api/v1/size-charts/[<id>/]` | `save_size_chart` and `delete_size_chart`: the finished chart is validated (a Size attribute, a unique name in any case, 1-12 distinct headings, every row one of the attribute's sizes, once, one figure per column), rows are replaced, each save and delete is audited, and a save queues the `products` revalidation job after its commit. A chart in use is not deleted (409, in words) |
 
 The parity stack now sets `WEB_REVALIDATE_URL` on both APIs (nothing listens), so the
 `content.tasks.revalidate_storefront` jobs a write queues are compared like checkout's. Seeding
@@ -251,6 +266,13 @@ the port):
   before the order's savepoint, so two simultaneous requests with the same new mobile both insert
   one, and the loser's unique violation aborts its whole transaction. One order is placed; the
   other click is refused rather than answered with it.
+- A manager or administrator cannot reorder attribute values: the viewset declares no requirement
+  for `move`, so `RolePermission` refuses everyone but an owner or superuser (D117).
+- A move of an attribute value swaps from the value's position as read before the lock, so two
+  moves at once can leave two values on one position (D118).
+- A size chart PATCH whose nested row names no size is a 500: `partial` reaches the nested rows,
+  and the view then reads a key the row never had (D119).
+- `request.data.get` on a JSON body that is not an object is a 500 on `move` too.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
   `as_view({"post": "reviews"})`, which drops the action's `[IsAuthenticated, IsCustomer]` (only a
   router applies them), so anonymous and staff callers reach the view and are refused by its
