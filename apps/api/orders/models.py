@@ -332,6 +332,8 @@ class OrderEventType(models.TextChoices):
     STOCK_RESERVED = "STOCK_RESERVED", "Stock reserved"
     STOCK_COMMITTED = "STOCK_COMMITTED", "Stock deducted"
     STOCK_RELEASED = "STOCK_RELEASED", "Stock released"
+    #: The counter sold units this order had reserved (§1.4, D115).
+    STOCK_SHORT = "STOCK_SHORT", "Stock short"
 
 
 class OrderEvent(AppendOnlyModel):

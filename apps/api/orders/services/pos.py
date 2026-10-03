@@ -47,7 +47,7 @@ from orders.models import (
     PaymentState,
 )
 from orders.services import payments as payment_services
-from orders.services import pricing
+from orders.services import pricing, shortages
 from orders.services.lifecycle import log_event
 from promotions import services as promotion_services
 from promotions.models import Coupon, DiscountType
@@ -559,6 +559,14 @@ def create_pos_sale(*, branch: Branch, actor: User, data: SaleInput) -> Order:
         actor=actor,
         reference_type="order",
         reference_id=order.pk,
+    )
+    # Where the owner lets the counter take reserved units, the online orders
+    # that lost them are flagged for staff (§1.4, D115).
+    shortages.flag_short_orders(
+        branch=branch,
+        lines=[(line.variant.pk, line.quantity) for line in priced.lines],
+        sale=order,
+        actor=actor,
     )
 
     # Count the coupon's use, re-checking both limits under its row lock. After

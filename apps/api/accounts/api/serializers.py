@@ -72,6 +72,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "default_tax_rate",
             "tax_settled_at",
             "tax_settled_by_name",
+            "counter_sells_reserved",
             "branches",
         ]
         # The VAT fields are readable here but only writable through
