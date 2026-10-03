@@ -169,38 +169,13 @@ export function SupplierForm({
 
   const errorFor = (field: string) => errors.find((error) => error.field === field)?.message;
 
-  /**
-   * A `<form>` when it can legally be one, a `<div>` when nested.
-   *
-   * `noValidate` and `onSubmit` are meaningless on a div, so they are dropped
-   * rather than spread onto it — React would warn about unknown DOM props.
-   */
-  const Shell = ({
-    children,
-    className,
-    onSubmit: onSubmitProp,
-    noValidate,
-  }: {
-    children: React.ReactNode;
-    className?: string;
-    onSubmit: (event: React.FormEvent) => void;
-    noValidate?: boolean;
-  }) =>
-    nested ? (
-      <div className={className}>{children}</div>
-    ) : (
-      <form onSubmit={onSubmitProp} noValidate={noValidate} className={className}>
-        {children}
-      </form>
-    );
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>{editing ? `Edit ${editing.name}` : "New supplier"}</CardTitle>
       </CardHeader>
       <CardContent>
-        <Shell onSubmit={submit} noValidate className="space-y-4">
+        <FormShell nested={nested} onSubmit={submit} noValidate className="space-y-4">
           <ErrorSummary errors={errors} title="Could not save this supplier" />
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -358,8 +333,42 @@ export function SupplierForm({
               </span>
             )}
           </div>
-        </Shell>
+        </FormShell>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * A `<form>` when it can legally be one, a `<div>` when nested.
+ *
+ * `noValidate` and `onSubmit` are meaningless on a div, so they are dropped
+ * rather than spread onto it — React would warn about unknown DOM props.
+ *
+ * Module scope, not inside `SupplierForm`: React tells components apart by
+ * function identity, so one declared in the body is a *new* component on every
+ * render. Each keystroke re-renders the form, and React then unmounted every
+ * input under the wrapper and mounted fresh ones -- the typed value survived in
+ * state, the focused element did not, and focus was lost after each letter.
+ */
+function FormShell({
+  nested,
+  children,
+  className,
+  onSubmit,
+  noValidate,
+}: {
+  nested: boolean;
+  children: React.ReactNode;
+  className?: string;
+  onSubmit: (event: React.FormEvent) => void;
+  noValidate?: boolean;
+}) {
+  return nested ? (
+    <div className={className}>{children}</div>
+  ) : (
+    <form onSubmit={onSubmit} noValidate={noValidate} className={className}>
+      {children}
+    </form>
   );
 }
