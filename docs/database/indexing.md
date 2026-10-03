@@ -63,6 +63,7 @@ engagement_review:        rating BETWEEN 1 AND 5
 | `inventory_inventory (branch)` partial `on_hand <= reorder_point` | low-stock report |
 | `inventory_inventorytransaction (branch, variant, created_at DESC)` | stock card / movement report |
 | `inventory_inventorytransaction (reference_type, reference_id)` | "what did this order do to stock" |
+| `inventory_labelprint (branch, variant, created_at DESC)` | label sheet: the newest mark per variant at a branch (`DISTINCT ON`, `inventory.labels.latest_marks`) |
 | `orders_order (branch, created_at DESC)` | admin order list, dashboard |
 | `orders_order (channel, status, created_at DESC)` | channel reports, pending-online-orders KPI |
 | `orders_order (customer, created_at DESC)` | customer order history |

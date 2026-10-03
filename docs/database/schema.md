@@ -34,6 +34,7 @@ enums are forbidden — a database dump must be readable without the code.
 | `orders_orderitem` | `sku`, `product_name`, `variant_label`, `unit_price`, `unit_cost` | renaming or repricing a product must not rewrite sales history |
 | `orders_order` | `shipping_address`, `billing_address` (JSON) | a customer editing their address must not alter a past invoice |
 | `inventory_inventorytransaction` | `on_hand_after`, `reserved_after` | self-verifying ledger |
+| `inventory_labelprint` | `on_hand` | the branch's stock when a variant's labels were marked printed; append-only, newest row per branch × variant is the state |
 | `purchasing_purchasereceiptitem` | `unit_cost` | costing must reflect the price actually paid |
 
 Denormalisation is only used for **history that must not change**, never as a performance shortcut that

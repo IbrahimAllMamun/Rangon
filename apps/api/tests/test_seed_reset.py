@@ -91,3 +91,28 @@ def test_reset_survives_a_booked_parcel(shop: Any) -> None:
     call_command("seed_demo", "--reset", "--orders", "1", verbosity=0)
 
     assert not Shipment.objects.filter(pk=parcel.pk).exists()
+
+
+def test_reset_survives_a_label_mark(shop: Any) -> None:
+    """The fifth: `LabelPrint` PROTECTs `ProductVariant`.
+
+    The label sheet records which variants a branch has finished labelling,
+    and keeps the references PROTECT so a labelled variant is archived rather
+    than deleted. That is the exact shape that broke `_reset` four times
+    before, so it is pinned here the day the model arrives.
+    """
+    from inventory.labels import LabelMark, mark_labels
+    from inventory.models import LabelPrint
+
+    mark_labels(
+        branch=shop["branch"],
+        product=shop["product"],
+        marks=[LabelMark(variant_id=shop["variants"][0].pk, printed=True, quantity=10)],
+        actor=shop["owner"],
+    )
+    assert LabelPrint.objects.exists()
+
+    call_command("seed_demo", "--reset", "--orders", "1", verbosity=0)
+
+    assert not LabelPrint.objects.exists()
+    assert Product.objects.exists()

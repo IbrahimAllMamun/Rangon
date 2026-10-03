@@ -37,6 +37,8 @@ Extras:
 | POST | `products/{id}/publish/` · `unpublish/` | storefront visibility |
 | GET | `variants/lookup/?code=<barcode\|sku>` | exact-first lookup (POS + admin) |
 | POST | `variants/{id}/barcode/` | generate a barcode if missing |
+| GET | `products/{id}/labels/?branch=` | `products.view` — the barcode label sheet: **every** variant of the product (variant fields as for `variants/`), each with `stock` at the branch, `label_status` (the newest mark: `printed`, `quantity`, `on_hand`, `marked_at`, `marked_by`, `received_since`, or `null` if never marked) and `suggested_labels`. Also `product` and `branch` ([business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)) |
+| POST | `products/{id}/labels/` | `products.update` — tick variants off as printed or back on. Body `{branch?, marks: [{variant, printed, quantity?}]}` (1–200 marks, quantity 0–500). Every variant must belong to the product, each once; all or nothing. Appends one `LabelPrint` row per mark and answers with the sheet as `GET` does |
 | POST | `products/import/` · GET `products/export/` | CSV bulk (`products.create`) |
 | GET/POST/PATCH/DELETE | `size-charts/` | size charts, each for one Size attribute ([business-rules §5b](../business-rules.md#5b-size-charts)). Unpaginated; `?attribute=<id>` filters. Body: `attribute` (create only), `name`, `system`, `notes`, `position`, `columns: [str]`, `rows: [{attribute_value, cells: [str]}]`. Rows are **replaced**, not merged, and the finished chart is validated whole — one cell per column, sizes from the chart's attribute only. Reads add `attribute_code`, `attribute_name`, each row's `value`/`label`, and `product_count`. `DELETE` answers `409` with `details.product_count` while products use the chart |
 

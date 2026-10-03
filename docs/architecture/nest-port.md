@@ -182,7 +182,7 @@ Then products (part 3a):
 |---|---|
 | `GET /api/v1/products/` | paginated (25, up to 100), newest first with the key breaking ties; filters on status, published, featured, category and brand; `never_ordered=true` (drafts no purchase order names); `search` matches what the storefront search finds over every product (an exact SKU or barcode outright, else ranked text or a similar name) or a name or SKU containing the text, or a barcode equal to it |
 | `GET /api/v1/products/<id>/` | variants with stock at the branch asked for (`resolve_branch`) and whether that branch ever received each at a cost; specifications grouped by attribute; images with their colour. A variant's attribute links have no ordering of their own, so they are read with Django's statement |
-| `POST/PUT/PATCH/DELETE /api/v1/products/[<id>/]` | specifications and size chart through their services, each audited when it changes something; a draft cannot be published in the same payload; a chart must be one the category offers, unless the product's variants are built on it. A product ever sold or stocked is archived; any other is deleted with what only pointed at it (variants, links, images, specifications, cart lines, offers, carousel entries -- each of those a `home` revalidation job); a purchase order line refuses it (409), after the audit entry is written, as Django writes it first |
+| `POST/PUT/PATCH/DELETE /api/v1/products/[<id>/]` | specifications and size chart through their services, each audited when it changes something; a draft cannot be published in the same payload; a chart must be one the category offers, unless the product's variants are built on it. A product ever sold, stocked or labelled (a `LabelPrint` row, added 2026-10-03) is archived; any other is deleted with what only pointed at it (variants, links, images, specifications, cart lines, offers, carousel entries -- each of those a `home` revalidation job); a purchase order line refuses it (409), after the audit entry is written, as Django writes it first |
 | `POST /api/v1/products/<id>/generate-variants/` | the cartesian product of the chosen values, combinations the product has skipped, SKUs and in-store barcodes from the `barcode` sequence; or one SKU with no options under the product's row lock, so a retried submit makes nothing. A negative cost reaches the database's check constraint: 409, as in Django |
 | `POST /api/v1/products/<id>/publish/`, `unpublish/` | publishing needs an active variant priced above zero |
 
@@ -193,6 +193,13 @@ Then variants (part 3b):
 | `GET/POST /api/v1/variants/`, `GET/PUT/PATCH/DELETE /api/v1/variants/<id>/` | paginated, ordered by the product (newest first), position and SKU; filtered by product and status; DRF's `SearchFilter` over SKU, barcode and product name -- every term must match one of them, terms split on whitespace and commas, a quoted phrase kept whole, a NUL refused with the details as a bare list. Unique SKU and barcode, a blank barcode stored as NULL, `DateField` with Python's `date.fromisoformat` and Django's fallback (ISO weeks, `2026-1-5`, any script's digits). Archive-or-delete as for products |
 | `GET /api/v1/variants/lookup/?code=&branch=` | the barcode exactly, else the SKU in any case, with stock at the branch; not found is the view's own hand-written envelope, with no request id |
 | `POST /api/v1/variants/<id>/barcode/` | the variant's in-store barcode, assigned under its row lock when it has none, audited |
+
+**Added to Django after phase 4 closed, not ported yet:** `GET/POST /api/v1/products/<id>/labels/`
+(2026-10-03, the label sheet: every variant with its stock and its newest `inventory_labelprint`
+mark; [business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)).
+Django serves it. What the port already does is treat a variant or product with a mark as history
+when deleting it, as Django now does, so the two still agree on `DELETE`. `src/database/schema.ts`
+has not been re-introspected for the new table; nothing in the port reads it through Drizzle.
 
 Then product images (part 3c), the first endpoint that takes a form:
 

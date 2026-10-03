@@ -439,7 +439,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 21  | Dashboard                             | ✅      | ✅       | Server-aggregated KPIs, sales chart with a table alternative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 22  | Reports                               | ✅      | ✅       | 8 report endpoints + CSV export, with a reports screen (product performance + CSV download for all seven)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 23  | Offline POS                           | ❌      | ❌       | **Dropped 2026-09-09, owner's decision.** Not deferred — declined. A large build (local queue, sync, conflict resolution on a ledger that must not oversell) against an occasional outage a paper pad already covers for one counter. The design notes stay in `architecture/offline-pos.md` as a record of what was considered, not as a plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 24  | Barcode + printing                    | ✅      | 🟡       | Keyboard-wedge scanning, barcode generation, and **printable label sheets shipped 2026-09-04** — `/admin/labels`, EAN-13 drawn as vector SVG with quiet zones, on a 38x25 mm thermal roll (width and height editable, one sticker per page). Print CSS for 75 mm receipt and A4. No ESC/POS driver |
+| 24  | Barcode + printing                    | ✅      | 🟡       | Keyboard-wedge scanning, barcode generation, and **printable label sheets shipped 2026-09-04** — `/admin/labels`, EAN-13 drawn as vector SVG with quiet zones, on a 38x25 mm thermal roll (width and height editable, one sticker per page). Print CSS for 75 mm receipt and A4. **2026-10-03:** a scan lists every variant of the product with its stock, and each is ticked off once printed (append-only marks, [§1.10](business-rules.md#110-barcode-labels-which-variants-are-printed)). No ESC/POS driver |
 | 25  | Notifications                         | 🟡      | ✅       | Model, in-app feed API, Celery email tasks.**UI shipped 2026-08-21** — a polling bell in the admin header and `/admin/notifications` with all/unread filtering and mark-as-read. **SMS built 2026-09-10** — provider interface, `console` no-op default, registry, an `SmsMessage` log, segment counting and an allowlist guard, wired to order confirmed / shipped / refunded. Partial only because the **last mile needs an account**: a real gateway is one class and a settings line. See [operations/sms.md](operations/sms.md). The same pass found the customer was never told their order was placed at all, and that every order email carried an unusable relative tracking link |
 | 26  | SEO                                   | ✅      | ✅       | Metadata, OG, sitemap, robots, canonicals, JSON-LD product + breadcrumbs. The doubled brand in product titles ([D4](#known-defects)) was fixed 2026-09-09                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
@@ -480,6 +480,67 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### Barcode labels: every variant, its stock, and a tick that is never lost, 2026-10-03
+
+Asked for: on `/admin/labels`, scanning one variant should list **all** variants of the product, show
+the stock each holds as the hint for how many labels to print, and let the person mark which
+variants are finished printing — with a migration that is safe for a live database, so no data is
+deleted.
+
+**What shipped.**
+
+- `inventory.LabelPrint` (migration `inventory/0004_labelprint`): append-only, like the ledger. An
+  un-tick is a new row with `printed = false`, never an edit or a delete; the newest row per
+  branch × variant is the state. It PROTECTs the variant, so a variant or product with marks is
+  **archived, not deleted** (Django, and the NestJS port's `DELETE` to match), and `seed_demo
+  --reset` clears it first.
+- `inventory.labels`: `latest_marks` (one `DISTINCT ON` query), `received_since` (units *purchased*
+  in after the mark, read from the ledger), `suggested_labels` and `mark_labels` (all or nothing,
+  every variant must belong to the product, the stock figure on a mark taken by the server).
+- `GET/POST /products/{id}/labels/` — read under `products.view`, tick under `products.update`
+  ([business-rules §1.10](business-rules.md#110-barcode-labels-which-variants-are-printed), two
+  `DECISION REQUIRED` defaults: only purchases reopen a printed variant; cashiers cannot tick).
+- The label screen: a scan brings in the whole product as a table — variant, stock at the branch,
+  labels to print (prefilled one per unit, with a *Use N* shortcut back to the suggestion) and a
+  *Printed* tick with who printed how many and when. A delivery after printing reopens the variant
+  in words ("6 more received since — they need labels"). *Mark N as printed* ticks off everything
+  on the roll at once, deliberately separate from *Print*.
+
+**Why the migration is safe.** It only creates one new, empty table and its index; it alters,
+renames or drops nothing that exists. `tests/test_label_print_migration.py` proves it three ways:
+the migration's only operation is that `CreateModel`; applying it to a stocked shop leaves **every
+row of every existing table** byte-identical (row count and an md5 over all rows, per table); and no
+migration, now or later, may remove, rename, retype or rewrite the marks — with a self-test showing
+that guard fails on each of those.
+
+**Checks run** (Docker test stack, its own project and database; the local production stack was
+not touched):
+
+```text
+pytest ................................. 1684 passed
+ruff 0.8.4 check + format --check ...... clean, 250 files
+mypy ................................... clean, 162 source files
+makemigrations --check ................. no changes
+vitest (TZ=UTC) ........................ 489 passed, 45 files
+tsc --noEmit ........................... clean
+next lint (changed files) .............. clean
+prettier (api-nest, changed files) ..... clean
+```
+
+**Run in a browser**, not only typechecked: `next dev` against a seeded throwaway API, signed in as
+the stock manager. Scanning *Block Print Kurti L / Maroon* listed all eight variants with their stock
+(153 stickers); ticking *L / Beige* recorded "13 printed … by Tanvir Islam" and survived a reload; a
+`PURCHASE` of six more reopened it with the warning and a suggestion of 6; un-ticking appended a row;
+*Mark 7 as printed* ticked the rest except the one set to 0. The database held exactly
+`[printed 13 @13] → [un-marked @19] → [printed 19 @19]` for that variant and nine rows in all. No
+console errors.
+
+**Not done.** The NestJS port does not serve `products/{id}/labels/` yet (Django does; nothing routes
+to the port), and its `schema.ts` was not re-introspected — the Nest unit tests and parity harness
+were not run for the two SQL lines changed there. There is no branch picker on the label screen: an
+owner sees their own branch, or the default one. The migration has not been rehearsed on a copy of
+a real database.
 
 ### The NestJS API, phase 4 part 5c: navigation, banners and the home carousel -- phase 4 done, 2026-10-01
 

@@ -176,6 +176,39 @@ the screen has no edit, and a correction is a new movement made from `/admin/inv
   `types=DAMAGE,LOSS` — and refuses a type it does not know rather than ignoring it. Dates are the
   shop's days, read by the same parser as the cash book (`core.dates.parse_window`).
 
+### 1.10 Barcode labels: which variants are printed
+
+`/admin/labels` lists **every variant of a product** as soon as any one of them is scanned or
+searched for, with the stock the branch holds beside each, so whoever is at the printer can see how
+many stickers each size and colour needs. The person printing ticks each variant off once its
+labels are out (`GET`/`POST /products/{id}/labels/`).
+
+- **The hint is `on_hand`, not `available`.** Stickers go on physical units, and units reserved for
+  an online order are still on the rail. Each variant's label count starts at one per unit on hand
+  (0 for none or for negative stock), capped at 500 — the same ceiling one mark may claim.
+- **A tick is per branch.** One shop having printed its twelve says nothing about the other shop's
+  five, so the mark is recorded against the branch whose stock was on screen.
+- **A tick reopens when new stock arrives.** After a variant is marked printed, every unit
+  *purchased* into the branch since then is counted (`received_since`) and becomes the new
+  suggestion, capped at what is still on hand — what sold in the meantime has left the shop.
+  Marking it printed again closes it. *`DECISION REQUIRED` — only `PURCHASE` counts as unlabelled
+  stock. A transfer moves stock this shop already labelled (same barcode, same shop name), a
+  customer return comes back with its sticker, and a counted surplus was already on the rail. If
+  branches print their own labels with different details, transfers should count too.*
+- **Nothing marked is ever lost.** `LabelPrint` is append-only like the ledger: un-ticking writes a
+  new row with `printed = false` instead of deleting or editing the old one, and the current state
+  is the newest row. A variant or product that has marks is **archived, not deleted**, like one
+  with stock or sales: the stickers on the rail carry its barcode, and deleting it would make every
+  one of them scan as nothing. The migration that added the table (`inventory.0004_labelprint`)
+  only creates it, and `tests/test_label_print_migration.py` refuses any later migration that
+  removes, renames, retypes or rewrites it.
+- **Who may tick.** Reading the sheet needs `products.view`, as the label screen does. Ticking needs
+  `products.update`, the same as assigning a barcode — the role that receives and labels stock.
+  *`DECISION REQUIRED` — a cashier cannot tick. If cashiers print labels at the counter, a separate
+  permission would let them without letting them edit products.*
+- The count of stickers a tick records is what the person says they printed. It is informational:
+  nothing reads it as a stock figure, and the stock figure on the mark is taken by the server.
+
 ---
 
 ## 2. Returns and refunds

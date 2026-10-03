@@ -16,6 +16,11 @@ export interface VariantAttribute {
 
 export interface PickableVariant {
   id: string;
+  /**
+   * The product's id. Optional for the same reason as the fields below; the
+   * label sheet uses it to bring in every other variant of what was scanned.
+   */
+  product?: string;
   sku: string;
   barcode: string | null;
   product_name: string;

@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LABEL_SIZE,
   LABEL_SIZE_LIMITS,
+  type LabelStatus,
+  MAX_QUANTITY,
+  type SheetVariant,
+  clampQuantity,
+  describeLabelStatus,
+  mergeSheet,
   parseLabelDimension,
+  rowsFromSheet,
   thermalLayout,
   variantLines,
 } from "./label-sheet";
@@ -177,5 +184,144 @@ describe("the sticker size fields", () => {
     expect(narrow.value).toBeNull();
     expect(narrow.error).toBe(`Between ${limits.min} and ${limits.max} mm.`);
     expect(parseLabelDimension("101", limits).value).toBeNull();
+  });
+});
+
+function sheetVariant(overrides: Partial<SheetVariant> = {}): SheetVariant {
+  return {
+    ...variant(),
+    product: "p1",
+    status: "ACTIVE",
+    stock: { on_hand: 12, reserved: 0, available: 12 },
+    label_status: null,
+    suggested_labels: 12,
+    ...overrides,
+  };
+}
+
+function printedStatus(overrides: Partial<LabelStatus> = {}): LabelStatus {
+  return {
+    printed: true,
+    quantity: 12,
+    on_hand: 12,
+    marked_at: "2026-10-03T08:30:00Z",
+    marked_by: "Rahim Uddin",
+    received_since: 0,
+    ...overrides,
+  };
+}
+
+describe("the label count on each variant", () => {
+  it("starts at what the server suggests: one per unit in stock", () => {
+    const [row] = rowsFromSheet([sheetVariant({ suggested_labels: 12 })]);
+    expect(row.quantity).toBe(12);
+  });
+
+  it("lists every variant, including the ones with nothing to print", () => {
+    const rows = rowsFromSheet([
+      sheetVariant({ id: "v1", suggested_labels: 3 }),
+      sheetVariant({ id: "v2", suggested_labels: 0, stock: null }),
+    ]);
+    expect(rows.map((row) => [row.variant.id, row.quantity])).toEqual([
+      ["v1", 3],
+      ["v2", 0],
+    ]);
+  });
+
+  it("is kept between 0 and the server's ceiling, in whole stickers", () => {
+    expect(clampQuantity(-4)).toBe(0);
+    expect(clampQuantity(2.7)).toBe(2);
+    expect(clampQuantity(Number.NaN)).toBe(0);
+    expect(clampQuantity(9999)).toBe(MAX_QUANTITY);
+    expect(rowsFromSheet([sheetVariant({ suggested_labels: 9999 })])[0].quantity).toBe(
+      MAX_QUANTITY,
+    );
+  });
+
+  it("says why a barcode that is not an EAN-13 will not print", () => {
+    const [row] = rowsFromSheet([sheetVariant({ barcode: "12345678" })]);
+    expect(row.error).toMatch(/not a valid EAN-13/);
+  });
+});
+
+describe("folding the server's answer back into the sheet", () => {
+  it("resets the count only on the variants just marked", () => {
+    const rows = rowsFromSheet([
+      sheetVariant({ id: "v1", suggested_labels: 12 }),
+      sheetVariant({ id: "v2", suggested_labels: 4 }),
+    ]).map((row) => ({ ...row, quantity: 7 }));
+
+    const merged = mergeSheet(
+      rows,
+      [
+        sheetVariant({ id: "v1", suggested_labels: 0, label_status: printedStatus() }),
+        sheetVariant({ id: "v2", suggested_labels: 4 }),
+      ],
+      new Set(["v1"]),
+    );
+
+    // v1 is done: nothing more to print. v2 keeps what the user typed.
+    expect(merged.map((row) => row.quantity)).toEqual([0, 7]);
+    expect(merged[0].variant.label_status?.printed).toBe(true);
+  });
+
+  it("always takes the stock and the ticks from the server", () => {
+    const rows = rowsFromSheet([sheetVariant({ id: "v1" })]);
+
+    const [row] = mergeSheet(
+      rows,
+      [sheetVariant({ id: "v1", stock: { on_hand: 30, reserved: 2, available: 28 } })],
+      new Set(),
+    );
+
+    expect(row.variant.stock?.on_hand).toBe(30);
+  });
+
+  it("keeps a barcode assigned on screen", () => {
+    const rows = rowsFromSheet([sheetVariant({ id: "v1", barcode: null })]).map((row) => ({
+      ...row,
+      barcode: "2000000000015",
+    }));
+
+    const [row] = mergeSheet(rows, [sheetVariant({ id: "v1", barcode: null })], new Set());
+
+    expect(row.barcode).toBe("2000000000015");
+  });
+
+  it("adds a variant created since the product was put on the sheet", () => {
+    const rows = rowsFromSheet([sheetVariant({ id: "v1" })]);
+
+    const merged = mergeSheet(
+      rows,
+      [sheetVariant({ id: "v1" }), sheetVariant({ id: "v9", suggested_labels: 2 })],
+      new Set(["v1"]),
+    );
+
+    expect(merged.map((row) => row.variant.id)).toEqual(["v1", "v9"]);
+    expect(merged[1].quantity).toBe(2);
+  });
+});
+
+describe("the line under a variant's tick", () => {
+  it("is absent for a variant nobody has marked", () => {
+    expect(describeLabelStatus(null)).toBeNull();
+  });
+
+  it("says how many were printed, when, and by whom", () => {
+    const described = describeLabelStatus(printedStatus());
+    expect(described?.summary).toMatch(/^12 printed .*2026.* by Rahim Uddin$/);
+    expect(described?.reopened).toBeNull();
+  });
+
+  it("says in words when a delivery since needs labels", () => {
+    // Words, not just an amber colour (WCAG 1.4.1).
+    const described = describeLabelStatus(printedStatus({ received_since: 8 }));
+    expect(described?.reopened).toBe("8 more received since — they need labels");
+  });
+
+  it("records an un-mark as such", () => {
+    const described = describeLabelStatus(printedStatus({ printed: false, quantity: 0 }));
+    expect(described?.summary).toMatch(/^Marked not printed /);
+    expect(described?.reopened).toBeNull();
   });
 });

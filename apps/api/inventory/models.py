@@ -298,3 +298,58 @@ class StockCountItem(BaseModel):
         if self.counted_quantity is None:
             return None
         return self.counted_quantity - self.expected_quantity
+
+
+class LabelPrint(AppendOnlyModel):
+    """A branch saying it has, or has not, finished printing a variant's labels.
+
+    The label screen lists every variant of a product beside its stock, and
+    whoever is at the printer ticks each one off as its stickers come out. This
+    row is that tick, kept so the next person -- or the same one tomorrow --
+    can see which sizes are done without counting stickers on the rail.
+
+    Append-only, like the ledger beside it. Un-ticking a variant writes a new
+    row with ``printed=False`` rather than deleting or editing the old one, so
+    the current state is simply the newest row for the branch and variant, and
+    nothing anyone marked is lost to a mis-click. The references are PROTECT
+    for the same reason: a variant whose labels are on physical stock is
+    archived, not deleted (``ProductVariantViewSet.perform_destroy``), so the
+    barcode on those stickers keeps resolving.
+
+    Per branch, because labels go on the units a branch holds: one shop having
+    printed for its twelve says nothing about the other shop's five.
+
+    ``on_hand`` is read by the server from the stock row at marking time and is
+    never taken from the browser (CLAUDE.md section 3.4). Nothing here moves
+    stock; it only records what a person did with a printer.
+    """
+
+    branch = models.ForeignKey(
+        "accounts.Branch", on_delete=models.PROTECT, related_name="label_prints"
+    )
+    variant = models.ForeignKey(
+        "catalog.ProductVariant", on_delete=models.PROTECT, related_name="label_prints"
+    )
+    printed = models.BooleanField(
+        default=True, help_text="False is an un-mark: the newest row is the state."
+    )
+    quantity = models.PositiveIntegerField(
+        default=0, help_text="Labels the person reported printing in this run."
+    )
+    on_hand = models.IntegerField(default=0, help_text="Stock at the branch when this was marked.")
+    created_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "inventory_labelprint"
+        ordering = ("-created_at",)
+        indexes = [
+            # The label sheet: the newest mark per variant at one branch
+            # (`inventory.labels.latest_marks`, a DISTINCT ON over this order).
+            models.Index(fields=["branch", "variant", "-created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        state = "printed" if self.printed else "not printed"
+        return f"{self.variant_id} @ {self.branch_id}: {state} ({self.quantity})"

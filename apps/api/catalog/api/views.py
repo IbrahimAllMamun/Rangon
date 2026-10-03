@@ -33,6 +33,8 @@ from catalog.api.serializers import (
     CategoryAttributeSerializer,
     CategorySerializer,
     GenerateVariantsSerializer,
+    LabelMarksSerializer,
+    LabelSheetVariantSerializer,
     ProductDetailSerializer,
     ProductImageSerializer,
     ProductImportSerializer,
@@ -69,6 +71,7 @@ from catalog.services import (
 from core import audit
 from core.exceptions import Conflict, ValidationError
 from core.requests import AuthedRequest, actor
+from inventory import labels as label_services
 from inventory import services as inventory_services
 
 PRODUCT_PERMISSIONS = {
@@ -338,11 +341,19 @@ class ProductViewSet(viewsets.ModelViewSet):
         # `products.create` alone would let somebody load a catalogue without
         # the right to touch a single stock figure by hand.
         "import_csv": ["products.create", "inventory.adjust"],
+        # Reading the sheet is reading the catalogue, as the label screen is.
+        # Ticking a variant off is a write, gated like assigning its barcode:
+        # the role that receives and labels stock holds `products.update`.
+        "labels": {"GET": ["products.view"], "POST": ["products.update"]},
     }
     filterset_fields = ["status", "published", "featured", "category", "brand"]
     ordering_fields = ["name", "created_at"]
 
     def get_queryset(self) -> Any:
+        if self.action == "labels":
+            # The sheet reads its variants itself; the list's prefetches and
+            # price annotations would be four queries spent on nothing.
+            return Product.objects.select_related("brand")
         queryset = (
             Product.objects.select_related("brand", "category")
             .prefetch_related(
@@ -460,10 +471,13 @@ class ProductViewSet(viewsets.ModelViewSet):
         # deleted: order history and the inventory ledger both hold PROTECTed
         # references to its variants, so a hard delete would raise
         # ProtectedError and surface as an unexplained 409.
+        # Printed labels count too: they carry the variants' barcodes on
+        # physical stock, and `LabelPrint` PROTECTs the variant.
         if (
             instance.variants.filter(order_items__isnull=False).exists()
             or instance.variants.filter(inventory__isnull=False).exists()
             or instance.variants.filter(inventory_transactions__isnull=False).exists()
+            or instance.variants.filter(label_prints__isnull=False).exists()
         ):
             instance.status = "ARCHIVED"
             instance.published = False
@@ -524,6 +538,65 @@ class ProductViewSet(viewsets.ModelViewSet):
         product.published = False
         product.save(update_fields=["published", "updated_at"])
         return Response(ProductDetailSerializer(product, context={"request": request}).data)
+
+    @action(detail=True, methods=["get", "post"])
+    def labels(self, request: AuthedRequest, pk: str | None = None) -> Response:
+        """The barcode label sheet for this product, at one branch.
+
+        GET lists **every** variant of the product -- not only the one that was
+        scanned -- with the stock the branch holds, which is the hint for how
+        many stickers each needs, and whether its labels have been printed.
+
+        POST ticks variants off (``printed: true``) or back on, and answers with
+        the sheet as it now stands, so the screen redraws from one response.
+        Each tick is a new ``LabelPrint`` row; nothing is edited or deleted.
+        """
+        product = self.get_object()
+        if request.method == "POST":
+            serializer = LabelMarksSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+            branch = resolve_branch(request.user, data.get("branch"))
+            label_services.mark_labels(
+                branch=branch,
+                product=product,
+                marks=[
+                    label_services.LabelMark(
+                        variant_id=mark["variant"],
+                        printed=mark["printed"],
+                        quantity=mark["quantity"],
+                    )
+                    for mark in data["marks"]
+                ],
+                actor=request.user,
+            )
+        else:
+            branch = resolve_branch(request.user, request.query_params.get("branch"))
+
+        variants = list(
+            ProductVariant.objects.filter(product=product)
+            .select_related("product", "product__brand")
+            .prefetch_related("attribute_values__attribute_value", "attribute_values__attribute")
+        )
+        marks = label_services.latest_marks(branch=branch, variant_ids=[v.pk for v in variants])
+        context = {
+            "request": request,
+            "stock": inventory_services.availability(branch=branch, variants=variants),
+            "label_marks": marks,
+            "label_received": label_services.received_since(branch=branch, marks=marks),
+        }
+        return Response(
+            {
+                "product": {
+                    "id": str(product.pk),
+                    "name": product.name,
+                    "brand_name": product.brand.name if product.brand else "",
+                    "status": product.status,
+                },
+                "branch": {"id": str(branch.pk), "name": branch.name, "code": branch.code},
+                "variants": LabelSheetVariantSerializer(variants, many=True, context=context).data,
+            }
+        )
 
     @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser])
     def import_csv(self, request: AuthedRequest) -> Response:
@@ -651,10 +724,14 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         resolving. An ARCHIVED variant is not sellable (`is_sellable`), which is
         what "remove it" actually means for a shop.
         """
+        # A variant with label marks has stickers on physical stock carrying its
+        # barcode, so it is archived like one with sales: deleting it would make
+        # every one of those stickers scan as nothing.
         has_history = (
             instance.order_items.exists()
             or instance.inventory.exists()
             or instance.inventory_transactions.exists()
+            or instance.label_prints.exists()
         )
         if has_history:
             instance.status = PublishStatus.ARCHIVED

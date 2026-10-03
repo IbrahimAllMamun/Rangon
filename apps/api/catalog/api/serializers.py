@@ -25,6 +25,7 @@ from catalog.models import (
 from catalog.services import size_chart_problem, spec_payload
 from core.media import RelativeImageField, media_url, validate_image_upload
 from core.slugs import unique_slug
+from inventory.labels import MAX_LABELS, suggested_labels
 
 #: `#rgb`, `#rrggbb` or `#rrggbbaa`, which is everything a CSS colour input can
 #: emit and everything `background-color` will accept from us.
@@ -531,6 +532,67 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             "average_cost": str(snapshot.average_cost),
             **flag,
         }
+
+
+class LabelSheetVariantSerializer(ProductVariantSerializer):
+    """A variant on the barcode label sheet: its stock, and whether its labels are done.
+
+    Context, beside the `stock` snapshots the base serializer reads:
+    `label_marks` (`inventory.labels.latest_marks`) and `label_received`
+    (`inventory.labels.received_since`). Their own keys, because the base
+    serializer already reads `received` as something else entirely.
+    """
+
+    label_status = serializers.SerializerMethodField()
+    suggested_labels = serializers.SerializerMethodField()
+
+    class Meta(ProductVariantSerializer.Meta):
+        fields = [*ProductVariantSerializer.Meta.fields, "label_status", "suggested_labels"]
+
+    def _mark(self, variant: ProductVariant) -> Any:
+        return self.context.get("label_marks", {}).get(str(variant.pk))
+
+    def _received(self, variant: ProductVariant) -> int:
+        return int(self.context.get("label_received", {}).get(str(variant.pk), 0))
+
+    def get_label_status(self, variant: ProductVariant) -> dict[str, Any] | None:
+        mark = self._mark(variant)
+        if mark is None:
+            return None
+        return {
+            "printed": mark.printed,
+            "quantity": mark.quantity,
+            "on_hand": mark.on_hand,
+            "marked_at": mark.created_at.isoformat(),
+            "marked_by": mark.created_by.full_name if mark.created_by else "",
+            "received_since": self._received(variant) if mark.printed else 0,
+        }
+
+    def get_suggested_labels(self, variant: ProductVariant) -> int:
+        snapshot = self.context.get("stock", {}).get(str(variant.pk))
+        return suggested_labels(
+            on_hand=snapshot.on_hand if snapshot else 0,
+            mark=self._mark(variant),
+            received=self._received(variant),
+        )
+
+
+class LabelMarkSerializer(serializers.Serializer):
+    variant = serializers.UUIDField()
+    printed = serializers.BooleanField()
+    # Only for `printed: true`; an un-mark records 0 whatever is sent.
+    quantity = serializers.IntegerField(
+        min_value=0, max_value=MAX_LABELS, required=False, default=0
+    )
+
+
+class LabelMarksSerializer(serializers.Serializer):
+    """The body of `POST /products/{id}/labels/`: tick variants off, or back on."""
+
+    branch = serializers.UUIDField(required=False, allow_null=True)
+    # A product's whole variant matrix in one request is the bulk case; 200 is
+    # far past any real matrix and still bounds the work one request can do.
+    marks = serializers.ListField(child=LabelMarkSerializer(), min_length=1, max_length=200)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
