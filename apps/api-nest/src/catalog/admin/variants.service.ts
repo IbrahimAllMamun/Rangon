@@ -268,7 +268,7 @@ export class VariantsService {
   }
 
   /**
-   * `perform_destroy`: a SKU ever sold or stocked is archived; any other is
+   * `perform_destroy`: a SKU ever sold, stocked or labelled is archived; any other is
    * deleted, unless a count sheet, a transfer or a purchase order names it
    * (`PROTECT`: 409, after the audit entry, which Django writes first).
    */
@@ -280,7 +280,8 @@ export class VariantsService {
     const history = await this.db.one(
       `SELECT 1 AS "a" WHERE EXISTS (SELECT 1 FROM "orders_orderitem" WHERE "variant_id" = $1)
           OR EXISTS (SELECT 1 FROM "inventory_inventory" WHERE "variant_id" = $1)
-          OR EXISTS (SELECT 1 FROM "inventory_inventorytransaction" WHERE "variant_id" = $1)`,
+          OR EXISTS (SELECT 1 FROM "inventory_inventorytransaction" WHERE "variant_id" = $1)
+          OR EXISTS (SELECT 1 FROM "inventory_labelprint" WHERE "variant_id" = $1)`,
       [variant.id],
     );
     const entity = {

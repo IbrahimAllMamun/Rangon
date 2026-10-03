@@ -639,7 +639,7 @@ export class ProductsService {
   }
 
   /**
-   * `perform_destroy`: a product ever sold or stocked is archived, not
+   * `perform_destroy`: a product ever sold, stocked or labelled is archived, not
    * deleted; any other goes, with its variants, images, specifications and
    * whatever only pointed at it -- unless a count sheet, a transfer or a
    * purchase order still names a variant (`PROTECT`: 409). The audit entry
@@ -650,7 +650,8 @@ export class ProductsService {
       `SELECT 1 AS "a" FROM "catalog_productvariant" v WHERE v."product_id" = $1 AND (
          EXISTS (SELECT 1 FROM "orders_orderitem" i WHERE i."variant_id" = v."id")
          OR EXISTS (SELECT 1 FROM "inventory_inventory" s WHERE s."variant_id" = v."id")
-         OR EXISTS (SELECT 1 FROM "inventory_inventorytransaction" t WHERE t."variant_id" = v."id"))
+         OR EXISTS (SELECT 1 FROM "inventory_inventorytransaction" t WHERE t."variant_id" = v."id")
+         OR EXISTS (SELECT 1 FROM "inventory_labelprint" l WHERE l."variant_id" = v."id"))
        LIMIT 1`,
       [product.id],
     );

@@ -489,7 +489,7 @@ class Command(BaseCommand):
             AccountTransfer,
             Expense,
         )
-        from inventory.models import InventoryTransaction, StockCount, StockTransfer
+        from inventory.models import InventoryTransaction, LabelPrint, StockCount, StockTransfer
         from orders.models import Cart, HeldSale, Order, Payment, Refund, ReturnRequest
         from promotions.models import CouponRedemption
         from purchasing.models import PurchaseOrder, PurchaseReceipt, SupplierPayment
@@ -527,6 +527,8 @@ class Command(BaseCommand):
             # cascade from the parent document.
             StockCount,
             StockTransfer,
+            # PROTECTs ProductVariant, like the ledger beside it.
+            LabelPrint,
             InventoryTransaction,
             Inventory,
             AuditLog,
