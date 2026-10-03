@@ -34,7 +34,7 @@ Run these manually against a seeded environment before each release
 | C4b | Apply a once-per-customer coupon to an anonymous sale | refused until a customer is attached (F3); the same customer's second use is refused |
 | C4c | Void a sale that used a coupon | the coupon's use comes back, and the re-rung sale can spend it |
 | C5 | Take split payment (cash + card) | two payment rows, correct change displayed, order `PAID` |
-| C6 | Print the receipt | 80 mm layout, branch details, items, totals, order number, VAT line |
+| C6 | Print the receipt | 75 mm layout, branch details, items, totals, order number, VAT line |
 | C7 | Hold a sale, start another, resume the held one | both carts intact, no stock moved until each sale completes |
 | C8 | Sell the last unit while the website sells it too | exactly one succeeds; the other sees "insufficient stock" |
 | C9 | Process a return with a receipt | refund ≤ paid, stock restored on `RESTOCK`, not on `DAMAGED` |

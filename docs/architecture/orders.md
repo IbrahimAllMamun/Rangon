@@ -87,7 +87,7 @@ and `tests/test_concurrency.py::test_double_click_checkout_creates_one_order` pr
 
 ## Documents
 
-- **Receipt** (POS, 80 mm thermal-friendly print CSS)
+- **Receipt** (POS, 75 mm thermal roll print CSS, variable length)
 - **Invoice** (A4)
 - **Packing slip** (A4, no prices)
 

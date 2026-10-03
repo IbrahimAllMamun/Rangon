@@ -297,9 +297,17 @@
     background: #fff;
     color: #000;
   }
+  /*
+    75 mm thermal roll. The height is whatever the receipt is: the roll has
+    no page length, so nothing here sets one. Top and bottom get room the
+    sides do not need -- the first line clears the tear edge, and the
+    footer clears the cutter, which sits a little above the print head.
+  */
   .print-receipt {
-    width: 80mm;
+    width: 75mm;
     font-size: 12px;
+    padding-top: 6mm;
+    padding-bottom: 10mm;
   }
   .print-a4 {
     width: 210mm;
@@ -310,34 +318,59 @@
   }
 
   /*
-    Barcode label sheets.
+    Barcode stickers on a thermal roll.
 
-    The grid is already sized in millimetres by the component, because it has
-    to line up with the physical label stock in the printer. What print needs
-    on top of that is for the sheet to be the *only* thing on the page: the
-    admin shell, the picker and the controls are all `.no-print`, and the
-    sheet itself has to escape the shell's padding and start at the paper's
-    own origin, or every label lands a couple of centimetres off.
+    The component sizes each sticker in millimetres and sets `@page` to the
+    same size with no margin, since the 8 mm above is for receipts and invoices
+    and would push every sticker off its die-cut. What print needs on top of
+    that is for the stickers to be the *only* thing on the page: the admin
+    shell, the picker and the controls are all `.no-print`, and the roll has to
+    escape the shell's padding and start at the paper's own origin.
+
+    `top: 0; left: 0` only means the paper's corner if nothing above the roll
+    is a containing block. Something is: `PendingRegion` wraps every admin page
+    in a `relative` div inside `<main>`'s padding, so the stickers printed
+    offset down and right by that padding. Every ancestor is flattened here
+    rather than that one div, because the next wrapper anyone adds would bring
+    it straight back.
+
+    `animation: none` is the one that is easy to miss. `PendingRegion` also
+    carries `.route-fade`, which animates `transform` with fill-mode `both`, so
+    the animation never ends -- and Chrome makes any element with a current
+    transform animation a containing block, even with `transform: none
+    !important` winning the cascade. Measured in the real page: with every
+    other property here applied the roll still sat at the wrapper's corner,
+    16 px in and down; cancelling the animation put it at 0,0.
+
+    `min-height: 0` because the shell is `min-h-screen`, which in print is one
+    whole page of nothing; let the stickers alone decide how many pages print.
+
+    `margin` is `!important` against the parent's `space-y-6`, whose selector
+    outranks a single class and added its gap above the first sticker.
   */
+  :has(.print-labels) {
+    position: static !important;
+    transform: none !important;
+    animation: none !important;
+    filter: none !important;
+    contain: none !important;
+    will-change: auto !important;
+    min-height: 0 !important;
+  }
   .print-labels {
     position: absolute;
     top: 0;
     left: 0;
-    margin: 0;
+    margin: 0 !important;
   }
 
   .print-label {
-    /* A label must never be split across two pages. */
+    /* One sticker per page, never split across two. */
     break-inside: avoid;
     page-break-inside: avoid;
   }
-
-  /*
-    Label sheets carry their own margins, measured from the stock. The 8 mm
-    above is for receipts and invoices and would push every label out of
-    alignment, so a sheet page sets its own to zero.
-  */
-  @page labels {
-    margin: 0;
+  .print-label:not(:last-child) {
+    break-after: page;
+    page-break-after: always;
   }
 }
