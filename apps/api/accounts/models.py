@@ -74,6 +74,15 @@ class Organization(BaseModel):
         related_name="tax_settlements",
     )
 
+    # --- Stock held for online orders (D115, docs/business-rules.md §1.4).
+    # Off: the counter sells only what is not reserved. On: the customer in the
+    # shop comes first, and the online orders left short are flagged for staff.
+    # The owner's decision alone, so only the owner may change it.
+    counter_sells_reserved = models.BooleanField(
+        default=False,
+        help_text="Let a counter sale take units reserved for online orders.",
+    )
+
     class Meta:
         db_table = "accounts_organization"
         ordering = ("name",)

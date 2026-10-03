@@ -172,6 +172,32 @@ def _check_can_reduce(inventory: Inventory, delta: int, *, allow_negative: bool)
         )
 
 
+def _check_counter_can_take(inventory: Inventory, quantity: int) -> None:
+    """A counter sale takes only units no online order holds -- unless the owner says it may.
+
+    `docs/business-rules.md` §1.4 (D115). Checked after `_check_can_reduce`, so a
+    sale the shelf cannot cover at all is refused for that first.
+    """
+    if quantity <= 0 or inventory.available >= quantity:
+        return
+    if _allow_oversell() or inventory.branch.organization.counter_sells_reserved:
+        return
+    available = max(inventory.available, 0)
+    raise InsufficientStock(
+        f"Only {available} unit(s) of {inventory.variant.sku} are available at "
+        f"{inventory.branch.code}; {inventory.reserved} are held for online orders.",
+        details={
+            "variant_id": str(inventory.variant_id),
+            "sku": inventory.variant.sku,
+            "branch": inventory.branch.code,
+            "requested": quantity,
+            "on_hand": inventory.on_hand,
+            "reserved": inventory.reserved,
+            "available": inventory.available,
+        },
+    )
+
+
 def _check_can_reserve(inventory: Inventory, quantity: int, *, allow_negative: bool) -> None:
     if quantity <= 0:
         return
@@ -495,7 +521,11 @@ def sell(
     reference_type: str = "order",
     reference_id: Any = None,
 ) -> list[InventoryTransaction]:
-    """Deduct stock immediately (POS: goods leave the shop at once)."""
+    """Deduct stock immediately (POS: goods leave the shop at once).
+
+    Units reserved for online orders are not for sale here unless the
+    organisation's `counter_sells_reserved` is on (§1.4, D115).
+    """
     return _bulk(
         branch=branch,
         lines=lines,
@@ -504,6 +534,7 @@ def sell(
         reference_type=reference_type,
         reference_id=reference_id,
         cost_from_average=True,
+        respect_reservations=True,
     )
 
 
@@ -539,6 +570,7 @@ def _bulk(
     reference_id: Any,
     reason: str = "",
     cost_from_average: bool = False,
+    respect_reservations: bool = False,
 ) -> list[InventoryTransaction]:
     materialised = [(_variant_id(v), int(q)) for v, q in lines if int(q) != 0]
     if not materialised:
@@ -556,6 +588,8 @@ def _bulk(
                 _check_can_reserve(inventory, quantity, allow_negative=False)
         else:
             _check_can_reduce(inventory, sign * quantity, allow_negative=False)
+            if respect_reservations:
+                _check_counter_can_take(inventory, quantity)
 
     for variant_id, quantity in materialised:
         inventory = inventories[str(variant_id)]

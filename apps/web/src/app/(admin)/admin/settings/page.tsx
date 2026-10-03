@@ -1,5 +1,6 @@
 import { type Branch, BranchEditor } from "@/components/admin/branch-editor";
 import { OrganizationForm } from "@/components/admin/organization-form";
+import { ReservedStockSetting } from "@/components/admin/reserved-stock-setting";
 import { PageHeader } from "@/components/admin/shell";
 import { type TaxMode, TaxSettingsForm } from "@/components/admin/tax-settings-form";
 import { Badge, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
@@ -23,6 +24,7 @@ interface Organization {
   default_tax_rate: string;
   tax_settled_at: string | null;
   tax_settled_by_name: string;
+  counter_sells_reserved: boolean;
   branches: Branch[];
 }
 
@@ -81,6 +83,11 @@ export default async function SettingsPage() {
               tax_settled_at: orgResult.tax_settled_at ?? null,
               tax_settled_by_name: orgResult.tax_settled_by_name ?? "",
             }}
+          />
+
+          <ReservedStockSetting
+            initial={orgResult.counter_sells_reserved ?? false}
+            isOwner={user?.role === "OWNER" || permissions.includes("*")}
           />
 
           <BranchEditor branches={orgResult.branches ?? []} canManage={canManage} />

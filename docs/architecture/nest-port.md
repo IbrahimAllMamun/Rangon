@@ -505,8 +505,9 @@ D113, a blank guest token opened any counter order to anyone with its sequential
 One found while writing the checkout races is outside the port: a counter sale checks `on_hand`,
 not `available`, so the POS can sell units reserved for online orders (D115). Measured: an online
 order reserves all 13 of a variant and the counter then sells all 13, leaving `available` at -13 --
-which business rule 1.4 says may never happen with overselling off. Phase 5 ports the POS; Django
-must be fixed first.
+which business rule 1.4 says may never happen with overselling off. Fixed in Django on 2026-10-02 by
+the owner's decision: the counter checks `available` unless the owner's `counter_sells_reserved`
+is on, and then flags the online orders left short. Phase 5 ports that rule with the POS.
 
 A courier's tracking-URL template is filled as Python's `str.format` fills it, except that a
 format spec (`{tracking_number:>12}`) is refused -- a 500 where Django would pad. No template uses one.

@@ -60,9 +60,9 @@ Read these alongside it:
 | Standing | Work is started phase by phase on request ("start phase N", "continue phase N") | one branch per phase; each part committed separately |
 | Standing | Pull requests only when the owner runs the create-pr command, as **ready, not draft**, base `main` | never push or open a PR unasked |
 | Standing | After finishing a phase, write down the instructions | this file; keep it current |
+| 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
-Waiting on the owner: **D115** — may a counter sale take units reserved for an online order?
-([business-rules.md §1.4](business-rules.md)). It must be settled before phase 5 ports the POS.
+Nothing is waiting on the owner.
 
 ## 3. The machine
 
@@ -329,7 +329,7 @@ apps/api-nest/
   | Defect | What it is | Status |
   |---|---|---|
   | D114 | a first-time guest's double-click can get 409 | copied |
-  | D115 | the counter can sell reserved stock | owner's decision needed |
+  | D115 | the counter could sell reserved stock | fixed in Django 2026-10-02 (owner's switch); port it in phase 5 |
   | D116 | a broker outage turns a placed order into a 500 | the port logs instead; a documented difference |
 
 - **A bug in the port itself:** fix it, add a unit test that fails on the old code, and mention it
@@ -407,15 +407,14 @@ Every part of a phase updates, in the same branch:
 | Phase | Scope | Notes before starting |
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
-| 4 | done 2026-10-01 | on `phase/nest-4-catalogue-admin`; the content admin's parts 5a-5c (settings and social links; site pages and the page sanitiser, ADR-0015; navigation items, banners and the carousel) finished it. Its PR waits for the owner |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | **D115 must be decided first**; POS sales, refunds and the cash drawer each need races |
+| 4 | done 2026-10-01 | merged to `main` (PR #77) |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | D115 is decided: port `sell`'s check of `available`, the owner's `counter_sells_reserved` and `orders.services.shortages` with the sale; POS sales, refunds and the cash drawer each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Open phase 4's PR when the owner asks.
-2. Settle D115 with the owner before phase 5.
+1. Start phase 5 when the owner asks; D115's rule is part of it.
 
 ### Checklist for a part
 

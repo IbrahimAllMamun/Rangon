@@ -144,6 +144,48 @@ def test_pos_sale_and_online_checkout_cannot_both_take_the_last_unit(last_unit):
     assert inventory_services.verify_integrity() == []
 
 
+def test_counter_sales_and_checkouts_racing_never_sell_held_stock():
+    """D115: with the owner's switch off, the counter and the website share one
+    count of what is available -- three units, six buyers, three sold, nothing
+    held for an online order handed over the counter."""
+    branch = factories.branch(factories.organization())
+    variant = factories.variant(price="1000.00")
+    factories.stock(variant, branch, 3, "400.00")
+    cashier = factories.user("CASHIER", branch_obj=branch)
+
+    def buy(index: int) -> str:
+        if index % 2 == 0:
+            order = pos.create_pos_sale(
+                branch=branch,
+                actor=cashier,
+                data=SaleInput(
+                    lines=[SaleLineInput(variant_id=variant.pk, quantity=1)],
+                    payments=[PaymentInput(method=PaymentMethod.CASH, amount=Decimal("1000.00"))],
+                    idempotency_key=f"held-pos-{index}",
+                ),
+            )
+            return f"POS:{order.number}"
+        cart = checkout_services.get_or_create_cart(token=f"held-web-{index}", branch=branch)
+        checkout_services.add_item(cart=cart, variant_id=variant.pk, quantity=1)
+        order = checkout_services.place_order(
+            cart=cart,
+            shipping_address=ADDRESS,
+            payment_method=PaymentMethod.COD,
+            contact_phone=f"0178000000{index}",
+            idempotency_key=f"held-web-{index}",
+        )
+        return f"WEB:{order.number}"
+
+    results, errors = run_together(buy, 6)
+
+    assert len(results) == 3, f"sold {results}"
+    assert all(getattr(error, "code", "") == "INSUFFICIENT_STOCK" for error in errors), errors
+    inventory = Inventory.objects.get(variant=variant, branch=branch)
+    assert inventory.available == 0
+    assert inventory.on_hand - inventory.reserved >= 0
+    assert inventory_services.verify_integrity() == []
+
+
 def test_double_click_checkout_creates_one_order(last_unit):
     cart = checkout_services.get_or_create_cart(token="double", branch=last_unit["branch"])
     checkout_services.add_item(cart=cart, variant_id=last_unit["variant"].pk, quantity=1)

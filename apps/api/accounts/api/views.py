@@ -277,6 +277,26 @@ class OrganizationView(APIView):
         organization = get_organization()
         serializer = OrganizationSerializer(organization, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        # Whether the counter may sell stock reserved for online orders is the
+        # owner's decision (docs/business-rules.md §1.4, D115).
+        wanted = serializer.validated_data.get("counter_sells_reserved")
+        if (
+            wanted is not None
+            and organization is not None
+            and wanted != organization.counter_sells_reserved
+            and not (request.user.is_owner or request.user.is_superuser)
+        ):
+            return Response(
+                {
+                    "error": {
+                        "code": "PERMISSION_DENIED",
+                        "message": "Only the owner can decide whether the counter sells stock "
+                        "reserved for online orders.",
+                        "details": {},
+                    }
+                },
+                status=403,
+            )
         before = OrganizationSerializer(organization).data
         serializer.save()
         audit.record(

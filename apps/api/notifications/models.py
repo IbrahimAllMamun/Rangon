@@ -23,6 +23,7 @@ class NotificationType(models.TextChoices):
     REFUND_COMPLETED = "REFUND_COMPLETED", "Refund completed"
     STOCK_EXPIRING = "STOCK_EXPIRING", "Stock expiring"
     INTEGRITY_ALERT = "INTEGRITY_ALERT", "Inventory integrity alert"
+    ORDER_STOCK_SHORT = "ORDER_STOCK_SHORT", "Online order short of stock"
 
 
 class NotificationLevel(models.TextChoices):
