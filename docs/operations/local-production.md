@@ -6,6 +6,10 @@
 >
 > This is **not** [deployment.md](deployment.md), which pulls the exact images CI built and scanned.
 > Here you build them yourself.
+>
+> This page fills the stack with demo data. For a real shop on a blank database (no demo, your own
+> organization, branch and owner account), follow
+> [new-store-from-scratch.md](new-store-from-scratch.md) instead.
 
 ---
 
