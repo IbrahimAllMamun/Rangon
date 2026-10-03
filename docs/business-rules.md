@@ -77,13 +77,21 @@ Overselling is refused (`INSUFFICIENT_STOCK`) unless `RANGON_ALLOW_OVERSELL=1`, 
 organisation-level configuration. `available` may never go negative while that flag is off. Enforced by
 a database `CheckConstraint` plus a service-level guard under `SELECT … FOR UPDATE`.
 
-**DECISION REQUIRED (D115, found 2026-10-01).** The code does not fully do this. Online checkout
-checks `available` under the row lock, but a counter sale checks only `on_hand`, so the POS can sell
-units reserved for an online order and leave `available` negative. No database constraint holds
-`available` either; only `reserved >= 0` is enforced. Until this is decided, the code's behaviour
-stands: the counter may sell reserved units. Either `inventory.services.sell` checks `available`,
-or this rule says that reservations give way to the counter and what then happens to the online
-order.
+**Stock reserved for online orders, at the counter (D115, decided by the owner 2026-10-02).**
+Reserved units are not for sale at the counter by default: a POS sale is checked against `available`
+under the row lock, as online checkout is, and refused with `INSUFFICIENT_STOCK` saying how many
+units are held for online orders. The owner may decide otherwise, shop-wide, with the organisation's
+**`counter_sells_reserved`** (Settings → Stock held for online orders). Only the owner (or a
+superuser) can change it; the change is audited. With it on, the counter may take reserved units --
+the customer in the shop comes first -- and `available` may then go negative. Every online order the
+sale leaves short is flagged in the same transaction: a `STOCK_SHORT` entry on its timeline, which
+staff see and the customer does not, and an `ORDER_STOCK_SHORT` notice to everyone at the branch
+who handles orders, so that someone restocks or contacts the customer before it is packed. The order
+keeps its reservation; stock received later covers it. The oldest orders keep first claim on the
+shelf, so the newest are the ones flagged, and each unit is flagged once, by the sale that took it.
+Other movements -- damage, loss, transfers -- answer to the shelf (`on_hand`) as before. The rule is
+held in the service; no database constraint holds `available` (only `reserved >= 0` is enforced),
+because the owner's switch and `RANGON_ALLOW_OVERSELL` both allow it below zero.
 
 ### 1.5 Expired reservations
 
