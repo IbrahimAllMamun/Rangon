@@ -9,7 +9,7 @@ import { memoShowsVat } from "@/lib/commerce/memo";
 import { dateTime, money } from "@/lib/format";
 
 /**
- * Sale complete + 80 mm receipt.
+ * Sale complete + 75 mm receipt.
  *
  * The receipt is normal DOM styled by the print stylesheet (globals.css
  * `@media print`), so any browser-visible printer works. A native ESC/POS

@@ -201,7 +201,7 @@ API has a screen now except the customer-account endpoints, which are without on
 | Offline POS | **Dropped 2026-09-09, owner's decision** — declined, not deferred. The POS needs connectivity, and an outage is covered by a paper pad and a re-key | `architecture/offline-pos.md` (design notes only) |
 | Quotation and the cheque register | **Dropped 2026-09-09, owner's decision.** Both are wholesale instruments and this shop sells retail. A cheque is still recordable as a payment into a `BANK` account | [roadmap.md](roadmap.md) phase 39 |
 | Customer accounts on the storefront | **Withdrawn 2026-09-15, owner's decision.** No shopper could create an account, so the wishlist, the account pages and the review form were gated on a login nobody could obtain. The endpoints are kept, unadvertised | [api/endpoints.md](api/endpoints.md#the-customer-account-endpoints-have-no-caller-deliberately) |
-| ESC/POS driver | Browser print of an 80 mm receipt works | `@media print` in `globals.css` |
+| ESC/POS driver | Browser print of a 75 mm receipt works | `@media print` in `globals.css` |
 | Images inside site pages | About, Contact and the policies are text: headings, lists, emphasis and links. The editor offers only what the server's sanitiser keeps, and an image would also need an upload path | `content/rich_text.py`, [ADR-0012](architecture/decisions/0012-storefront-footer-and-site-pages.md) |
 
 ### The UI dead ends
