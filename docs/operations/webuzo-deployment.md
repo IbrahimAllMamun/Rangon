@@ -245,7 +245,18 @@ docker compose -f docker-compose.yml -f docker-compose.webuzo.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.webuzo.yml ps
 ```
 
-Create the first real user (**do not** run `seed_demo` on a production database — it wipes and reseeds):
+Create the shop itself first. `migrate` makes the roles and permissions but **no organization**, and
+nothing in the app creates one, so without this step Settings has no shop to edit and a branch
+cannot be added. `scripts/bootstrap-store.py` makes the organization, the first branch and a
+zero-balance cash drawer, and is safe to re-run
+([new-store-from-scratch.md §6](new-store-from-scratch.md#6-create-the-organization-first-branch-and-cash-drawer)):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts/bootstrap-store.py
+```
+
+Then the first real user (**do not** run `seed_demo` on a production database — it wipes and
+reseeds). Interactive on purpose: `--noinput` skips the password rules:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec api python manage.py createsuperuser
