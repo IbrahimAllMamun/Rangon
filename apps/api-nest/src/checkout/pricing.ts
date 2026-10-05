@@ -174,13 +174,14 @@ export function calculate(
       : quantize(taxableBase.times(rate));
 
   // Spread across the lines for the receipt; rounding drift lands on the last.
-  if (!taxTotal.isZero() && !taxableBase.isZero()) {
+  // A line's share is its share of `subtotal`, not of the discounted base.
+  if (!taxTotal.isZero() && !subtotal.isZero()) {
     let allocated = ZERO;
     lines.forEach((line, index) => {
       if (index === lines.length - 1) {
         line.taxAmount = quantize(taxTotal.minus(allocated));
       } else {
-        const share = quantize(taxTotal.times(lineTotal(line).div(taxableBase)));
+        const share = quantize(taxTotal.times(lineTotal(line).div(subtotal)));
         line.taxAmount = share;
         allocated = allocated.plus(share);
       }

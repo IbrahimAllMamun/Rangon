@@ -46,6 +46,26 @@ def _within_return_window(order: Order) -> bool:
     return timezone.now() <= reference + window
 
 
+def _line_paid(order: Order, item: OrderItem) -> Decimal:
+    """What the customer handed over for one order line, unrounded.
+
+    `line_total` carries the line's own discount and nothing else.  A coupon or
+    a cashier's whole-sale discount is frozen on the order and never written
+    back to the lines, so each line bears it in proportion to its share of
+    `subtotal` -- refunding `line_total` gave back money that was never paid.
+
+    Under EXCLUSIVE the VAT sat on top of the line, so leaving it out would keep
+    the customer's tax; under INCLUSIVE it is already inside.  The order's own
+    frozen `tax_mode` decides, so history never moves.
+    """
+    paid = item.line_total
+    if order.subtotal > ZERO:
+        paid -= item.line_total * order.discount_total / order.subtotal
+    if order.tax_mode == TaxMode.EXCLUSIVE:
+        paid += item.tax_amount
+    return paid
+
+
 @transaction.atomic
 def request_return(
     *,
@@ -89,7 +109,7 @@ def request_return(
         refund_shipping=reason in SHOP_FAULT_REASONS,
     )
 
-    refund_total = ZERO
+    returned: list[tuple[OrderItem, int, Decimal]] = []
     for item_id, quantity in lines:
         quantity = int(quantity)
         item = items.get(str(item_id))
@@ -110,22 +130,22 @@ def request_return(
             raise ValidationError(
                 f"{item.product_name} is a final-sale item and cannot be returned."
             )
+        returned.append((item, quantity, _line_paid(order, item) * quantity / item.quantity))
 
-        # Refund the price actually paid for that line, discount included.  Under
-        # EXCLUSIVE the VAT sat on top of line_total, so refunding line_total alone
-        # would keep the customer's tax; under INCLUSIVE the tax is already inside
-        # it.  The order's own frozen tax_mode decides, so history never moves.
-        line_paid = item.line_total
-        if order.tax_mode == TaxMode.EXCLUSIVE:
-            line_paid += item.tax_amount
-        line_refund = quantize(line_paid * quantity / item.quantity)
-        refund_total += line_refund
+    # Rounded once for the whole request, not line by line: 20.00 off three
+    # equal lines is 6.67 each, and three rounded shares give back 279.99 of a
+    # 280.00 sale.  The last line carries the difference so the lines still add
+    # up to the request.
+    refund_total = quantize(sum((paid for _, _, paid in returned), ZERO))
+    line_refunds = [quantize(paid) for _, _, paid in returned]
+    line_refunds[-1] += refund_total - sum(line_refunds, ZERO)
 
+    for (item, quantity, _), line_refund in zip(returned, line_refunds, strict=True):
         ReturnItem.objects.create(
             return_request=request,
             order_item=item,
             quantity=quantity,
-            restock_decision=restock_decisions.get(str(item_id), RestockDecision.RESTOCK),
+            restock_decision=restock_decisions.get(str(item.pk), RestockDecision.RESTOCK),
             refund_amount=line_refund,
         )
 

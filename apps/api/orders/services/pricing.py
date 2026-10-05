@@ -220,13 +220,17 @@ def calculate(
 
     # Distribute tax across lines for the receipt; the order total stays the
     # authoritative figure, so rounding drift lands on the last line only.
-    if tax_total and taxable_base:
+    # A line's share is its share of `subtotal`, which is what the lines add up
+    # to.  Dividing by `taxable_base` -- smaller by the order discount -- gave
+    # every line but the last more than its share and left the last one short:
+    # below zero once the discount passed half of a two-line sale.
+    if tax_total and subtotal:
         allocated = ZERO
         for index, line in enumerate(lines):
             if index == len(lines) - 1:
                 line.tax_amount = quantize(tax_total - allocated)
             else:
-                share = quantize(tax_total * (line.line_total / taxable_base))
+                share = quantize(tax_total * (line.line_total / subtotal))
                 line.tax_amount = share
                 allocated += share
     else:

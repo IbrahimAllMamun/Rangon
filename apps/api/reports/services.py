@@ -22,7 +22,7 @@ from django.db.models import (
     Value,
     When,
 )
-from django.db.models.functions import Coalesce, TruncDate, TruncMonth
+from django.db.models.functions import Coalesce, Round, TruncDate, TruncMonth
 from django.utils import timezone
 
 from accounts.models import TaxMode
@@ -51,21 +51,65 @@ from purchasing.models import (
 
 MONEY: DecimalField = DecimalField(max_digits=18, decimal_places=2)
 
-#: Revenue from one order line, with VAT taken out when it is sitting inside
-#: the price.  `line_total` is what the customer was charged for the goods; under
-#: INCLUSIVE pricing that figure contains the tax, so counting it as revenue
-#: overstates both turnover and margin by exactly the VAT.  Each line carries its
-#: own allocated `tax_amount`, and the order carries the mode it was priced under,
-#: so the correction is per-line and reads the frozen values rather than today's
-#: setting (docs/business-rules.md §3.4).
-NET_LINE_REVENUE = Case(
-    When(
-        order__tax_mode=TaxMode.INCLUSIVE,
-        then=ExpressionWrapper(F("line_total") - F("tax_amount"), output_field=MONEY),
-    ),
-    default=F("line_total"),
-    output_field=MONEY,
-)
+
+def _net_line_value(line: str = "") -> Case:
+    """What the goods on one order line earned: discount and VAT both taken out.
+
+    `line_total` is the line after its *own* discount only.  A coupon or a
+    cashier's whole-sale discount is frozen on the order (`discount_total`) and
+    never written back to the lines, so summing `line_total` reports money the
+    customer never paid -- every revenue, margin and profit figure built on it
+    was overstated by exactly the discount.  Each line bears the order discount
+    in proportion to its share of `subtotal`, which is the sum of the line
+    totals, so the lines of one order add up to `subtotal - discount_total`.
+
+    Under INCLUSIVE pricing the result still contains the tax, and counting it
+    as revenue overstates turnover and margin by exactly the VAT.  Each line
+    carries its own allocated `tax_amount`, and the order carries the mode it
+    was priced under, so the correction is per-line too.
+
+    Everything read here is frozen on the order, never today's setting
+    (docs/business-rules.md §3.4).  The share is deliberately left unrounded:
+    rounding per line drifts a cent an order away from the total the customer
+    paid, so the sum is rounded instead (`_net_revenue`).
+
+    `line` is the lookup prefix that reaches the order line -- empty from
+    `OrderItem`, `order_item__` from `ReturnItem`.
+    """
+    line_total = F(f"{line}line_total")
+    after_discount = Case(
+        # A zero subtotal cannot carry a discount (pricing.calculate refuses
+        # one larger than the subtotal), and dividing by it would be an error.
+        When(
+            **{f"{line}order__subtotal__gt": ZERO},
+            then=ExpressionWrapper(
+                line_total
+                - line_total * F(f"{line}order__discount_total") / F(f"{line}order__subtotal"),
+                output_field=MONEY,
+            ),
+        ),
+        default=line_total,
+        output_field=MONEY,
+    )
+    return Case(
+        When(
+            **{f"{line}order__tax_mode": TaxMode.INCLUSIVE},
+            then=ExpressionWrapper(after_discount - F(f"{line}tax_amount"), output_field=MONEY),
+        ),
+        default=after_discount,
+        output_field=MONEY,
+    )
+
+
+#: Revenue from one order line, net of the order's discount and of any VAT
+#: sitting inside the price.  Sum it through `_net_revenue`, which rounds.
+NET_LINE_REVENUE = _net_line_value()
+
+
+def _net_revenue(*, filter: Q | None = None) -> Coalesce:
+    """`NET_LINE_REVENUE` summed over a group of order lines, to two places."""
+    return Coalesce(Round(Sum(NET_LINE_REVENUE, filter=filter), 2), Value(ZERO), output_field=MONEY)
+
 
 #: The VAT frozen on one order line, prorated to the quantity a return brought
 #: back.  A return gives back the tax the customer paid on the goods that came
@@ -81,18 +125,7 @@ RETURNED_LINE_VAT = ExpressionWrapper(
 #: The same prorating for the line's VAT-exclusive value -- the taxable base a
 #: credit takes back off the return.
 RETURNED_LINE_BASE = ExpressionWrapper(
-    Case(
-        When(
-            order_item__order__tax_mode=TaxMode.INCLUSIVE,
-            then=ExpressionWrapper(
-                F("order_item__line_total") - F("order_item__tax_amount"), output_field=MONEY
-            ),
-        ),
-        default=F("order_item__line_total"),
-        output_field=MONEY,
-    )
-    * F("quantity")
-    / F("order_item__quantity"),
+    _net_line_value("order_item__") * F("quantity") / F("order_item__quantity"),
     output_field=MONEY,
 )
 
@@ -275,7 +308,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
             Value(ZERO),
             output_field=MONEY,
         ),
-        net_sales=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        net_sales=_net_revenue(),
         tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
     )
 
@@ -326,7 +359,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         .values("sku", "product_name")
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            revenue=_net_revenue(),
         )
         .order_by("-units")[:10]
     )
@@ -336,7 +369,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         .values(category=F("variant__product__category__name"))
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            revenue=_net_revenue(),
         )
         .order_by("-revenue")[:10]
     )
@@ -423,7 +456,7 @@ def product_performance(*, date_range: DateRange, branch: Any = None) -> list[di
         .values("sku", "product_name", "variant_label")
         .annotate(
             units=Sum("quantity"),
-            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            revenue=_net_revenue(),
             cost=Coalesce(
                 Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
                 Value(ZERO),
@@ -520,7 +553,7 @@ def profit_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any
         .annotate(day=TruncDate("order__placed_at"))
         .values("day")
         .annotate(
-            revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            revenue=_net_revenue(),
             cost=Coalesce(
                 Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
                 Value(ZERO),
@@ -627,7 +660,7 @@ def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, 
     lines = OrderItem.objects.filter(order__in=orders)
 
     sales = lines.aggregate(
-        revenue=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+        revenue=_net_revenue(),
         tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
         cogs=Coalesce(
             Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
@@ -782,16 +815,8 @@ def vat_report(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
     # Zero-rated supply is reported beside it rather than folded into it.
     output = lines.aggregate(
         vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
-        taxable=Coalesce(
-            Sum(NET_LINE_REVENUE, filter=Q(order__tax_rate__gt=0)),
-            Value(ZERO),
-            output_field=MONEY,
-        ),
-        zero_rated=Coalesce(
-            Sum(NET_LINE_REVENUE, filter=Q(order__tax_rate=0)),
-            Value(ZERO),
-            output_field=MONEY,
-        ),
+        taxable=_net_revenue(filter=Q(order__tax_rate__gt=0)),
+        zero_rated=_net_revenue(filter=Q(order__tax_rate=0)),
         orders=Count("order", distinct=True),
     )
 
@@ -902,7 +927,7 @@ def _vat_by_rate(lines: Any) -> list[dict[str, Any]]:
     rows = (
         lines.values("order__tax_rate", "order__tax_mode")
         .annotate(
-            taxable=Coalesce(Sum(NET_LINE_REVENUE), Value(ZERO), output_field=MONEY),
+            taxable=_net_revenue(),
             vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
             orders=Count("order", distinct=True),
         )

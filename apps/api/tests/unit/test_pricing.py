@@ -93,6 +93,27 @@ class TestOrderMaths:
 
         assert sum(line.tax_amount for line in lines) == priced.tax_total
 
+    def test_each_line_carries_the_tax_on_its_own_share_of_a_discounted_order(self):
+        lines = self._lines(("1000.00", 1, "0.00"), ("500.00", 1, "0.00"))
+
+        priced = pricing.calculate(
+            lines, manual_discount=Decimal("150.00"), tax_rate=Decimal("0.15")
+        )
+
+        # 15% of 900 and of 450: the discount comes off each line in proportion.
+        assert priced.tax_total == Decimal("202.50")
+        assert [line.tax_amount for line in lines] == [Decimal("135.00"), Decimal("67.50")]
+
+    def test_a_deep_discount_never_leaves_a_line_with_negative_tax(self):
+        lines = self._lines(("500.00", 1, "0.00"), ("500.00", 1, "0.00"))
+
+        priced = pricing.calculate(
+            lines, manual_discount=Decimal("600.00"), tax_rate=Decimal("0.15")
+        )
+
+        assert priced.tax_total == Decimal("60.00")
+        assert [line.tax_amount for line in lines] == [Decimal("30.00"), Decimal("30.00")]
+
     def test_a_discount_larger_than_the_line_is_refused(self):
         with pytest.raises(ValidationError):
             self._lines(("1000.00", 1, "1500.00"))

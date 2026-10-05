@@ -252,12 +252,21 @@ stock even if it was raised as `RESTOCK`.
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −
   `SUM(refunds)`), enforced in `orders.services.returns`.
+- **A refund gives back what was paid for the goods, and a discount was never paid.** A line's own
+  discount is already inside `OrderItem.line_total`. A coupon or a cashier's whole-sale discount is
+  not — it is frozen on the order — so each line bears it in proportion to its share of `subtotal`:
+  `line_paid = line_total − line_total × discount_total ÷ subtotal`. One of two ৳1,000 items bought
+  with 10% off the sale comes back for ৳900, not ৳1,000.
 - **A refund carries the VAT the customer paid.** Under the `EXCLUSIVE` treatment the tax sits on
-  top of `OrderItem.line_total` in its own `tax_amount` column, so the refund is
-  `line_total + tax_amount`; under `INCLUSIVE` the tax is already inside `line_total` and is not
-  added again. The **order's own** frozen `tax_mode` decides (§3.4), so an order refunds under the
-  treatment it was priced with even after the setting changes. A partial quantity refunds its share
-  of both.
+  top of the line in its own `tax_amount` column, so the refund is `line_paid + tax_amount`; under
+  `INCLUSIVE` the tax is already inside it and is not added again. The **order's own** frozen
+  `tax_mode` decides (§3.4), so an order refunds under the treatment it was priced with even after
+  the setting changes. A partial quantity refunds its share of both.
+- **A return is rounded once, not line by line.** The shares of a discount rarely divide evenly, so
+  the request's total is the rounded sum of the unrounded lines and the last line carries the
+  difference: everything back in one return refunds exactly what was paid. Lines sent back one
+  return at a time can still come to 0.01 over between them, and the cap above holds the last one
+  to what is left of the payment.
 - Refund method defaults to the original payment method. Cash sales refund cash from the register;
   gateway payments refund through the provider; COD orders refund by cash or mobile transfer recorded
   manually.
@@ -297,6 +306,13 @@ total           = taxable_base + tax + shipping_amount
 
 Rounding: half-up to 2 decimal places, applied once per order-level figure (never on intermediate
 sums). Money is `Decimal`; `float` is forbidden.
+
+The order's `tax` is then spread across the lines for the receipt, each line taking
+`tax × line_subtotal ÷ subtotal` and the last line whatever rounding leaves. The divisor is
+`subtotal`, not `taxable_base`: the lines add up to `subtotal`, so dividing by the smaller figure
+gives every line but the last more than its share. `OrderItem.tax_amount` is frozen at the sale, so
+an order sold before 2026-10-05 with VAT, an order-level discount and more than one line keeps the
+split it was given — its total was always right.
 
 ### 3.3 Discounts
 
@@ -508,6 +524,21 @@ gross_profit = revenue − Σ line_cogs
 Profit is never computed as "selling price − current product cost". Reports read the frozen
 `unit_cost`, so historical profit does not move when prices or costs change later.
 
+**Revenue is what the customer paid for the goods, so every discount is out of it.** A line's own
+discount is already inside `line_total`. A coupon or a cashier's whole-sale discount is not: it is
+frozen on the order as `discount_total` and never written back to the lines (§3.2). Reports are built
+from lines, so each line bears the order's discount in proportion to its share of `subtotal`:
+
+```text
+line_revenue = line_total − line_total × discount_total ÷ subtotal   (− tax_amount when INCLUSIVE)
+```
+
+The share is left unrounded and the *sum* is rounded, so the lines of one order always add up to
+`subtotal − discount_total` — the same figure as `Order.net_revenue`. `reports.services` has one
+expression for this (`NET_LINE_REVENUE`, summed through `_net_revenue`) and the dashboard, the
+business summary, the profit and product reports and the VAT return's taxable base all read it; a
+report that sums `line_total` directly counts money nobody paid.
+
 **The channel never changes COGS.** A POS sale and an online sale of the same variant in the same
 minute freeze the same figure. Both resolve it through `orders.services.pricing.resolve_unit_cost`,
 which is the single place the rule below is applied — online checkout used to skip it and read
@@ -585,7 +616,7 @@ raise and receive a purchase order.
 `GET /api/v1/reports/business-summary/` serves it (permission `reports.financial`):
 
 ```text
-  revenue from goods            net of VAT, never the gross line total
+  revenue from goods            net of VAT and of every discount, never the gross line total
 − refunds                       completed returns, by completed_at
 = net revenue
 − cost of goods sold            frozen unit_cost × quantity
