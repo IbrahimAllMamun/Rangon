@@ -481,6 +481,63 @@ is still open and tracked in
 
 ## Verification log
 
+### A scan brings in the whole product; net profit after expenses and purchase shipping, 2026-10-05
+
+Asked for: scanning a barcode on a purchase order should bring in every variant of that product,
+with ways to add and remove variants; net profit on the dashboard and the reports, after expenses
+and the shipping charged on purchase orders; an expenses card on the dashboard; and a change that is
+safe to migrate.
+
+**What shipped.**
+
+- **Purchase order form.** A scan or a pick lists every variant of the product, grouped under it,
+  with the branch's stock beside each. The scanned one starts at 1, the rest at 0; a line at 0 is
+  not on the order and is never sent (`lib/commerce/purchase-order`: `isOrdered`,
+  `orderedLines`, `mergeProductLines`, `groupLines`, `bumpQuantity`). Scanning a variant already on
+  the order adds one. Per product: *Add a variant* (a removed one, back at 1), *New size or colour*
+  (`components/admin/new-variants-form`, new SKUs on the product's own axes through
+  `generate-variants`, needs `products.create`), *Remove the N at 0* and *Remove product*
+  ([business-rules § 7a.6c](business-rules.md#7a6c-a-scan-brings-in-the-whole-product)).
+- **Net profit.** `reports.services.purchase_shipping`: a purchase order's `shipping_total`, landed
+  in full at its first posted receipt -- receiving costs stock at each line's `unit_cost`, so this
+  was in no profit figure before. `business_summary` subtracts it after operating expenses, and the
+  dashboard and the summary now share one path (`_gross_profit`, `_net_profit`), so they agree
+  ([§ 4.1](business-rules.md#41-net-profit-the-business-summary), one `DECISION REQUIRED`:
+  expensed on arrival rather than spread into landed cost).
+- **Dashboard.** A *Profit* row -- gross profit, expenses (count and top category), purchase
+  shipping, net profit -- for readers with `reports.financial` only; the API leaves the block out for
+  everyone else rather than sending zeroes. The dashboard's gross profit now takes completed returns
+  into account, as the summary always did. **Reports** gains the same four figures at the top; the
+  statement and its CSV gain a *Purchase order shipping* line.
+
+**Migration.** None needed: no model changed, and `makemigrations --check` says so. Nothing writes
+to an existing row.
+
+**Checks run** (Docker test stack, its own project and database; the local production stack was
+not touched):
+
+```text
+pytest ................................. 1727 passed
+ruff 0.8.4 check + format --check ...... clean, 253 files
+mypy ................................... clean, 162 source files
+makemigrations --check ................. no changes
+vitest (TZ=UTC) ........................ 498 passed, 45 files
+tsc --noEmit ........................... clean
+next lint (changed files) .............. clean
+```
+
+**Run in a browser** against a seeded throwaway API. As the owner: scanned *Classic Oxford Shirt
+M / Navy* and got all eight variants with their stock; a second scan made it 2; *Remove the 6 at 0*,
+*Add a variant* (L / Navy back at 1) and *New size or colour* (Black: four SKUs created and added)
+all worked; the draft saved exactly the seven ordered lines (11,616.00 + 500.00 shipping, as
+previewed). Receiving it moved the dashboard's purchase shipping from 0.00 to 500.00 and net profit
+from -124,936.20 to -125,436.20, the same figures on the reports page and in the statement. As the
+stock manager: the dashboard without the profit row, gross profit still in *Sales*. No console
+errors.
+
+**Found and recorded, not fixed:** [D141](#known-defects) -- a purchase order line's discount never
+reaches the cost of the stock.
+
 ### Barcode labels: every variant, its stock, and a tick that is never lost, 2026-10-03
 
 Asked for: on `/admin/labels`, scanning one variant should list **all** variants of the product, show
@@ -3531,6 +3588,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D138~~ | ~~**Gross profit counted the discount as income, on every report.**~~ **Fixed 2026-10-05.** A coupon or a cashier's whole-sale discount is frozen on the order as `discount_total` and never written back to the lines; `OrderItem.line_total` carries only the line's own discount. Every report builds revenue from one expression over lines, `NET_LINE_REVENUE`, which read `line_total` -- so a ৳1,000 item that cost ৳600 and sold with ৳100 off showed ৳400 of gross profit where ৳300 was made. The dashboard's *Gross profit* and margin, the business summary's revenue, gross and **net** profit, the profit report, product performance, top products and category sales were all overstated by exactly the discounts given, and the VAT report's *taxable sales* sat above the base the tax had been charged on (`taxable × rate ≠ vat`). The dashboard's *Revenue* tile was right throughout, because it sums `grand_total`, which is why the two tiles disagreed. Each line now bears the order discount in proportion to its share of `subtotal`, unrounded, and the **sum** is rounded -- rounding per line drifts 0.01 an order away from what was paid. `RETURNED_LINE_BASE` takes the same correction, so a return's taxable credit matches the VAT it credits. No migration: every value read is already frozen on the order, so historical periods are corrected too | `apps/api/reports/services.py`, `apps/api/tests/test_report_discounts.py` | Reported by the owner from the dashboard after a discounted counter sale. `Order.gross_profit` had it right all along; the reports never used it, and no report test sold anything at a discount. Rule in [business-rules § 4](business-rules.md). Reading the same code found [D139](#known-defects) |
 | ~~D139~~ | ~~**A partial return of a discounted sale refunded the discount as well.**~~ **Fixed 2026-10-05.** `returns.request_return` worked the refund out from `OrderItem.line_total`, under a comment reading "the price actually paid for that line, discount included" -- but `line_total` carries only the line's *own* discount. A coupon or a cashier's whole-sale discount lives on the order and was never taken off: one of two ৳1,000 items bought with 10% off the sale came back for ৳1,000 when ৳900 had been paid for it, and the customer kept the other item for ৳800. Only the cap at `paid_total − refunded_total` stopped it going further, so a *full* return was always right and the fault showed only on a partial one. Each line now bears the order discount in proportion to its share of `subtotal`; the request is rounded once and the last line carries the difference, so everything back in one return refunds exactly what was paid | `apps/api/orders/services/returns.py`, `apps/api/tests/test_return_refund_discounts.py` | Found reading the code for D138 -- the same blind spot, with money leaving the drawer instead of a figure on a screen. D78 fixed the VAT on this exact line on 2026-09-18 and its tests sold nothing at a discount. Returns already requested keep the amount they were raised with. Rule in [business-rules § 2.4](business-rules.md#24-refunds) |
 | ~~D140~~ | ~~**An order discount skewed the VAT split between lines, below zero on the last one.**~~ **Fixed 2026-10-05.** `pricing.calculate` gave each line `tax × line_total ÷ taxable_base`, and `taxable_base` is `subtotal` *less the order discount* -- so the shares came to more than the whole, every line but the last was over-allocated, and the last absorbed the difference. Two equal lines of ৳2,450 with ৳490 off were frozen at ৳167.32 and ৳133.86 of VAT; with a discount above half of a two-line sale the last line's `tax_amount` went negative. The order's own `tax_total` and `grand_total` were always right, which is why nothing failed: the split only matters where a line is read on its own -- the receipt, a per-line refund under `EXCLUSIVE`, the VAT credit on a return. The divisor is now `subtotal`. The NestJS port copied the fault faithfully and is changed with it; its unit test had the skewed pair pinned as the expected answer | `apps/api/orders/services/pricing.py`, `apps/api-nest/src/checkout/pricing.ts`, `apps/api/tests/unit/test_pricing.py`, `apps/api-nest/test/unit/pricing.spec.ts` | Found working out what a D139 refund should be on a two-line order. Orders already sold keep the split frozen on them ([business-rules § 3.2](business-rules.md#32-order-maths)); nothing rewrites a historical line |
+| D141 | **A purchase order line's discount never reaches the cost of the stock.** `recalculate_totals` takes the line's `discount` off what the supplier is owed, but `receive_purchase` puts the goods in at the line's undiscounted `unit_cost` unless the receiver retypes it -- so a 100.00 discount on ten units at 450.00 enters stock at 450.00 a unit instead of 440.00, and COGS, stock value and every margin built on them carry the 100.00 the shop never paid. Found 2026-10-05 while adding purchase order shipping to net profit, which is in no unit cost either (business-rules § 4.1). Not fixed: changing it changes how received stock is valued from then on, so it is the owner's call | `apps/api/purchasing/services.py` (`receive_purchase`) | Open. The fix is the receipt's default unit cost, `(unit_cost × quantity − discount) ÷ quantity`; nothing already received would move |
 
 ## Still API-only (no UI)
 

@@ -33,6 +33,8 @@ interface BusinessSummary {
   gross_profit: string;
   gross_margin_percent: string;
   expenses: { total: string; count: number; by_category: ExpenseRow[] };
+  /** "Shipping / other cost" on purchase orders whose goods arrived in the period. */
+  purchase_shipping: { total: string; orders: number };
   net_profit: string;
   net_margin_percent: string;
   volume: {
@@ -73,7 +75,7 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
       <PageHeader
         title="Business summary"
         back={{ href: `/admin/reports?range=${range}`, label: "Back to reports" }}
-        description="Revenue through to net profit. Costs come from the price frozen on each order line at sale time, so history does not move when today's prices do."
+        description="Revenue through to net profit, after expenses and the shipping charged on purchase orders. Costs come from the price frozen on each order line at sale time, so history does not move when today's prices do."
         actions={
           <DateRangeTabs basePath="/admin/reports/business" active={range} />
         }
@@ -265,6 +267,14 @@ function statementLines(summary: BusinessSummary): Line[] {
     },
     { label: "Gross profit", amount: summary.gross_profit, emphasis: "subtotal" },
     { label: "Operating expenses", amount: summary.expenses.total, negative: true },
+    {
+      label: "Purchase order shipping",
+      amount: summary.purchase_shipping.total,
+      negative: true,
+      note: `${summary.purchase_shipping.orders} order${
+        summary.purchase_shipping.orders === 1 ? "" : "s"
+      } received`,
+    },
     { label: "Net profit", amount: summary.net_profit, emphasis: "total" },
   ];
 }

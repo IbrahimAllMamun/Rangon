@@ -118,9 +118,13 @@ class BaseReportView(APIView):
             return data
         return data.get("daily", [])
 
+    def report_options(self, request: AuthedRequest) -> dict[str, Any]:
+        """Extra arguments for the report, decided by who is reading it."""
+        return {}
+
     def get(self, request: AuthedRequest) -> Response | HttpResponse:
         branch = _branch_for(request)
-        kwargs: dict[str, Any] = {"branch": branch}
+        kwargs: dict[str, Any] = {"branch": branch, **self.report_options(request)}
         if self.needs_range:
             kwargs["date_range"] = DateRange.from_params(request.query_params)
 
@@ -147,6 +151,11 @@ class BaseReportView(APIView):
 class DashboardView(BaseReportView):
     report = staticmethod(report_services.dashboard)
     filename = "dashboard.csv"
+
+    def report_options(self, request: AuthedRequest) -> dict[str, Any]:
+        # Expenses and net profit are the business summary's figures, so they
+        # need its permission. Everyone with `reports.view` keeps the rest.
+        return {"financial": request.user.has_perm_code("reports.financial")}
 
 
 class SalesReportView(BaseReportView):
@@ -259,6 +268,10 @@ class BusinessSummaryView(BaseReportView):
         ]
         rows += [
             {"line": "Total expenses", "amount": -data["expenses"]["total"]},
+            {
+                "line": "Purchase order shipping",
+                "amount": -data["purchase_shipping"]["total"],
+            },
             {"line": "Net profit", "amount": data["net_profit"]},
             {"line": "VAT collected (held, not income)", "amount": revenue["vat_collected"]},
         ]

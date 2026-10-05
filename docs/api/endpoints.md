@@ -331,12 +331,13 @@ guest-token based and does not touch them, so nothing is blocked.
 
 | Path | Perm |
 |---|---|
-| `dashboard/?range=<preset>` — see [§ Date ranges](#date-ranges) | `reports.view` |
+| `dashboard/?range=<preset>` — see [§ Date ranges](#date-ranges). `kpis.gross_profit` is the business summary's (completed returns included). A `profit` object — `gross_profit`, `expenses`, `expense_count`, `top_expense_category`, `purchase_shipping`, `purchase_shipping_orders`, `net_profit`, `net_margin_percent` — is present only for a reader with `reports.financial`, and absent (not zero) otherwise | `reports.view` |
 | `sales/`, `sales/by-channel/`, `sales/by-payment/` | `reports.view` |
 | `products/performance/` | `reports.view` |
 | `inventory/valuation/`, `inventory/movement/` | `reports.financial` |
 | `purchases/`, `returns/`, `profit/` | `reports.financial` |
 | `expenses/` — spend by category, with each category's share | `reports.financial` |
+| `business-summary/` — revenue to net profit ([business-rules § 4.1](../business-rules.md#41-net-profit-the-business-summary)); `purchase_shipping: {total, orders}` is the "Shipping / other cost" on purchase orders whose first delivery fell in the range, and `net_profit` is after it | `reports.financial` |
 | any of the above + `&format=csv` | `reports.export` |
 
 ### Date ranges
