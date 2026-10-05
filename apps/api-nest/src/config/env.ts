@@ -65,6 +65,9 @@ const schema = z.object({
   // `settings.RANGON["ALLOW_OVERSELL"]`: sell past what is on hand. Off
   // everywhere this project runs; read so both APIs refuse the same sales.
   RANGON_ALLOW_OVERSELL: flag(false),
+  // `settings.RANGON["DISCOUNT_APPROVAL_PERCENT"]`: a cashier's own discount above this
+  // share of the sale needs a manager (docs/business-rules.md section 3.3).
+  RANGON_DISCOUNT_APPROVAL_PERCENT: z.string().default('20'),
   // `settings.RANGON`: the reorder point a new inventory row starts with, and
   // the provider recorded on an online payment.
   RANGON_LOW_STOCK_THRESHOLD: z.coerce.number().int().default(5),

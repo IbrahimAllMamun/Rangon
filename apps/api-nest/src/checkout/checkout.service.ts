@@ -297,7 +297,8 @@ export class CheckoutService {
       const lowStock = await this.ledger.reserve(
         tx,
         branch,
-        priced.lines.map((line) => [line.variant.id, line.quantity]),
+        // A cart line's quantity is an int4 column: always a number here.
+        priced.lines.map((line) => [line.variant.id, Number(line.quantity)]),
         orderId,
       );
       for (const inventoryId of lowStock) {

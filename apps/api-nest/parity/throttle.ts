@@ -182,6 +182,20 @@ async function main(): Promise<void> {
       path: '/api/v1/pos/lookup/?code=NOPE',
       auth: true,
     },
+    // A manager's override sits behind the sign-in rate, counted per cashier:
+    // ten guesses at a manager's password a minute, not six hundred.
+    {
+      name: 'manager override, 12 wrong passwords',
+      count: 12,
+      path: '/api/v1/pos/elevate/',
+      cashier: true,
+      body: {
+        email: 'manager@rangon.test',
+        password: 'not-the-password',
+        permission: 'sales.discount_override',
+        discount_percent: '30',
+      },
+    },
   ] as {
     name: string;
     count: number;

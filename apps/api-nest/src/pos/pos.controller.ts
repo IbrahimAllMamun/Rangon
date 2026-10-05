@@ -1,4 +1,4 @@
-import { Delete, Get, HttpCode, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
+import { Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { RequestUser } from '../auth/authentication';
@@ -6,9 +6,12 @@ import { Action, StaffView } from '../auth/permissions';
 import { ThrottleScope } from '../auth/throttle';
 import { lookupParam } from '../catalog/admin/catalog-admin.controller';
 import { VariantsService } from '../catalog/admin/variants.service';
+import { auditContext } from '../common/audit';
 import { Params, QueryDict } from '../common/query-dict';
+import { ENV, Env } from '../config/env';
 import { requestData } from '../http/request-body';
 import { HoldsService } from './holds.service';
+import { PosCounterService } from './pos-counter.service';
 import { PosReadsService } from './pos-reads.service';
 
 /** Every POS view asks for the same thing: the right to ring up a sale. */
@@ -68,6 +71,39 @@ export class PosProductsController {
   @Get('pos/products/')
   products(@Params() query: QueryDict, @Req() request: FastifyRequest) {
     return this.reads.products(request.user as RequestUser, query);
+  }
+}
+
+/** `PosQuoteView`: the register's running total, priced as the sale would record it. */
+@StaffView('pos/quote', SELL)
+@ThrottleScope('pos')
+export class PosQuoteController {
+  constructor(private readonly counter: PosCounterService) {}
+
+  @Post('pos/quote/')
+  @HttpCode(200)
+  quote(@Req() request: FastifyRequest) {
+    return this.counter.quote(request.user as RequestUser, requestData(request));
+  }
+}
+
+/** `PosElevateView`: a manager's override, behind the sign-in throttle. */
+@StaffView('pos/elevate', SELL)
+@ThrottleScope('auth')
+export class PosElevateController {
+  constructor(
+    private readonly counter: PosCounterService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Post('pos/elevate/')
+  @HttpCode(200)
+  elevate(@Req() request: FastifyRequest) {
+    return this.counter.elevate(
+      request.user as RequestUser,
+      requestData(request),
+      auditContext(request, this.env),
+    );
   }
 }
 

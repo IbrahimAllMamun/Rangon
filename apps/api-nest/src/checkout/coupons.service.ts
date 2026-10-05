@@ -34,14 +34,14 @@ const COUPON_COLUMNS = `id, code, description, discount_type, value, minimum_ord
   maximum_discount, starts_at, ends_at, usage_limit, usage_limit_per_customer, used_count,
   channels, is_active`;
 
-function pyTruthyJson(value: unknown): boolean {
+export function pyTruthyJson(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (value && typeof value === 'object') return Object.keys(value).length > 0;
   return Boolean(value);
 }
 
 /** Python `item in container` for a JSON value: list membership, dict key, substring. */
-function pyContains(container: unknown, item: string): boolean {
+export function pyContains(container: unknown, item: string): boolean {
   if (Array.isArray(container)) return container.includes(item);
   if (typeof container === 'string') return container.includes(item);
   if (container && typeof container === 'object') return Object.hasOwn(container, item);

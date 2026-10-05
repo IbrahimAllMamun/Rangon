@@ -22,8 +22,14 @@ export const ZERO = new Dec('0.00');
 
 /** `quantize`: two decimal places, half up -- what a shopkeeper expects. */
 export function quantize(value: Dec | string | number): Dec {
-  return new Dec(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const rounded = new Dec(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  // `Decimal.quantize` raises `InvalidOperation` when the result needs more
+  // digits than the context's 28: an amount past 26 whole digits.
+  if (rounded.abs().gte(PRECISION_LIMIT)) throw new Error('decimal.InvalidOperation: quantize');
+  return rounded;
 }
+
+const PRECISION_LIMIT = new Dec(10).pow(26);
 
 /**
  * Python `str(Decimal)` of a quantized amount: always two places, and a
@@ -51,7 +57,8 @@ export interface PricedVariant {
 
 export interface PricedLine {
   variant: PricedVariant;
-  quantity: number;
+  /** A Python int: past 2^53 only where a register's quote was asked for that many. */
+  quantity: number | bigint;
   unitPrice: Dec;
   unitCost: Dec;
   lineDiscount: Dec;
@@ -85,8 +92,9 @@ export interface PricedOrder {
   couponId: string | null;
 }
 
-export function itemCount(order: PricedOrder): number {
-  return order.lines.reduce((sum, line) => sum + line.quantity, 0);
+export function itemCount(order: PricedOrder): number | bigint {
+  const total = order.lines.reduce((sum, line) => sum + BigInt(line.quantity), 0n);
+  return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : total;
 }
 
 /**
@@ -101,7 +109,7 @@ export function resolveUnitCost(variant: PricedVariant, averageCost: string | un
 
 /** `price_lines`: the unit price always from the database, never the client. */
 export function priceLines(
-  rawLines: [variant: PricedVariant, quantity: number, lineDiscount: Dec | null][],
+  rawLines: [variant: PricedVariant, quantity: number | bigint, lineDiscount: Dec | null][],
   costs: Map<string, string> = new Map(),
 ): PricedLine[] {
   return rawLines.map(([variant, quantity, lineDiscount]) => {
@@ -129,14 +137,19 @@ export function priceLines(
  * and a mixed basket takes the highest rate present -- the conservative choice.
  */
 export function resolveTaxRate(lines: PricedLine[], organisationRate: string): Dec {
+  return new Dec(resolveTaxRateText(lines, organisationRate));
+}
+
+/** The same rate as the database wrote it: `str()` of the Decimal Django holds. */
+export function resolveTaxRateText(lines: PricedLine[], organisationRate: string): string {
   const rates = lines
     .map((line) => line.variant.categoryTaxRate)
-    .filter((rate): rate is string => rate !== null)
-    .map((rate) => new Dec(rate));
-  const fallback = new Dec(organisationRate);
-  if (!rates.length) return fallback;
+    .filter((rate): rate is string => rate !== null);
+  if (!rates.length) return organisationRate;
   // Python's `max()` answers the first of equal values.
-  return [...rates, fallback].reduce((best, rate) => (rate.gt(best) ? rate : best));
+  return [...rates, organisationRate].reduce((best, rate) =>
+    new Dec(rate).gt(best) ? rate : best,
+  );
 }
 
 /** `calculate`: every order-level figure once, in a fixed order. */

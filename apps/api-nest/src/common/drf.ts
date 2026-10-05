@@ -602,7 +602,7 @@ function decimalTuple(text: string): { digits: string; exponent: number } {
 export function decimalField(
   maxDigits: number,
   decimalPlaces: number,
-  options: { required?: boolean; allowNull?: boolean; minValue?: string } = {},
+  options: { required?: boolean; allowNull?: boolean; minValue?: string; maxValue?: string } = {},
 ): Field<string | null> {
   const allowNull = options.allowNull ?? false;
   return {
@@ -659,6 +659,13 @@ export function decimalField(
         );
       }
       const value = new Dec(parsed).toDecimalPlaces(decimalPlaces, Decimal.ROUND_HALF_EVEN);
+      // `MaxValueValidator` is added first; a value cannot fail both.
+      if (options.maxValue !== undefined && value.gt(options.maxValue)) {
+        throw Invalid.of(
+          `Ensure this value is less than or equal to ${options.maxValue}.`,
+          'max_value',
+        );
+      }
       // `MinValueValidator(min_value)`, on the quantized value.
       if (options.minValue !== undefined && value.lt(options.minValue)) {
         throw Invalid.of(

@@ -14,6 +14,17 @@ parity database only. What each row is for:
   string, an integer past 2^53, floats and Bengali text.
 - At PAR3: two holds parked by its manager -- a hold at another branch is
   not found, and an owner reads them with `?branch=`.
+
+For the quote and the manager's approval (its own marker, `parity.till`):
+- `parity.till`: a role that may ring up a sale and nothing else -- no
+  `sales.discount`, so any discount of its own is refused.
+- `parity.approver`: a MANAGER at DHK1 whose approvals the cases mint, so a
+  case that deactivates or moves the approver touches no other case.
+- `parity.gone`: a MANAGER at DHK1 who is no longer active.
+- PARITY-TWICE and PARITY-THRICE: coupons good twice and three times per
+  customer, for the counter's "needs the customer on the sale" refusal.
+- PARITY-STR: a coupon whose `channels` is a string, not a list -- Python's
+  `in` is then a substring test.
 """
 
 from datetime import timedelta
@@ -21,13 +32,17 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import Branch, User
+from accounts.models import Branch, Permission, Role, RoleCode, Status, User
+from accounts.services import get_organization
 from catalog.models import ProductVariant
 from customers.models import Customer
 from finance.models import Account, AccountKind
 from orders.models import HeldSale
+from promotions.models import Coupon, DiscountType
 
+PARITY_PASSWORD = "Parity-Pass-2026!"
 MARKER = "Parity Mirpur Till"
+COUNTER_MARKER = "parity.till@rangon.test"
 
 
 def apply() -> None:
@@ -80,8 +95,61 @@ def apply() -> None:
     print("parity POS fixture applied")
 
 
+def apply_counter() -> None:
+    home = Branch.objects.get(code="DHK1")
+    till = Role.objects.create(code="PARITY_TILL", name="Parity till only", is_system=False)
+    till.permissions.set(Permission.objects.filter(code__in=["sales.create", "sales.view"]))
+
+    def account(email: str, role: Role, **extra) -> User:
+        return User.objects.create_user(
+            email=email,
+            password=PARITY_PASSWORD,
+            role=role,
+            organization=get_organization(),
+            branch=home,
+            **extra,
+        )
+
+    manager = Role.objects.get(code=RoleCode.MANAGER)
+    account(COUNTER_MARKER, till, first_name="Parity", last_name="Till")
+    account("parity.approver@rangon.test", manager, first_name="Parity", last_name="Approver")
+    # `User.save()` reads `is_active` off the status.
+    account("parity.gone@rangon.test", manager, status=Status.INACTIVE)
+
+    Coupon.objects.create(
+        code="PARITY-TWICE",
+        description="Thirty off, twice each",
+        discount_type=DiscountType.FIXED,
+        value=30,
+        usage_limit_per_customer=2,
+        channels=["POS", "ONLINE"],
+    )
+    Coupon.objects.create(
+        code="PARITY-THRICE",
+        description="A tenth off, three times each",
+        discount_type=DiscountType.PERCENTAGE,
+        value=10,
+        usage_limit_per_customer=3,
+    )
+    Coupon.objects.create(
+        code="PARITY-STR",
+        description="Channels as a string",
+        discount_type=DiscountType.FIXED,
+        value=5,
+        usage_limit_per_customer=None,
+        channels="POSTAL",
+    )
+    print("parity counter fixture applied")
+
+
 if Account.objects.filter(name=MARKER).exists():
     print("parity POS fixture already applied")
 else:
     with transaction.atomic():
         apply()
+
+if User.objects.filter(email=COUNTER_MARKER).exists():
+    print("parity counter fixture already applied")
+else:
+    with transaction.atomic():
+        apply_counter()
