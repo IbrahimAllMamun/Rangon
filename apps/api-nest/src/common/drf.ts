@@ -511,6 +511,35 @@ export function dictField(
   };
 }
 
+/**
+ * `serializers.JSONField` for a JSON body: any value JSON can carry, kept as
+ * parsed (a float stays a `PyFloat`, an integer past 2^53 a bigint), so what
+ * is stored is what Python's `json.dumps` would write.
+ */
+export function jsonField(
+  options: { required?: boolean; allowNull?: boolean } = {},
+): Field<unknown> {
+  return {
+    run(data, partial) {
+      const settled = emptyValue<unknown>(data, partial, {
+        required: options.required ?? true,
+        allowNull: options.allowNull ?? false,
+      });
+      if (settled.settled) return settled.value;
+      // `json.dumps(data, allow_nan=False)`: a float past a double was read as infinity.
+      if (hasNonFiniteFloat(data)) throw Invalid.of('Value must be valid JSON.');
+      return data;
+    },
+  };
+}
+
+function hasNonFiniteFloat(value: unknown): boolean {
+  if (value instanceof PyFloat) return !Number.isFinite(value.value);
+  if (Array.isArray(value)) return value.some(hasNonFiniteFloat);
+  if (isDict(value)) return Object.values(value).some(hasNonFiniteFloat);
+  return false;
+}
+
 /** A field with `default=`: a missing value is the default, not skipped (unless partial). */
 export function withDefault<T>(field: Field<T>, fallback: () => T): Field<T> {
   return {

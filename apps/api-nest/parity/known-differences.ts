@@ -39,4 +39,11 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
       'No client appends a suffix.',
     appliesTo: (testCase) => testCase.name.startsWith('admin catalogue: format suffix'),
   },
+  {
+    reason:
+      'Form bodies: every Django view parses `application/x-www-form-urlencoded` and multipart; the ' +
+      'Nest API parses them only on the views that take uploads and answers 415 elsewhere. The web ' +
+      'app posts JSON to all of those.',
+    appliesTo: (testCase) => testCase.name.endsWith(': a form body'),
+  },
 ];
