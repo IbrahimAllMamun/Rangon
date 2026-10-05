@@ -61,6 +61,8 @@ export interface Posting {
   method: string;
   notes: string;
   occurredAt: string;
+  /** `created_by`: the member of staff who took the money, when one did. */
+  actorId?: string | null;
 }
 
 /**
@@ -194,7 +196,7 @@ export class CashBookService {
          (id, created_at, updated_at, account_id, transaction_type, amount, balance_after, reference_type,
           reference_id, reason, notes, occurred_at, created_by_id, idempotency_key)
        VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, 'SALE_PAYMENT', $3, $4, $5, $6, '',
-               $7, $8::timestamptz, NULL, NULL)`,
+               $7, $8::timestamptz, $9::uuid, NULL)`,
       [
         randomUUID(),
         locked.id,
@@ -204,6 +206,7 @@ export class CashBookService {
         posting.referenceId,
         posting.notes,
         posting.occurredAt,
+        posting.actorId ?? null,
       ],
     );
     await tx.query('RELEASE SAVEPOINT record_movement');

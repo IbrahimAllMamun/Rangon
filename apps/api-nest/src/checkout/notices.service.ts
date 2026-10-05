@@ -28,15 +28,20 @@ export class NoticesService {
    * permission -- at the branch, or an owner or admin anywhere. Django runs
    * this after the order commits, so it is called after commit here too.
    */
-  async notifyStaff(entry: {
-    type: string;
-    title: string;
-    body: string;
-    permission: string;
-    branchId: string;
-    link: string;
-  }): Promise<void> {
-    const users = await this.db.query<{
+  async notifyStaff(
+    entry: {
+      type: string;
+      title: string;
+      body: string;
+      permission: string;
+      branchId: string;
+      link: string;
+      level?: string;
+      data?: Record<string, unknown>;
+    },
+    q: Queryable = this.db,
+  ): Promise<void> {
+    const users = await q.query<{
       id: string;
       role_code: string | null;
       is_superuser: boolean;
@@ -50,13 +55,13 @@ export class NoticesService {
     );
     for (const user of users) {
       if (user.role_code === 'CUSTOMER') continue;
-      if (!(await this.holds(user, entry.permission))) continue;
-      await this.db.query(
+      if (!(await this.holds(user, entry.permission, q))) continue;
+      await q.query(
         `INSERT INTO notifications_notification
            (id, created_at, updated_at, user_id, permission_code, branch_id, notification_type, level,
             title, body, link, data, read_at, emailed_at)
-         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, $4::uuid, $5, 'INFO', $6,
-                 $7, $8, '{}'::jsonb, NULL, NULL)`,
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, $4::uuid, $5, $9, $6,
+                 $7, $8, $10::jsonb, NULL, NULL)`,
         [
           randomUUID(),
           user.id,
@@ -66,6 +71,8 @@ export class NoticesService {
           pySlice(entry.title, 160),
           entry.body,
           entry.link,
+          entry.level ?? 'INFO',
+          JSON.stringify(entry.data ?? {}),
         ],
       );
     }
@@ -75,10 +82,11 @@ export class NoticesService {
   private async holds(
     user: { role_code: string | null; is_superuser: boolean; role_id: string | null },
     code: string,
+    q: Queryable = this.db,
   ): Promise<boolean> {
     if (user.role_code === 'OWNER' || user.is_superuser) return true;
     if (!user.role_id) return false;
-    const row = await this.db.one(
+    const row = await q.one(
       `SELECT 1 AS found FROM accounts_role_permissions rp JOIN accounts_permission p ON p.id = rp.permission_id
         WHERE rp.role_id = $1::uuid AND p.code = $2 LIMIT 1`,
       [user.role_id, code],

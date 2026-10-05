@@ -3,7 +3,11 @@ import { Module } from '@nestjs/common';
 import { AccountsModule } from '../accounts/accounts.module';
 import { CatalogAdminModule } from '../catalog/admin/catalog-admin.module';
 import { CheckoutModule } from '../checkout/checkout.module';
+import { CashBookService } from '../finance/cash-book.service';
 import { InventoryModule } from '../inventory/inventory.module';
+import { OrderPayments } from '../orders/order-payments.service';
+import { OrderWritesService } from '../orders/order-writes.service';
+import { StaffOrders } from '../orders/staff-order.service';
 import { HoldsService } from './holds.service';
 import {
   HeldSalesController,
@@ -11,10 +15,12 @@ import {
   PosLookupController,
   PosProductsController,
   PosQuoteController,
+  PosSalesController,
   PosSessionController,
 } from './pos.controller';
 import { PosCounterService } from './pos-counter.service';
 import { PosReadsService } from './pos-reads.service';
+import { PosSales } from './pos-sales.service';
 import { SalePricing } from './sale-pricing.service';
 
 /** The counter: `orders.api.pos_views` (phase 5). */
@@ -26,8 +32,19 @@ import { SalePricing } from './sale-pricing.service';
     PosProductsController,
     PosQuoteController,
     PosElevateController,
+    PosSalesController,
     HeldSalesController,
   ],
-  providers: [PosReadsService, HoldsService, SalePricing, PosCounterService],
+  providers: [
+    PosReadsService,
+    HoldsService,
+    SalePricing,
+    PosCounterService,
+    PosSales,
+    StaffOrders,
+    OrderPayments,
+    OrderWritesService,
+    CashBookService,
+  ],
 })
 export class PosModule {}

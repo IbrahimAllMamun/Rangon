@@ -63,12 +63,17 @@ export class OrderWritesService {
     orderId: string,
     eventType: string,
     message: string,
-    options: { data?: Record<string, unknown>; customerVisible?: boolean } = {},
+    options: {
+      data?: Record<string, unknown>;
+      customerVisible?: boolean;
+      actorId?: string | null;
+    } = {},
   ): Promise<void> {
     await tx.query(
       `INSERT INTO orders_orderevent
          (id, created_at, updated_at, order_id, event_type, message, data, is_customer_visible, actor_id)
-       VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, $4, $5::jsonb, $6, NULL)`,
+       VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, $4, $5::jsonb, $6,
+               $7::uuid)`,
       [
         randomUUID(),
         orderId,
@@ -76,6 +81,7 @@ export class OrderWritesService {
         pySlice(message, 255),
         JSON.stringify(options.data ?? {}),
         options.customerVisible ?? true,
+        options.actorId ?? null,
       ],
     );
   }

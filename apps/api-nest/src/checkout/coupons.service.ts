@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { Injectable } from '@nestjs/common';
 
 import { Dec } from '../common/decimal';
@@ -189,5 +191,54 @@ export class CouponsService {
     // Python's `min(discount, subtotal)` answers the first of two equal values.
     if (subtotal.lt(discount)) discount = subtotal;
     return { coupon, discount, freeShipping, eligibleSubtotal: eligible };
+  }
+
+  /**
+   * `promotions.services.redeem`: count the use under the coupon's row lock,
+   * re-checking both limits -- validation ran before this lock existed, so
+   * two checkouts can both have passed it (business-rules section 3.3).
+   */
+  async redeem(
+    tx: Queryable,
+    couponId: string,
+    orderId: string,
+    discount: Dec,
+    customerId: string | null,
+  ): Promise<void> {
+    const coupon = await tx.one<{
+      id: string;
+      usage_limit: number | null;
+      used_count: number;
+      usage_limit_per_customer: number | null;
+    }>(
+      `SELECT id, usage_limit, used_count, usage_limit_per_customer FROM promotions_coupon WHERE id = $1::uuid FOR UPDATE`,
+      [couponId],
+    );
+    if (!coupon) return;
+    if (isExhausted(coupon as unknown as CouponRow))
+      throw new CouponInvalid('This coupon has reached its usage limit.');
+    if (coupon.usage_limit_per_customer && customerId) {
+      const used = await tx.one<{ count: string }>(
+        `SELECT count(*) AS count FROM promotions_couponredemption
+          WHERE coupon_id = $1::uuid AND customer_id = $2::uuid AND released_at IS NULL AND NOT (order_id = $3::uuid)`,
+        [couponId, customerId, orderId],
+      );
+      if (Number(used?.count ?? 0) >= coupon.usage_limit_per_customer) {
+        throw new CouponInvalid('You have already used this coupon.');
+      }
+    }
+    const created = await tx.query(
+      `INSERT INTO promotions_couponredemption
+         (id, created_at, updated_at, coupon_id, order_id, customer_id, discount_amount, released_at)
+       VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4::uuid, $5, NULL)
+       ON CONFLICT (coupon_id, order_id) DO NOTHING RETURNING id`,
+      [randomUUID(), couponId, orderId, customerId, money(quantize(discount))],
+    );
+    if (created.length) {
+      await tx.query(
+        `UPDATE promotions_coupon SET updated_at = clock_timestamp(), used_count = $2 WHERE id = $1::uuid`,
+        [couponId, coupon.used_count + 1],
+      );
+    }
   }
 }

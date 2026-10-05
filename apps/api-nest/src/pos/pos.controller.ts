@@ -12,6 +12,7 @@ import { ENV, Env } from '../config/env';
 import { requestData } from '../http/request-body';
 import { HoldsService } from './holds.service';
 import { PosCounterService } from './pos-counter.service';
+import { PosSales } from './pos-sales.service';
 import { PosReadsService } from './pos-reads.service';
 
 /** Every POS view asks for the same thing: the right to ring up a sale. */
@@ -104,6 +105,51 @@ export class PosElevateController {
       requestData(request),
       auditContext(request, this.env),
     );
+  }
+}
+
+/** `request.headers.get("Idempotency-Key")`: null when the header is absent, "" when it is empty. */
+function idempotencyKey(request: FastifyRequest): string | null {
+  const value = request.headers['idempotency-key'];
+  if (value === undefined) return null;
+  return Array.isArray(value) ? value.join(',') : value;
+}
+
+/** `PosSaleViewSet`: ring up a sale, read it back, print its receipt. */
+@StaffView('pos/sales', {
+  create: ['sales.create'],
+  receipt: ['sales.view'],
+  void: ['sales.cancel'],
+  retrieve: ['sales.view'],
+})
+@ThrottleScope('pos')
+export class PosSalesController {
+  constructor(
+    private readonly sales: PosSales,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Post('pos/sales/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.sales.create(
+      request.user as RequestUser,
+      requestData(request),
+      idempotencyKey(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Get('pos/sales/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Params() query: QueryDict) {
+    return this.sales.retrieve(lookupParam(pk), query);
+  }
+
+  @Get('pos/sales/:pk/receipt/')
+  @Action('receipt')
+  receipt(@Param('pk') pk: string, @Params() query: QueryDict) {
+    return this.sales.receipt(lookupParam(pk), query);
   }
 }
 

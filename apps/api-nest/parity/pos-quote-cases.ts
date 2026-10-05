@@ -35,7 +35,7 @@ function b62(value: number): string {
 }
 
 /** `signing.dumps(payload, salt=...)`, stamped `age` seconds ago. */
-function sign(
+export function signApproval(
   payload: unknown,
   options: { age?: number; salt?: string; key?: string } = {},
 ): string {
@@ -461,77 +461,77 @@ export async function posQuoteCases(apis: { DJANGO: URL; NEST: URL }): Promise<C
     ...fields,
   });
   for (const [name, mint, who] of [
-    ['a good approval', () => sign(approval()), 'cashier'],
-    ['an approval for more', () => sign(approval({ max_percent: '75.00' })), 'cashier'],
-    ['an approval for less', () => sign(approval({ max_percent: '49.99' })), 'cashier'],
-    ['an approval with no ceiling', () => sign(approval({ max_percent: null })), 'cashier'],
-    ['an approval four minutes old', () => sign(approval(), { age: 240 }), 'cashier'],
-    ['an approval six minutes old', () => sign(approval(), { age: 360 }), 'cashier'],
-    ['an approval from the future', () => sign(approval(), { age: -600 }), 'cashier'],
+    ['a good approval', () => signApproval(approval()), 'cashier'],
+    ['an approval for more', () => signApproval(approval({ max_percent: '75.00' })), 'cashier'],
+    ['an approval for less', () => signApproval(approval({ max_percent: '49.99' })), 'cashier'],
+    ['an approval with no ceiling', () => signApproval(approval({ max_percent: null })), 'cashier'],
+    ['an approval four minutes old', () => signApproval(approval(), { age: 240 }), 'cashier'],
+    ['an approval six minutes old', () => signApproval(approval(), { age: 360 }), 'cashier'],
+    ['an approval from the future', () => signApproval(approval(), { age: -600 }), 'cashier'],
     [
       'an approval signed with another key',
-      () => sign(approval(), { key: 'not-the-key' }),
+      () => signApproval(approval(), { key: 'not-the-key' }),
       'cashier',
     ],
     [
       'an approval signed for another purpose',
-      () => sign(approval(), { salt: 'something.else' }),
+      () => signApproval(approval(), { salt: 'something.else' }),
       'cashier',
     ],
     [
       'an approval with its payload changed',
       () =>
-        sign(approval()).replace(
+        signApproval(approval()).replace(
           /^[^:]+/,
           Buffer.from(JSON.stringify(approval({ max_percent: '99.00' }))).toString('base64url'),
         ),
       'cashier',
     ],
-    ['an approval cut short', () => sign(approval()).slice(0, -3), 'cashier'],
+    ['an approval cut short', () => signApproval(approval()).slice(0, -3), 'cashier'],
     ['an approval with no parts', () => 'not-a-token', 'cashier'],
     ['an approval of two parts', () => 'abc:def', 'cashier'],
     ['an approval in Bengali', () => 'অনুমোদন:১:২', 'cashier'],
     [
       'an approval given to another cashier',
-      () => sign(approval({ cashier: U('manager@rangon.test') })),
+      () => signApproval(approval({ cashier: U('manager@rangon.test') })),
       'cashier',
     ],
     [
       'an approval for another permission',
-      () => sign(approval({ permission: 'sales.refund' })),
+      () => signApproval(approval({ permission: 'sales.refund' })),
       'cashier',
     ],
-    ['an approval by a cashier', () => sign(approval({ approver: cashier })), 'cashier'],
+    ['an approval by a cashier', () => signApproval(approval({ approver: cashier })), 'cashier'],
     [
       'an approval by an inactive manager',
-      () => sign(approval({ approver: U('parity.gone@rangon.test') })),
+      () => signApproval(approval({ approver: U('parity.gone@rangon.test') })),
       'cashier',
     ],
-    ['an approval by nobody', () => sign(approval({ approver: missing })), 'cashier'],
+    ['an approval by nobody', () => signApproval(approval({ approver: missing })), 'cashier'],
     [
       'an approval by something that is not a uuid',
-      () => sign(approval({ approver: 'abc' })),
+      () => signApproval(approval({ approver: 'abc' })),
       'cashier',
     ],
     [
       'an approval by the other branch’s manager',
-      () => sign(approval({ approver: U('parity.mirpur@rangon.test') })),
+      () => signApproval(approval({ approver: U('parity.mirpur@rangon.test') })),
       'cashier',
     ],
     [
       'an approval by an owner',
-      () => sign(approval({ approver: U('owner@rangon.test') })),
+      () => signApproval(approval({ approver: U('owner@rangon.test') })),
       'cashier',
     ],
     [
       'an approval by an administrator',
-      () => sign(approval({ approver: U('parity.admin@rangon.test') })),
+      () => signApproval(approval({ approver: U('parity.admin@rangon.test') })),
       'cashier',
     ],
-    ['an approval nobody needed', () => sign(approval()), 'manager'],
+    ['an approval nobody needed', () => signApproval(approval()), 'manager'],
     [
       'an approval for a till that may not discount',
-      () => sign(approval({ cashier: U('parity.till@rangon.test') })),
+      () => signApproval(approval({ cashier: U('parity.till@rangon.test') })),
       'till',
     ],
   ] as [string, () => string, Who | 'till'][]) {
@@ -547,7 +547,7 @@ export async function posQuoteCases(apis: { DJANGO: URL; NEST: URL }): Promise<C
     () => ({
       ...half,
       branch: mirpur,
-      approval_token: sign(approval({ cashier: U('owner@rangon.test') })),
+      approval_token: signApproval(approval({ cashier: U('owner@rangon.test') })),
     }),
     'owner',
   );

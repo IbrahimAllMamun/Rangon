@@ -475,6 +475,144 @@ export class StockService {
     return lowStock;
   }
 
+  /**
+   * `_check_counter_can_take`: a counter sale takes only units no online
+   * order holds, unless the owner says it may (business-rules section 1.4,
+   * D115). Checked after `checkCanReduce`, so a sale the shelf cannot cover
+   * at all is refused for that first.
+   */
+  private async checkCounterCanTake(
+    tx: Queryable,
+    inventory: LockedInventory,
+    quantity: Count,
+  ): Promise<void> {
+    const available = inventory.on_hand - inventory.reserved;
+    if (quantity <= 0 || BigInt(available) >= BigInt(quantity)) return;
+    if (this.env.RANGON_ALLOW_OVERSELL) return;
+    // `inventory.branch.organization.counter_sells_reserved`, read when it matters.
+    const shop = await tx.one<{ counter_sells_reserved: boolean }>(
+      `SELECT o."counter_sells_reserved" FROM "accounts_branch" b
+         INNER JOIN "accounts_organization" o ON (b."organization_id" = o."id")
+        WHERE b."id" = $1`,
+      [inventory.branch_id],
+    );
+    if (shop?.counter_sells_reserved) return;
+    const sku = skuOf(inventory);
+    throw new InsufficientStock(
+      `Only ${Math.max(available, 0)} unit(s) of ${sku} are available at ` +
+        `${inventory.branch_code}; ${inventory.reserved} are held for online orders.`,
+      {
+        details: {
+          variant_id: inventory.variant_id,
+          sku,
+          branch: inventory.branch_code,
+          requested: quantity,
+          on_hand: inventory.on_hand,
+          reserved: inventory.reserved,
+          available,
+        },
+      },
+    );
+  }
+
+  /**
+   * `_bulk` for a movement of stock on hand (a sale out, a return in): the
+   * rows locked, every line checked against the shelf as locked -- a SKU on
+   * two lines is checked twice against the same figure -- and then each line
+   * written at the row's average cost.
+   */
+  private async bulk(
+    tx: Queryable,
+    after: AfterCommit,
+    movement: {
+      branch: Branch;
+      lines: readonly [variantId: string, quantity: Count][];
+      type: 'SALE' | 'RETURN';
+      actor: AuditActor | null;
+      referenceType: string;
+      referenceId: string | null;
+      reason?: string;
+      respectReservations?: boolean;
+    },
+  ): Promise<LedgerEntry[]> {
+    const materialised = movement.lines.filter(([, quantity]) => BigInt(quantity) !== 0n);
+    if (!materialised.length) return [];
+    const inventories = await this.lock(
+      tx,
+      movement.branch.id,
+      materialised.map(([variantId]) => variantId),
+    );
+    const sign = BigInt(SIGN[movement.type] as number);
+    for (const [variantId, quantity] of materialised) {
+      const inventory = inventories.get(variantId) as LockedInventory;
+      this.checkCanReduce(inventory, exact(sign * BigInt(quantity)));
+      if (movement.respectReservations) await this.checkCounterCanTake(tx, inventory, quantity);
+    }
+    const entries: LedgerEntry[] = [];
+    for (const [variantId, quantity] of materialised) {
+      const inventory = inventories.get(variantId) as LockedInventory;
+      entries.push(
+        await this.writeLedger(tx, inventory, {
+          type: movement.type,
+          delta: exact(sign * BigInt(quantity)),
+          actor: movement.actor,
+          referenceType: movement.referenceType,
+          referenceId: movement.referenceId,
+          reason: movement.reason ?? '',
+          notes: '',
+          unitCost: inventory.average_cost,
+        }),
+      );
+      after.lowStockCheck(inventory);
+    }
+    return entries;
+  }
+
+  /**
+   * `sell`: stock out at once, for the counter -- the goods leave the shop.
+   * Units reserved for online orders are not for sale here unless the
+   * organisation's `counter_sells_reserved` is on.
+   */
+  async sell(
+    tx: Queryable,
+    after: AfterCommit,
+    sale: {
+      branch: Branch;
+      lines: readonly [variantId: string, quantity: Count][];
+      actor: AuditActor | null;
+      referenceType?: string;
+      referenceId: string | null;
+    },
+  ): Promise<LedgerEntry[]> {
+    return this.bulk(tx, after, {
+      ...sale,
+      type: 'SALE',
+      referenceType: sale.referenceType ?? 'order',
+      respectReservations: true,
+    });
+  }
+
+  /** `restock_return`: goods back on the shelf, at the row's average cost. */
+  async restockReturn(
+    tx: Queryable,
+    after: AfterCommit,
+    restock: {
+      branch: Branch;
+      lines: readonly [variantId: string, quantity: Count][];
+      actor: AuditActor | null;
+      referenceType?: string;
+      referenceId: string | null;
+      reason?: string;
+    },
+  ): Promise<LedgerEntry[]> {
+    return this.bulk(tx, after, {
+      ...restock,
+      type: 'RETURN',
+      referenceType: restock.referenceType ?? 'return',
+      reason: restock.reason ?? 'Customer return restocked',
+    });
+  }
+
   /** `adjust`: correct stock to a counted figure by writing the difference. */
   async adjust(
     tx: Queryable,

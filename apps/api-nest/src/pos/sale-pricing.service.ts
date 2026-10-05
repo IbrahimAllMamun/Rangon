@@ -67,6 +67,7 @@ export interface BasketInput {
 export interface CustomerRow {
   id: string;
   name: string;
+  phone: string | null;
   is_walk_in: boolean;
   total_orders: number;
   total_spent: string;
@@ -158,6 +159,15 @@ export class SalePricing {
     );
     if (!row) return null;
     return { ...row, fullName: pyStrip(`${row.firstName} ${row.lastName}`) || row.email };
+  }
+
+  /** `user.full_name` of any account, active or not: the cashier named on a receipt. */
+  async staffName(id: string): Promise<string> {
+    const row = await this.db.one<{ first_name: string; last_name: string; email: string }>(
+      `SELECT "first_name", "last_name", "email" FROM "accounts_user" WHERE "id" = $1`,
+      [id],
+    );
+    return row ? pyStrip(`${row.first_name} ${row.last_name}`) || row.email : '';
   }
 
   /** `approval_token`: what a manager has just approved, for the register to carry to the sale. */
@@ -285,7 +295,7 @@ export class SalePricing {
   private async namedCustomer(customerId: string | null): Promise<CustomerRow | null> {
     if (!customerId) return null;
     const customer = await this.db.one<CustomerRow>(
-      `SELECT "id", "name", "is_walk_in", "total_orders", "total_spent" FROM "customers_customer"
+      `SELECT "id", "name", "phone", "is_walk_in", "total_orders", "total_spent" FROM "customers_customer"
         WHERE "customers_customer"."id" = $1 ORDER BY "customers_customer"."name" ASC LIMIT 1`,
       [customerId],
     );
