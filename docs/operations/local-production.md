@@ -10,6 +10,10 @@
 > This page fills the stack with demo data. For a real shop on a blank database (no demo, your own
 > organization, branch and owner account), follow
 > [new-store-from-scratch.md](new-store-from-scratch.md) instead.
+>
+> **Already running a shop on this stack?** Deploy new code with
+> [upgrading-local-production.md](upgrading-local-production.md). Everything on this page assumes
+> the data in it can be thrown away.
 
 ---
 

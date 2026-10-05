@@ -366,6 +366,7 @@ Staging/production procedures, migration strategy, rollback and backups are docu
 - [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md) — your own machine + your own domain
 - [docs/operations/local-production.md](docs/operations/local-production.md) — build and run the production images locally, from scratch
 - [docs/operations/new-store-from-scratch.md](docs/operations/new-store-from-scratch.md) — the same stack as a real shop: blank database, no demo, your own organization, branch and owner account
+- [docs/operations/upgrading-local-production.md](docs/operations/upgrading-local-production.md) — deploying new code to that stack once it holds real data: backup, build, migration check, swap, verify, rollback
 - [docs/operations/cloudflare-local-setup.md](docs/operations/cloudflare-local-setup.md) — Cloudflare Tunnel runbook for the local stack
 - [docs/operations/backups.md](docs/operations/backups.md)
 - [docs/operations/disaster-recovery.md](docs/operations/disaster-recovery.md)

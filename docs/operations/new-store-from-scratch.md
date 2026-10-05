@@ -15,6 +15,10 @@
 - `scripts/rebuild-local-prod.sh`: it starts with `compose down -v`, which **deletes the database
   volume**, and then reseeds the demo.
 
+Once the shop is trading, new code goes on with
+[upgrading-local-production.md](upgrading-local-production.md): backup, build, migration check,
+swap, verify and rollback, without touching the database's volume.
+
 All commands run from the repository root. The first command of step 4, steps 5–7 and the
 integrity checks in step 9 were run against a brand-new database on 2026-10-03, including both forms
 of step 6. The owner was created
