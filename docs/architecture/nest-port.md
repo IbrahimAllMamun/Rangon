@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05 |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -128,6 +128,8 @@ across both APIs where both serve the path:
 | A carousel item removed while a remove waits on it (each API in turn) | 404 and no audit row -- deterministic; with the port's `FOR UPDATE` removed it never waits, audits and answers 204 |
 | A carousel move, and a header item's move, while their run is reordered (each API in turn) | each renumbers the order it read before the wait (D132, copied); with the port's `FOR UPDATE` removed neither waits |
 | A footer column added while a fourth is being added (each API in turn) | it goes in: five columns (D136, copied); no lock is involved |
+| Two resumes of one held sale that both read it before either deletes it, one per API | both are handed the cart (D138, copied); no lock is involved -- the harness holds the row until both requests are queued behind it |
+| A held sale resumed by someone else while an edit of it waits on its row (each API in turn) | the edit's `UPDATE` finds no row and the hold is inserted again, as `save()` does it (D138, copied) |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -336,6 +338,32 @@ validated it, and one read back as the database holds it.
 | `GET/POST /api/v1/storefront-banners/`, `GET/PUT/PATCH/DELETE /api/v1/storefront-banners/<id>/` | the same permissions; highest priority first, then newest; django-filter on placement and `is_active`, `ordering` on priority and `created_at`. `StorefrontBanner.clean()`: an announcement needs its message, a hero its title; the URL is not checked. Forms and multipart, the image under `banners/`; `Location` is the answer's `url`. Each save and delete queues `navigation` and `home` at once |
 | `GET/POST /api/v1/home-carousel/`, `DELETE /api/v1/home-carousel/<id>/`, `POST /api/v1/home-carousel/<id>/move/` | `settings.view` to read, `content.navigation_manage` to write; no detail read (405, or 403 for all but an owner or superuser). The list never filters, so `ordering` is ignored. Each row carries its product's primary image (the flagged one, else the first) and the range of its sellable variants' prices, and why it is hidden from the homepage. An add locks the run, refuses a missing or archived product, one already there (409, or the unique index's 409 under a race) and a 25th -- counted from the run as read before any wait (D135, copied). A remove locks the item and its product (`select_for_update` over a join). Adds and removes queue `home` after the commit; a move queues it at once, D132 copied |
 
+## Phase 5: the counter
+
+Phase 5 ports `orders/api/pos_views.py` and, with it, what a counter sale leans on: returns and
+refunds (`ReturnRequestViewSet`, `OrderViewSet`'s payments and refunds). Its parts, in order:
+
+1. the register's reads and held sales (below);
+2. the quote and the manager's approval (`pos/quote/`, `pos/elevate/`: `price_sale`, the discount
+   threshold, coupons at the counter, Django's signed approval token);
+3. the sale (`pos/sales/`: `sell` under the stock lock with D115's rule and the short-order flags,
+   payments into their accounts, the receipt);
+4. voiding a sale, and refunds;
+5. returns, at the counter and in the back office;
+6. the staff order screens `OrderViewSet` serves, which no phase had named;
+7. the label sheet added to Django after phase 4 closed (`products/<id>/labels/`).
+
+Every POS view asks for `sales.create` as a flat list, so a method the view does not serve is a
+403 for a role without it and a 405 for one with it. All of them name the `pos` throttle scope.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/pos/session/` | what the register needs to open, in one answer: the branch `resolve_branch` allows (`?branch=`), the cashier with every permission code in code-point order (`*` alone for an owner or superuser), the shop's name, currency, receipt footer and VAT number, the branch's newest twenty held sales, and its active accounts by kind and name |
+| `GET /api/v1/pos/lookup/?code=` | a scan: the catalogue's own exact lookup (barcode, else SKU in any case, the code stripped), with stock at the branch. Not found is the view's hand-written 404, which quotes the code as sent and is answered before the branch is looked at |
+| `GET /api/v1/pos/products/?q=&category=` | the grid: sixty active SKUs of active products, by product name and position (Django's statement, so ties come back alike); `q` in the SKU or product name, or equal to the barcode; `category` an exact slug. Each with its label, price, what the branch can sell (`available`, which can be negative) and the product's primary image |
+| `GET/POST /api/v1/pos/holds/`, `GET/PUT/PATCH/DELETE /api/v1/pos/holds/<id>/` | parked carts, unpaginated, newest first, of the branch the request acts on -- a hold at another branch is a 404, and an owner reads one with `?branch=`. `ordering` takes what `OrderingFilter` offers by default: every serializer field by its source (`customer__name`, `created_by__email`; `branch` and `customer` order by the related model's own ordering). A create reads `branch` from the body, though the serializer has it read only, after the serializer has passed; the hold's label is whatever was sent, blank included. `payload` is DRF's `JSONField`: any JSON but `null`, floats and long integers stored as Python writes them, a float past a double refused. An edit finds the hold before it reads the body, and writes every column back. On a PATCH the answer leaves out `customer_name` for a hold with no customer and `created_by_email` for one whose cashier is gone: DRF skips a read-only field with a default on a partial update when its source is missing. No lock anywhere (D138, copied) |
+| `POST /api/v1/pos/holds/<id>/resume/` | the payload as stored, and the hold deleted. The body is never read |
+
 ## Running it
 
 ```bash
@@ -473,6 +501,7 @@ the port):
 - An `Idempotency-Key` longer than the column's 80 characters is a 500 (D124).
 - A NUL in the inventory list's `search` or `category`, or in the ledger's `search`, is a 500:
   those views filter on the raw parameter, where `SearchFilter` would refuse it (D125).
+  The POS scan and grid do the same with `code` and `q` (D140).
 - A stock count may be edited onto any branch, whatever its status or the user's branch, and an
   edit writes every column back from the row as read (D126).
 - An owner or superuser may delete a stock count, an applied one too; the ledger's adjustments
@@ -499,6 +528,12 @@ the port):
   (D136).
 - A naive publish window in the first hours of 1 January of the year 1 is a 500: DRF's
   `valid_datetime` converts it to UTC, which overflows, and nothing catches it (D137).
+- Held sales take no lock: two registers resuming one hold at once are both handed the cart, and
+  an edit that read a hold before a resume deleted it puts it back (D138).
+- The register's `pos` rate of 1200 a minute is never reached: the `user` rate of 600 counts the
+  same requests and refuses first (D139).
+- A held sale's payload with a `\u0000` or half a surrogate pair is a 500 from PostgreSQL, and so is
+  a NUL in the scan's `code` or the grid's `q` (D140).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

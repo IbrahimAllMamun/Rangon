@@ -481,6 +481,48 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 5 part 1: the register's reads and held sales, 2026-10-05
+
+Asked for: phase 5 of the port, the counter. Ported first: what the register reads to open
+(`PosSessionView`), a scan (`PosLookupView`), the product grid (`PosProductSearchView`) and held
+sales (`HeldSaleViewSet` with `resume`). The quote, the sale, voids, returns and refunds follow, as
+`docs/architecture/nest-port.md` lists them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 3021/3021 (284 new), 33 by the documented differences
+concurrency ................................... 61/61 (3 new: two resumes of one hold that both read
+                                                it, and an edit that meets a resume, on each API)
+throttle-check ................................ 11/11 (2 new: 602 scans by a cashier, and by a role
+                                                that may not use the register)
+nest unit tests ............................... 755 passed (8 new: DRF's JSONField)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The baseline on `main` before the part was 2737/2737 and 58 races. `fixture_pos.py` adds a cash
+account at PAR3 and twenty-four held sales: twenty-two at DHK1 a minute apart (one for a named
+customer, one whose cashier is gone, payloads that are a list, a string, an integer past 2^53,
+floats and Bengali text) and two at PAR3.
+
+The cases open the register as every role, at each branch, an inactive one, a missing one and one
+that is not a UUID; scan a barcode, a SKU in either case, padded, partial, archived, blank, with
+quotes, in Bengali and with a NUL, at a branch allowed and not; search the grid by word, SKU,
+barcode, `%`, `_`, a backslash and category, at each branch; read the holds with every ordering
+`OrderingFilter` offers and several it does not; park a hold with each field in every type JSON
+has, read-only fields, each branch a body can name, and bodies that are a list, `null`, a string,
+broken JSON, empty, a form and plain text; edit and replace holds field by field, at another
+branch, missing, and with a broken body on a hold that is and is not there; resume and delete
+them. Each write is compared by the rows left in `orders_heldsale`.
+
+Found in the port, by its first run: DRF's `JSONField` refuses a float past a double (`1e400`
+reads as infinity), and a PATCH's answer leaves out `customer_name` and `created_by_email` when
+their source is missing -- DRF skips a read-only field with a default on a partial update. Found in
+Django, and copied: D138 (held sales take no lock: two resumes of one hold both get the cart, and
+an edit that meets a resume puts the hold back), D139 (the register's 1200 a minute is never
+reached, because the user rate of 600 counts the same requests), D140 (a held sale's payload with
+a NUL or half a surrogate pair is a 500, and so is a NUL in a scan or a grid search). The form
+body that Django parks and the port refuses with 415 is the difference already documented, now
+declared to the harness too.
+
 ### A scan brings in the whole product; net profit after expenses and purchase shipping, 2026-10-05
 
 Asked for: scanning a barcode on a purchase order should bring in every variant of that product,
@@ -3585,6 +3627,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D135 | **Two carousel adds at once can take it past 24 products.** `add_carousel_product` locks the run with `list(HomeCarouselItem.objects.select_for_update()...)` and then counts it, but PostgreSQL's locking `SELECT` returns the rows of the snapshot it took before it waited: an add that queued behind another add counts the run without the row the first one inserted. Measured on the parity stack with the run at 23: an add that waited while another committed counted 23 and made 25. Both adds also take the same position (the code says so; `created_at` breaks the tie) | `apps/api/content/services.py` | Found porting the carousel to NestJS, which copies it. Counting again after the lock (`HomeCarouselItem.objects.count()`, a fresh statement) or locking a parent row would do it |
 | D136 | **The footer can get a fifth column.** `NavigationItem._clean_placement` counts the footer's columns with no lock and the view saves after it, so two new columns at once both see three and both go in. Measured on the parity stack: a column added while a fourth was being inserted (not yet committed) answered 201, and the footer then had five | `apps/api/content/models.py`, `apps/api/content/api/views.py` | Found porting navigation items to NestJS, which copies it. The storefront renders the first four; a lock on the settings row, or a constraint, would close it |
 | D137 | **A naive publish window in the first hours of 1 January of the year 1 is a 500.** DRF 3.15's `DateTimeField` makes a naive value aware in Asia/Dhaka (local mean time, +06:01:40) and then calls `valid_datetime`, whose `astimezone(timezone.utc)` overflows below the year 1; the `OverflowError` is not caught. Measured with `starts_at: "0001-01-01T00:00"` on navigation items and banners | `rest_framework/utils/timezone.py` (DRF) | Found porting the content windows to NestJS, which copies it. Harmless beyond the 500; DRF's own bug |
+| D138 | **Held sales take no lock.** `resume` reads the hold and then deletes it, and an edit reads it and then saves every column. Measured on the parity stack: two registers that resume one hold at the same moment are both handed the cart (200 and 200), so a parked sale can be rung up twice; and an edit that read the hold before a resume deleted it puts the hold back, because `save()` inserts when its `UPDATE` finds no row | `apps/api/orders/services/pos.py`, `apps/api/orders/api/pos_views.py` | Found porting the POS to NestJS, which copies it. Deleting with `select_for_update()` and answering 404 to the loser, and saving an edit with `update_fields`, would do it |
+| D139 | **The register's own rate limit is never reached.** POS views name the `pos` scope, 1200 a minute, but `UserRateThrottle` (600 a minute) is a default throttle class and counts the same requests, so the 601st request in a minute is refused. Measured with the throttles on: 602 scans by one cashier answer 600 times and then 429 twice. A busy till with a scanner, the quote on every basket change and two tabs open shares one 600 | `apps/api/config/settings/base.py` | Found porting the POS to NestJS, which copies it. Giving the POS views `throttle_classes = [ScopedRateThrottle]`, or raising `user`, would do it -- the owner's call |
+| D140 | **A held sale's payload with a NUL or half a surrogate pair is a 500.** `JSONField` accepts any JSON, and PostgreSQL's `jsonb` then refuses `\u0000` and an unpaired surrogate. Measured: `POST /pos/holds/` with `{"payload": {"a": "x\u0000y"}}`. The scan and the grid are 500s on a NUL too (`GET /pos/lookup/?code=a%00b`, `GET /pos/products/?q=a%00b`): they filter on the raw parameter, as D125's views do | `apps/api/orders/api/pos_views.py`, `apps/api/orders/api/serializers.py` | Found porting the POS to NestJS, which copies it. A validator on `payload`, and reading the parameters through `CharField().run_validation`, would do it |
 | ~~D138~~ | ~~**Gross profit counted the discount as income, on every report.**~~ **Fixed 2026-10-05.** A coupon or a cashier's whole-sale discount is frozen on the order as `discount_total` and never written back to the lines; `OrderItem.line_total` carries only the line's own discount. Every report builds revenue from one expression over lines, `NET_LINE_REVENUE`, which read `line_total` -- so a ৳1,000 item that cost ৳600 and sold with ৳100 off showed ৳400 of gross profit where ৳300 was made. The dashboard's *Gross profit* and margin, the business summary's revenue, gross and **net** profit, the profit report, product performance, top products and category sales were all overstated by exactly the discounts given, and the VAT report's *taxable sales* sat above the base the tax had been charged on (`taxable × rate ≠ vat`). The dashboard's *Revenue* tile was right throughout, because it sums `grand_total`, which is why the two tiles disagreed. Each line now bears the order discount in proportion to its share of `subtotal`, unrounded, and the **sum** is rounded -- rounding per line drifts 0.01 an order away from what was paid. `RETURNED_LINE_BASE` takes the same correction, so a return's taxable credit matches the VAT it credits. No migration: every value read is already frozen on the order, so historical periods are corrected too | `apps/api/reports/services.py`, `apps/api/tests/test_report_discounts.py` | Reported by the owner from the dashboard after a discounted counter sale. `Order.gross_profit` had it right all along; the reports never used it, and no report test sold anything at a discount. Rule in [business-rules § 4](business-rules.md). Reading the same code found [D139](#known-defects) |
 | ~~D139~~ | ~~**A partial return of a discounted sale refunded the discount as well.**~~ **Fixed 2026-10-05.** `returns.request_return` worked the refund out from `OrderItem.line_total`, under a comment reading "the price actually paid for that line, discount included" -- but `line_total` carries only the line's *own* discount. A coupon or a cashier's whole-sale discount lives on the order and was never taken off: one of two ৳1,000 items bought with 10% off the sale came back for ৳1,000 when ৳900 had been paid for it, and the customer kept the other item for ৳800. Only the cap at `paid_total − refunded_total` stopped it going further, so a *full* return was always right and the fault showed only on a partial one. Each line now bears the order discount in proportion to its share of `subtotal`; the request is rounded once and the last line carries the difference, so everything back in one return refunds exactly what was paid | `apps/api/orders/services/returns.py`, `apps/api/tests/test_return_refund_discounts.py` | Found reading the code for D138 -- the same blind spot, with money leaving the drawer instead of a figure on a screen. D78 fixed the VAT on this exact line on 2026-09-18 and its tests sold nothing at a discount. Returns already requested keep the amount they were raised with. Rule in [business-rules § 2.4](business-rules.md#24-refunds) |
 | ~~D140~~ | ~~**An order discount skewed the VAT split between lines, below zero on the last one.**~~ **Fixed 2026-10-05.** `pricing.calculate` gave each line `tax × line_total ÷ taxable_base`, and `taxable_base` is `subtotal` *less the order discount* -- so the shares came to more than the whole, every line but the last was over-allocated, and the last absorbed the difference. Two equal lines of ৳2,450 with ৳490 off were frozen at ৳167.32 and ৳133.86 of VAT; with a discount above half of a two-line sale the last line's `tax_amount` went negative. The order's own `tax_total` and `grand_total` were always right, which is why nothing failed: the split only matters where a line is read on its own -- the receipt, a per-line refund under `EXCLUSIVE`, the VAT credit on a return. The divisor is now `subtotal`. The NestJS port copied the fault faithfully and is changed with it; its unit test had the skewed pair pinned as the expected answer | `apps/api/orders/services/pricing.py`, `apps/api-nest/src/checkout/pricing.ts`, `apps/api/tests/unit/test_pricing.py`, `apps/api-nest/test/unit/pricing.spec.ts` | Found working out what a D139 refund should be on a two-line order. Orders already sold keep the split frozen on them ([business-rules § 3.2](business-rules.md#32-order-maths)); nothing rewrites a historical line |

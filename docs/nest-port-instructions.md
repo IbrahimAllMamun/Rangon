@@ -176,10 +176,12 @@ apps/api-nest/
     inventory/stock.service.ts  inventory.services: the one place stock moves (checkout and admin)
     content/validators.ts     content.validators: links, social profiles and maps a merchandiser pastes
     content/rich-text.ts      content.rich_text: nh3.clean (ammonia's clean, html5ever's serializer)
+    pos/                      the counter: orders.api.pos_views (session, scan, grid, held sales ...)
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
-    concurrency.ts            the race checks; admin-, inventory- and content-concurrency.ts for staff writes
+    concurrency.ts            the race checks; admin-, inventory-, content-, merchandising- and
+                              pos-concurrency.ts for staff writes
     restore.ts                snapshot-and-restore of whole tables for the admin write cases
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
@@ -319,7 +321,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D137**.
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D140**.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
 - **A security hole:** fixed in Django first, on `fix/<slug>`, with tests, ahead of the port.
 - **A rule the code breaks, or never had:** mark it `DECISION REQUIRED` in `business-rules.md`,
@@ -366,6 +368,7 @@ apps/api-nest/
 | Creates differed only in `Location` | DRF's `get_success_headers` puts the answer's `url` field in `Location`, whatever that field means -- a navigation item's link, a banner's | copy it wherever a serializer has a `url` |
 | A DRF `DateTimeField` port refused 2009's skipped hour, where DRF took it | DRF 3.15's `valid_datetime` never refuses: under PEP 495 such a time is never equal to itself in UTC, so its "exists" test short-circuits its "ambiguous" one | read DRF's code, not its message list; compare on a generated corpus |
 | A 40,000-deep page took 24 s, all of it in the event loop | html5ever walks the whole stack of open elements for every block tag; Django's thread just waits, Node's process does not | count open elements by name, so the walk ends at once when none matches |
+| A case named for a fixture row answered 404 on both APIs and "matched" | the case looked the row up by a label the fixture had overridden, so both APIs were asked for `/holds/undefined/` | read the `PARITY_VERBOSE=1` statuses of every new case before believing a green run |
 
 ## 9. Documentation, per part
 
@@ -408,13 +411,13 @@ Every part of a phase updates, in the same branch:
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | D115 is decided: port `sell`'s check of `available`, the owner's `counter_sells_reserved` and `orders.services.shortages` with the sale; POS sales, refunds and the cash drawer each need races |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Part 1 (session, scan, grid, held sales) done. Next: 2 the quote and the manager's approval (Django's `signing`), then 3 the sale -- D115 is decided: port `sell`'s check of `available`, the owner's `counter_sells_reserved` and `orders.services.shortages` with it; sales, voids, refunds and returns each need races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Start phase 5 when the owner asks; D115's rule is part of it.
+1. Finish phase 5 (parts 2-7), then open its PR when the owner asks.
 
 ### Checklist for a part
 
