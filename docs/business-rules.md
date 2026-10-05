@@ -252,12 +252,21 @@ stock even if it was raised as `RESTOCK`.
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −
   `SUM(refunds)`), enforced in `orders.services.returns`.
+- **A refund gives back what was paid for the goods, and a discount was never paid.** A line's own
+  discount is already inside `OrderItem.line_total`. A coupon or a cashier's whole-sale discount is
+  not — it is frozen on the order — so each line bears it in proportion to its share of `subtotal`:
+  `line_paid = line_total − line_total × discount_total ÷ subtotal`. One of two ৳1,000 items bought
+  with 10% off the sale comes back for ৳900, not ৳1,000.
 - **A refund carries the VAT the customer paid.** Under the `EXCLUSIVE` treatment the tax sits on
-  top of `OrderItem.line_total` in its own `tax_amount` column, so the refund is
-  `line_total + tax_amount`; under `INCLUSIVE` the tax is already inside `line_total` and is not
-  added again. The **order's own** frozen `tax_mode` decides (§3.4), so an order refunds under the
-  treatment it was priced with even after the setting changes. A partial quantity refunds its share
-  of both.
+  top of the line in its own `tax_amount` column, so the refund is `line_paid + tax_amount`; under
+  `INCLUSIVE` the tax is already inside it and is not added again. The **order's own** frozen
+  `tax_mode` decides (§3.4), so an order refunds under the treatment it was priced with even after
+  the setting changes. A partial quantity refunds its share of both.
+- **A return is rounded once, not line by line.** The shares of a discount rarely divide evenly, so
+  the request's total is the rounded sum of the unrounded lines and the last line carries the
+  difference: everything back in one return refunds exactly what was paid. Lines sent back one
+  return at a time can still come to 0.01 over between them, and the cap above holds the last one
+  to what is left of the payment.
 - Refund method defaults to the original payment method. Cash sales refund cash from the register;
   gateway payments refund through the provider; COD orders refund by cash or mobile transfer recorded
   manually.
@@ -297,6 +306,13 @@ total           = taxable_base + tax + shipping_amount
 
 Rounding: half-up to 2 decimal places, applied once per order-level figure (never on intermediate
 sums). Money is `Decimal`; `float` is forbidden.
+
+The order's `tax` is then spread across the lines for the receipt, each line taking
+`tax × line_subtotal ÷ subtotal` and the last line whatever rounding leaves. The divisor is
+`subtotal`, not `taxable_base`: the lines add up to `subtotal`, so dividing by the smaller figure
+gives every line but the last more than its share. `OrderItem.tax_amount` is frozen at the sale, so
+an order sold before 2026-10-05 with VAT, an order-level discount and more than one line keeps the
+split it was given — its total was always right.
 
 ### 3.3 Discounts
 
