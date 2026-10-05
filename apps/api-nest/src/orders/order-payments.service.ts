@@ -5,7 +5,8 @@ import { Injectable } from '@nestjs/common';
 import { money, quantize, ZERO } from '../checkout/pricing';
 import { AuditActor, AuditContext, recordAudit } from '../common/audit';
 import { Dec } from '../common/decimal';
-import { ValidationError } from '../common/errors';
+import { RefundExceedsCaptured, ValidationError } from '../common/errors';
+import { pySlice } from '../common/python';
 import { Queryable } from '../database/database.service';
 import { CashBookService } from '../finance/cash-book.service';
 import { OrderRef, OrderWritesService } from './order-writes.service';
@@ -141,5 +142,199 @@ export class OrderPayments {
       branchId: order.branchId,
     });
     return paymentId;
+  }
+
+  /**
+   * `refund_order`: money back against an order, never more than was
+   * captured, once per `idempotencyKey`. It goes back through the largest
+   * captured payment: that payment's method unless the caller names one, and
+   * its account when the refund goes back the way the money came -- else the
+   * branch's own for the method (D95). The whole amount is entered against
+   * that one payment, whatever the others took (D149, copied).
+   */
+  async refundOrder(
+    tx: Queryable,
+    context: AuditContext,
+    orderId: string,
+    refund: {
+      amount: Dec;
+      actor: AuditActor;
+      reason: string;
+      method?: string | null;
+      accountId?: string | null;
+      idempotencyKey?: string | null;
+      returnRequestId?: string | null;
+    },
+  ): Promise<string> {
+    const order = (await tx.one<{
+      id: string;
+      number: string;
+      branch_id: string;
+      currency: string;
+      grand_total: string;
+      paid_total: string;
+      refunded_total: string;
+    }>(
+      `SELECT "id", "number", "branch_id", "currency", "grand_total", "paid_total", "refunded_total"
+         FROM "orders_order" WHERE "orders_order"."id" = $1 LIMIT 21 FOR UPDATE`,
+      [orderId],
+    )) as {
+      id: string;
+      number: string;
+      branch_id: string;
+      currency: string;
+      grand_total: string;
+      paid_total: string;
+      refunded_total: string;
+    };
+    const amount = quantize(refund.amount);
+    if (amount.lte(ZERO)) throw new ValidationError('Refund amount must be positive.');
+
+    const byKey = (key: string) =>
+      tx.one<{ id: string }>(
+        `SELECT "id" FROM "orders_refund" WHERE "orders_refund"."idempotency_key" = $1
+          ORDER BY "orders_refund"."created_at" DESC LIMIT 1`,
+        [key],
+      );
+    const key = refund.idempotencyKey ?? null;
+    if (key) {
+      const existing = await byKey(key);
+      if (existing) return existing.id;
+    }
+
+    const refundable = quantize(new Dec(order.paid_total).minus(order.refunded_total));
+    if (amount.gt(refundable)) {
+      throw new RefundExceedsCaptured(
+        `Only ${money(refundable)} can be refunded on ${order.number}.`,
+        {
+          details: {
+            requested: money(amount),
+            refundable: money(refundable),
+            paid_total: order.paid_total,
+            refunded_total: order.refunded_total,
+          },
+        },
+      );
+    }
+
+    // The payment that took the most money: Django's statement, so a tie breaks alike.
+    const source = await tx.one<{
+      id: string;
+      method: string;
+      amount: string;
+      refunded_total: string;
+      account_id: string | null;
+    }>(
+      `SELECT "orders_payment"."id", "orders_payment"."method", "orders_payment"."amount",
+              "orders_payment"."refunded_total", "orders_payment"."account_id"
+         FROM "orders_payment"
+        WHERE ("orders_payment"."order_id" = $1
+               AND "orders_payment"."status" IN ('PARTIALLY_REFUNDED', 'CAPTURED', 'REFUNDED'))
+        ORDER BY "orders_payment"."amount" DESC LIMIT 1`,
+      [order.id],
+    );
+    const method = refund.method || (source ? source.method : 'CASH');
+    let accountId = refund.accountId ?? null;
+    if (accountId === null && source?.account_id) {
+      const kind = (
+        await tx.one<{ kind: string }>(
+          `SELECT "kind" FROM "finance_account" WHERE "finance_account"."id" = $1 LIMIT 21`,
+          [source.account_id],
+        )
+      )?.kind;
+      if (this.cashBook.kindOf(method) === kind) accountId = source.account_id;
+    }
+
+    const reason = pySlice(refund.reason, 255);
+    const refundId = randomUUID();
+    await tx.query('SAVEPOINT refund_order');
+    try {
+      await tx.query(
+        `INSERT INTO orders_refund
+           (id, created_at, updated_at, order_id, payment_id, return_request_id, amount, method,
+            status, reason, provider_reference, idempotency_key, account_id, created_by_id)
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4::uuid, $5, $6,
+                 'COMPLETED', $7, '', $8, $9::uuid, $10::uuid)`,
+        [
+          refundId,
+          order.id,
+          source?.id ?? null,
+          refund.returnRequestId ?? null,
+          money(amount),
+          method,
+          reason,
+          key,
+          accountId,
+          refund.actor.id,
+        ],
+      );
+      await tx.query('RELEASE SAVEPOINT refund_order');
+    } catch (error) {
+      if (!String((error as { code?: string }).code).startsWith('23')) throw error;
+      await tx.query('ROLLBACK TO SAVEPOINT refund_order');
+      const winner = key === null ? null : await byKey(key);
+      if (winner) return winner.id;
+      throw error;
+    }
+
+    // `_post_refund_to_cash_book`.
+    if (!(await this.cashBook.alreadyPosted(tx, 'refund', refundId))) {
+      const branch = (await tx.one<{ code: string }>(
+        `SELECT "code" FROM "accounts_branch" WHERE "accounts_branch"."id" = $1 LIMIT 21`,
+        [order.branch_id],
+      )) as { code: string };
+      const posted = await this.cashBook.recordRefund(tx, {
+        branch: { id: order.branch_id, code: branch.code },
+        amount,
+        referenceType: 'refund',
+        referenceId: refundId,
+        accountId,
+        method,
+        notes: `${order.number} refund`,
+        reason,
+        actorId: refund.actor.id,
+      });
+      if (posted !== null && accountId !== posted) {
+        await tx.query(
+          `UPDATE "orders_refund" SET "updated_at" = clock_timestamp(), "account_id" = $2
+            WHERE "orders_refund"."id" = $1`,
+          [refundId, posted],
+        );
+      }
+    }
+
+    if (source) {
+      const refunded = quantize(new Dec(source.refunded_total).plus(amount));
+      await tx.query(
+        `UPDATE "orders_payment" SET "updated_at" = clock_timestamp(), "status" = $2,
+                "refunded_total" = $3 WHERE "orders_payment"."id" = $1`,
+        [
+          source.id,
+          refunded.gte(source.amount) ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+          money(refunded),
+        ],
+      );
+    }
+
+    await this.orders.refreshPaymentStatus(tx, {
+      id: order.id,
+      number: order.number,
+      branchId: order.branch_id,
+      currency: order.currency,
+      grandTotal: order.grand_total,
+    });
+    await this.orders.logEvent(tx, order.id, 'REFUND_ISSUED', `Refund ${money(amount)}`, {
+      data: { refund_id: refundId, amount: money(amount), reason: refund.reason },
+      actorId: refund.actor.id,
+    });
+    await recordAudit(tx, context, {
+      action: 'REFUND_ISSUED',
+      entity: { type: 'Refund', id: refundId, label: `Refund ${money(amount)} on ${order.id}` },
+      actor: refund.actor,
+      newValues: { order: order.number, amount: money(amount), method },
+      reason: refund.reason,
+      branchId: order.branch_id,
+    });
+    return refundId;
   }
 }

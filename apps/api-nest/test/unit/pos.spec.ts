@@ -11,6 +11,7 @@ import {
   signingDumps,
   signingLoads,
 } from '../../src/common/signing';
+import { formatMoney } from '../../src/finance/cash-book.service';
 import { installBigIntJson, parsePythonJson } from '../../src/http/request-body';
 
 describe('JSONField(required=False), as a held sale reads its payload', () => {
@@ -135,5 +136,21 @@ describe('DecimalField(max_digits=5, decimal_places=2, min_value=0, max_value=10
     ['9.999', '{"percent":["Ensure that there are no more than 2 decimal places."]}'],
   ])('%j', async (value, expected) => {
     expect(await run(value)).toBe(expected);
+  });
+});
+
+describe('core.money.format_money, as a refusal quotes a drawer', () => {
+  it.each([
+    ['0', '৳ 0.00'],
+    ['100', '৳ 100.00'],
+    ['890.00', '৳ 890.00'],
+    ['999.995', '৳ 1,000.00'],
+    ['1000', '৳ 1,000.00'],
+    ['65450.00', '৳ 65,450.00'],
+    ['1234567.891', '৳ 1,234,567.89'],
+    ['12345678901.5', '৳ 12,345,678,901.50'],
+    ['0.004', '৳ 0.00'],
+  ])('%s', (value, expected) => {
+    expect(formatMoney(value, '৳')).toBe(expected);
   });
 });

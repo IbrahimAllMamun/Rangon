@@ -18,13 +18,15 @@ import {
   pkRelatedField,
   runSerializer,
 } from '../common/drf';
-import { NotFound, PriceChanged, ValidationError } from '../common/errors';
-import { pyStrip } from '../common/python';
+import { Conflict, NotFound, PriceChanged, ValidationError } from '../common/errors';
+import { Dec } from '../common/decimal';
+import { pySlice, pyStrip } from '../common/python';
 import type { QueryDict } from '../common/query-dict';
 import { nextNumber } from '../common/sequence';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
+import { dataGet, pythonTypeName } from '../http/request-body';
 import { AfterCommit, StockService } from '../inventory/stock.service';
 import { OrderPayments } from '../orders/order-payments.service';
 import { OrderWritesService } from '../orders/order-writes.service';
@@ -537,6 +539,101 @@ export class PosSales {
     const order = id ? await this.staffOrders.byId(id) : null;
     if (!order) throw new NotFound();
     return order;
+  }
+
+  /**
+   * `void`: `void_sale`. The sale is never deleted: the goods go back on the
+   * shelf under a compensating RETURN, whatever was paid and not yet refunded
+   * goes back through `refund_order`, the coupon's use is released, and the
+   * order is cancelled. A sale already cancelled answers as it is. The checks
+   * are made on the order as read, before its row is locked (D150, copied).
+   */
+  async void(
+    user: RequestUser,
+    pk: string,
+    query: QueryDict,
+    data: () => unknown,
+    context: AuditContext,
+  ) {
+    const found = await this.find(pk, query);
+    // `request.data.get("reason", "")`, then `reason.strip()`: anything but a str fails.
+    const given = dataGet(data(), 'reason');
+    const reason = given === undefined ? '' : given;
+    if (found.channel !== 'POS')
+      throw new Conflict('Only a POS sale can be voided; use returns for online orders.');
+    if (found.status === 'CANCELLED') return this.staffOrders.detail(found);
+    if (typeof reason !== 'string')
+      throw new TypeError(`'${pythonTypeName(reason)}' object has no attribute 'strip'`);
+    if (!pyStrip(reason)) throw new ValidationError('A reason is required to void a sale.');
+    const actor = { id: user.id, email: user.email };
+
+    await this.stock.run(async (tx: Queryable, after: AfterCommit) => {
+      const order = (await tx.one<{
+        id: string;
+        number: string;
+        branch_id: string;
+        paid_total: string;
+        refunded_total: string;
+      }>(
+        `SELECT "id", "number", "branch_id", "paid_total", "refunded_total" FROM "orders_order"
+          WHERE "orders_order"."id" = $1 LIMIT 21 FOR UPDATE`,
+        [found.id],
+      )) as {
+        id: string;
+        number: string;
+        branch_id: string;
+        paid_total: string;
+        refunded_total: string;
+      };
+      const branch = (await tx.one<{ id: string; code: string }>(
+        `SELECT "id", "code" FROM "accounts_branch" WHERE "accounts_branch"."id" = $1 LIMIT 21`,
+        [order.branch_id],
+      )) as { id: string; code: string };
+      const items = await tx.query<{ variant_id: string; quantity: number }>(
+        `SELECT "variant_id", "quantity" FROM "orders_orderitem"
+          WHERE "orders_orderitem"."order_id" = $1 ORDER BY "orders_orderitem"."created_at" ASC`,
+        [order.id],
+      );
+      await this.stock.restockReturn(tx, after, {
+        branch,
+        lines: items.map((item) => [item.variant_id, item.quantity] as [string, number]),
+        actor,
+        referenceType: 'order_void',
+        referenceId: order.id,
+        reason: `Sale ${order.number} voided: ${reason}`,
+      });
+
+      const owed = new Dec(order.paid_total).minus(order.refunded_total);
+      if (owed.gt(0)) {
+        await this.payments.refundOrder(tx, context, order.id, {
+          amount: owed,
+          actor,
+          reason: `Sale voided: ${reason}`,
+        });
+      }
+      // Goods back, money back -- so the coupon's use comes back too.
+      await this.coupons.release(tx, order.id);
+
+      await tx.query(
+        `UPDATE "orders_order" SET "updated_at" = clock_timestamp(), "status" = 'CANCELLED',
+                "cancelled_at" = clock_timestamp(), "cancel_reason" = $2, "stock_committed" = false
+          WHERE "orders_order"."id" = $1`,
+        [order.id, pySlice(reason, 255)],
+      );
+      await this.orders.logEvent(tx, order.id, 'CANCELLED', `Sale voided: ${reason}`, {
+        actorId: user.id,
+      });
+      await recordAudit(tx, context, {
+        action: 'ORDER_CANCELLED',
+        entity: { type: 'Order', id: order.id, label: order.number },
+        actor,
+        oldValues: { status: 'DELIVERED' },
+        newValues: { status: 'CANCELLED' },
+        reason,
+        branchId: order.branch_id,
+      });
+    });
+    return this.staffOrders.detail((await this.staffOrders.byId(found.id)) as StaffOrderRow);
   }
 
   /** `retrieve`. */

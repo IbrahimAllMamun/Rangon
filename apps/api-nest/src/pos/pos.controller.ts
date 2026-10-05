@@ -146,6 +146,19 @@ export class PosSalesController {
     return this.sales.retrieve(lookupParam(pk), query);
   }
 
+  @Post('pos/sales/:pk/void/')
+  @Action('void')
+  @HttpCode(200)
+  void(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.sales.void(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      () => requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+
   @Get('pos/sales/:pk/receipt/')
   @Action('receipt')
   receipt(@Param('pk') pk: string, @Params() query: QueryDict) {

@@ -37,6 +37,12 @@ For the sale (its own marker, the key `parity-pos-replayed`):
   one at PAR3 by its manager (for a named customer: PAR3 keeps no walk-in
   record until a case makes one), and one by the DHK1 manager for a named
   customer with a coupon, a discount past the threshold, and cash and a card.
+
+For voids (its own marker, the note "Parity void card"):
+- Three more counter sales: one at PAR3 paid by card, which has no account
+  there, so its payment names none; one discounted to nothing and never paid;
+  and one for a named customer with a twice-each coupon, paid in cash with
+  change.
 """
 
 from datetime import timedelta
@@ -60,6 +66,7 @@ PARITY_PASSWORD = "Parity-Pass-2026!"
 MARKER = "Parity Mirpur Till"
 COUNTER_MARKER = "parity.till@rangon.test"
 SALES_MARKER = "parity-pos-replayed"
+VOIDS_MARKER = "Parity void card"
 
 
 def apply() -> None:
@@ -253,3 +260,61 @@ if Order.objects.filter(idempotency_key=SALES_MARKER).exists():
 else:
     with transaction.atomic():
         apply_sales()
+
+
+def apply_voids() -> None:
+    home = Branch.objects.get(code="DHK1")
+    mirpur = Branch.objects.get(code="PAR3")
+
+    def sku(code: str) -> ProductVariant:
+        return ProductVariant.objects.get(sku=code)
+
+    def line(code: str, quantity: int) -> SaleLineInput:
+        return SaleLineInput(variant_id=sku(code).pk, quantity=quantity)
+
+    pos.create_pos_sale(
+        branch=mirpur,
+        actor=User.objects.get(email="owner@rangon.test"),
+        data=SaleInput(
+            lines=[line("PAR-TEE-S-WHT", 1)],
+            payments=[PaymentInput(method="CARD", amount=Decimal("1100.00"))],
+            # Named, as the other PAR3 sale is: PAR3 keeps no walk-in record.
+            customer_id=Customer.objects.get(email="parity.guest@rangon.test").pk,
+            note=VOIDS_MARKER,
+        ),
+    )
+    pos.create_pos_sale(
+        branch=home,
+        actor=User.objects.get(email="manager@rangon.test"),
+        data=SaleInput(
+            lines=[line("RGN-ESS-XL-WHI", 1)],
+            manual_discount_percent=Decimal("100"),
+            note="Parity void free",
+        ),
+    )
+    pos.create_pos_sale(
+        branch=home,
+        actor=User.objects.get(email="cashier@rangon.test"),
+        data=SaleInput(
+            lines=[line("RGN-ESS-XL-WHI", 2)],
+            payments=[
+                PaymentInput(
+                    method="CASH",
+                    amount=Decimal("1750.00"),
+                    tendered_amount=Decimal("2000.00"),
+                )
+            ],
+            customer_id=Customer.objects.get(email="customer@rangon.test").pk,
+            coupon_code="PARITY-TWICE",
+            register="R1",
+            note="Parity void coupon",
+        ),
+    )
+    print("parity voids fixture applied")
+
+
+if Order.objects.filter(customer_note=VOIDS_MARKER).exists():
+    print("parity voids fixture already applied")
+else:
+    with transaction.atomic():
+        apply_voids()

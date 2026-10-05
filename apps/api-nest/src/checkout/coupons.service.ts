@@ -241,4 +241,36 @@ export class CouponsService {
       );
     }
   }
+
+  /**
+   * `promotions.services.release`: the use given back when a sale is undone
+   * -- each of the order's live redemptions locked, then its coupon, the
+   * count taken down (never below zero) and the redemption marked released.
+   */
+  async release(tx: Queryable, orderId: string): Promise<void> {
+    const redemptions = await tx.query<{ id: string; coupon_id: string }>(
+      `SELECT "id", "coupon_id" FROM "promotions_couponredemption"
+        WHERE ("promotions_couponredemption"."order_id" = $1
+               AND "promotions_couponredemption"."released_at" IS NULL)
+        ORDER BY "promotions_couponredemption"."created_at" DESC FOR UPDATE`,
+      [orderId],
+    );
+    for (const redemption of redemptions) {
+      const coupon = (await tx.one<{ used_count: number }>(
+        `SELECT "used_count" FROM "promotions_coupon" WHERE "promotions_coupon"."id" = $1
+          LIMIT 21 FOR UPDATE`,
+        [redemption.coupon_id],
+      )) as { used_count: number };
+      await tx.query(
+        `UPDATE "promotions_coupon" SET "updated_at" = clock_timestamp(), "used_count" = $2
+          WHERE "promotions_coupon"."id" = $1`,
+        [redemption.coupon_id, Math.max(coupon.used_count - 1, 0)],
+      );
+      await tx.query(
+        `UPDATE "promotions_couponredemption" SET "updated_at" = clock_timestamp(),
+                "released_at" = clock_timestamp() WHERE "promotions_couponredemption"."id" = $1`,
+        [redemption.id],
+      );
+    }
+  }
 }

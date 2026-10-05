@@ -40,6 +40,7 @@ import { merchandisingCases } from './merchandising-cases.ts';
 import { posCases } from './pos-cases.ts';
 import { posQuoteCases } from './pos-quote-cases.ts';
 import { posSaleCases } from './pos-sale-cases.ts';
+import { posVoidCases } from './pos-void-cases.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -572,6 +573,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await posCases()));
   cases.push(...(await posQuoteCases({ DJANGO, NEST })));
   cases.push(...(await posSaleCases()));
+  cases.push(...(await posVoidCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }

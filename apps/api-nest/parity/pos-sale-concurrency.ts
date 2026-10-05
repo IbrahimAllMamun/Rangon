@@ -384,9 +384,14 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
 
     // 8. D146, copied: a customer's totals are written from the figures read
     //    when the sale was priced. One that changed while the sale was under
-    //    way is overwritten: five orders become one.
+    //    way is overwritten: the five orders committed mid-flight are lost.
     for (const [side, api] of sides) {
       await restore();
+      const known = (await one<{ total_orders: number; total_spent: string; expected: string }>(
+        `SELECT total_orders, total_spent::text, (total_spent + 2450)::text AS expected
+           FROM customers_customer WHERE id = $1`,
+        [shopper.id],
+      )) as { total_orders: number; total_spent: string; expected: string };
       const { waited, response } = await behind(
         [`SELECT id FROM customers_customer WHERE id = $1 FOR UPDATE`, [shopper.id]],
         'UPDATE "customers_customer"%',
@@ -398,7 +403,8 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
           }),
         async (holder) => {
           await holder.query(
-            `UPDATE customers_customer SET total_orders = 5, total_spent = 5000.00 WHERE id = $1`,
+            `UPDATE customers_customer SET total_orders = total_orders + 5,
+                    total_spent = total_spent + 5000 WHERE id = $1`,
             [shopper.id],
           );
         },
@@ -412,10 +418,135 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
         passed:
           waited &&
           response.status === 201 &&
-          totals?.total_orders === 1 &&
-          totals.total_spent === '2450.00',
-        detail: `${response.status}, ${waited ? 'waited on the row' : 'never waited'}, ${totals?.total_orders} order(s), ${totals?.total_spent} spent (5 and 5000.00 were committed mid-flight)`,
+          totals?.total_orders === known.total_orders + 1 &&
+          totals.total_spent === known.expected,
+        detail: `${response.status}, ${waited ? 'waited on the row' : 'never waited'}, ${known.total_orders} order(s) and ${known.total_spent} before, ${totals?.total_orders} and ${totals?.total_spent} after (5 more orders and 5000.00 were committed mid-flight)`,
       });
+    }
+
+    // --- Voids (part 4) ------------------------------------------------------------------
+    const sale = await one<{ id: string; variant_id: string }>(
+      `SELECT o.id, i.variant_id FROM orders_order o JOIN orders_orderitem i ON i.order_id = o.id
+        WHERE o.idempotency_key = 'parity-pos-replayed'`,
+    );
+    if (sale) {
+      const voidSale = (api: URL) =>
+        send(api, {
+          name: 'void',
+          method: 'POST',
+          path: `/api/v1/pos/sales/${sale.id}/void/`,
+          headers: { ...auth('manager'), 'content-type': 'application/json' },
+          body: JSON.stringify({ reason: 'Rung up twice' }),
+        });
+      const afterVoid = async () =>
+        (await one<{
+          status: string;
+          on_hand: number;
+          restocks: string;
+          refunds: string;
+          refunded: string;
+        }>(
+          `SELECT o.status,
+                  (SELECT i.on_hand FROM inventory_inventory i
+                    WHERE i.branch_id = o.branch_id AND i.variant_id = $2) AS on_hand,
+                  (SELECT count(*) FROM inventory_inventorytransaction t
+                    WHERE t.reference_type = 'order_void' AND t.reference_id = o.id::text) AS restocks,
+                  (SELECT count(*) FROM orders_refund r WHERE r.order_id = o.id) AS refunds,
+                  o.refunded_total::text AS refunded
+             FROM orders_order o WHERE o.id = $1`,
+          [sale.id, sale.variant_id],
+        )) as {
+          status: string;
+          on_hand: number;
+          restocks: string;
+          refunds: string;
+          refunded: string;
+        };
+
+      // 9. D150, copied: `void_sale` checks the order as read and locks it
+      //    afterwards. Two voids that both read it before either locks it both
+      //    go through: the unit goes back on the shelf twice.
+      await restore();
+      const shelfBefore = (await afterVoid()).on_hand;
+      const holder = new pg.Client({ connectionString: process.env.DATABASE_URL });
+      await holder.connect();
+      await holder.query('BEGIN');
+      await holder.query(`SELECT id FROM orders_order WHERE id = $1 FOR UPDATE`, [sale.id]);
+      const voids = sides.map(([, api]) => voidSale(api));
+      let queued = 0;
+      for (let attempt = 0; attempt < 160 && queued < 2; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        queued = Number(
+          (
+            await one<{ count: string }>(
+              `SELECT count(*) AS count FROM pg_stat_activity
+                WHERE wait_event_type = 'Lock' AND state = 'active'
+                  AND query ILIKE '%"orders_order"%' AND query NOT ILIKE '%pg_stat_activity%'`,
+            )
+          )?.count ?? 0,
+        );
+      }
+      await holder.query('COMMIT');
+      await holder.end();
+      const answers = (await Promise.all(voids)).map((response) => response.status);
+      const twice = await afterVoid();
+      checks.push({
+        name: 'counter: two voids of one sale that both read it before either locks it, one per API, put the goods back twice (D150, copied)',
+        passed:
+          queued === 2 &&
+          answers.every((status) => status === 200) &&
+          twice.status === 'CANCELLED' &&
+          twice.on_hand === shelfBefore + 2 &&
+          Number(twice.restocks) === 2 &&
+          Number(twice.refunds) === 1,
+        detail: `statuses ${answers.join(',')}, ${queued} queued on the order, shelf ${shelfBefore} -> ${twice.on_hand} for one unit sold, ${twice.restocks} restock(s), ${twice.refunds} refund(s) of ${twice.refunded}`,
+      });
+
+      // 10. A void whose refund meets an emptied drawer mid-flight is refused
+      //     whole: nothing back on the shelf, the sale still standing.
+      for (const [side, api] of sides) {
+        await restore();
+        const before = await afterVoid();
+        const { waited, response } = await behind(
+          [`SELECT id FROM finance_account WHERE id = $1 FOR UPDATE`, [drawer.id]],
+          '%finance_account%',
+          () => voidSale(api),
+          async (holder2) => {
+            await holder2.query(
+              `INSERT INTO finance_accounttransaction
+                 (id, created_at, updated_at, account_id, transaction_type, amount, balance_after,
+                  reference_type, reference_id, reason, notes, occurred_at)
+               SELECT gen_random_uuid(), clock_timestamp(), clock_timestamp(), a.id, 'WITHDRAWAL',
+                      100.00 - a.balance, 100.00, 'manual', '', 'Banked by the harness mid-flight', '',
+                      clock_timestamp()
+                 FROM finance_account a WHERE a.id = $1`,
+              [drawer.id],
+            );
+            await holder2.query(`UPDATE finance_account SET balance = 100.00 WHERE id = $1`, [
+              drawer.id,
+            ]);
+          },
+        );
+        const after = await afterVoid();
+        const balance = (
+          await one<{ balance: string }>(
+            `SELECT balance::text FROM finance_account WHERE id = $1`,
+            [drawer.id],
+          )
+        )?.balance;
+        checks.push({
+          name: `counter: a void (${side}) whose drawer is emptied mid-flight is refused whole -- the account lock holds`,
+          passed:
+            waited &&
+            response.status === 409 &&
+            after.status === before.status &&
+            after.on_hand === before.on_hand &&
+            Number(after.restocks) === 0 &&
+            Number(after.refunds) === 0 &&
+            balance === '100.00',
+          detail: `${response.status} ${message(response.body).slice(0, 60)}, ${waited ? 'waited on the lock' : 'never waited'}, sale ${after.status}, shelf ${after.on_hand} (was ${before.on_hand}), ${after.refunds} refund(s), drawer ${balance}`,
+        });
+      }
     }
     await restore();
   } finally {
