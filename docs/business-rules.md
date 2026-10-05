@@ -749,6 +749,29 @@ verification call may capture a payment.
 
 ---
 
+### 5.6 At the counter: what the code does where no rule was written
+
+Found while porting the counter sale to the NestJS API (2026-10-06). The port copies each; the
+defect numbers are in [roadmap.md](roadmap.md).
+
+- **A SKU that is not for sale.** The counter scans, prices and sells an archived SKU, and an
+  active SKU of a draft or unpublished product, with no warning (D142).
+  *`DECISION REQUIRED` -- may old stock of an archived SKU be cleared at the till? Until decided,
+  it may: the sale goes through.*
+- **Paying more than the total.** A counter sale refuses a payment that falls short and records
+  one that overshoots as it is: `paid_total` above `grand_total`, the account credited with the
+  whole amount, no change recorded unless the payment was cash with a `tendered_amount` (D147).
+  *`DECISION REQUIRED` -- refuse an overpayment, or record the excess as change. Until decided, it
+  is recorded as paid.*
+- **Another branch's receipt.** A sale is read, and its receipt reprinted, by anyone who may view
+  sales and has its id, whatever branch it was rung up at (D148).
+  *`DECISION REQUIRED` -- should a cashier be able to reprint another branch's receipt? Until
+  decided, they can.*
+
+One thing here is not a decision but a defect, and breaks §1.4: a counter sale with **one SKU on
+two lines** is checked line by line against the same shelf figure and can take it below zero
+(D145).
+
 ## 6. Customers
 
 - Identity is **phone-first**: `phone` is unique per organisation when present; `email` is optional and

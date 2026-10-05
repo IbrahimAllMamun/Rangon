@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval) 2026-10-06 |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt) 2026-10-06 |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -130,6 +130,14 @@ across both APIs where both serve the path:
 | A footer column added while a fourth is being added (each API in turn) | it goes in: five columns (D136, copied); no lock is involved |
 | Two resumes of one held sale that both read it before either deletes it, one per API | both are handed the cart (D138, copied); no lock is involved -- the harness holds the row until both requests are queued behind it |
 | A held sale resumed by someone else while an edit of it waits on its row (each API in turn) | the edit's `UPDATE` finds no row and the hold is inserted again, as `save()` does it (D138, copied) |
+| 8 counter sales at once for the last 5 of a SKU, across both APIs | 5 sell, 3 are refused, the shelf at 0 and its ledger agreeing. Every counter sale takes the `order:POS` number sequence's lock first, so this passes with the stock lock removed |
+| A sale committed while a counter sale of the whole shelf waits on the inventory row (each API in turn) | the waiting sale is refused -- deterministic; with the port's `FOR UPDATE` removed it sells units the shelf no longer has (0 on the shelf, the ledger at -1) |
+| An online reservation committed while a counter sale of the whole shelf waits on the row (each API in turn) | the sale is refused: the unit is held for an online order (D115's rule, under the lock); with the lock removed it sells the reserved unit |
+| 6 clicks with one `Idempotency-Key` on a counter sale, across both APIs | six 201s, one order, one unit sold |
+| A coupon's last use taken while a counter sale waits on the coupon's row (each API in turn) | the sale is refused and nothing is written; with the port's `FOR UPDATE` removed it redeems the coupon a second time |
+| 6 anonymous counter sales at once at a branch with no walk-in record, across both APIs | one walk-in record, all six sales on it: the unique index decides, and the loser reads the winner's row |
+| A deposit committed while a counter sale's cash payment waits on the drawer's row (each API in turn) | the payment lands on the committed balance; with the port's `FOR UPDATE` removed the deposit is lost |
+| A customer's totals changed while a sale to them waits on the customer's row (each API in turn) | the sale writes its own stale figures over them: five orders become one (D146, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -378,6 +386,25 @@ price.
 | `POST /api/v1/pos/quote/` | the basket priced exactly as the sale would record it; writes nothing. `PosBasketSerializer`: lines of a variant, a quantity of at least 1 (any size: a Python int) and a line discount; a customer; the sale's discount as an amount or a percentage, never both; a coupon code; an approval token; a branch. An unknown variant, a line discount past its line and a discount past the sale are 400s. A coupon or a discount that cannot go through is not: it comes back in `issues` (`coupon` or `discount`, with the refusal's code, message and details) beside figures priced without the coupon and with the discount. A coupon for free delivery, one not sold in store and one limited per customer on a sale with no customer are the counter's own refusals; the walk-in record is no customer. The cashier's discount -- lines plus the sale's -- is measured against the goods before any discount: none at all without `sales.discount`, and above `RANGON_DISCOUNT_APPROVAL_PERCENT` (20) only for a holder of `sales.discount_override` or with an approval: for this cashier and this permission, at most five minutes old, by a manager still active, still holding the permission and not bound to another branch, and for no more than the percentage approved. Nothing checks that a SKU is active, or in stock (D142, copied) |
 | `POST /api/v1/pos/elevate/` | a manager's own email and password, checked as `authenticate()` checks them (an old hash is upgraded, whoever it belongs to), behind the `auth` throttle scope: ten a minute per cashier. The approver must hold the permission asked for -- any string; an owner or superuser holds them all. A discount must name its percentage. Audited as `PERMISSION_ELEVATION` at the cashier's branch; the answer carries the signed approval and its 300 seconds |
 
+Then the sale itself (part 3). `create_pos_sale` is one transaction (`pos/pos-sales.service.ts`),
+in Django's order: the key looked up; the basket priced strictly, so the first refusal is the
+answer; the total compared with the one the register showed; the customer, or the branch's
+walk-in record, made on first use under its unique index; the order numbered `RGN-POS-` and
+inserted in a savepoint, so a retry that loses the race for its key answers with the winner's
+sale; the lines; stock out through `StockService.sell`, under the row lock; the online orders
+left short, where the owner lets the counter into reserved stock; the coupon redeemed under its
+row lock (`CouponsService.redeem`, moved out of checkout and shared with it); each payment
+captured and posted to the account it lands in (`orders/order-payments.service.ts`); the
+customer's totals; a call-back lead closed; the timeline and the audit log. Low-stock jobs are
+queued after the commit. The answer is the staff's `OrderDetailSerializer`
+(`orders/staff-order.service.ts`), which the back office's order screens will share.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/pos/sales/` | `sales.create`; 201 with the order. `PosSaleSerializer`: the quote's basket, with payments (a method, an amount of zero or more, a tendered amount, a reference, an active account), a register, a note and the total expected. A payment of nothing is skipped; cash tendered short is refused, and tendered over is change; an account the cashier names must be this branch's, open and of the kind the method's money moves through, else the branch's default for that kind, else none at all -- the sale stands and the payment names no account. Too little paid is a 400 after everything else was done, which the transaction undoes; too much is recorded as paid (D147, copied). Stock: `_check_can_reduce` and then the counter's own rule (business rule 1.4, D115) -- units reserved for online orders are refused, with how many are held, unless the organisation's `counter_sells_reserved` is on; then they are sold, and each online order left short, newest first, gets a `STOCK_SHORT` entry the customer does not see and an `ORDER_STOCK_SHORT` warning to everyone at the branch who may view orders. Each line is checked against the shelf as locked, so one SKU on two lines can oversell (D145, copied). An `Idempotency-Key` already used answers 201 with the order that holds it, whoever made it and whatever the basket -- after the body has been validated and the branch resolved; an empty one is stored and then answers every later sale (D143, copied) |
+| `GET /api/v1/pos/sales/<id>/` | `sales.view`; any order by id, whatever its branch or channel (D148, copied). `?ordering=` takes the sale serializer's field names: one that is not a field of an order is a 500 (D144, copied), and any other changes nothing |
+| `GET /api/v1/pos/sales/<id>/receipt/` | the same lookup; the order, `document_type: RECEIPT`, the organisation's name, address, phone, email, VAT number and receipt footer, the order's branch, and the cashier's name |
+
 ## Running it
 
 ```bash
@@ -550,8 +577,20 @@ the port):
   a NUL in the scan's `code` or the grid's `q` (D140).
 - A quote for a quantity so large that an amount passes 26 whole digits is a 500: `quantize`
   raises `decimal.InvalidOperation`, which nothing catches (D141).
-- The counter scans and prices a SKU that is archived or whose product is a draft, with no word
-  of it: `price_sale` never asks whether a variant is sellable (D142).
+- The counter scans, prices and sells a SKU that is archived or whose product is a draft, with no
+  word of it: `price_sale` never asks whether a variant is sellable (D142).
+- An empty `Idempotency-Key` on a counter sale is stored, and every later sale with an empty one
+  answers 201 with the first (D143).
+- `?ordering=lines` (or `note`, `coupon_code`, `approval_token`, `manual_discount_percent`,
+  `expected_total`) on a sale or its receipt is a 500 (D144).
+- One SKU on two lines of a counter sale is checked twice against the same shelf figure and
+  deducted twice: `on_hand` can go below zero, and reserved units can be sold without the owner's
+  switch (D145).
+- A customer's order count and spend are written from the figures read when the sale was priced,
+  over whatever was committed meanwhile (D146).
+- A counter sale records an overpayment as paid, and a sale discounted to nothing as `UNPAID`, or
+  `PARTIALLY_PAID` if anything was paid (D147).
+- A sale and its receipt are read by id whatever the branch or channel (D148).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
