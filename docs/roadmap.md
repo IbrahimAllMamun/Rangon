@@ -481,6 +481,51 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 5 part 2: the quote and the manager's approval, 2026-10-06
+
+Asked for: phase 5 of the port, continued. Ported: `PosQuoteView` and `PosElevateView`, with
+`price_sale` and everything under it -- the counter's coupon rules, the cashier's discount as an
+amount or a percentage, the approval threshold, and a manager's approval carried as Django's
+signed token (`common/signing.ts`: `signing.dumps` and `loads`). The sale, part 3, prices through
+the same code.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 3254/3254 (233 new), 35 by the documented differences
+concurrency ................................... 61/61 (none new: a quote writes nothing, and an
+                                                approval only its audit entry)
+throttle-check ................................ 12/12 (1 new: twelve wrong manager passwords from
+                                                one cashier, refused after ten)
+nest unit tests ............................... 775 passed (20 new: Django's signed tokens, written
+                                                and read; `quantize` at the edge of the decimal
+                                                context; a DecimalField's bounds)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_pos.py` gains a role that may sell and nothing else, a manager whose approvals the cases
+mint, one who is no longer active, and coupons good twice and three times per customer and one
+whose channels are a string.
+
+The cases price a basket as every role; with every field in each wrong shape; with quantities as
+text, as a float, past 2^53, at 10^22 and at 10^30; with SKUs that are archived, free, of a draft
+product or not there; with discounts on a line, on the sale, as a percentage, at the threshold, a
+paisa past it, past the sale, and by a role with no right to discount; with fifteen coupons, each
+refusal checkout has and the counter's three, alone and beside a refused discount; with VAT added
+and inside the price, a category's rate above, below and equal to the shop's; at each branch. A
+manager's approval is tried good, for more, for less, with no ceiling, four and six minutes old,
+from the future, signed with another key or for another purpose, altered, cut short, not a token
+at all, for another cashier, for another permission, and by a cashier, an inactive manager,
+nobody, something that is not a UUID, the other branch's manager, an owner and an administrator
+-- the harness signs them itself, just before each request. Two more are approved by one API and
+priced by the other. Asking a manager is tried by every role, with each field wrong, with
+credentials that are wrong, padded, in capitals, a cashier's, a customer's (one with an old
+password hash, which is upgraded), an inactive manager's, and for permissions nobody holds; each
+is compared by its audit entry and the accounts it touched.
+
+Found in the port, by its first run: an approver that is not a UUID is Django's 400, even on a
+quote, where the port answered an issue. Found in Django, and copied: D141 (a quote for a
+quantity of 10^30 is a 500: `quantize` raises `decimal.InvalidOperation`), D142 (the counter scans
+and prices an archived SKU, and one of a draft product, with no word of it).
+
 ### The NestJS API, phase 5 part 1: the register's reads and held sales, 2026-10-05
 
 Asked for: phase 5 of the port, the counter. Ported first: what the register reads to open
@@ -3630,6 +3675,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D138 | **Held sales take no lock.** `resume` reads the hold and then deletes it, and an edit reads it and then saves every column. Measured on the parity stack: two registers that resume one hold at the same moment are both handed the cart (200 and 200), so a parked sale can be rung up twice; and an edit that read the hold before a resume deleted it puts the hold back, because `save()` inserts when its `UPDATE` finds no row | `apps/api/orders/services/pos.py`, `apps/api/orders/api/pos_views.py` | Found porting the POS to NestJS, which copies it. Deleting with `select_for_update()` and answering 404 to the loser, and saving an edit with `update_fields`, would do it |
 | D139 | **The register's own rate limit is never reached.** POS views name the `pos` scope, 1200 a minute, but `UserRateThrottle` (600 a minute) is a default throttle class and counts the same requests, so the 601st request in a minute is refused. Measured with the throttles on: 602 scans by one cashier answer 600 times and then 429 twice. A busy till with a scanner, the quote on every basket change and two tabs open shares one 600 | `apps/api/config/settings/base.py` | Found porting the POS to NestJS, which copies it. Giving the POS views `throttle_classes = [ScopedRateThrottle]`, or raising `user`, would do it -- the owner's call |
 | D140 | **A held sale's payload with a NUL or half a surrogate pair is a 500.** `JSONField` accepts any JSON, and PostgreSQL's `jsonb` then refuses `\u0000` and an unpaired surrogate. Measured: `POST /pos/holds/` with `{"payload": {"a": "x\u0000y"}}`. The scan and the grid are 500s on a NUL too (`GET /pos/lookup/?code=a%00b`, `GET /pos/products/?q=a%00b`): they filter on the raw parameter, as D125's views do | `apps/api/orders/api/pos_views.py`, `apps/api/orders/api/serializers.py` | Found porting the POS to NestJS, which copies it. A validator on `payload`, and reading the parameters through `CharField().run_validation`, would do it |
+| D141 | **A quote for an absurd quantity is a 500.** A line's quantity is an `IntegerField` with no upper bound, and `quantize` raises `decimal.InvalidOperation` once an amount needs more than the context's 28 digits; nothing catches it. Measured on the parity stack: `POST /pos/quote/` with one shirt at 2450.00 and a quantity of 10^30 is a 500; 10^22 answers 200 with a total of 24500000000000000000000000.00 | `apps/api/orders/api/serializers.py`, `apps/api/core/money.py` | Found porting the quote to NestJS, which copies it. `max_value` on the quantity (the column is an int4) would do it |
+| D142 | **The counter prices a SKU that is not for sale.** `lookup_variant` finds a variant whatever its status, and `price_sale` never asks `is_sellable` or looks at the product's status. Measured on the parity stack: a quote for an archived SKU, and for an active SKU of a draft product, answers 200 with no issue; the scan finds both. `ProductVariantViewSet.perform_destroy` archives a SKU with history precisely so that it stops selling. Whether the sale itself goes through is measured with the sale (phase 5 part 3) | `apps/api/orders/services/pos.py` | Found porting the quote to NestJS, which copies it. An issue on the quote and a refusal on the sale would do it -- with a decision on whether old stock of an archived SKU may still be cleared at the till (`DECISION REQUIRED`) |
 | ~~D138~~ | ~~**Gross profit counted the discount as income, on every report.**~~ **Fixed 2026-10-05.** A coupon or a cashier's whole-sale discount is frozen on the order as `discount_total` and never written back to the lines; `OrderItem.line_total` carries only the line's own discount. Every report builds revenue from one expression over lines, `NET_LINE_REVENUE`, which read `line_total` -- so a ৳1,000 item that cost ৳600 and sold with ৳100 off showed ৳400 of gross profit where ৳300 was made. The dashboard's *Gross profit* and margin, the business summary's revenue, gross and **net** profit, the profit report, product performance, top products and category sales were all overstated by exactly the discounts given, and the VAT report's *taxable sales* sat above the base the tax had been charged on (`taxable × rate ≠ vat`). The dashboard's *Revenue* tile was right throughout, because it sums `grand_total`, which is why the two tiles disagreed. Each line now bears the order discount in proportion to its share of `subtotal`, unrounded, and the **sum** is rounded -- rounding per line drifts 0.01 an order away from what was paid. `RETURNED_LINE_BASE` takes the same correction, so a return's taxable credit matches the VAT it credits. No migration: every value read is already frozen on the order, so historical periods are corrected too | `apps/api/reports/services.py`, `apps/api/tests/test_report_discounts.py` | Reported by the owner from the dashboard after a discounted counter sale. `Order.gross_profit` had it right all along; the reports never used it, and no report test sold anything at a discount. Rule in [business-rules § 4](business-rules.md). Reading the same code found [D139](#known-defects) |
 | ~~D139~~ | ~~**A partial return of a discounted sale refunded the discount as well.**~~ **Fixed 2026-10-05.** `returns.request_return` worked the refund out from `OrderItem.line_total`, under a comment reading "the price actually paid for that line, discount included" -- but `line_total` carries only the line's *own* discount. A coupon or a cashier's whole-sale discount lives on the order and was never taken off: one of two ৳1,000 items bought with 10% off the sale came back for ৳1,000 when ৳900 had been paid for it, and the customer kept the other item for ৳800. Only the cap at `paid_total − refunded_total` stopped it going further, so a *full* return was always right and the fault showed only on a partial one. Each line now bears the order discount in proportion to its share of `subtotal`; the request is rounded once and the last line carries the difference, so everything back in one return refunds exactly what was paid | `apps/api/orders/services/returns.py`, `apps/api/tests/test_return_refund_discounts.py` | Found reading the code for D138 -- the same blind spot, with money leaving the drawer instead of a figure on a screen. D78 fixed the VAT on this exact line on 2026-09-18 and its tests sold nothing at a discount. Returns already requested keep the amount they were raised with. Rule in [business-rules § 2.4](business-rules.md#24-refunds) |
 | ~~D140~~ | ~~**An order discount skewed the VAT split between lines, below zero on the last one.**~~ **Fixed 2026-10-05.** `pricing.calculate` gave each line `tax × line_total ÷ taxable_base`, and `taxable_base` is `subtotal` *less the order discount* -- so the shares came to more than the whole, every line but the last was over-allocated, and the last absorbed the difference. Two equal lines of ৳2,450 with ৳490 off were frozen at ৳167.32 and ৳133.86 of VAT; with a discount above half of a two-line sale the last line's `tax_amount` went negative. The order's own `tax_total` and `grand_total` were always right, which is why nothing failed: the split only matters where a line is read on its own -- the receipt, a per-line refund under `EXCLUSIVE`, the VAT credit on a return. The divisor is now `subtotal`. The NestJS port copied the fault faithfully and is changed with it; its unit test had the skewed pair pinned as the expected answer | `apps/api/orders/services/pricing.py`, `apps/api-nest/src/checkout/pricing.ts`, `apps/api/tests/unit/test_pricing.py`, `apps/api-nest/test/unit/pricing.spec.ts` | Found working out what a D139 refund should be on a two-line order. Orders already sold keep the split frozen on them ([business-rules § 3.2](business-rules.md#32-order-maths)); nothing rewrites a historical line |
