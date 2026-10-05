@@ -508,6 +508,21 @@ gross_profit = revenue − Σ line_cogs
 Profit is never computed as "selling price − current product cost". Reports read the frozen
 `unit_cost`, so historical profit does not move when prices or costs change later.
 
+**Revenue is what the customer paid for the goods, so every discount is out of it.** A line's own
+discount is already inside `line_total`. A coupon or a cashier's whole-sale discount is not: it is
+frozen on the order as `discount_total` and never written back to the lines (§3.2). Reports are built
+from lines, so each line bears the order's discount in proportion to its share of `subtotal`:
+
+```text
+line_revenue = line_total − line_total × discount_total ÷ subtotal   (− tax_amount when INCLUSIVE)
+```
+
+The share is left unrounded and the *sum* is rounded, so the lines of one order always add up to
+`subtotal − discount_total` — the same figure as `Order.net_revenue`. `reports.services` has one
+expression for this (`NET_LINE_REVENUE`, summed through `_net_revenue`) and the dashboard, the
+business summary, the profit and product reports and the VAT return's taxable base all read it; a
+report that sums `line_total` directly counts money nobody paid.
+
 **The channel never changes COGS.** A POS sale and an online sale of the same variant in the same
 minute freeze the same figure. Both resolve it through `orders.services.pricing.resolve_unit_cost`,
 which is the single place the rule below is applied — online checkout used to skip it and read
@@ -585,7 +600,7 @@ raise and receive a purchase order.
 `GET /api/v1/reports/business-summary/` serves it (permission `reports.financial`):
 
 ```text
-  revenue from goods            net of VAT, never the gross line total
+  revenue from goods            net of VAT and of every discount, never the gross line total
 − refunds                       completed returns, by completed_at
 = net revenue
 − cost of goods sold            frozen unit_cost × quantity
