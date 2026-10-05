@@ -324,7 +324,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D148**.
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D151**.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
 - **A security hole:** fixed in Django first, on `fix/<slug>`, with tests, ahead of the port.
 - **A rule the code breaks, or never had:** mark it `DECISION REQUIRED` in `business-rules.md`,
@@ -375,6 +375,7 @@ apps/api-nest/
 | A fixture's inactive manager approved a discount | `User.save()` sets `is_active` from `status`; `create_user(is_active=False)` is overwritten | set the status; and ask Django (a shell probe) what a new case answers before trusting two APIs that agree |
 | An effects query showed a seed order as "changed" by a sale | it selected rows by `updated_at >= $1`, and the seed dates some of today's rows later today; the two APIs' `$1` differ, so it would also have flaked | compare with the snapshot table (`to_jsonb(row) IS DISTINCT FROM` the snapshot's), never with the clock |
 | A port answered 500 for `?ordering=<a relation>` on a detail route, Django 200 | Django's `get()` drops the queryset's ordering; only a name `order_by` cannot resolve fails, and it fails when the filter runs | on a detail route, an ordering term either raises at once or does nothing |
+| Two race checks broke when a fixture gained sales | the new sales gave a customer totals and a branch its walk-in record, which the checks assumed were zero and absent | a check reads its baseline after the restore and asserts the change; a fixture row that must stay absent is said so beside the code that would make it |
 
 ## 9. Documentation, per part
 
@@ -417,13 +418,13 @@ Every part of a phase updates, in the same branch:
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Parts 1 (session, scan, grid, held sales), 2 (the quote, the manager's approval) and 3 (the sale and its receipt, with D115's rule) done. Next: 4 voiding a sale and refunds (`void_sale`, `refund_order`, `promotions.release`, `StockService.restockReturn` is ready), then 5 returns; each needs races |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Parts 1 (session, scan, grid, held sales), 2 (the quote, the manager's approval) and 3 (the sale and its receipt, with D115's rule) done. Part 4 (voiding a sale: `refund_order`, the cash book's `REFUND`, `release`) done too. Next: 5 returns (`orders.services.returns`, `ReturnRequestViewSet`, `pos/returns/`), then 6 the staff order screens with `refunds` and `payments`; each needs races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 5 (parts 4-7), then open its PR when the owner asks.
+1. Finish phase 5 (parts 5-7), then open its PR when the owner asks.
 2. The owner should see D145 (a counter oversell) and the three decisions in business-rules §5.6.
 
 ### Checklist for a part
