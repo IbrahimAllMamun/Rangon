@@ -1,9 +1,10 @@
-import { ArrowRight, Download } from "lucide-react";
+import { ArrowRight, Download, Receipt, TrendingDown, TrendingUp, Truck } from "lucide-react";
 import Link from "next/link";
 
 import { DateRangeTabs, resolveRange } from "@/components/admin/date-range-tabs";
 import { PageHeader } from "@/components/admin/shell";
 import { type Column, ResourceTable } from "@/components/admin/resource-table";
+import { StatCard } from "@/components/admin/stat-card";
 import { Button, Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { apiServer } from "@/lib/api/server";
 import { money, percent } from "@/lib/format";
@@ -32,14 +33,36 @@ const REPORTS = [
   { path: "/reports/returns/", label: "Returns", description: "Reasons, quantities and refunds" },
   { path: "/reports/profit/", label: "Profit", description: "Revenue minus frozen COGS, by day" },
   { path: "/reports/expenses/", label: "Expenses", description: "Spending by category, with each category's share" },
-  { path: "/reports/business-summary/", label: "Business summary", description: "Revenue, COGS, expenses and net profit as a statement" },
+  { path: "/reports/business-summary/", label: "Business summary", description: "Revenue, COGS, expenses, purchase shipping and net profit as a statement" },
   { path: "/reports/vat/", label: "VAT return", description: "Output VAT less credits and input VAT, by month and by rate" },
 ];
+
+/** The business summary's bottom lines, as much of it as this page shows. */
+interface ProfitLines {
+  gross_profit: string;
+  gross_margin_percent: string;
+  expenses: { total: string; count: number };
+  purchase_shipping: { total: string; orders: number };
+  net_profit: string;
+  net_margin_percent: string;
+}
 
 type Search = Promise<{ range?: string }>;
 
 export default async function ReportsPage({ searchParams }: { searchParams: Search }) {
   const range = resolveRange((await searchParams).range);
+
+  // Allowed to fail on its own, like the dashboard's cash tiles: the business
+  // summary needs `reports.financial`, and a reader without it still gets the
+  // rest of this page rather than an error.
+  let profit: ProfitLines | null = null;
+  try {
+    profit = await apiServer<ProfitLines>(`/reports/business-summary/?range=${range}`);
+  } catch {
+    profit = null;
+  }
+  const loss = (value: string) => Number.parseFloat(value) < 0;
+  const summaryHref = `/admin/reports/business?range=${range}`;
 
   let rows: ProductRow[] = [];
   let error: string | null = null;
@@ -82,15 +105,66 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         }
       />
 
+      {profit && (
+        <section aria-labelledby="reports-profit" className="mb-6">
+          <h2
+            id="reports-profit"
+            className="mb-2 text-caption font-semibold uppercase tracking-wide text-muted"
+          >
+            Profit in this period
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Net profit"
+              value={money(profit.net_profit)}
+              context={`${percent(profit.net_margin_percent)} net margin`}
+              href={summaryHref}
+              icon={
+                loss(profit.net_profit) ? (
+                  <TrendingDown className="size-4" aria-hidden />
+                ) : (
+                  <TrendingUp className="size-4" aria-hidden />
+                )
+              }
+              tone={loss(profit.net_profit) ? "error" : "success"}
+            />
+            <StatCard
+              label="Gross profit"
+              value={money(profit.gross_profit)}
+              context={`${percent(profit.gross_margin_percent)} margin`}
+              href={summaryHref}
+              tone={loss(profit.gross_profit) ? "error" : "success"}
+            />
+            <StatCard
+              label="Expenses"
+              value={money(profit.expenses.total)}
+              context={`${profit.expenses.count} recorded`}
+              href="/admin/expenses"
+              icon={<Receipt className="size-4" aria-hidden />}
+            />
+            <StatCard
+              label="Purchase shipping"
+              value={money(profit.purchase_shipping.total)}
+              context={`On ${profit.purchase_shipping.orders} purchase order${
+                profit.purchase_shipping.orders === 1 ? "" : "s"
+              } received`}
+              href="/admin/purchases"
+              icon={<Truck className="size-4" aria-hidden />}
+            />
+          </div>
+        </section>
+      )}
+
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         <Link
-          href={`/admin/reports/business?range=${range}`}
+          href={summaryHref}
           className="flex items-center justify-between gap-4 rounded-lg border border-border bg-surface p-4 transition-colors duration-fast hover:border-neutral-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
         >
           <span>
             <span className="block text-body font-semibold">Business summary</span>
             <span className="block text-body-sm text-muted">
-              The whole statement — revenue, refunds, cost of goods, expenses and net profit.
+              The whole statement — revenue, refunds, cost of goods, expenses, purchase shipping
+              and net profit.
             </span>
           </span>
           <ArrowRight className="size-5 shrink-0 text-neutral-400" aria-hidden />

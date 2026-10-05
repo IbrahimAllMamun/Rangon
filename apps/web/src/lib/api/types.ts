@@ -611,6 +611,25 @@ export interface DashboardData {
   payment_methods: { method: PaymentMethod; amount: string; count: number }[];
   top_products: { sku: string; product_name: string; units: number; revenue: string }[];
   category_sales: { category: string; units: number; revenue: string }[];
+  /**
+   * Only for a reader with `reports.financial` -- the permission the business
+   * summary needs for the same figures. Absent, not zero, for everyone else.
+   */
+  profit?: DashboardProfit;
+}
+
+/** The dashboard's slice of the business summary (business-rules § 4.1). */
+export interface DashboardProfit {
+  gross_profit: string;
+  expenses: string;
+  expense_count: number;
+  /** The category most was spent on, or "" when nothing was. */
+  top_expense_category: string;
+  /** "Shipping / other cost" on purchase orders whose goods arrived in the period. */
+  purchase_shipping: string;
+  purchase_shipping_orders: number;
+  net_profit: string;
+  net_margin_percent: string;
 }
 
 export interface PosVariant {

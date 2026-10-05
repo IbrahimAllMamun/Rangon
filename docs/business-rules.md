@@ -623,12 +623,35 @@ raise and receive a purchase order.
 + cost recovered from returns   RESTOCK lines only
 = gross profit
 − operating expenses            finance.selectors.expense_totals, voids excluded
+− purchase order shipping       "Shipping / other cost" on purchase orders, by first delivery
 = net profit
 ```
 
-Three rules decide which period a figure lands in, and each matches what the money did: sales by
-`placed_at`, returns by `completed_at`, expenses by `spent_at`. A refund in August of a July sale
+Four rules decide which period a figure lands in, and each matches what the money did: sales by
+`placed_at`, returns by `completed_at`, expenses by `spent_at`, and purchase order shipping by the
+`received_at` of the order's **first** posted goods receipt. A refund in August of a July sale
 reduces August.
+
+**Purchase order shipping is a cost of the period, not of the stock** (added 2026-10-05). Receiving
+puts each line into stock at its own `unit_cost` (`purchasing.services.receive_purchase`), so a
+purchase order's `shipping_total` never reaches `average_cost` or COGS — before this line it was in
+no profit figure at all, and net profit was overstated by every taka spent bringing goods in.
+`reports.services.purchase_shipping` subtracts it once, in full, when the first delivery arrives: an
+order nothing has been received against has not cost it yet, a second delivery does not count it
+again, and a cancelled order never counts (cancelling is refused once anything has been received).
+
+> **DECISION REQUIRED — default chosen.** Shipping is expensed when the goods arrive. The
+> alternative is *landed cost*: spread it over the units received, so it enters `average_cost` and
+> reaches profit only as those units sell — more accurate per product, but it changes how stock is
+> valued from then on. Switching later needs no migration; it changes `receive_purchase`, and this
+> line would then have to stop subtracting what COGS already carries.
+
+**The dashboard shows the same statement.** Its *Profit* row — gross profit, expenses, purchase
+shipping, net profit — comes from the functions above, so the dashboard and the business summary
+agree for the same range and branch, and the row adds up as it reads. Its gross profit takes
+completed returns into account as the statement does; before 2026-10-05 it ignored them. The row is
+sent only to a reader holding `reports.financial`, the permission the business summary needs —
+everyone with `reports.view` keeps the rest of the dashboard, with gross profit in its *Sales* row.
 
 **VAT is reported but never counted as revenue or profit.** It is money held for the government. Under
 inclusive pricing it sits inside the line total, so it is removed per line — the order's own frozen
@@ -1401,6 +1424,30 @@ a product with *nothing* a shopper can pay for.
 Until 2026-09-28 a product with one SKU and no variant axes could not be created this way, and the
 documented default sent the buyer to the full product form — which could not make one either. It
 is resolved by *One version only* above.
+
+### 7a.6c A scan brings in the whole product
+
+Added 2026-10-05. Scanning or searching any one variant on `/admin/purchases/new` lists **every**
+variant of its product, grouped under the product, each with the stock the buyer's branch holds —
+a buyer reordering a shirt is deciding the size run, not one size. The scanned one starts at 1 and
+the rest at **0**; a line at 0 is not on the order. It is neither sent to the API nor counted in the
+totals, so nobody has to delete the sizes they are not buying. Archived variants are retired SKUs and
+are never brought in or offered.
+
+* **Scanning a variant already on the order adds one** to its quantity — a scan is a count.
+* **Per product:** *Add a variant* puts back one of its variants that was removed; *Remove the N at
+  0* clears the ones not ordered; *Remove product* takes every line of it off (and a later scan
+  brings the whole product back). Each line still has its own remove button.
+* **New size or colour** creates new SKUs on a product already on the order, in the sizes and
+  colours it already comes in, through `POST /products/{id}/generate-variants/` — so it needs
+  `products.create`, like creating a product here. It offers only the product's own axes: adding an
+  axis changes what the product is, which is the product form's job. A single-version product is
+  sent to the product page instead (§ 7a.6).
+* A link that opens an order with variants on it (`?variants=`) is not widened: those lines were
+  asked for by name. They still get their stock figures and *Add a variant*.
+
+Nothing here touches the database's rules: the API still requires every line it is sent to have a
+quantity of 1 or more, and refuses the same variant twice.
 
 ### 7a.6a After receiving: what arrived that nobody can buy
 

@@ -7,9 +7,12 @@ import {
   Landmark,
   type LucideIcon,
   Package,
+  Receipt,
   ShoppingCart,
   Smartphone,
+  TrendingDown,
   TrendingUp,
+  Truck,
   Undo2,
   Wallet,
 } from "lucide-react";
@@ -77,6 +80,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   }
 
   const kpis = data.kpis;
+  // Present only for a reader with `reports.financial`; the API leaves it out
+  // for everyone else rather than sending zeroes that would read as real.
+  const profit = data.profit;
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
   return (
     <>
@@ -98,13 +105,17 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             context={`${kpis.orders} order${kpis.orders === 1 ? "" : "s"}`}
             icon={<Wallet className="size-4" aria-hidden />}
           />
-          <StatCard
-            label="Gross profit"
-            value={money(kpis.gross_profit)}
-            context={`${percent(kpis.margin_percent)} margin`}
-            icon={<TrendingUp className="size-4" aria-hidden />}
-            tone="success"
-          />
+          {/* With the profit row below, gross profit opens that row instead,
+              so the row reads as the sum it is. */}
+          {!profit && (
+            <StatCard
+              label="Gross profit"
+              value={money(kpis.gross_profit)}
+              context={`${percent(kpis.margin_percent)} margin`}
+              icon={<TrendingUp className="size-4" aria-hidden />}
+              tone="success"
+            />
+          )}
           <StatCard
             label="Items sold"
             value={String(kpis.units_sold)}
@@ -118,6 +129,56 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             icon={<HandCoins className="size-4" aria-hidden />}
           />
         </KpiGroup>
+
+        {profit && (
+          <KpiGroup id="kpi-profit" title="Profit">
+            <StatCard
+              label="Gross profit"
+              value={money(profit.gross_profit)}
+              context={`${percent(kpis.margin_percent)} margin, after returns`}
+              icon={<TrendingUp className="size-4" aria-hidden />}
+              tone={Number(profit.gross_profit) < 0 ? "error" : "success"}
+            />
+            <StatCard
+              label="Expenses"
+              value={money(profit.expenses)}
+              context={
+                profit.expense_count
+                  ? `${plural(profit.expense_count, "expense")}${
+                      profit.top_expense_category ? ` · most on ${profit.top_expense_category}` : ""
+                    }`
+                  : "None recorded in this period"
+              }
+              href="/admin/expenses"
+              icon={<Receipt className="size-4" aria-hidden />}
+            />
+            <StatCard
+              label="Purchase shipping"
+              value={money(profit.purchase_shipping)}
+              context={
+                profit.purchase_shipping_orders
+                  ? `On ${plural(profit.purchase_shipping_orders, "purchase order")} received`
+                  : "No shipping on goods received"
+              }
+              href="/admin/purchases"
+              icon={<Truck className="size-4" aria-hidden />}
+            />
+            <StatCard
+              label="Net profit"
+              value={money(profit.net_profit)}
+              context={`${percent(profit.net_margin_percent)} net margin`}
+              href={`/admin/reports/business?range=${range}`}
+              icon={
+                Number(profit.net_profit) < 0 ? (
+                  <TrendingDown className="size-4" aria-hidden />
+                ) : (
+                  <TrendingUp className="size-4" aria-hidden />
+                )
+              }
+              tone={Number(profit.net_profit) < 0 ? "error" : "success"}
+            />
+          </KpiGroup>
+        )}
 
         <KpiGroup id="kpi-operations" title="Operations">
           <StatCard

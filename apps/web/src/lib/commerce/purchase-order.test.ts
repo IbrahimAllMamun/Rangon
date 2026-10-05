@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   blankReturn,
+  bumpQuantity,
   defaultReceipt,
+  groupLines,
+  isOrdered,
   lineTotals,
+  mergeProductLines,
   orderTotals,
+  orderedLines,
   quantize,
   receiptValue,
   returnCredit,
@@ -179,9 +184,20 @@ describe("validateLines", () => {
     expect(validateLines([line()])).toEqual([]);
   });
 
-  it("rejects a zero or fractional quantity", () => {
-    expect(validateLines([line({ quantity: "0" })])).toHaveLength(1);
+  it("rejects a fractional or negative quantity", () => {
     expect(validateLines([line({ quantity: "1.5" })])).toHaveLength(1);
+    // A negative line also has a negative total, which the discount check
+    // reports too; what matters here is that the quantity itself is refused.
+    expect(
+      validateLines([line({ quantity: "-1" })]).map((problem) => problem.message),
+    ).toContainEqual(expect.stringMatching(/whole number/));
+  });
+
+  it("accepts 0, which keeps a variant brought in with its product off the order", () => {
+    // Was an error until a scan started bringing in every variant of the
+    // product: the ones not wanted sit at 0 rather than being deleted.
+    expect(validateLines([line({ quantity: "0" })])).toEqual([]);
+    expect(validateLines([line({ quantity: "" })])).toEqual([]);
   });
 
   it("rejects a negative unit cost", () => {
@@ -222,6 +238,85 @@ describe("toCreatePayload", () => {
       unit_cost: "0",
       discount: "0",
     });
+  });
+
+  it("leaves out the variants left at 0", () => {
+    const payload = toCreatePayload([
+      line(),
+      line({ key: "k2", variantId: "v2", quantity: "0" }),
+      line({ key: "k3", variantId: "v3", quantity: "" }),
+    ]);
+
+    expect(payload.map((row) => row.variant)).toEqual(["v1"]);
+  });
+});
+
+describe("lines brought in with their product", () => {
+  const shirt = (variantId: string, over: Partial<DraftLine> = {}) =>
+    line({ key: variantId, variantId, productId: "shirt", quantity: "0", ...over });
+
+  it("counts only the lines with a quantity", () => {
+    const totals = orderTotals([shirt("m", { quantity: "2" }), shirt("s"), shirt("l")], "");
+
+    expect(totals.lineCount).toBe(1);
+    expect(totals.unitCount).toBe(2);
+    expect(orderedLines([shirt("m", { quantity: "2" }), shirt("s")]).map((l) => l.variantId)).toEqual([
+      "m",
+    ]);
+  });
+
+  it("does not treat a half unit as ordered", () => {
+    expect(isOrdered(shirt("m", { quantity: "1.5" }))).toBe(false);
+    expect(isOrdered(shirt("m", { quantity: "1" }))).toBe(true);
+  });
+
+  it("keeps a product's lines together, in the product's own order", () => {
+    const scanned = [
+      line({ key: "cap", variantId: "cap", productId: "cap" }),
+      shirt("m", { quantity: "1" }),
+      line({ key: "sock", variantId: "sock", productId: "sock" }),
+    ];
+
+    const merged = mergeProductLines(scanned, "shirt", [shirt("s"), shirt("l")], ["s", "m", "l"]);
+
+    expect(merged.map((l) => l.variantId)).toEqual(["cap", "s", "m", "l", "sock"]);
+    // The scanned one keeps its quantity; the rest start at 0.
+    expect(merged.find((l) => l.variantId === "m")?.quantity).toBe("1");
+    expect(merged.find((l) => l.variantId === "s")?.quantity).toBe("0");
+  });
+
+  it("never adds a variant twice", () => {
+    const merged = mergeProductLines([shirt("m", { quantity: "3" })], "shirt", [shirt("m")], ["m"]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].quantity).toBe("3");
+  });
+
+  it("puts a product new to the order at the end", () => {
+    const merged = mergeProductLines([line()], "shirt", [shirt("s"), shirt("m")], ["s", "m"]);
+
+    expect(merged.map((l) => l.variantId)).toEqual(["v1", "s", "m"]);
+  });
+
+  it("groups lines by product, where each product first appears", () => {
+    const groups = groupLines([
+      shirt("s"),
+      line({ key: "cap", variantId: "cap", productId: "cap", productName: "Cap" }),
+      shirt("m"),
+      line({ key: "loose", variantId: "loose" }),
+    ]);
+
+    expect(groups.map((group) => [group.key, group.lines.map((l) => l.variantId)])).toEqual([
+      ["shirt", ["s", "m"]],
+      ["cap", ["cap"]],
+      ["variant:loose", ["loose"]],
+    ]);
+  });
+
+  it("counts a second scan of the same variant as one more", () => {
+    expect(bumpQuantity([shirt("m", { quantity: "2" })], "m")[0].quantity).toBe("3");
+    expect(bumpQuantity([shirt("m", { quantity: "0" })], "m")[0].quantity).toBe("1");
+    expect(bumpQuantity([shirt("m", { quantity: "abc" })], "m")[0].quantity).toBe("1");
   });
 });
 

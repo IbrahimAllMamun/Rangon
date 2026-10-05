@@ -17,7 +17,9 @@ from django.db.models import (
     DecimalField,
     ExpressionWrapper,
     F,
+    OuterRef,
     Q,
+    Subquery,
     Sum,
     Value,
     When,
@@ -45,6 +47,7 @@ from purchasing.models import (
     PurchaseOrder,
     PurchaseOrderItem,
     PurchaseOrderStatus,
+    PurchaseReceipt,
     PurchaseReturn,
     PurchaseReturnItem,
 )
@@ -291,7 +294,17 @@ def sold_orders(date_range: DateRange, *, branch: Any = None, channel: str = "")
     return queryset
 
 
-def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
+def dashboard(
+    *, date_range: DateRange, branch: Any = None, financial: bool = True
+) -> dict[str, Any]:
+    """The figures every staff member sees first.
+
+    `financial` adds the `profit` block -- expenses, purchase shipping and net
+    profit -- which the view asks for only when the reader holds
+    `reports.financial`, the permission the business summary needs for the
+    same figures.  Without it they are not computed at all, not computed and
+    hidden.
+    """
     orders = sold_orders(date_range, branch=branch)
 
     totals = orders.aggregate(
@@ -312,8 +325,13 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
     )
 
-    gross_profit = quantize(items["net_sales"] - items["cogs"])
-    margin = quantize(gross_profit / items["net_sales"] * 100) if items["net_sales"] else ZERO
+    # The business summary's gross profit, refunds and restocked cost
+    # included, so the gross and net profit cards on one screen add up.
+    gross = _gross_profit(
+        date_range=date_range, branch=branch, revenue=items["net_sales"], cogs=items["cogs"]
+    )
+    gross_profit = gross.gross_profit
+    margin = _percent(gross_profit, gross.net_revenue)
 
     by_channel = list(
         orders.values("channel")
@@ -399,7 +417,7 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
     if branch is not None:
         pending_online = pending_online.filter(branch=branch)
 
-    return {
+    payload: dict[str, Any] = {
         "range": {"start": date_range.start, "end": date_range.end, "label": date_range.label},
         "kpis": {
             "revenue": totals["revenue"],
@@ -424,6 +442,22 @@ def dashboard(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
         "top_products": top_products,
         "category_sales": category_sales,
     }
+
+    if financial:
+        net = _net_profit(date_range=date_range, branch=branch, gross_profit=gross_profit)
+        expenses = net["expenses"]
+        top_category = expenses["by_category"][0]["category"] if expenses["by_category"] else ""
+        payload["profit"] = {
+            "gross_profit": gross_profit,
+            "expenses": expenses["total"],
+            "expense_count": expenses["count"],
+            "top_expense_category": top_category,
+            "purchase_shipping": net["purchase_shipping"]["total"],
+            "purchase_shipping_orders": net["purchase_shipping"]["orders"],
+            "net_profit": net["net_profit"],
+            "net_margin_percent": _percent(net["net_profit"], gross.net_revenue),
+        }
+    return payload
 
 
 def sales_report(*, date_range: DateRange, branch: Any = None, channel: str = "") -> list[dict]:
@@ -626,55 +660,76 @@ def expense_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
     ]
 
 
-def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
-    """Phase 38: what the business actually made in a period.
+def purchase_shipping(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
+    """What purchase orders charged for shipping, in the period their goods arrived.
 
-    The one report an owner manages by, and the first one that reaches all the
-    way down to net profit rather than stopping at gross margin:
+    `PurchaseOrder.shipping_total` -- the "Shipping / other cost" box on the
+    purchase order form -- is in no unit cost: receiving puts each line into
+    stock at its own `unit_cost` (`purchasing.services.receive_purchase`), so
+    none of this money ever reaches COGS.  Left out of the statement, net
+    profit was overstated by every taka paid to bring goods in.
 
-        revenue        goods sold, net of VAT
-        less refunds   completed returns in the period
-        less COGS      the cost frozen on each line (ADR-0006), minus the cost
-                       of goods that came back to sellable stock
-        = gross profit
-        less expenses  finance.selectors.expense_totals, voids excluded
-        = net profit
-
-    Three deliberate choices, because each is a place a plausible-looking
-    figure would be wrong:
-
-    * **VAT is not revenue.**  Under inclusive pricing the tax sits inside the
-      line total, so it is taken out per line before anything is summed.  It is
-      reported separately: it is money held for the government, not turnover.
-    * **Each event lands in the period it happened.**  Sales by `placed_at`,
-      returns by `completed_at`, expenses by `spent_at`.  A refund in August of
-      a July sale reduces August, which is what the cash and the ledger did.
-    * **Only restocked goods give their cost back.**  A return marked DAMAGED
-      is a write-off and its cost stays a cost; one marked QUARANTINE is not
-      sellable yet, so it is treated the same way until it is.  Only RESTOCK
-      recovers the cost, because only RESTOCK put the goods back on the shelf.
+    It lands when the order's first delivery is received, because that is the
+    delivery the freight was paid for.  An order nothing has arrived against
+    has not cost it yet, and a cancelled one never counts: cancelling is
+    refused once stock has been received
+    (`purchasing.services.cancel_purchase_order`).  The whole charge lands at
+    once, even when the rest of the order arrives later or is closed short
+    (business-rules § 4.1).
     """
-    from finance import selectors as finance_selectors
-
-    orders = sold_orders(date_range, branch=branch)
-    lines = OrderItem.objects.filter(order__in=orders)
-
-    sales = lines.aggregate(
-        revenue=_net_revenue(),
-        tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
-        cogs=Coalesce(
-            Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
-            Value(ZERO),
-            output_field=MONEY,
-        ),
-        units=Coalesce(Sum("quantity"), Value(0)),
+    first_received = (
+        PurchaseReceipt.objects.filter(purchase_order=OuterRef("pk"), is_posted=True)
+        .order_by("received_at")
+        .values("received_at")[:1]
     )
-    order_totals = orders.aggregate(
-        count=Count("id"),
-        shipping=Coalesce(Sum("shipping_total"), Value(ZERO), output_field=MONEY),
-        discounts=Coalesce(Sum("discount_total"), Value(ZERO), output_field=MONEY),
+    orders = (
+        PurchaseOrder.objects.filter(shipping_total__gt=ZERO)
+        .annotate(first_received_at=Subquery(first_received))
+        .filter(
+            first_received_at__gte=date_range.start,
+            first_received_at__lte=date_range.end,
+        )
     )
+    if branch is not None:
+        orders = orders.filter(branch=branch)
+    totals = orders.aggregate(
+        total=Coalesce(Sum("shipping_total"), Value(ZERO), output_field=MONEY),
+        orders=Count("id"),
+    )
+    return {"total": quantize(totals["total"]), "orders": totals["orders"]}
 
+
+def _percent(part: Decimal, whole: Decimal) -> Decimal:
+    return quantize(part / whole * 100) if whole else ZERO
+
+
+@dataclass(frozen=True)
+class _GrossProfit:
+    """Net revenue down to gross profit -- the top half of business-rules § 4.1."""
+
+    revenue: Decimal
+    refunds: Decimal
+    net_revenue: Decimal
+    cogs: Decimal
+    cogs_recovered: Decimal
+    net_cogs: Decimal
+    gross_profit: Decimal
+    #: The returns behind `refunds`, for a caller that also counts them.
+    completed_returns: Any
+
+
+def _gross_profit(
+    *, date_range: DateRange, branch: Any, revenue: Decimal, cogs: Decimal
+) -> _GrossProfit:
+    """Apply the period's completed returns to its sales.
+
+    `revenue` and `cogs` are the sold lines' sums.  Both callers aggregate
+    those lines already for figures of their own, so they are taken in rather
+    than summed a second time -- the dashboard has a query budget.
+
+    One function, so the dashboard's gross profit and the business summary's
+    cannot drift apart: they used to, because the dashboard ignored returns.
+    """
     completed_returns = ReturnRequest.objects.filter(
         status=ReturnStatus.COMPLETED,
         completed_at__gte=date_range.start,
@@ -705,19 +760,97 @@ def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, 
         )["total"]
     )
 
-    revenue = quantize(sales["revenue"])
+    revenue = quantize(revenue)
+    cogs = quantize(cogs)
     net_revenue = quantize(revenue - refunds)
-    net_cogs = quantize(sales["cogs"] - cogs_recovered)
-    gross_profit = quantize(net_revenue - net_cogs)
+    net_cogs = quantize(cogs - cogs_recovered)
+    return _GrossProfit(
+        revenue=revenue,
+        refunds=refunds,
+        net_revenue=net_revenue,
+        cogs=cogs,
+        cogs_recovered=cogs_recovered,
+        net_cogs=net_cogs,
+        gross_profit=quantize(net_revenue - net_cogs),
+        completed_returns=completed_returns,
+    )
 
-    expense_totals = finance_selectors.expense_totals(
+
+def _net_profit(*, date_range: DateRange, branch: Any, gross_profit: Decimal) -> dict[str, Any]:
+    """Gross profit less what running the shop cost in the period.
+
+    Operating expenses come from `finance.selectors.expense_totals`, so the
+    expenses screen, the expense report and this cannot disagree; purchase
+    order shipping from `purchase_shipping`, because no other figure carries it.
+    """
+    from finance import selectors as finance_selectors
+
+    expenses = finance_selectors.expense_totals(
         branch=branch, date_from=date_range.start, date_to=date_range.end
     )
-    expenses_total = quantize(expense_totals["total"])
-    net_profit = quantize(gross_profit - expenses_total)
+    shipping = purchase_shipping(date_range=date_range, branch=branch)
+    expenses_total = quantize(expenses["total"])
+    return {
+        "expenses": {**expenses, "total": expenses_total},
+        "purchase_shipping": shipping,
+        "net_profit": quantize(gross_profit - expenses_total - shipping["total"]),
+    }
 
-    def _percent(part: Decimal, whole: Decimal) -> Decimal:
-        return quantize(part / whole * 100) if whole else ZERO
+
+def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, Any]:
+    """Phase 38: what the business actually made in a period.
+
+    The one report an owner manages by, and the first one that reaches all the
+    way down to net profit rather than stopping at gross margin:
+
+        revenue        goods sold, net of VAT
+        less refunds   completed returns in the period
+        less COGS      the cost frozen on each line (ADR-0006), minus the cost
+                       of goods that came back to sellable stock
+        = gross profit
+        less expenses  finance.selectors.expense_totals, voids excluded
+        less shipping  what purchase orders charged to bring goods in
+                       (`purchase_shipping`), by their first delivery
+        = net profit
+
+    Three deliberate choices, because each is a place a plausible-looking
+    figure would be wrong:
+
+    * **VAT is not revenue.**  Under inclusive pricing the tax sits inside the
+      line total, so it is taken out per line before anything is summed.  It is
+      reported separately: it is money held for the government, not turnover.
+    * **Each event lands in the period it happened.**  Sales by `placed_at`,
+      returns by `completed_at`, expenses by `spent_at`.  A refund in August of
+      a July sale reduces August, which is what the cash and the ledger did.
+    * **Only restocked goods give their cost back.**  A return marked DAMAGED
+      is a write-off and its cost stays a cost; one marked QUARANTINE is not
+      sellable yet, so it is treated the same way until it is.  Only RESTOCK
+      recovers the cost, because only RESTOCK put the goods back on the shelf.
+    """
+    orders = sold_orders(date_range, branch=branch)
+    lines = OrderItem.objects.filter(order__in=orders)
+
+    sales = lines.aggregate(
+        revenue=_net_revenue(),
+        tax=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
+        cogs=Coalesce(
+            Sum(ExpressionWrapper(F("unit_cost") * F("quantity"), output_field=MONEY)),
+            Value(ZERO),
+            output_field=MONEY,
+        ),
+        units=Coalesce(Sum("quantity"), Value(0)),
+    )
+    order_totals = orders.aggregate(
+        count=Count("id"),
+        shipping=Coalesce(Sum("shipping_total"), Value(ZERO), output_field=MONEY),
+        discounts=Coalesce(Sum("discount_total"), Value(ZERO), output_field=MONEY),
+    )
+
+    gross = _gross_profit(
+        date_range=date_range, branch=branch, revenue=sales["revenue"], cogs=sales["cogs"]
+    )
+    net = _net_profit(date_range=date_range, branch=branch, gross_profit=gross.gross_profit)
+    expenses = net["expenses"]
 
     return {
         "period": {
@@ -726,9 +859,9 @@ def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, 
             "label": date_range.label,
         },
         "revenue": {
-            "goods": revenue,
-            "refunds": refunds,
-            "net": net_revenue,
+            "goods": gross.revenue,
+            "refunds": gross.refunds,
+            "net": gross.net_revenue,
             "shipping_charged": quantize(order_totals["shipping"]),
             "discounts_given": quantize(order_totals["discounts"]),
             # Held for the government, never income -- shown so the figure on
@@ -736,25 +869,28 @@ def business_summary(*, date_range: DateRange, branch: Any = None) -> dict[str, 
             "vat_collected": quantize(sales["tax"]),
         },
         "cost_of_goods": {
-            "sold": quantize(sales["cogs"]),
-            "recovered_from_returns": cogs_recovered,
-            "net": net_cogs,
+            "sold": gross.cogs,
+            "recovered_from_returns": gross.cogs_recovered,
+            "net": gross.net_cogs,
         },
-        "gross_profit": gross_profit,
-        "gross_margin_percent": _percent(gross_profit, net_revenue),
+        "gross_profit": gross.gross_profit,
+        "gross_margin_percent": _percent(gross.gross_profit, gross.net_revenue),
         "expenses": {
-            "total": expenses_total,
-            "count": expense_totals["count"],
-            "by_category": expense_totals["by_category"],
+            "total": expenses["total"],
+            "count": expenses["count"],
+            "by_category": expenses["by_category"],
         },
-        "net_profit": net_profit,
-        "net_margin_percent": _percent(net_profit, net_revenue),
+        "purchase_shipping": net["purchase_shipping"],
+        "net_profit": net["net_profit"],
+        "net_margin_percent": _percent(net["net_profit"], gross.net_revenue),
         "volume": {
             "orders": order_totals["count"],
             "units": sales["units"],
-            "returns": completed_returns.count(),
+            "returns": gross.completed_returns.count(),
             "average_order_value": (
-                quantize(net_revenue / order_totals["count"]) if order_totals["count"] else ZERO
+                quantize(gross.net_revenue / order_totals["count"])
+                if order_totals["count"]
+                else ZERO
             ),
         },
     }

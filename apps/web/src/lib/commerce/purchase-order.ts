@@ -32,6 +32,13 @@ export interface DraftLine {
    * hand is never overwritten (`purchase-order-form.tsx`).
    */
   costTouched?: boolean;
+  /**
+   * The product the variant belongs to. Lines are shown grouped by it, and a
+   * scan of any one variant brings in the rest of that product.
+   */
+  productId?: string;
+  /** Units the branch holds, as a hint for how many to order. Null when unknown. */
+  onHand?: number | null;
 }
 
 export interface LineTotals {
@@ -62,6 +69,86 @@ function num(value: string): number {
   if (value.trim() === "") return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Whether a line is on the order.
+ *
+ * A scan brings in every variant of the product, and the ones the buyer does
+ * not want sit at 0 rather than having to be deleted one by one. Those are not
+ * lines of the order: they are neither sent nor counted.
+ */
+export function isOrdered(line: DraftLine): boolean {
+  const quantity = num(line.quantity);
+  return Number.isInteger(quantity) && quantity >= 1;
+}
+
+export function orderedLines(lines: DraftLine[]): DraftLine[] {
+  return lines.filter(isOrdered);
+}
+
+export interface LineGroup {
+  /** The product's id, or the variant's for a line that came without one. */
+  key: string;
+  productId: string | null;
+  productName: string;
+  lines: DraftLine[];
+}
+
+/** Lines gathered by product, each product where its first line appears. */
+export function groupLines(lines: DraftLine[]): LineGroup[] {
+  const groups = new Map<string, LineGroup>();
+  for (const line of lines) {
+    const key = line.productId ?? `variant:${line.variantId}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, productId: line.productId ?? null, productName: line.productName, lines: [] };
+      groups.set(key, group);
+    }
+    group.lines.push(line);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Put more of one product's variants on the order.
+ *
+ * The product's lines -- those already there and `added` -- are kept together,
+ * where the product first appears, in `catalogueOrder`: the product's own
+ * order (its variants' positions, then SKU), not the order they were scanned
+ * in. A variant already on the order is never added twice.
+ */
+export function mergeProductLines(
+  lines: DraftLine[],
+  productId: string,
+  added: DraftLine[],
+  catalogueOrder: string[],
+): DraftLine[] {
+  const present = new Set(lines.map((line) => line.variantId));
+  const fresh = added.filter((line) => !present.has(line.variantId));
+  const rank = new Map(catalogueOrder.map((variantId, index) => [variantId, index]));
+  const position = (line: DraftLine) => rank.get(line.variantId) ?? Number.MAX_SAFE_INTEGER;
+
+  const product = [...lines.filter((line) => line.productId === productId), ...fresh].sort(
+    (a, b) => position(a) - position(b),
+  );
+  const first = lines.findIndex((line) => line.productId === productId);
+  const others = lines.filter((line) => line.productId !== productId);
+  const at =
+    first === -1
+      ? others.length
+      : lines.slice(0, first).filter((line) => line.productId !== productId).length;
+  return [...others.slice(0, at), ...product, ...others.slice(at)];
+}
+
+/** One more of a variant already on the order: what a second scan means. */
+export function bumpQuantity(lines: DraftLine[], variantId: string): DraftLine[] {
+  return lines.map((line) => {
+    if (line.variantId !== variantId) return line;
+    const quantity = num(line.quantity);
+    const next = Number.isInteger(quantity) && quantity >= 0 ? quantity + 1 : 1;
+    return { ...line, quantity: String(next) };
+  });
 }
 
 export function lineTotals(line: DraftLine): LineTotals {
@@ -126,7 +213,8 @@ export function orderTotals(
     taxTotal: quantize(taxTotal),
     shipping: shippingValue,
     grandTotal: quantize(subtotal - discountTotal + quantize(taxTotal) + shippingValue),
-    lineCount: lines.length,
+    // A line left at 0 is not a line of the order (`isOrdered`).
+    lineCount: orderedLines(lines).length,
     unitCount,
   };
 }
@@ -149,8 +237,13 @@ export function validateLines(lines: DraftLine[]): LineProblem[] {
 
   for (const line of lines) {
     const quantity = num(line.quantity);
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      problems.push({ key: line.key, message: "Quantity must be a whole number of 1 or more." });
+    // 0 is allowed: it is how a variant brought in with the rest of its
+    // product stays off the order (`isOrdered`). A half unit is not.
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      problems.push({
+        key: line.key,
+        message: "Quantity must be a whole number. Leave it at 0 to keep the line off the order.",
+      });
     }
     if (num(line.unitCost) < 0) {
       problems.push({ key: line.key, message: "Unit cost cannot be negative." });
@@ -183,7 +276,8 @@ export function validateLines(lines: DraftLine[]): LineProblem[] {
  */
 export function toCreatePayload(lines: DraftLine[], vatPercent = "") {
   const rate = vatFraction(vatPercent);
-  return lines.map((line) => ({
+  // Lines left at 0 are the variants the buyer is not ordering: never sent.
+  return orderedLines(lines).map((line) => ({
     variant: line.variantId,
     quantity: Number(line.quantity),
     unit_cost: line.unitCost === "" ? "0" : line.unitCost,
