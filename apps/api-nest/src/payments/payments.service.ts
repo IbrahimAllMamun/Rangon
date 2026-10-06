@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 
 import { quantize } from '../checkout/pricing';
-import { AuditContext, recordAudit } from '../common/audit';
+import { AuditContext } from '../common/audit';
 import { Conflict } from '../common/errors';
 import { Database, Queryable } from '../database/database.service';
 import { CashBookService } from '../finance/cash-book.service';
+import { OrderPayments } from '../orders/order-payments.service';
 import { OrderWritesService } from '../orders/order-writes.service';
 import { ProviderEvent } from './providers';
 
@@ -38,6 +39,7 @@ export class PaymentsService {
     private readonly db: Database,
     private readonly orders: OrderWritesService,
     private readonly cashBook: CashBookService,
+    private readonly payments: OrderPayments,
   ) {}
 
   /** Store the event exactly once and act on it. Answers the stored result. */
@@ -123,10 +125,7 @@ export class PaymentsService {
     });
   }
 
-  /**
-   * `capture_payment`: the payment locked and captured once, the money posted
-   * to the account it landed in, the order's payment status derived again.
-   */
+  /** `capture_payment`, as the gateway's event asks for it: no member of staff acted. */
   private async capture(
     tx: Queryable,
     context: AuditContext,
@@ -134,97 +133,7 @@ export class PaymentsService {
     providerReference: string,
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const payment = await tx.one<PaymentRow>(
-      `SELECT ${PAYMENT_COLUMNS} FROM orders_payment WHERE id = $1::uuid LIMIT 21 FOR UPDATE`,
-      [paymentId],
-    );
-    if (!payment) throw new Error('Payment matching query does not exist.');
-    // Idempotent: whoever held the lock first captured it.
-    if (CAPTURED_STATES.has(payment.status)) return;
-    if (payment.status === 'VOIDED' || payment.status === 'FAILED') {
-      throw new Conflict(`A ${payment.status} payment cannot be captured.`);
-    }
-    // Django stamps `captured_at`, then `updated_at` as it saves. One UPDATE
-    // cannot keep that order: Postgres fills the columns in table order, and
-    // `updated_at` comes first. So the moment is read before the write.
-    const capturedAt = await this.now(tx);
-    await tx.query(
-      `UPDATE orders_payment SET updated_at = clock_timestamp(), status = 'CAPTURED',
-              provider_reference = CASE WHEN $2 = '' THEN provider_reference ELSE $2 END,
-              payload = CASE WHEN $3 THEN payload || $4::jsonb ELSE payload END,
-              captured_at = $5::timestamptz
-        WHERE id = $1::uuid`,
-      [
-        payment.id,
-        providerReference,
-        Object.keys(payload).length > 0,
-        JSON.stringify(payload),
-        capturedAt,
-      ],
-    );
-
-    const order = await tx.one<{
-      id: string;
-      number: string;
-      currency: string;
-      grand_total: string;
-      branch_id: string;
-      branch_code: string;
-    }>(
-      `SELECT o.id, o.number, o.currency, o.grand_total, o.branch_id, b.code AS branch_code
-         FROM orders_order o JOIN accounts_branch b ON b.id = o.branch_id
-        WHERE o.id = $1::uuid LIMIT 21 FOR UPDATE OF o`,
-      [payment.order_id],
-    );
-    if (!order) throw new Error('Order matching query does not exist.');
-
-    // Capture is when the money is really the shop's: this is where a gateway's
-    // settled payment enters the cash book.
-    if (!(await this.cashBook.alreadyPosted(tx, 'payment', payment.id))) {
-      const accountId = await this.cashBook.recordSalePayment(tx, {
-        branch: { id: order.branch_id, code: order.branch_code },
-        amount: payment.amount,
-        referenceType: 'payment',
-        referenceId: payment.id,
-        accountId: payment.account_id,
-        method: payment.method,
-        notes: `${order.number} - ${payment.method}`,
-        occurredAt: capturedAt,
-      });
-      if (accountId !== null && payment.account_id !== accountId) {
-        await tx.query(
-          `UPDATE orders_payment SET updated_at = clock_timestamp(), account_id = $2::uuid WHERE id = $1::uuid`,
-          [payment.id, accountId],
-        );
-      }
-    }
-
-    const ref = {
-      id: order.id,
-      number: order.number,
-      branchId: order.branch_id,
-      currency: order.currency,
-      grandTotal: order.grand_total,
-    };
-    await this.orders.refreshPaymentStatus(tx, ref);
-    await this.orders.logEvent(
-      tx,
-      order.id,
-      'PAYMENT_CAPTURED',
-      `${payment.method} ${payment.amount} captured`,
-      { data: { payment_id: payment.id } },
-    );
-    await recordAudit(tx, context, {
-      action: 'PAYMENT_RECORDED',
-      entity: {
-        type: 'Payment',
-        id: payment.id,
-        label: `${payment.method} ${payment.amount} (CAPTURED)`,
-      },
-      oldValues: { status: 'PENDING' },
-      newValues: { status: 'CAPTURED', amount: payment.amount },
-      branchId: order.branch_id,
-    });
+    await this.payments.capture(tx, context, paymentId, { providerReference, payload });
   }
 
   /** `timezone.now()`, read as the service reads it: before the row it stamps is saved. */

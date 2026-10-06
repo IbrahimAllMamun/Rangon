@@ -18,8 +18,7 @@ import {
   runSerializer,
   uuidField,
 } from '../common/drf';
-import { Dec } from '../common/decimal';
-import { Conflict, CouponInvalid, PriceChanged, ValidationError } from '../common/errors';
+import { Conflict, PriceChanged, ValidationError } from '../common/errors';
 import { canonicalPhone, INVALID_PHONE_MESSAGE, normalizePhone } from '../common/phone';
 import { pyStr, pyStrip } from '../common/python';
 import { ENV, Env } from '../config/env';
@@ -28,7 +27,7 @@ import { StockService } from '../inventory/stock.service';
 import { CeleryService } from '../jobs/celery.service';
 import { OrderRef, OrderWritesService } from '../orders/order-writes.service';
 import { CartRow, CartService, ShippingMethodRow } from './cart.service';
-import { isExhausted } from './coupons.service';
+import { CouponsService } from './coupons.service';
 import { Job, NoticesService } from './notices.service';
 import { itemCount, lineTotal, money, quantize } from './pricing';
 
@@ -109,6 +108,7 @@ export class CheckoutService {
   constructor(
     private readonly db: Database,
     private readonly carts: CartService,
+    private readonly coupons: CouponsService,
     private readonly organization: OrganizationService,
     private readonly ledger: StockService,
     private readonly orders: OrderWritesService,
@@ -297,7 +297,8 @@ export class CheckoutService {
       const lowStock = await this.ledger.reserve(
         tx,
         branch,
-        priced.lines.map((line) => [line.variant.id, line.quantity]),
+        // A cart line's quantity is an int4 column: always a number here.
+        priced.lines.map((line) => [line.variant.id, Number(line.quantity)]),
         orderId,
       );
       for (const inventoryId of lowStock) {
@@ -310,7 +311,7 @@ export class CheckoutService {
       });
 
       if (cart.coupon_id) {
-        await this.redeem(tx, cart.coupon_id, orderId, priced.couponDiscount, buyer);
+        await this.coupons.redeem(tx, cart.coupon_id, orderId, priced.couponDiscount, buyer);
       }
 
       const order: OrderRef = {
@@ -456,54 +457,5 @@ export class CheckoutService {
       [id, name || 'Guest customer', number || null, address || null],
     );
     return id;
-  }
-
-  /**
-   * `promotions.services.redeem`: count the use under the coupon's row lock,
-   * re-checking both limits -- validation ran before this lock existed, so
-   * two checkouts can both have passed it (business-rules section 3.3).
-   */
-  private async redeem(
-    tx: Queryable,
-    couponId: string,
-    orderId: string,
-    discount: Dec,
-    customerId: string,
-  ): Promise<void> {
-    const coupon = await tx.one<{
-      id: string;
-      usage_limit: number | null;
-      used_count: number;
-      usage_limit_per_customer: number | null;
-    }>(
-      `SELECT id, usage_limit, used_count, usage_limit_per_customer FROM promotions_coupon WHERE id = $1::uuid FOR UPDATE`,
-      [couponId],
-    );
-    if (!coupon) return;
-    if (isExhausted(coupon as never))
-      throw new CouponInvalid('This coupon has reached its usage limit.');
-    if (coupon.usage_limit_per_customer && customerId) {
-      const used = await tx.one<{ count: string }>(
-        `SELECT count(*) AS count FROM promotions_couponredemption
-          WHERE coupon_id = $1::uuid AND customer_id = $2::uuid AND released_at IS NULL AND NOT (order_id = $3::uuid)`,
-        [couponId, customerId, orderId],
-      );
-      if (Number(used?.count ?? 0) >= coupon.usage_limit_per_customer) {
-        throw new CouponInvalid('You have already used this coupon.');
-      }
-    }
-    const created = await tx.query(
-      `INSERT INTO promotions_couponredemption
-         (id, created_at, updated_at, coupon_id, order_id, customer_id, discount_amount, released_at)
-       VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4::uuid, $5, NULL)
-       ON CONFLICT (coupon_id, order_id) DO NOTHING RETURNING id`,
-      [randomUUID(), couponId, orderId, customerId, money(quantize(discount))],
-    );
-    if (created.length) {
-      await tx.query(
-        `UPDATE promotions_coupon SET updated_at = clock_timestamp(), used_count = $2 WHERE id = $1::uuid`,
-        [couponId, coupon.used_count + 1],
-      );
-    }
   }
 }

@@ -76,22 +76,31 @@ async function main(): Promise<void> {
       `SELECT id, password, email FROM accounts_user ORDER BY email LIMIT 1`,
     )
   ).rows[0];
+  const cashier = (
+    await db.query<{ id: string; password: string; email: string }>(
+      `SELECT id, password, email FROM accounts_user WHERE email = 'cashier@rangon.test'`,
+    )
+  ).rows[0];
   await db.end();
-  if (!user) throw new Error('No user to authenticate as.');
+  if (!user || !cashier) throw new Error('No user to authenticate as.');
 
   const now = Math.floor(Date.now() / 1000);
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const head = encode({ alg: 'HS256', typ: 'JWT' });
-  const body = encode({
-    token_type: 'access',
-    exp: now + 600,
-    iat: now,
-    jti: randomUUID().replaceAll('-', ''),
-    user_id: user.id,
-    hash_password: createHash('md5').update(user.password).digest('hex').toUpperCase(),
-  });
   const key = process.env.DJANGO_SECRET_KEY ?? '';
-  const token = `${head}.${body}.${createHmac('sha256', key).update(`${head}.${body}`).digest('base64url')}`;
+  const sign = (account: { id: string; password: string }) => {
+    const body = encode({
+      token_type: 'access',
+      exp: now + 600,
+      iat: now,
+      jti: randomUUID().replaceAll('-', ''),
+      user_id: account.id,
+      hash_password: createHash('md5').update(account.password).digest('hex').toUpperCase(),
+    });
+    return `${head}.${body}.${createHmac('sha256', key).update(`${head}.${body}`).digest('base64url')}`;
+  };
+  const token = sign(user);
+  const cashierToken = sign(cashier);
 
   const scenarios = [
     // anon 60/min; a spoofed X-Forwarded-For must not buy a fresh bucket.
@@ -157,12 +166,43 @@ async function main(): Promise<void> {
       headers: { 'x-cart-token': 'parity-cart-empty' },
       body: {},
     },
+    // The register: the `pos` scope allows 1200/min, but the `user` rate of
+    // 600/min counts the same requests and refuses first (D143).
+    {
+      name: 'the register, 602 scans by a cashier',
+      count: 602,
+      path: '/api/v1/pos/lookup/?code=NOPE',
+      cashier: true,
+    },
+    // Permissions are checked before throttles: a role that may not use the
+    // register is refused every time and never throttled.
+    {
+      name: 'the register, 602 scans by a role without it',
+      count: 602,
+      path: '/api/v1/pos/lookup/?code=NOPE',
+      auth: true,
+    },
+    // A manager's override sits behind the sign-in rate, counted per cashier:
+    // ten guesses at a manager's password a minute, not six hundred.
+    {
+      name: 'manager override, 12 wrong passwords',
+      count: 12,
+      path: '/api/v1/pos/elevate/',
+      cashier: true,
+      body: {
+        email: 'manager@rangon.test',
+        password: 'not-the-password',
+        permission: 'sales.discount_override',
+        discount_percent: '30',
+      },
+    },
   ] as {
     name: string;
     count: number;
     path: string | string[];
     spoof?: boolean;
     auth?: boolean;
+    cashier?: boolean;
     headers?: Record<string, string>;
     body?: unknown;
   }[];
@@ -178,6 +218,7 @@ async function main(): Promise<void> {
         const headers: Record<string, string> = { ...scenario.headers };
         if (scenario.spoof) headers['x-forwarded-for'] = `198.51.100.${i % 250}`;
         if (scenario.auth) headers.authorization = `Bearer ${token}`;
+        if (scenario.cashier) headers.authorization = `Bearer ${cashierToken}`;
         const path = Array.isArray(scenario.path)
           ? (scenario.path[i % scenario.path.length] as string)
           : scenario.path;

@@ -185,6 +185,7 @@ export const accountsOrganization = pgTable("accounts_organization", {
 	taxMode: varchar("tax_mode", { length: 16 }).notNull(),
 	taxSettledAt: timestamp("tax_settled_at", { withTimezone: true, mode: 'string' }),
 	taxSettledById: uuid("tax_settled_by_id"),
+	counterSellsReserved: boolean("counter_sells_reserved").notNull(),
 }, (table) => [
 	index("accounts_organization_created_at_a5d48e24").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
 	index("accounts_organization_slug_d6ef85ac_like").using("btree", table.slug.asc().nullsLast().op("varchar_pattern_ops")),
@@ -1749,6 +1750,25 @@ export const inventoryInventorytransaction = pgTable("inventory_inventorytransac
 	index("inventory_inventorytransaction_reference_type_11ee4d47_like").using("btree", table.referenceType.asc().nullsLast().op("varchar_pattern_ops")),
 	index("inventory_inventorytransaction_variant_id_53152681").using("btree", table.variantId.asc().nullsLast().op("uuid_ops")),
 	unique("inventory_inventorytransaction_idempotency_key_key").on(table.idempotencyKey),
+]);
+
+export const inventoryLabelprint = pgTable("inventory_labelprint", {
+	id: uuid().primaryKey().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+	printed: boolean().notNull(),
+	quantity: integer().notNull(),
+	onHand: integer("on_hand").notNull(),
+	branchId: uuid("branch_id").notNull(),
+	createdById: uuid("created_by_id"),
+	variantId: uuid("variant_id").notNull(),
+}, (table) => [
+	index("inventory_l_branch__94782b_idx").using("btree", table.branchId.asc().nullsLast().op("timestamptz_ops"), table.variantId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsFirst().op("uuid_ops")),
+	index("inventory_labelprint_branch_id_7e81f233").using("btree", table.branchId.asc().nullsLast().op("uuid_ops")),
+	index("inventory_labelprint_created_at_654d2910").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
+	index("inventory_labelprint_created_by_id_2042d881").using("btree", table.createdById.asc().nullsLast().op("uuid_ops")),
+	index("inventory_labelprint_variant_id_26ddeede").using("btree", table.variantId.asc().nullsLast().op("uuid_ops")),
+	check("inventory_labelprint_quantity_check", sql`quantity >= 0`),
 ]);
 
 export const notificationsNotification = pgTable("notifications_notification", {

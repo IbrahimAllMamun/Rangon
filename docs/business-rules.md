@@ -282,6 +282,34 @@ stock even if it was raised as `RESTOCK`.
 - Restocking fee: none.
   *`DECISION REQUIRED` — assumed 0%.*
 
+### 2.5 What the code does where no rule was written
+
+Found while porting returns to the NestJS API (2026-10-06). The port copies each; the defect
+numbers are in [roadmap.md](roadmap.md).
+
+- **A return for less, or more, than the goods were worth.** Completing a return takes any amount
+  from 0.01 up to what is left to refund on the whole order: a one-tee return worth 886.93 can be
+  completed for the order's full 5,770.00, or for 0.01. An order whose every line is back becomes
+  `REFUNDED` whatever was paid back, while its `payment_status` says `PARTIALLY_REFUNDED`.
+  *`DECISION REQUIRED` -- cap a return's refund at what its own lines came to, and decide what an
+  order is called when its goods are back and only part of the money is. Until decided, any amount
+  up to the order's is taken, and the order is `REFUNDED`.*
+- **Whose return it is.** A return is opened -- and at the counter refunded, from the order's own
+  branch's till -- by anyone who may refund, on any order whose id they have, whatever branch it
+  was sold at; they cannot then read the return back (D156).
+  *`DECISION REQUIRED` -- may a branch take back another branch's sale? Shops often do. If so the
+  refund should leave the till of the branch handing the money over, and the return should be
+  visible there. Until decided, it is allowed and the money leaves the selling branch's till.*
+- **A return before the goods have left.** An online order that is `PACKED` can be returned: the
+  goods go back on the shelf and the order can still be shipped (D164). Not a decision: §1.3 has the
+  goods leave the shelf at `PACKED` and nothing brings them back but a return of goods that left.
+
+Three things here break rules already written. §2.2 has an override of the window "recorded in the
+audit log", and it is not (D165). §2.4's "the method is stated at the refund, and the account
+follows it" does not hold at the counter, where a method the ledger does not know is accepted and
+moves no account (D158). And §2.2's window can be restarted: rejecting a return stamps the order
+delivered at that moment (D163).
+
 ---
 
 ## 3. Pricing, discounts, tax
@@ -748,6 +776,50 @@ verification call may capture a payment.
 - Returns are idempotent on `(order, stage)`.
 
 ---
+
+### 5.6 At the counter: what the code does where no rule was written
+
+Found while porting the counter sale to the NestJS API (2026-10-06). The port copies each; the
+defect numbers are in [roadmap.md](roadmap.md).
+
+- **A SKU that is not for sale.** The counter scans, prices and sells an archived SKU, and an
+  active SKU of a draft or unpublished product, with no warning (D146).
+  *`DECISION REQUIRED` -- may old stock of an archived SKU be cleared at the till? Until decided,
+  it may: the sale goes through.*
+- **Paying more than the total.** A counter sale refuses a payment that falls short and records
+  one that overshoots as it is: `paid_total` above `grand_total`, the account credited with the
+  whole amount, no change recorded unless the payment was cash with a `tendered_amount` (D151).
+  *`DECISION REQUIRED` -- refuse an overpayment, or record the excess as change. Until decided, it
+  is recorded as paid.*
+- **Another branch's receipt.** A sale is read, and its receipt reprinted, by anyone who may view
+  sales and has its id, whatever branch it was rung up at (D152).
+  *`DECISION REQUIRED` -- should a cashier be able to reprint another branch's receipt? Until
+  decided, they can.*
+
+One thing here is not a decision but a defect, and breaks §1.4: a counter sale with **one SKU on
+two lines** is checked line by line against the same shelf figure and can take it below zero
+(D149).
+
+### 5.7 In the back office: where the code and these rules part
+
+Found while porting the staff order screens to the NestJS API (2026-10-06). The port copies each;
+the defect numbers are in [roadmap.md](roadmap.md).
+
+- **§5.2 is not enforced on the status route.** Changing an order's status to `CANCELLED` asks
+  only for `orders.update_status`, and refunds nothing: an inventory manager, who may not cancel,
+  cancels; a paid order is left cancelled and paid (D166). Not a decision -- the rule is written
+  -- but the fix is a choice: refuse `CANCELLED` there, or send it through the cancel service
+  behind `sales.cancel`.
+- **§5.5 is not honoured when a payment is recorded.** The route takes no `Idempotency-Key`, so
+  the same request twice is the money twice, and nothing stops a payment past what the order
+  owes, or on an order that is cancelled or refunded (D167).
+  *`DECISION REQUIRED` -- should a payment past what is outstanding be refused, or kept as credit
+  owed to the customer? Until decided, it is recorded as paid.*
+- **The return statuses can be set by hand.** `RETURN_REQUESTED`, `RETURNED` and `REFUNDED` are
+  edges of §5.1 that the status route follows like any other: a delivered order can be walked to
+  `REFUNDED` with no return raised and no money paid back.
+  *`DECISION REQUIRED` -- should those three statuses be reachable only through a return (§2.1)?
+  Until decided, staff with `orders.update_status` can set them.*
 
 ## 6. Customers
 

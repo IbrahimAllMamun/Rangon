@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -128,6 +128,36 @@ across both APIs where both serve the path:
 | A carousel item removed while a remove waits on it (each API in turn) | 404 and no audit row -- deterministic; with the port's `FOR UPDATE` removed it never waits, audits and answers 204 |
 | A carousel move, and a header item's move, while their run is reordered (each API in turn) | each renumbers the order it read before the wait (D132, copied); with the port's `FOR UPDATE` removed neither waits |
 | A footer column added while a fourth is being added (each API in turn) | it goes in: five columns (D136, copied); no lock is involved |
+| Two resumes of one held sale that both read it before either deletes it, one per API | both are handed the cart (D142, copied); no lock is involved -- the harness holds the row until both requests are queued behind it |
+| A held sale resumed by someone else while an edit of it waits on its row (each API in turn) | the edit's `UPDATE` finds no row and the hold is inserted again, as `save()` does it (D142, copied) |
+| 8 counter sales at once for the last 5 of a SKU, across both APIs | 5 sell, 3 are refused, the shelf at 0 and its ledger agreeing. Every counter sale takes the `order:POS` number sequence's lock first, so this passes with the stock lock removed |
+| A sale committed while a counter sale of the whole shelf waits on the inventory row (each API in turn) | the waiting sale is refused -- deterministic; with the port's `FOR UPDATE` removed it sells units the shelf no longer has (0 on the shelf, the ledger at -1) |
+| An online reservation committed while a counter sale of the whole shelf waits on the row (each API in turn) | the sale is refused: the unit is held for an online order (D115's rule, under the lock); with the lock removed it sells the reserved unit |
+| 6 clicks with one `Idempotency-Key` on a counter sale, across both APIs | six 201s, one order, one unit sold |
+| A coupon's last use taken while a counter sale waits on the coupon's row (each API in turn) | the sale is refused and nothing is written; with the port's `FOR UPDATE` removed it redeems the coupon a second time |
+| 6 anonymous counter sales at once at a branch with no walk-in record, across both APIs | one walk-in record, all six sales on it: the unique index decides, and the loser reads the winner's row |
+| A deposit committed while a counter sale's cash payment waits on the drawer's row (each API in turn) | the payment lands on the committed balance; with the port's `FOR UPDATE` removed the deposit is lost |
+| A customer's totals changed while a sale to them waits on the customer's row (each API in turn) | the sale writes its own stale figures over them: the orders committed meanwhile are lost (D150, copied); no lock is involved |
+| Two voids of one sale that both read it before either locks it, one per API | both go through: the unit goes back on the shelf twice, with one refund (D154, copied) |
+| A drawer emptied while a void's refund waits on the account's row (each API in turn) | the void is refused whole -- nothing restocked, the sale standing; with the port's `FOR UPDATE` removed it pays the refund and overwrites the withdrawal |
+| Two approvals of one return queued on its row (one per API, then both through each API) | one approves and the other is told it is approved already; with the port's `FOR UPDATE` removed both Nest approvals go through and the timeline says so twice |
+| Two receipts of one return queued on its row (one per API, then both through each API); six at once across both APIs | one receives -- the goods go back once, each line's returned count moves once -- and the rest are told the return is no longer approved; with the port's `FOR UPDATE` removed the second Nest receipt gets as far as the line's own check |
+| Two completions of one return queued on its row (one per API, then both through each API) | both answer 200 and the refund is paid once: one refund, one cash-book entry, one audit entry; with the port's `FOR UPDATE` removed the second Nest completion is a 409 |
+| An order set back to DELIVERED while a completion waits on the order's row (each API in turn) | the refund is paid and the order's status left alone; with the port's `FOR UPDATE` removed the Nest completion acts on the status it read and is refused by the status machine, paying nothing |
+| A sale cancelled while a return being opened on it waits on the order's row (each API in turn) | refused as a return on a cancelled order is; with the port's `FOR UPDATE` removed Nest gets as far as the status change before it is stopped |
+| Two returns for one unit (D157), neither restocking, received at once through one API, queued on the order line | one is received and the other is refused: the unit comes back once; with the port's `FOR UPDATE` removed both Nest receipts go through |
+| A drawer emptied while a completion's refund waits on the account's row (each API in turn) | the completion is refused whole: the return still RECEIVED, nothing refunded |
+| 6 returns opened at once on one sale, across both APIs | six 201s and six numbers in a row, none shared; with the port's order lock removed most of the six are 500s |
+| 6 counter returns of a sale's one unit at once, across both APIs | one 201: the unit and the money come back once, the sale REFUNDED |
+| Two requests to pack one order queued on its row (one per API, then both through each API) | both answer 200, the order is packed once and its stock deducted once; with the port's `FOR UPDATE` removed the two Nest requests deduct the stock twice |
+| Two requests to record one pending payment queued on its row (one per API, then both through each API) | both answer 201, the payment is captured once and the money entered once; with the port's `FOR UPDATE` removed the Nest pair capture it twice on the timeline -- and the webhook's own capture checks fail with them, the function being one |
+| An order packed while a cancel of it waits on the order's row (each API in turn) | the cancel is refused by the status machine, nothing released or refunded; with the port's `FOR UPDATE` removed Nest cancels and refunds an order whose goods have left the shelf |
+| An order refunded in full while a refund of it waits on the order's row (each API in turn) | refused, a 422; with the port's `FOR UPDATE` removed Nest pays it again |
+| A shelf emptied while an order being packed waits on the stock row (each API in turn) | packing is refused whole: the order stays PROCESSING, nothing deducted |
+| 6 refunds of an order's whole payment at once, across both APIs | one 201 and five 422s: refunded once; with the port's `FOR UPDATE` removed the order is refunded twice over |
+| 6 clicks of one refund with one `Idempotency-Key`, across both APIs | six 201s naming one refund |
+| An order packed through one API and cancelled through the other at once | one wins and the other is a 409; the stock and the money agree with whichever it was |
+| 6 marks of one variant's labels at once, across both APIs | six rows, none lost: `mark_labels` takes no lock and needs none, the newest row being the state |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -194,12 +224,11 @@ Then variants (part 3b):
 | `GET /api/v1/variants/lookup/?code=&branch=` | the barcode exactly, else the SKU in any case, with stock at the branch; not found is the view's own hand-written envelope, with no request id |
 | `POST /api/v1/variants/<id>/barcode/` | the variant's in-store barcode, assigned under its row lock when it has none, audited |
 
-**Added to Django after phase 4 closed, not ported yet:** `GET/POST /api/v1/products/<id>/labels/`
-(2026-10-03, the label sheet: every variant with its stock and its newest `inventory_labelprint`
-mark; [business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)).
-Django serves it. What the port already does is treat a variant or product with a mark as history
-when deleting it, as Django now does, so the two still agree on `DELETE`. `src/database/schema.ts`
-has not been re-introspected for the new table; nothing in the port reads it through Drizzle.
+**Added to Django after phase 4 closed:** `GET/POST /api/v1/products/<id>/labels/` (2026-10-03,
+the label sheet; [business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)).
+Ported as part 7 of phase 5, below; `src/database/schema.ts` was re-introspected for
+`inventory_labelprint` then. A variant or product with a mark is history when it is deleted, in
+the port as in Django, so the two agree on `DELETE`.
 
 Then product images (part 3c), the first endpoint that takes a form:
 
@@ -335,6 +364,120 @@ validated it, and one read back as the database holds it.
 | `POST /api/v1/navigation-items/<id>/move/` | among its siblings (placement and parent), the run locked and renumbered 0..n, then `navigation` and `site` revalidated. D132, copied |
 | `GET/POST /api/v1/storefront-banners/`, `GET/PUT/PATCH/DELETE /api/v1/storefront-banners/<id>/` | the same permissions; highest priority first, then newest; django-filter on placement and `is_active`, `ordering` on priority and `created_at`. `StorefrontBanner.clean()`: an announcement needs its message, a hero its title; the URL is not checked. Forms and multipart, the image under `banners/`; `Location` is the answer's `url`. Each save and delete queues `navigation` and `home` at once |
 | `GET/POST /api/v1/home-carousel/`, `DELETE /api/v1/home-carousel/<id>/`, `POST /api/v1/home-carousel/<id>/move/` | `settings.view` to read, `content.navigation_manage` to write; no detail read (405, or 403 for all but an owner or superuser). The list never filters, so `ordering` is ignored. Each row carries its product's primary image (the flagged one, else the first) and the range of its sellable variants' prices, and why it is hidden from the homepage. An add locks the run, refuses a missing or archived product, one already there (409, or the unique index's 409 under a race) and a 25th -- counted from the run as read before any wait (D135, copied). A remove locks the item and its product (`select_for_update` over a join). Adds and removes queue `home` after the commit; a move queues it at once, D132 copied |
+
+## Phase 5: the counter
+
+Phase 5 ports `orders/api/pos_views.py` and, with it, what a counter sale leans on: returns and
+refunds (`ReturnRequestViewSet`, `OrderViewSet`'s payments and refunds). Its parts, in order:
+
+1. the register's reads and held sales (below);
+2. the quote and the manager's approval (`pos/quote/`, `pos/elevate/`: `price_sale`, the discount
+   threshold, coupons at the counter, Django's signed approval token);
+3. the sale (`pos/sales/`: `sell` under the stock lock with D115's rule and the short-order flags,
+   payments into their accounts, the receipt);
+4. voiding a sale, and refunds;
+5. returns, at the counter and in the back office;
+6. the staff order screens `OrderViewSet` serves, which no phase had named;
+7. the label sheet added to Django after phase 4 closed (`products/<id>/labels/`).
+
+Every POS view asks for `sales.create` as a flat list, so a method the view does not serve is a
+403 for a role without it and a 405 for one with it. All of them name the `pos` throttle scope.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/pos/session/` | what the register needs to open, in one answer: the branch `resolve_branch` allows (`?branch=`), the cashier with every permission code in code-point order (`*` alone for an owner or superuser), the shop's name, currency, receipt footer and VAT number, the branch's newest twenty held sales, and its active accounts by kind and name |
+| `GET /api/v1/pos/lookup/?code=` | a scan: the catalogue's own exact lookup (barcode, else SKU in any case, the code stripped), with stock at the branch. Not found is the view's hand-written 404, which quotes the code as sent and is answered before the branch is looked at |
+| `GET /api/v1/pos/products/?q=&category=` | the grid: sixty active SKUs of active products, by product name and position (Django's statement, so ties come back alike); `q` in the SKU or product name, or equal to the barcode; `category` an exact slug. Each with its label, price, what the branch can sell (`available`, which can be negative) and the product's primary image |
+| `GET/POST /api/v1/pos/holds/`, `GET/PUT/PATCH/DELETE /api/v1/pos/holds/<id>/` | parked carts, unpaginated, newest first, of the branch the request acts on -- a hold at another branch is a 404, and an owner reads one with `?branch=`. `ordering` takes what `OrderingFilter` offers by default: every serializer field by its source (`customer__name`, `created_by__email`; `branch` and `customer` order by the related model's own ordering). A create reads `branch` from the body, though the serializer has it read only, after the serializer has passed; the hold's label is whatever was sent, blank included. `payload` is DRF's `JSONField`: any JSON but `null`, floats and long integers stored as Python writes them, a float past a double refused. An edit finds the hold before it reads the body, and writes every column back. On a PATCH the answer leaves out `customer_name` for a hold with no customer and `created_by_email` for one whose cashier is gone: DRF skips a read-only field with a default on a partial update when its source is missing. No lock anywhere (D142, copied) |
+| `POST /api/v1/pos/holds/<id>/resume/` | the payload as stored, and the hold deleted. The body is never read |
+
+Then the two questions a register asks before a sale (part 2). Both are answered by
+`price_sale` (`pos/sale-pricing.service.ts`), which the sale itself will use: the lines priced from
+the database at the branch's average cost (`checkout/pricing.ts`, shared with checkout), a coupon
+checked as checkout checks it and then by the counter's own three rules, the cashier's discount
+turned into money, and the discount threshold. A manager's approval travels as Django's
+`signing.dumps` token (`common/signing.ts`: `TimestampSigner`'s format and key derivation), so
+either API honours what the other approved -- two cases ask one API to approve and the other to
+price.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/pos/quote/` | the basket priced exactly as the sale would record it; writes nothing. `PosBasketSerializer`: lines of a variant, a quantity of at least 1 (any size: a Python int) and a line discount; a customer; the sale's discount as an amount or a percentage, never both; a coupon code; an approval token; a branch. An unknown variant, a line discount past its line and a discount past the sale are 400s. A coupon or a discount that cannot go through is not: it comes back in `issues` (`coupon` or `discount`, with the refusal's code, message and details) beside figures priced without the coupon and with the discount. A coupon for free delivery, one not sold in store and one limited per customer on a sale with no customer are the counter's own refusals; the walk-in record is no customer. The cashier's discount -- lines plus the sale's -- is measured against the goods before any discount: none at all without `sales.discount`, and above `RANGON_DISCOUNT_APPROVAL_PERCENT` (20) only for a holder of `sales.discount_override` or with an approval: for this cashier and this permission, at most five minutes old, by a manager still active, still holding the permission and not bound to another branch, and for no more than the percentage approved. Nothing checks that a SKU is active, or in stock (D146, copied) |
+| `POST /api/v1/pos/elevate/` | a manager's own email and password, checked as `authenticate()` checks them (an old hash is upgraded, whoever it belongs to), behind the `auth` throttle scope: ten a minute per cashier. The approver must hold the permission asked for -- any string; an owner or superuser holds them all. A discount must name its percentage. Audited as `PERMISSION_ELEVATION` at the cashier's branch; the answer carries the signed approval and its 300 seconds |
+
+Then the sale itself (part 3). `create_pos_sale` is one transaction (`pos/pos-sales.service.ts`),
+in Django's order: the key looked up; the basket priced strictly, so the first refusal is the
+answer; the total compared with the one the register showed; the customer, or the branch's
+walk-in record, made on first use under its unique index; the order numbered `RGN-POS-` and
+inserted in a savepoint, so a retry that loses the race for its key answers with the winner's
+sale; the lines; stock out through `StockService.sell`, under the row lock; the online orders
+left short, where the owner lets the counter into reserved stock; the coupon redeemed under its
+row lock (`CouponsService.redeem`, moved out of checkout and shared with it); each payment
+captured and posted to the account it lands in (`orders/order-payments.service.ts`); the
+customer's totals; a call-back lead closed; the timeline and the audit log. Low-stock jobs are
+queued after the commit. The answer is the staff's `OrderDetailSerializer`
+(`orders/staff-order.service.ts`), which the back office's order screens will share.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/v1/pos/sales/` | `sales.create`; 201 with the order. `PosSaleSerializer`: the quote's basket, with payments (a method, an amount of zero or more, a tendered amount, a reference, an active account), a register, a note and the total expected. A payment of nothing is skipped; cash tendered short is refused, and tendered over is change; an account the cashier names must be this branch's, open and of the kind the method's money moves through, else the branch's default for that kind, else none at all -- the sale stands and the payment names no account. Too little paid is a 400 after everything else was done, which the transaction undoes; too much is recorded as paid (D151, copied). Stock: `_check_can_reduce` and then the counter's own rule (business rule 1.4, D115) -- units reserved for online orders are refused, with how many are held, unless the organisation's `counter_sells_reserved` is on; then they are sold, and each online order left short, newest first, gets a `STOCK_SHORT` entry the customer does not see and an `ORDER_STOCK_SHORT` warning to everyone at the branch who may view orders. Each line is checked against the shelf as locked, so one SKU on two lines can oversell (D149, copied). An `Idempotency-Key` already used answers 201 with the order that holds it, whoever made it and whatever the basket -- after the body has been validated and the branch resolved; an empty one is stored and then answers every later sale (D147, copied) |
+| `GET /api/v1/pos/sales/<id>/` | `sales.view`; any order by id, whatever its branch or channel (D152, copied). `?ordering=` takes the sale serializer's field names: one that is not a field of an order is a 500 (D148, copied), and any other changes nothing |
+| `GET /api/v1/pos/sales/<id>/receipt/` | the same lookup; the order, `document_type: RECEIPT`, the organisation's name, address, phone, email, VAT number and receipt footer, the order's branch, and the cashier's name |
+| `POST /api/v1/pos/sales/<id>/void/` | `sales.cancel`; the same lookup, so any branch's sale (D152). `void_sale`: an online order is a 409, a sale already cancelled answers as it is, and a reason is required -- read with `request.data.get` and `.strip()`, so a body that is not an object, or a reason that is not a string, is a 500. Then one transaction: the order locked; every line back on the shelf at the row's average cost (`RETURN`, reference `order_void`); what was paid and not yet refunded sent back through `refund_order` -- one refund against the largest captured payment, in its method and out of its account, or the branch's own for the method, refused when a drawer does not hold that much (`INSUFFICIENT_FUNDS`, with the balance as `format_money` prints it) or is closed; the coupon's use released under its lock; the order `CANCELLED`, with the reason, on the timeline and in the audit log. The status is not read again under the lock (D154), a line is restocked whether or not it was returned (D155), and a sale paid two ways is refunded one way (D153); all copied |
+
+Then returns (part 5), in the back office step by step and at the counter in one
+(`orders/returns.service.ts`). A return is its own record -- the order and its payments are never
+edited -- and moves REQUESTED, APPROVED, RECEIVED, COMPLETED, or to REJECTED before the goods are
+back. Every step takes the return's row first; opening one and paying its refund take the order's
+row, and receiving takes each order line's. What comes back is worked out once, when the return is
+opened (`returnShares`): the line's total less its share of any whole-order discount, plus its VAT
+where VAT sat on top, for the units returned -- rounded once for the request, the last line
+carrying the odd paisa -- with shipping added when the shop was at fault, and never more than is
+left to refund on the order. Goods go back on the shelf at RECEIVED, only for lines to RESTOCK,
+through `StockService.restockReturn`; money goes back at COMPLETED through `refundOrder`, the same
+one a void uses.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/returns/` | `orders.view`; paginated, newest first, the returns of orders at the user's branch (every branch for an owner, an administrator or staff with no branch). Filters `status`, `reason`, `order`; `ordering` takes every serializer field by its source (`order__number`, `order__customer__name`; `order` orders by the order's own default, newest placed first) -- and `items`, which lists a return once per line (D159, copied). Each return with its lines, read in no stated order (D161, copied) |
+| `GET /api/v1/returns/<id>/` | the same scope and filters: another branch's return, or one the filters exclude, is a 404; a filter value that is not a choice is a 400 |
+| `POST /api/v1/returns/` | `sales.refund`; 201. `CreateReturnSerializer`: an order, a reason, lines of an order line, a quantity of at least 1 and a restock decision (RESTOCK unless said), a comment. The order is any order by id, whatever its branch (D156, copied); one not there is a 404. `request_return`: the order locked; a cancelled or refunded order, and an online order whose goods have not left, are 409s; no lines is a 400; past the return window (`RANGON_RETURN_WINDOW_DAYS`, 14, from delivery or else from placing) it takes `sales.refund_override` or is a 403; the order's lines locked; a line not on the order, more units than are still returnable, and a final-sale product are 400s. A line's returnable count moves only when goods are received, so a second return for the same unit is opened too (D157, copied); one line asked for twice is the unique index's 409. A DELIVERED or SHIPPED order goes to RETURN_REQUESTED. The staff who refund at the order's branch are notified after the commit |
+| `POST /api/v1/returns/<id>/approve/` | `sales.refund`; REQUESTED to APPROVED, anything else a 409. The comment is `request.data.get("comment")`, unvalidated: a number or a list is stored as Python prints it, `null` is the column's 409, a body that is not an object is a 500 (D162, copied) |
+| `POST /api/v1/returns/<id>/reject/` | `sales.refund`; a REQUESTED or APPROVED return to REJECTED, anything else a 409. An order waiting on a return goes back to DELIVERED, whatever other returns it has and whatever it was before (D163, copied) |
+| `POST /api/v1/returns/<id>/receive/` | `sales.refund`; the body is validated before the return is looked for. `ReceiveReturnSerializer`: optionally one decision per line -- a restock decision, a condition note of up to 255 characters -- a line named twice a 400. Only an APPROVED return, else a 409. The decisions are written in one statement that leaves each line's `updated_at` as it was, as `bulk_update` does; a line not on the return is a 400. RESTOCK lines go back on the shelf under a `RETURN` referring to the return; every line's returned count moves under the line's row lock, and the table's own check refuses a unit coming back twice (a 409). The timeline entry records how many lines were restocked and the decision for each SKU |
+| `POST /api/v1/returns/<id>/complete/` | `sales.refund`; the body is validated before the return is looked for. `CompleteReturnSerializer`: an amount of at least 0.01 (the return's own unless given, and any amount up to what is left to refund on the order), a method the ledger knows or blank, any account. A COMPLETED return answers as it is; only a RECEIVED one is completed, else a 409. The order locked, then `refund_order` keyed by the `Idempotency-Key` header, or by the return when there is none: a retry pays once, and a key another refund holds completes the return with nothing paid (D160, copied). An order waiting on the return, with every line back, goes RETURNED and then REFUNDED, whatever was refunded. Audited as `REFUND_ISSUED` on the return |
+| `POST /api/v1/pos/returns/` | `sales.refund`, `pos` scope; 201. The same body as opening a return, its comment dropped: requested, approved, received and refunded in one transaction, by the same four steps. The refund's method is `request.data.get("refund_method", "CASH")`, unvalidated: a blank or `null` is the method of the largest payment, and one the ledger does not know -- `BITCOIN`, a number, a list -- is recorded against no account and moves no balance; past 20 characters it is a 500 (D158, copied) |
+
+Then the back office's orders (part 6): `OrderViewSet`, every channel's orders read and acted on.
+The reads are `orders/staff-order.service.ts`, whose `OrderDetailSerializer` the counter already
+answers with. The writes are `orders/staff-order-actions.service.ts`, over three shared pieces:
+`OrderLifecycle` (`lifecycle.transition` with the stock side of its two edges -- PACKED turns the
+order's reservation into a sale through `StockService.consumeReservation`, CANCELLED gives the
+reservation and the coupon's use back through `releaseReservation` and `CouponsService.release`),
+`OrderPayments.capture` (`capture_payment`, moved out of the webhook's service so that a gateway's
+event and a member of staff capture through one function and one lock) and `refundOrder`.
+
+Every route runs the viewset's queryset and filters, so an order at another branch, or one the
+query string excludes, is a 404 on a write as on a read.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/orders/` | `orders.view`; `OrderListSerializer`, paginated, newest placed first, the orders of the user's branch. `search` matches the number or the customer's name in any case, or the digits of a phone number once country and trunk prefixes are taken off (`880` alone matches nobody); `date_from` and `date_to` are days in Dhaka, read as Django's `DateField` reads one -- a value that is not a date is a 400 naming it. Filters `channel`, `status`, `payment_status`, `branch`, `customer`; `ordering` by `placed_at` or `grand_total`. A NUL in `search` is a 500 (D172, copied) |
+| `GET /api/v1/orders/<id>/`, `.../timeline/`, `.../invoice/`, `.../packing-slip/` | `orders.view`; the order with its lines, payments, refunds and events; its events alone; the order with `document_type: INVOICE` and the organisation; the same as `PACKING_SLIP` with no prices on the lines |
+| `POST /api/v1/orders/<id>/status/` | `orders.update_status`; the body is validated first (`to_status`, any string; a reason of up to 255 characters). `transition`: the order locked; an order already there answers as it is; an edge the status machine does not have is a 409 with both ends. PACKED locks the stock rows, releases what the order holds and deducts each line at the row's average cost -- a line already sold for this order is skipped -- and a shelf that cannot cover it is a 409 that leaves the order where it was. CANCELLED is refused once stock has left the shelf, releases the reservation and the coupon's use, and keeps the reason; it asks for no `sales.cancel` and refunds nothing (D166, copied). SHIPPED and DELIVERED tell the customer after the commit: an in-app notice, then the email and SMS jobs |
+| `POST /api/v1/orders/<id>/cancel/` | `sales.cancel`; `cancel_order`: only a PENDING, CONFIRMED or PROCESSING order, else a 409; cancelled through the status machine, then whatever was paid and not refunded goes back through `refund_order`, in one transaction. The reason is `request.data.get("reason")` as sent: Python slices it, so a string or a list passes and anything else is a 500 (D168, copied). An order paid and refunded in full cannot be cancelled: the refund of nothing is a 400 (D169, copied). The answer carries the payment status and totals from before the refund (D170, copied) |
+| `POST /api/v1/orders/<id>/payments/` | `sales.payment_record`; 201 with the order. `RecordPaymentSerializer`: a method, an amount of zero or more, a reference, an open account. A pending payment of the same method and amount is captured -- its account set first, in a statement of its own, when the body names one -- under the payment's row lock, into the account it lands in; anything else is recorded as a new captured payment. Nothing compares the amount with what the order owes, no order is refused, and the route takes no `Idempotency-Key`: the same request twice is the money twice (D167, copied) |
+| `POST /api/v1/orders/<id>/refunds/` | `sales.refund`; 201 with the refund. `RefundRequestSerializer`: an amount, a reason, a method the ledger knows, an open account. `refund_order` under the order's row lock, keyed by the `Idempotency-Key` header: never more than was paid and not yet refunded (a 422), through the largest captured payment (D153), out of the account the method's money moves through. A key another refund holds answers with that refund, whichever order it is on (D171, copied) |
+
+Last, the barcode label sheet (part 7), which Django gained after phase 4 closed
+(`catalog/admin/labels.service.ts`: `inventory.labels` and `ProductViewSet.labels`). Nothing in
+it moves stock and it takes no lock: a tick is a new `inventory_labelprint` row, and the newest
+row for a branch and a variant is the state.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/products/<id>/labels/?branch=` | `products.view`; the product through the viewset's declared filters only (the list's `search` and `never_ordered` do not apply here), at the branch `resolve_branch` allows. Every variant as `ProductVariantSerializer` writes it, with its stock at the branch, and two more fields: `label_status` -- null for a variant never marked, else whether its labels are printed, how many, the stock when it was marked, when (`isoformat()`, so `+00:00`) and by whom (the name, or the email of someone with none, or nothing when the account is gone), and the units purchased in since a printed mark -- and `suggested_labels`: one per unit on hand, or per unit delivered since a printed mark, never more than are on hand, never more than 500, and none for a shelf below zero |
+| `POST /api/v1/products/<id>/labels/` | `products.update`; 200 with the sheet as it then stands. `LabelMarksSerializer`: a branch (in the body; the query string's is not read), and 1 to 200 marks of a variant, `printed` and a count of 0 to 500. `mark_labels`: each variant once, every one the product's own, else a 400 naming the strays; all the marks written or none; `on_hand` read from the branch's stock row, never from the request; an un-mark records no count |
 
 ## Running it
 
@@ -473,6 +616,7 @@ the port):
 - An `Idempotency-Key` longer than the column's 80 characters is a 500 (D124).
 - A NUL in the inventory list's `search` or `category`, or in the ledger's `search`, is a 500:
   those views filter on the raw parameter, where `SearchFilter` would refuse it (D125).
+  The POS scan and grid do the same with `code` and `q` (D144).
 - A stock count may be edited onto any branch, whatever its status or the user's branch, and an
   edit writes every column back from the row as read (D126).
 - An owner or superuser may delete a stock count, an applied one too; the ledger's adjustments
@@ -499,6 +643,66 @@ the port):
   (D136).
 - A naive publish window in the first hours of 1 January of the year 1 is a 500: DRF's
   `valid_datetime` converts it to UTC, which overflows, and nothing catches it (D137).
+- Held sales take no lock: two registers resuming one hold at once are both handed the cart, and
+  an edit that read a hold before a resume deleted it puts it back (D142).
+- The register's `pos` rate of 1200 a minute is never reached: the `user` rate of 600 counts the
+  same requests and refuses first (D143).
+- A held sale's payload with a `\u0000` or half a surrogate pair is a 500 from PostgreSQL, and so is
+  a NUL in the scan's `code` or the grid's `q` (D144).
+- A quote for a quantity so large that an amount passes 26 whole digits is a 500: `quantize`
+  raises `decimal.InvalidOperation`, which nothing catches (D145).
+- The counter scans, prices and sells a SKU that is archived or whose product is a draft, with no
+  word of it: `price_sale` never asks whether a variant is sellable (D146).
+- An empty `Idempotency-Key` on a counter sale is stored, and every later sale with an empty one
+  answers 201 with the first (D147).
+- `?ordering=lines` (or `note`, `coupon_code`, `approval_token`, `manual_discount_percent`,
+  `expected_total`) on a sale or its receipt is a 500 (D148).
+- One SKU on two lines of a counter sale is checked twice against the same shelf figure and
+  deducted twice: `on_hand` can go below zero, and reserved units can be sold without the owner's
+  switch (D149).
+- A customer's order count and spend are written from the figures read when the sale was priced,
+  over whatever was committed meanwhile (D150).
+- A counter sale records an overpayment as paid, and a sale discounted to nothing as `UNPAID`, or
+  `PARTIALLY_PAID` if anything was paid (D151).
+- A sale and its receipt are read, and a sale voided, by id whatever the branch (D152).
+- A void sends the whole refund back through the largest payment: a sale paid in cash and by card
+  is refunded in cash from the drawer, and the card payment stays captured (D153).
+- Two voids of one sale that both read it before either locks it both go through, and the goods
+  go back on the shelf twice (D154).
+- A void restocks every line at its sold quantity, units already returned included, and leaves the
+  customer's totals as they were; a reason that is not a string is a 500 (D155).
+- A return is opened, and at the counter refunded, on any order by id, whatever its branch
+  (D156).
+- A second return may be opened for a unit already on an open return; it can be approved and never
+  received. One line asked for twice in a request is the unique index's 409 (D157).
+- The counter's `refund_method` is taken as sent: one the ledger does not know is recorded against
+  no account and moves no balance (D158).
+- `?ordering=items` on the returns list shows a return once per line, inside a count of returns
+  (D159).
+- A return completed with an `Idempotency-Key` another refund holds is COMPLETED with nothing
+  paid (D160).
+- A return's lines are read in no stated order; the port sends the same statements, and the
+  harness compares a return's lines by the order line each is for, and the ledger entries of one
+  request by SKU (D161).
+- Approve and reject store whatever `comment` holds: Python's `str()` of a number or a list, a 409
+  for `null`, a 500 for a body that is not an object (D162).
+- Rejecting a return sends its order to DELIVERED and stamps `delivered_at` now, whatever other
+  returns the order has and whatever status it came from (D163).
+- A return is taken on a PACKED order: the goods go back on the shelf and the order can still be
+  shipped (D164).
+- A return past the window that the override lets through writes no audit entry of its own
+  (D165).
+- The status route cancels an order for anyone who may change a status, with no `sales.cancel`
+  and no refund: a paid order is left CANCELLED and PAID (D166).
+- Recording a payment takes no `Idempotency-Key`, compares nothing with what is owed and refuses
+  no order; an account the money cannot land in is refused after it has been saved on the pending
+  payment (D167).
+- A cancel's reason is taken as sent: anything but a string or a list is a 500 (D168).
+- An order paid and refunded in full cannot be cancelled (D169).
+- A cancel answers with the payment status and totals from before its own refund (D170).
+- A refund asked for with an `Idempotency-Key` another refund holds answers with that refund,
+  whichever order it belongs to (D171).
+- A NUL in the order list's `search` is a 500, on every route of the viewset (D172).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

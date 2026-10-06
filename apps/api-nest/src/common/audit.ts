@@ -15,7 +15,7 @@ import type { FastifyRequest } from 'fastify';
 import { clientIp } from '../auth/throttle';
 import type { Env } from '../config/env';
 import type { Queryable } from '../database/database.service';
-import { pySlice } from './python';
+import { PyFloat, pySlice } from './python';
 
 export interface AuditContext {
   ipAddress: string | null;
@@ -56,6 +56,8 @@ const SENSITIVE_KEYS = new Set([
 /** `_scrub`: secrets out, recursively. Values arrive already JSON-safe (strings for money and ids). */
 export function scrub(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(scrub);
+  // A float read from a JSON body is written back as the float it was.
+  if (value instanceof PyFloat) return value;
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, item]) => [

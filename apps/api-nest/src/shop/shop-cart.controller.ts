@@ -197,7 +197,7 @@ export class ShopCartController {
       name: text('name'),
       email: text('email'),
       cartTotal: money(priced.grandTotal),
-      itemCount: itemCount(priced),
+      itemCount: Number(itemCount(priced)),
     });
   }
 

@@ -170,16 +170,27 @@ apps/api-nest/
       rust-url.ts, bidi-class.ts  whether rust-url 2.5.8 parses a link, with idna 1.1's extra checks
       datetime-field.ts       DRF's DateTimeField: Django's parse_datetime, enforce_timezone in Asia/Dhaka
       html-entities.ts        CPython's HTML5 entity table, generated; html.unescape is in python.ts
+      signing.ts              django.core.signing: dumps and loads (TimestampSigner), for tokens both APIs read
       decimal.ts, datetime.ts, pagination.ts, query-dict.ts, phone.ts, uuid.ts ...
     <domain>/                 accounts, catalog, checkout, content, customers, engagement,
                               finance, inventory, jobs, orders, payments, shop (the controllers)
     inventory/stock.service.ts  inventory.services: the one place stock moves (checkout and admin)
     content/validators.ts     content.validators: links, social profiles and maps a merchandiser pastes
     content/rich-text.ts      content.rich_text: nh3.clean (ammonia's clean, html5ever's serializer)
+    pos/                      the counter: orders.api.pos_views (session, scan, grid, held sales ...)
+    orders/staff-order.service.ts, order-payments.service.ts
+                              the staff's OrderDetailSerializer; record_payment as staff take money
+    orders/returns.service.ts, returns.controller.ts
+                              orders.services.returns and its two views: back office and counter
+    orders/staff-order-actions.service.ts, orders.controller.ts, order-lifecycle.service.ts
+                              OrderViewSet's writes; lifecycle.transition with its stock edges
+    catalog/admin/labels.service.ts
+                              inventory.labels: the barcode label sheet and its ticks
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
-    concurrency.ts            the race checks; admin-, inventory- and content-concurrency.ts for staff writes
+    concurrency.ts            the race checks; admin-, inventory-, content-, merchandising- and
+                              pos-, returns- and staff-orders-concurrency.ts for staff writes
     restore.ts                snapshot-and-restore of whole tables for the admin write cases
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
@@ -319,7 +330,9 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D137**.
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D172**. Read the
+  latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
+  numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
 - **A security hole:** fixed in Django first, on `fix/<slug>`, with tests, ahead of the port.
 - **A rule the code breaks, or never had:** mark it `DECISION REQUIRED` in `business-rules.md`,
@@ -366,6 +379,16 @@ apps/api-nest/
 | Creates differed only in `Location` | DRF's `get_success_headers` puts the answer's `url` field in `Location`, whatever that field means -- a navigation item's link, a banner's | copy it wherever a serializer has a `url` |
 | A DRF `DateTimeField` port refused 2009's skipped hour, where DRF took it | DRF 3.15's `valid_datetime` never refuses: under PEP 495 such a time is never equal to itself in UTC, so its "exists" test short-circuits its "ambiguous" one | read DRF's code, not its message list; compare on a generated corpus |
 | A 40,000-deep page took 24 s, all of it in the event loop | html5ever walks the whole stack of open elements for every block tag; Django's thread just waits, Node's process does not | count open elements by name, so the walk ends at once when none matches |
+| A case named for a fixture row answered 404 on both APIs and "matched" | the case looked the row up by a label the fixture had overridden, so both APIs were asked for `/holds/undefined/` | read the `PARITY_VERBOSE=1` statuses of every new case before believing a green run |
+| A fixture's inactive manager approved a discount | `User.save()` sets `is_active` from `status`; `create_user(is_active=False)` is overwritten | set the status; and ask Django (a shell probe) what a new case answers before trusting two APIs that agree |
+| An effects query showed a seed order as "changed" by a sale | it selected rows by `updated_at >= $1`, and the seed dates some of today's rows later today; the two APIs' `$1` differ, so it would also have flaked | compare with the snapshot table (`to_jsonb(row) IS DISTINCT FROM` the snapshot's), never with the clock |
+| A port answered 500 for `?ordering=<a relation>` on a detail route, Django 200 | Django's `get()` drops the queryset's ordering; only a name `order_by` cannot resolve fails, and it fails when the filter runs | on a detail route, an ordering term either raises at once or does nothing |
+| Two race checks broke when a fixture gained sales | the new sales gave a customer totals and a branch its walk-in record, which the checks assumed were zero and absent | a check reads its baseline after the restore and asserts the change; a fixture row that must stay absent is said so beside the code that would make it |
+| Two requests for one return passed "one wins, one is refused" with the return's lock removed | a request that takes no `FOR UPDATE` still queues at its `UPDATE`; when it happened to be first in the queue the other re-read the row and refused itself | run the pair through each API on its own as well as one per API, and assert the refusal's own message |
+| A return's two lines came back in a different order on the second run, in Django alone | no `ORDER BY` anywhere: `ReturnItem` has no `Meta.ordering` (D161), and the restore between the two sides moves rows in the heap | send Django's statement as it is; compare what it leaves unordered by a stable key, and say so in the case file |
+| The port stored a comment the counter route should have dropped | `PosReturnView` validates `customer_comment` with the shared serializer and `pos_return` never passes it on | read what the service is called with, not only what the serializer accepts |
+| A fixture for one part broke another part's race check | it reserved a unit of the SKU the check sells the last of at the second branch | a fixture brings its own stock (`receive_stock`) rather than borrowing a SKU a check counts on; rerun every race check after adding one |
+| A cancel's answer differed only in its payment totals | Django serialises the object the status machine returned, not the row the refund then saved (D170) | compare the answer and the rows separately: each can be right while the other is stale |
 
 ## 9. Documentation, per part
 
@@ -408,13 +431,21 @@ Every part of a phase updates, in the same branch:
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | D115 is decided: port `sell`'s check of `available`, the owner's `counter_sells_reserved` and `orders.services.shortages` with the sale; POS sales, refunds and the cash drawer each need races |
+| 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Start phase 5 when the owner asks; D115's rule is part of it.
+1. Open phase 5's PR when the owner asks, and not before.
+2. The owner should see D166 first (the status route cancels without `sales.cancel` and without a
+   refund: a permission the API does not enforce, to be fixed in Django before the port's copy of
+   it is merged), then D149 (a counter oversell), D158 (a counter refund that moves no account),
+   D164 (a return on a packed order), D167 (a payment recorded twice), and the decisions in
+   business-rules §2.5, §5.6 and §5.7.
+3. Phase 6 starts with finance: the cash book's own routes (movements with idempotency keys,
+   D89 and D90's rules). `CashBookService` already posts sale payments and refunds; its
+   `InsufficientFunds`, named-account and default-account rules are ported and proven.
 
 ### Checklist for a part
 

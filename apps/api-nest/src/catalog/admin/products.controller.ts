@@ -9,6 +9,7 @@ import { Params, QueryDict } from '../../common/query-dict';
 import { ENV, Env } from '../../config/env';
 import { requestData } from '../../http/request-body';
 import { lookupParam, PRODUCT_PERMISSIONS } from './catalog-admin.controller';
+import { LabelsService } from './labels.service';
 import { ProductImportService } from './product-import.service';
 import { ProductsService } from './products.service';
 
@@ -25,13 +26,47 @@ function actor(request: FastifyRequest): AuditActor {
   unpublish: ['products.update'],
   // An import creates products and can receive stock, so it needs both.
   import_csv: ['products.create', 'inventory.adjust'],
+  // Ticking a variant off is a write, gated like assigning its barcode.
+  labels: { GET: ['products.view'], POST: ['products.update'] },
 })
 export class ProductsController {
   constructor(
     private readonly products: ProductsService,
     private readonly imports: ProductImportService,
+    private readonly labelSheets: LabelsService,
     @Inject(ENV) private readonly env: Env,
   ) {}
+
+  /** The barcode label sheet for a product at one branch: every variant, its stock, its tick. */
+  @Get('products/:pk/labels/')
+  @Action('labels')
+  async labels(
+    @Param('pk') pk: string,
+    @Params() query: QueryDict,
+    @Req() request: FastifyRequest,
+  ) {
+    const user = request.user as RequestUser;
+    const product = await this.products.findForLabels(lookupParam(pk), query);
+    const branch = await this.labelSheets.branch(user, query.get('branch') ?? null);
+    return this.labelSheets.sheet(product, branch);
+  }
+
+  /** Tick variants off, or back on; answers with the sheet as it now stands. */
+  @Post('products/:pk/labels/')
+  @Action('labels')
+  @HttpCode(200)
+  async markLabels(
+    @Param('pk') pk: string,
+    @Params() query: QueryDict,
+    @Req() request: FastifyRequest,
+  ) {
+    const user = request.user as RequestUser;
+    const product = await this.products.findForLabels(lookupParam(pk), query);
+    const data = await this.labelSheets.validate(requestData(request));
+    const branch = await this.labelSheets.branch(user, data.branch);
+    await this.labelSheets.mark(user, product, branch, data.marks);
+    return this.labelSheets.sheet(product, branch);
+  }
 
   /** A spreadsheet of products: a dry run unless `dry_run` is false. Multipart only. */
   @Post('products/import/')

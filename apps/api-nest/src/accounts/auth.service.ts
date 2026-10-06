@@ -78,7 +78,7 @@ export class AuthService {
    * checked -- and upgraded when the hash is out of date, whether or not the
    * account may sign in -- then `is_active`.
    */
-  private async authenticate(email: string, password: string): Promise<AccountRow | null> {
+  async authenticate(email: string, password: string): Promise<AccountRow | null> {
     const user = await this.db.one<AccountRow>(
       `SELECT ${ACCOUNT_COLUMNS} FROM accounts_user WHERE email = $1`,
       [email],
