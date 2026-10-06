@@ -42,6 +42,8 @@ import { shippingCases } from './shipping-cases.ts';
 import { shippingConcurrencyChecks } from './shipping-concurrency.ts';
 import { reviewsCases } from './reviews-cases.ts';
 import { reviewsConcurrencyChecks } from './reviews-concurrency.ts';
+import { teamCases } from './team-cases.ts';
+import { teamConcurrencyChecks } from './team-concurrency.ts';
 import { customersCases } from './customers-cases.ts';
 import { customersConcurrencyChecks } from './customers-concurrency.ts';
 import { merchandisingCases } from './merchandising-cases.ts';
@@ -611,6 +613,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await couponsCases()));
   cases.push(...(await shippingCases()));
   cases.push(...(await reviewsCases()));
+  cases.push(...(await teamCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -768,6 +771,7 @@ async function main(): Promise<void> {
       ['coupons', () => couponsConcurrencyChecks({ DJANGO, NEST })],
       ['shipping', () => shippingConcurrencyChecks({ DJANGO, NEST })],
       ['reviews', () => reviewsConcurrencyChecks({ DJANGO, NEST })],
+      ['team', () => teamConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {
