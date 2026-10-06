@@ -14,6 +14,7 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
+import { auditCases } from './audit-cases.ts';
 import { cartCases } from './cart-cases.ts';
 import { attributeCases } from './attribute-cases.ts';
 import { catalogAdminCases } from './catalog-admin-cases.ts';
@@ -723,6 +724,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await shippingCases()));
   cases.push(...(await reviewsCases()));
   cases.push(...(await teamCases()));
+  cases.push(...(await auditCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
