@@ -1,9 +1,28 @@
 import { Inject, Injectable } from '@nestjs/common';
 
+import type { RequestUser } from '../auth/authentication';
+import { branchCondition } from '../auth/permissions';
+import { likeContains } from '../catalog/discovery.service';
 import { primaryImageUrl } from '../catalog/primary-image';
 import { localIso } from '../common/datetime';
+import { gregorian } from '../common/drf';
+import { NotFound, ValidationError } from '../common/errors';
+import {
+  applyFilters,
+  choiceFilter,
+  type FilterField,
+  modelFilter,
+  orderingFrom,
+} from '../common/filtering';
+import { dateFromIsoformat } from '../common/isoformat';
+import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
+import { searchDigits } from '../common/phone';
+import { pyIntText } from '../common/python';
+import type { QueryDict } from '../common/query-dict';
+import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
+import { Params as SqlParams } from '../database/sql';
 import { parsePythonJson } from '../http/request-body';
 
 /** An order as staff read it: the row with what `OrderListSerializer` looks up beside it. */
@@ -54,6 +73,63 @@ const ORDER_COLUMNS = `o."id", o."number", o."channel", o."status", o."payment_s
   o."placed_at", o."created_at", o."confirmed_at", o."packed_at", o."shipped_at", o."delivered_at",
   o."cancelled_at", o."cancel_reason", o."stock_committed"`;
 
+const CHANNELS = ['POS', 'ONLINE', 'PHONE', 'SOCIAL', 'OTHER'] as const;
+const STATUSES = [
+  'PENDING',
+  'CONFIRMED',
+  'PROCESSING',
+  'PACKED',
+  'SHIPPED',
+  'DELIVERED',
+  'CANCELLED',
+  'RETURN_REQUESTED',
+  'RETURNED',
+  'REFUNDED',
+] as const;
+const PAYMENT_STATUSES = [
+  'UNPAID',
+  'PARTIALLY_PAID',
+  'PAID',
+  'PARTIALLY_REFUNDED',
+  'REFUNDED',
+] as const;
+
+/** `OrderViewSet.filterset_fields`. */
+const FILTERS: readonly FilterField[] = [
+  choiceFilter('channel', 'o."channel"', CHANNELS),
+  choiceFilter('status', 'o."status"', STATUSES),
+  choiceFilter('payment_status', 'o."payment_status"', PAYMENT_STATUSES),
+  modelFilter('branch', 'o."branch_id"', 'accounts_branch'),
+  modelFilter('customer', 'o."customer_id"', 'customers_customer'),
+];
+/** `OrderViewSet.ordering_fields`. */
+const ORDERING = { placed_at: 'o."placed_at"', grand_total: 'o."grand_total"' };
+
+const FROM = `FROM "orders_order" o
+  INNER JOIN "accounts_branch" ON (o."branch_id" = "accounts_branch"."id")
+  INNER JOIN "customers_customer" ON (o."customer_id" = "customers_customer"."id")
+  LEFT OUTER JOIN "accounts_user" ON (o."created_by_id" = "accounts_user"."id")`;
+
+/**
+ * A date as Django's `DateField.to_python` reads one for a `__date` lookup:
+ * `date.fromisoformat`, else `YYYY-M-D`. Anything else is Django's own
+ * `ValidationError`, which the API answers as a 400.
+ */
+export function lookupDate(value: string): string {
+  const refuse = (message: string) =>
+    new ValidationError('Invalid input.', { details: { non_field_errors: [message] } });
+  const iso = dateFromIsoformat(value);
+  if (iso) return gregorian(iso.year, iso.month, iso.day) as string;
+  const match = /^(\p{Nd}{4})-(\p{Nd}{1,2})-(\p{Nd}{1,2})\n?$/u.exec(value);
+  if (!match)
+    throw refuse(`“${value}” value has an invalid date format. It must be in YYYY-MM-DD format.`);
+  const [year, month, day] = match.slice(1).map((part) => Number(pyIntText(part as string)));
+  const date = gregorian(year as number, month as number, day as number);
+  if (!date)
+    throw refuse(`“${value}” value has the correct format (YYYY-MM-DD) but it is an invalid date.`);
+  return date;
+}
+
 /**
  * `OrderDetailSerializer`: an order with its lines, payments, refunds and
  * timeline, as the counter's receipt and the back office read it. Everything
@@ -76,6 +152,171 @@ export class StaffOrders {
 
   private iso(value: string | null): string | null {
     return localIso(value, this.env.DJANGO_TIME_ZONE);
+  }
+
+  /**
+   * `OrderViewSet.get_queryset` and its filters: the user's branch, then
+   * `search` (the number, the customer's name, the digits of a phone number),
+   * `date_from` and `date_to` on the day the order was placed in Dhaka, then
+   * the declared filters. Every route of the viewset runs through it, so a
+   * read by id that the filters exclude is a 404.
+   */
+  private async conditions(user: RequestUser, query: QueryDict, sql: SqlParams): Promise<string[]> {
+    const where: string[] = [];
+    const scope = branchCondition(user, ['o."branch_id"'], sql.values.length + 1);
+    if (scope) {
+      where.push(scope.sql);
+      for (const value of scope.values) sql.add(value, 'uuid');
+    }
+    const search = query.get('search');
+    if (search) {
+      const like = sql.add(likeContains(search));
+      const matches = [
+        `UPPER(o."number"::text) LIKE UPPER(${like})`,
+        `UPPER("customers_customer"."name"::text) LIKE UPPER(${like})`,
+      ];
+      // A query that is only a country code or a trunk `0` identifies nobody.
+      const digits = searchDigits(search);
+      if (digits)
+        matches.push(`"customers_customer"."phone"::text LIKE ${sql.add(likeContains(digits))}`);
+      where.push(`(${matches.join(' OR ')})`);
+    }
+    const day = `(o."placed_at" AT TIME ZONE '${this.env.DJANGO_TIME_ZONE}')::date`;
+    const from = query.get('date_from');
+    if (from) where.push(`${day} >= ${sql.add(lookupDate(from), 'date')}`);
+    const to = query.get('date_to');
+    if (to) where.push(`${day} <= ${sql.add(lookupDate(to), 'date')}`);
+    await applyFilters(this.db, query, FILTERS, sql, where);
+    return where;
+  }
+
+  /** `list`: `OrderListSerializer`, paginated, the newest placed first. */
+  async list(user: RequestUser, query: QueryDict, absoluteUrl: string) {
+    const sql = new SqlParams();
+    const where = await this.conditions(user, query, sql);
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const order = orderingFrom(query, ORDERING) ?? ['o."placed_at" DESC'];
+    const count = Number(
+      (
+        await this.db.one<{ count: string }>(
+          `SELECT COUNT(*) AS "count" ${FROM} ${whereSql}`,
+          sql.values,
+        )
+      )?.count ?? 0,
+    );
+    const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
+    const rows = await this.db.query<
+      StaffOrderRow & {
+        branch_code: string;
+        customer_name: string;
+        customer_phone: string | null;
+        created_by_email: string | null;
+      }
+    >(
+      `SELECT ${ORDER_COLUMNS}, "accounts_branch"."code" AS "branch_code",
+              "customers_customer"."name" AS "customer_name",
+              "customers_customer"."phone" AS "customer_phone",
+              "accounts_user"."email" AS "created_by_email"
+         ${FROM} ${whereSql} ORDER BY ${order.join(', ')}
+        LIMIT ${page.limit} OFFSET ${page.offset}`,
+      sql.values,
+    );
+    const counts = new Map(
+      (
+        await this.db.query<{ order_id: string; units: string }>(
+          `SELECT "order_id", SUM("quantity") AS "units" FROM "orders_orderitem"
+            WHERE "order_id" = ANY($1::uuid[]) GROUP BY "order_id"`,
+          [rows.map((row) => row.id)],
+        )
+      ).map((row) => [row.order_id, Number(row.units)]),
+    );
+    return paginated(
+      page,
+      rows.map((row) => ({
+        id: row.id,
+        number: row.number,
+        channel: row.channel,
+        status: row.status,
+        payment_status: row.payment_status,
+        branch: row.branch_id,
+        branch_code: row.branch_code,
+        customer: row.customer_id,
+        customer_name: row.customer_name,
+        customer_phone: row.customer_phone,
+        item_count: counts.get(row.id) ?? 0,
+        subtotal: row.subtotal,
+        discount_total: row.discount_total,
+        tax_total: row.tax_total,
+        shipping_total: row.shipping_total,
+        grand_total: row.grand_total,
+        paid_total: row.paid_total,
+        refunded_total: row.refunded_total,
+        currency: row.currency,
+        created_by_email: row.created_by_email ?? '',
+        placed_at: this.iso(row.placed_at),
+        created_at: this.iso(row.created_at),
+      })),
+      absoluteUrl,
+    );
+  }
+
+  /** `get_object()`: the filtered queryset, then the primary key -- a 404 either way. */
+  async find(user: RequestUser, pk: string, query: QueryDict): Promise<StaffOrderRow> {
+    const sql = new SqlParams();
+    const where = await this.conditions(user, query, sql);
+    const id = parseUuid(pk);
+    if (!id) throw new NotFound();
+    where.push(`o."id" = ${sql.add(id, 'uuid')}`);
+    const row = await this.db.one<StaffOrderRow>(
+      `SELECT ${ORDER_COLUMNS} ${FROM} WHERE ${where.join(' AND ')} LIMIT 21`,
+      sql.values,
+    );
+    if (!row) throw new NotFound();
+    return row;
+  }
+
+  /** `timeline`: `OrderEventSerializer` over the order's events, oldest first. */
+  async timeline(order: StaffOrderRow) {
+    return (await this.detail(order)).events;
+  }
+
+  /** `_organization_payload`: the shop, as a printed document names it. */
+  async organization(): Promise<Record<string, string>> {
+    const organization = await this.db.one<Record<string, string>>(
+      `SELECT "name", "address", "phone", "email", "vat_registration", "receipt_footer"
+         FROM "accounts_organization" WHERE "accounts_organization"."status" = 'ACTIVE'
+        ORDER BY "accounts_organization"."created_at" ASC LIMIT 1`,
+    );
+    return organization ?? {};
+  }
+
+  /** `invoice`: what the printable A4 invoice is drawn from. */
+  async invoice(order: StaffOrderRow) {
+    return {
+      order: await this.detail(order),
+      document_type: 'INVOICE',
+      organization: await this.organization(),
+    };
+  }
+
+  /** `packing_slip`: the same, with no prices on the lines. */
+  async packingSlip(order: StaffOrderRow) {
+    const detail = await this.detail(order);
+    return {
+      order: {
+        ...detail,
+        // A packing slip never shows prices.
+        items: detail.items.map((item) =>
+          Object.fromEntries(
+            Object.entries(item).filter(
+              ([key]) => !['unit_price', 'line_discount', 'tax_amount', 'line_total'].includes(key),
+            ),
+          ),
+        ),
+      },
+      document_type: 'PACKING_SLIP',
+      organization: await this.organization(),
+    };
   }
 
   /** `OrderDetailSerializer(order).data`. */

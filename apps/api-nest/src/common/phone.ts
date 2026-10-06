@@ -54,3 +54,12 @@ export function normalizeIfMobile(raw: string | null | undefined): string {
   if (raw === null || raw === undefined) return '';
   return canonicalPhone(raw) ?? pyStrip(raw);
 }
+
+/**
+ * `search_digits`: the digits of a partial number with every leading country
+ * or trunk prefix taken off -- "" when nothing identifying is left, so `880`
+ * alone matches nobody.
+ */
+export function searchDigits(raw: string | null | undefined): string {
+  return raw === null || raw === undefined ? '' : stripPrefixes(raw);
+}

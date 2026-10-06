@@ -984,7 +984,7 @@ export function nestedListField(
 }
 
 /** A Gregorian date from its parts, or null where Python's `date()` raises. */
-function gregorian(year: number, month: number, day: number): string | null {
+export function gregorian(year: number, month: number, day: number): string | null {
   if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1) return null;
   const last = new Date(Date.UTC(2000, month, 0)).getUTCDate();
   const days =

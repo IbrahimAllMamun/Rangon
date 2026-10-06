@@ -43,6 +43,8 @@ import { posSaleCases } from './pos-sale-cases.ts';
 import { posVoidCases } from './pos-void-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
+import { staffOrdersCases } from './staff-orders-cases.ts';
+import { staffOrdersConcurrencyChecks } from './staff-orders-concurrency.ts';
 
 const DJANGO = new URL(process.env.DJANGO_BASE ?? 'http://django:8000');
 const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
@@ -577,6 +579,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await posSaleCases()));
   cases.push(...(await posVoidCases()));
   cases.push(...(await returnsCases()));
+  cases.push(...(await staffOrdersCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -722,6 +725,7 @@ async function main(): Promise<void> {
       ...(await posConcurrencyChecks({ DJANGO, NEST })),
       ...(await posSaleConcurrencyChecks({ DJANGO, NEST })),
       ...(await returnsConcurrencyChecks({ DJANGO, NEST })),
+      ...(await staffOrdersConcurrencyChecks({ DJANGO, NEST })),
     ];
     for (const check of checks) {
       if (!check.passed) racesFailed += 1;

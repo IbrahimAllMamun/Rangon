@@ -592,6 +592,122 @@ export class StockService {
     });
   }
 
+  /**
+   * `release_reservation`: give back what an order held -- for each line no
+   * more than the row still holds, and nothing written for a line that holds
+   * none. Never refused: a release only frees stock.
+   */
+  async releaseReservation(
+    tx: Queryable,
+    after: AfterCommit,
+    release: {
+      branch: Branch;
+      lines: readonly [variantId: string, quantity: number][];
+      actor: AuditActor | null;
+      referenceId: string;
+      reason: string;
+    },
+  ): Promise<LedgerEntry[]> {
+    const materialised = release.lines.filter(([, quantity]) => quantity !== 0);
+    if (!materialised.length) return [];
+    const inventories = await this.lock(
+      tx,
+      release.branch.id,
+      materialised.map(([variantId]) => variantId),
+    );
+    const entries: LedgerEntry[] = [];
+    for (const [variantId, quantity] of materialised) {
+      const inventory = inventories.get(variantId) as LockedInventory;
+      const delta = -Math.min(quantity, inventory.reserved);
+      if (delta === 0) continue;
+      entries.push(
+        await this.writeLedger(tx, inventory, {
+          type: 'RESERVATION_RELEASE',
+          delta,
+          actor: release.actor,
+          referenceType: 'order',
+          referenceId: release.referenceId,
+          reason: release.reason,
+          notes: '',
+          unitCost: null,
+        }),
+      );
+      after.lowStockCheck(inventory);
+    }
+    return entries;
+  }
+
+  /**
+   * `consume_reservation`: a reservation becomes a sale as the goods are
+   * packed -- released, then deducted at the row's average cost, under the
+   * row lock. A line whose variant already has a SALE for this order is
+   * skipped, so a retried fulfilment cannot deduct twice.
+   */
+  async consumeReservation(
+    tx: Queryable,
+    after: AfterCommit,
+    fulfilment: {
+      branch: Branch;
+      lines: readonly [variantId: string, quantity: number][];
+      actor: AuditActor | null;
+      referenceId: string;
+    },
+  ): Promise<LedgerEntry[]> {
+    const materialised = fulfilment.lines.filter(([, quantity]) => quantity > 0);
+    if (!materialised.length) return [];
+    const sold = new Set(
+      (
+        await tx.query<{ variant_id: string }>(
+          `SELECT "variant_id" FROM "inventory_inventorytransaction"
+            WHERE ("reference_id" = $1 AND "reference_type" = 'order'
+                   AND "transaction_type" = 'SALE')`,
+          [fulfilment.referenceId],
+        )
+      ).map((row) => row.variant_id),
+    );
+    const pending = materialised.filter(([variantId]) => !sold.has(variantId));
+    if (!pending.length) return [];
+    const inventories = await this.lock(
+      tx,
+      fulfilment.branch.id,
+      pending.map(([variantId]) => variantId),
+    );
+    const entries: LedgerEntry[] = [];
+    for (const [variantId, quantity] of pending) {
+      const inventory = inventories.get(variantId) as LockedInventory;
+      const released = Math.min(quantity, inventory.reserved);
+      const entry = {
+        actor: fulfilment.actor,
+        referenceType: 'order',
+        referenceId: fulfilment.referenceId,
+        notes: '',
+      };
+      if (released) {
+        entries.push(
+          await this.writeLedger(tx, inventory, {
+            ...entry,
+            type: 'RESERVATION_RELEASE',
+            delta: -released,
+            reason: 'Reservation consumed by fulfilment',
+            unitCost: null,
+          }),
+        );
+      }
+      this.checkCanReduce(inventory, -quantity);
+      entries.push(
+        await this.writeLedger(tx, inventory, {
+          ...entry,
+          type: 'SALE',
+          delta: -quantity,
+          reason: '',
+          unitCost: inventory.average_cost,
+        }),
+      );
+      after.lowStockCheck(inventory);
+    }
+    return entries;
+  }
+
   /** `restock_return`: goods back on the shelf, at the row's average cost. */
   async restockReturn(
     tx: Queryable,

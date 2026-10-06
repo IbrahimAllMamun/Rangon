@@ -158,9 +158,14 @@ export class OrderWritesService {
   }
 
   /**
-   * `lifecycle.transition` for an edge with no stock side effect (PENDING to
-   * CONFIRMED is the one checkout takes). The edges that move stock --
-   * PACKED, CANCELLED -- are refused here rather than half-ported.
+   * `lifecycle.transition`: the order locked, the edge checked against the
+   * status machine, then the status, its timestamp, the timeline and the
+   * audit log. An order already there answers false and nothing is written.
+   *
+   * Two edges move stock -- PACKED and CANCELLED. What they do is the
+   * caller's `effects`, run under the lock before the status is written
+   * (`OrderLifecycle` supplies them); without it those edges are refused
+   * rather than half-done.
    */
   async transition(
     tx: Queryable,
@@ -169,41 +174,67 @@ export class OrderWritesService {
     toStatus: string,
     reason: string,
     actor: AuditActor | null = null,
-  ): Promise<void> {
-    if (toStatus === 'PACKED' || toStatus === 'CANCELLED') {
-      throw new Error(`The ${toStatus} transition moves stock and is not ported yet.`);
+    effects?: (locked: {
+      status: string;
+      stockCommitted: boolean;
+    }) => Promise<{ stockCommitted?: boolean; cancelReason?: string } | void>,
+    audited: { reasonText?: string; reasonData?: unknown } = {},
+  ): Promise<boolean> {
+    if ((toStatus === 'PACKED' || toStatus === 'CANCELLED') && !effects) {
+      throw new Error(`The ${toStatus} transition moves stock: use OrderLifecycle.`);
     }
-    const locked = await tx.one<{ status: string }>(
-      `SELECT status FROM orders_order WHERE id = $1::uuid FOR UPDATE`,
+    const locked = await tx.one<{ status: string; stock_committed: boolean }>(
+      `SELECT status, stock_committed FROM orders_order WHERE id = $1::uuid FOR UPDATE`,
       [order.id],
     );
     const from = locked?.status ?? '';
-    if (from === toStatus) return;
+    if (from === toStatus) return false;
     if (!(ALLOWED_TRANSITIONS[from] ?? []).includes(toStatus)) {
       throw new InvalidStatusTransition(`An order cannot go from ${from} to ${toStatus}.`, {
         details: { from, to: toStatus },
       });
     }
+    const changes =
+      (await effects?.({ status: from, stockCommitted: locked?.stock_committed ?? false })) ?? {};
+    // The stamp is `timezone.now()` read before the save, so it is never after `updated_at`.
     const stamp = TIMESTAMP_FIELDS[toStatus];
+    const now = stamp
+      ? ((await tx.one<{ now: string }>(`SELECT clock_timestamp() AS now`)) as { now: string }).now
+      : null;
     await tx.query(
       `UPDATE orders_order SET updated_at = clock_timestamp(), status = $2,
-              cancel_reason = cancel_reason, stock_committed = stock_committed
-              ${stamp ? `, ${stamp} = clock_timestamp()` : ''}
+              cancel_reason = COALESCE($3, cancel_reason),
+              stock_committed = COALESCE($4, stock_committed)
+              ${stamp ? `, ${stamp} = $5::timestamptz` : ''}
         WHERE id = $1::uuid`,
-      [order.id, toStatus],
+      [
+        order.id,
+        toStatus,
+        changes.cancelReason ?? null,
+        changes.stockCommitted ?? null,
+        ...(stamp ? [now] : []),
+      ],
     );
-    await this.logEvent(tx, order.id, 'STATUS_CHANGED', `${from} → ${toStatus}`, {
-      data: { from, to: toStatus, reason },
-      actorId: actor?.id ?? null,
-    });
+    const cancelled = toStatus === 'CANCELLED';
+    await this.logEvent(
+      tx,
+      order.id,
+      cancelled ? 'CANCELLED' : 'STATUS_CHANGED',
+      `${from} → ${toStatus}`,
+      {
+        data: { from, to: toStatus, reason: audited.reasonData ?? reason },
+        actorId: actor?.id ?? null,
+      },
+    );
     await recordAudit(tx, context, {
-      action: 'ORDER_STATUS_CHANGED',
+      action: cancelled ? 'ORDER_CANCELLED' : 'ORDER_STATUS_CHANGED',
       entity: { type: 'Order', id: order.id, label: order.number },
       actor,
       oldValues: { status: from },
       newValues: { status: toStatus },
-      reason,
+      reason: audited.reasonText ?? reason,
       branchId: order.branchId,
     });
+    return true;
   }
 }

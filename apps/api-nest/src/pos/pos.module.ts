@@ -5,10 +5,13 @@ import { CatalogAdminModule } from '../catalog/admin/catalog-admin.module';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { CashBookService } from '../finance/cash-book.service';
 import { InventoryModule } from '../inventory/inventory.module';
+import { OrderLifecycle } from '../orders/order-lifecycle.service';
 import { OrderPayments } from '../orders/order-payments.service';
 import { OrderWritesService } from '../orders/order-writes.service';
+import { OrdersController } from '../orders/orders.controller';
 import { PosReturnsController, ReturnsController } from '../orders/returns.controller';
 import { ReturnsService } from '../orders/returns.service';
+import { StaffOrderActions } from '../orders/staff-order-actions.service';
 import { StaffOrders } from '../orders/staff-order.service';
 import { HoldsService } from './holds.service';
 import {
@@ -38,6 +41,7 @@ import { SalePricing } from './sale-pricing.service';
     HeldSalesController,
     PosReturnsController,
     ReturnsController,
+    OrdersController,
   ],
   providers: [
     PosReadsService,
@@ -50,6 +54,8 @@ import { SalePricing } from './sale-pricing.service';
     OrderWritesService,
     CashBookService,
     ReturnsService,
+    OrderLifecycle,
+    StaffOrderActions,
   ],
 })
 export class PosModule {}
