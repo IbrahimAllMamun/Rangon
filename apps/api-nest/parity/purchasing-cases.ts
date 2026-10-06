@@ -31,7 +31,11 @@ export const SUPPLIER_EFFECTS = [
   // Offers a request made or changed.
   `SELECT s.code AS supplier, v.sku, o.supplier_sku, o.last_cost::text, o.lead_time_days,
           o.minimum_order_quantity, o.is_preferred, o.is_active,
-          (o.last_purchased_at AT TIME ZONE 'UTC')::text AS last_purchased, o.notes,
+          CASE WHEN o.last_purchased_at >= $1 THEN 'now'
+               ELSE (o.last_purchased_at AT TIME ZONE 'UTC')::text END AS last_purchased,
+          EXISTS (SELECT 1 FROM purchasing_purchasereceipt r
+                   WHERE r.received_at = o.last_purchased_at) AS at_a_receipt,
+          o.notes,
           u.email AS created_by,
           o.id NOT IN (SELECT id FROM "snap_purchasing_supplierproduct") AS made,
           o.updated_at > (SELECT x.updated_at FROM "snap_purchasing_supplierproduct" x WHERE x.id = o.id)

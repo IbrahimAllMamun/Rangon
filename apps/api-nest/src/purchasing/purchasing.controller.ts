@@ -8,7 +8,9 @@ import { auditContext } from '../common/audit';
 import { absoluteUri } from '../common/http';
 import { Params, QueryDict } from '../common/query-dict';
 import { ENV, Env } from '../config/env';
+import { idempotencyKey } from '../finance/finance.controller';
 import { requestData } from '../http/request-body';
+import { PurchaseOrdersService } from './purchase-orders.service';
 import { SupplierProductsService } from './supplier-products.service';
 import { SuppliersService } from './suppliers.service';
 
@@ -150,5 +152,107 @@ export class SupplierProductsController {
       query,
       auditContext(request, this.env),
     );
+  }
+}
+
+const RECEIVE = ['purchases.receive'] as const;
+
+/**
+ * `PurchaseOrderViewSet`: raised, sent, received, returned against, or
+ * cancelled. No edit and no delete: an order is a record of what was agreed.
+ */
+@StaffView('purchase-orders', {
+  list: VIEW,
+  retrieve: VIEW,
+  create: BUY,
+  send: BUY,
+  cancel: BUY,
+  receive: RECEIVE,
+  // Returning is the mirror of receiving, and the same authority does it.
+  purchase_return: RECEIVE,
+  receipts: VIEW,
+})
+export class PurchaseOrdersController {
+  constructor(
+    private readonly orders: PurchaseOrdersService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('purchase-orders/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Post('purchase-orders/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.orders.create(request.user as RequestUser, requestData(request));
+  }
+
+  @Get('purchase-orders/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.retrieve(request.user as RequestUser, lookupParam(pk), query);
+  }
+
+  @Post('purchase-orders/:pk/send/')
+  @Action('send')
+  @HttpCode(200)
+  send(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.send(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      auditContext(request, this.env),
+    );
+  }
+
+  @Post('purchase-orders/:pk/cancel/')
+  @Action('cancel')
+  @HttpCode(200)
+  cancel(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.cancel(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      () => requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Post('purchase-orders/:pk/receive/')
+  @Action('receive')
+  receive(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.receive(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Post('purchase-orders/:pk/return/')
+  @Action('purchase_return')
+  purchaseReturn(
+    @Param('pk') pk: string,
+    @Params() query: QueryDict,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.orders.purchaseReturn(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      requestData(request),
+      idempotencyKey(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Get('purchase-orders/:pk/receipts/')
+  @Action('receipts')
+  receipts(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.receipts(request.user as RequestUser, lookupParam(pk), query);
   }
 }

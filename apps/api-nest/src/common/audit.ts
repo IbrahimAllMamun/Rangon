@@ -91,7 +91,8 @@ export interface AuditRecord {
   actor?: AuditActor | null;
   oldValues?: Record<string, unknown>;
   newValues?: Record<string, unknown>;
-  reason?: string;
+  /** Null is what Django passes on when a view hands it `None`: the column refuses it. */
+  reason?: string | null;
   branchId?: string | null;
 }
 
@@ -131,7 +132,7 @@ export async function recordAudit(
       pySlice(entityLabel, 255),
       JSON.stringify(scrub(entry.oldValues ?? {})),
       JSON.stringify(scrub(entry.newValues ?? {})),
-      entry.reason ?? '',
+      entry.reason === undefined ? '' : entry.reason,
       context.ipAddress,
       context.userAgent,
       context.requestId,

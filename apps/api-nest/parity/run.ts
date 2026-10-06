@@ -44,6 +44,8 @@ import { posVoidCases } from './pos-void-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
 import { expensesCases } from './expenses-cases.ts';
+import { purchaseOrderCases } from './purchase-order-cases.ts';
+import { purchaseOrderConcurrencyChecks } from './purchase-order-concurrency.ts';
 import { purchasingCases } from './purchasing-cases.ts';
 import { purchasingConcurrencyChecks } from './purchasing-concurrency.ts';
 import { expensesConcurrencyChecks } from './expenses-concurrency.ts';
@@ -593,6 +595,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await financeCases()));
   cases.push(...(await expensesCases()));
   cases.push(...(await purchasingCases()));
+  cases.push(...(await purchaseOrderCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -744,6 +747,7 @@ async function main(): Promise<void> {
       ['finance', () => financeConcurrencyChecks({ DJANGO, NEST })],
       ['expenses', () => expensesConcurrencyChecks({ DJANGO, NEST })],
       ['purchasing', () => purchasingConcurrencyChecks({ DJANGO, NEST })],
+      ['purchase-orders', () => purchaseOrderConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {
