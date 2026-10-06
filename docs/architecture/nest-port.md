@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -186,6 +186,9 @@ across both APIs where both serve the path:
 | An order cancelled while a payment against it waits on its row (each API in turn) | not paid; with the lock removed Nest pays a cancelled order |
 | An account emptied while a supplier payment waits on the account's row (each API in turn) | refused whole: no payment left behind, the order as it was |
 | 6 clicks of one supplier payment with one `Idempotency-Key`, against an order and as an advance, across both APIs | six 201s naming one payment, the money out once |
+| 10 addresses added as a customer's default at once from the back office, across both APIs | one default: the customer's row lock, the one phase 2 proved for the storefront, as the back office reaches the same service |
+| 6 customers under one new number at once, across both APIs | one is made; the rest are told the number is taken (400) or meet the unique index (409). No lock is involved |
+| A lead recovered while a note on it waits at its `UPDATE` (each API in turn) | the note's save opens the lead again and forgets its order (D200, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -611,6 +614,24 @@ what was paid on it. It is recorded once and never edited or deleted.
 | `GET /api/v1/supplier-payments/` | `purchases.view`; paginated, newest paid first. A branch-bound user sees the payments against their branch's orders and those out of their branch's accounts (D95): an OR across two outer joins, which Django's query holds before the supplier's -- and the account's branch with them, when the ordering asks for the account. Filters `supplier`, `purchase_order`, `method`. The view names no `ordering_fields`, so `OrderingFilter` takes every serializer field by its source: `supplier` and `supplier__name` by the supplier's name, `purchase_order` by the order's own ordering (newest raised first), `purchase_order__number`, `account` by the account's (its branch's name, kind, name), `account__name`; `supplier_name`, `purchase_number` and `account_name` are not names it knows. There is no detail route |
 | `POST /api/v1/supplier-payments/` | `purchases.pay`; 201. `SupplierPaymentSerializer`: a supplier, optionally an order and an account, a method (cash, bank, cheque, mobile wallet, other), a reference, a moment, notes -- and an amount DRF does not require, the column having a default: a body without one is a 500 (D194, copied). Paying an order is acting on its branch (`resolve_branch`, a 403); `branch` is read from the body as sent and resolved even when the order's branch is the one used (D197, copied). `record_supplier_payment`: an amount above zero; a payment already made under this `Idempotency-Key` answers as it is, looked for before any lock and again under the order's; the order locked -- it must be this supplier's, not a draft or cancelled, and owe at least this much after what was paid and credited (`PAYMENT_EXCEEDS_OUTSTANDING`, a 422); the payment's row claimed in a savepoint; the money out of the account named -- which must be the paying branch's, open and of the method's kind -- or the branch's own for the method, or none at all, the payment standing with no account; refused when the account cannot cover it, taking the payment with it. Then the order's paid total and badge, and a `PAYMENT_RECORDED` audit entry at the paying branch |
 
+Then the people (part 6): `customers/customers-admin.service.ts` for `CustomerViewSet`, over the
+`AddressesService` the storefront's account already used -- so the back office and a customer
+editing their own addresses hold one default per customer under the same row lock -- and
+`orders/leads-admin.service.ts` for the call-back list.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/customers/`, `GET .../<id>/` | `customers.view`; paginated, newest first, each with its addresses (the default first, then the newest) and whether it has a storefront login. `search` matches the name or the email in any case, or the phone by the digits that identify a subscriber -- `+8801911...` finds the number stored as `8801911...`, and a country code or a trunk `0` alone adds no clause -- and applies on every route, as it is `get_queryset` that reads it: a NUL in it is a 500 (D201, copied). Filters `customer_type`, `is_active`; `ordering` by `name`, `created_at`, `total_spent` or `last_order_at`. `tags` is whatever JSON was stored, a float kept a float |
+| `POST /api/v1/customers/`, `PUT`/`PATCH .../<id>/` | `customers.create`; `customers.update` to edit. `CustomerSerializer`: a name; a phone made canonical before `UniqueValidator` sees it, so two spellings of one number collide in words; an email, unique as typed and stored lower-cased -- another customer's email in another case is the index's bare 409 (D198, copied); a type, the active switch, a birthday, notes, tags. A customer must be left with a phone or an email, judged on the record as it would be saved. The walk-in flag, the totals and the points are read only. An edit writes every column back as read |
+| `DELETE /api/v1/customers/<id>/` | `customers.update`; 204. The customer is deactivated, never deleted: its orders stay |
+| `GET /api/v1/customers/lookup/?phone=` | `customers.view`; the counter's search. Not the list's queryset: active customers who are not a branch's walk-in record whose number holds the digits typed, by name, ten at most, each with no more than a name, a number, an email, a type, a count of orders and the last one's date. Fewer than three identifying digits answers `{"results": [], "min_length": 3}` |
+| `GET /api/v1/customers/<id>/orders/` | `customers.view`; the customer's last hundred orders, newest placed first, as the order list writes them, whatever their branch |
+| `GET/POST /api/v1/customers/<id>/addresses/`, `PATCH/DELETE .../addresses/<address>/` | a requirement per method: `customers.view` to read, `customers.update` to write, and a method the action does not serve is a 403 for all but an owner or superuser. The customer comes from the URL, never the body. `add_address`, `update_address`, `delete_address`: the first address is the default whatever was asked, the only address stays it, and a deleted default hands the flag to the newest left -- each audited. An address key that is not a UUID is Django's own `ValidationError`, a 400 under `non_field_errors` |
+| `GET/POST /api/v1/customers/<id>/notes/`, `DELETE .../notes/<note>/` | the same per-method rule. Staff commentary, the pinned first; a note is added and deleted, audited both ways, never edited |
+| `GET /api/v1/abandoned-checkouts/`, `GET .../<id>/` | `customers.view`; the call-back list, paginated, last seen first, the leads of the user's branch. Filters `status`, `branch`; the view names no `ordering_fields`, so every serializer field orders by its source (`branch__code`, `recovered_order__number`) |
+| `PUT`/`PATCH /api/v1/abandoned-checkouts/<id>/` | `customers.update`; only the note is writable, and a PUT with nothing is accepted. The save writes every column back as read (D200, copied). A PATCH's answer leaves out `recovered_order_number` for a lead with no order, as DRF skips a defaulted read-only field then |
+| `POST /api/v1/abandoned-checkouts/<id>/lost/` | `customers.update`; 200. `mark_lost`: the lead LOST whatever it was -- a recovered one too (D199, copied) -- with `str(request.data.get("note", "")).strip()` as its note when that says anything: `null` is the note "None", a body that is not an object a 500 |
+
 ## Running it
 
 ```bash
@@ -891,6 +912,14 @@ the port):
 - A supplier payment's `branch` is read from the body unvalidated: a value that is not a UUID is
   a 400 under `non_field_errors`, a number is looked up as one, and a branch that is not
   available refuses a payment against an order whose own branch is the one that pays (D197).
+- A customer's email is checked for uniqueness as typed and stored lower-cased: another
+  customer's email in another case passes the serializer and is a bare 409 (D198).
+- A lead already recovered can be written off as LOST, and one written off can be written off
+  again; `lost` reads its note with `request.data.get`, so `null` is stored as "None" and a body
+  that is not an object is a 500 (D199).
+- A note on a lead saves every column back as it was read: a lead recovered meanwhile is opened
+  again and its order forgotten (D200).
+- A NUL in the customer list's `search` is a 500, on every route of the viewset (D201).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

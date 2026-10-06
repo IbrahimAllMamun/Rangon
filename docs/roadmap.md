@@ -481,6 +481,44 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 6: customers and the call-back list, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `CustomerViewSet` (list, read, create, edit,
+deactivate, `lookup`, `orders`, `addresses`, `notes`) and `AbandonedCheckoutViewSet` (list, read,
+the note, `lost`), with `customers.services` -- `add_address`, `update_address`,
+`delete_address`, `add_note`, `delete_note` -- and `leads.mark_lost` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 7448/7448 (526 new), 81 by the documented differences
+concurrency ................................... 171/171 (4 new: ten addresses added as the default, six
+                                                customers under one number, a lead recovered while a note
+                                                on it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The address rules were ported in phase 2 for the storefront's account; the back office now
+reaches the same `AddressesService`, so nothing about the one-default invariant was written
+twice. `fixture_customers.py` is new: a wholesale customer with a birthday, tags that hold a
+float and an object, two addresses and two notes; one with an email and no phone; one
+deactivated; one with a single address; and three more leads -- recovered by an order, written
+off, and open at PAR3.
+
+The cases read customers, their orders, addresses and notes, and the call-back list, as every
+role and through every search, filter and ordering -- the search by a number spelled five ways,
+by a country code alone and by a trunk zero; look a number up eighteen ways; add a customer
+forty-five ways and edit one thirty; add, edit and delete addresses -- the default, the only one,
+another customer's, a key that is not a UUID; add and delete notes; note a lead and write one
+off, with each shape of body.
+
+No port bug: the first run compared equal.
+
+Found in Django, and copied: D198 (another customer's email in another case is a bare 409), D199
+(a recovered lead can be written off), D200 (a note on a lead writes back the status it read:
+measured, a lead recovered meanwhile is opened again and its order forgotten), D201 (a NUL in the
+customer search is a 500).
+
 ### The NestJS API, phase 6 part 5: supplier payments, 2026-10-06
 
 Asked for: the rest of phase 6, continued. Ported: `SupplierPaymentViewSet` (list, record), with
@@ -4220,6 +4258,10 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D195 | **A supplier payment may be dated in the future.** `paid_at` is any datetime: `2099-01-01` is recorded, and the cash-book entry carries the same moment, so the money has left the account's balance today and its ledger line sorts decades ahead. `CreateExpenseSerializer` refuses a future `spent_at` for exactly that reason. *Found by the date cases.* | Low | Copied by the port. Refuse a future `paid_at`, as expenses do. `purchasing/api/serializers.py` |
 | D196 | **A supplier payment's `Idempotency-Key` answers with whichever payment holds it.** The lookup comes before every check but the amount's: a key another payment holds answers 201 with that payment, whatever supplier, order or amount this request named -- against a draft too, which cannot be paid. D160, D171 and D192 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the key cases.* | Low | Copied by the port. Refuse a key that names a payment to someone else, or for something else. `purchasing/services.py` |
 | D197 | **A supplier payment's `branch` is read from the body unvalidated.** `resolve_branch(actor, request.data.get("branch"))` runs for every payment: a value that is not a UUID is Django's own `ValidationError`, a 400 filed under `non_field_errors`; a number is looked up as a UUID; and for a payment against an order -- where the order's branch pays and this one is never used -- a branch that is not available is still a 403. *Found by the branch cases.* | Low | Copied by the port. A serializer field for it, resolved only when there is no order. `purchasing/api/views.py` |
+| D198 | **Another customer's email in another case is a bare 409.** `Customer.save()` stores an email lower-cased and trimmed; `CustomerSerializer`'s `UniqueValidator` compares the value as typed. `Ledger.Lady@Parity.Test` passes validation against a stored `ledger.lady@parity.test`, is lower-cased on save and meets the unique index: "The request conflicts with the current state of the data.", on a create and on an edit, naming no field. The phone beside it was fixed for exactly this (it is made canonical before the validator runs). *Found by the email cases.* | Low | Copied by the port. Lower-case in the field, as `BangladeshiPhoneField` normalises in its own. `customers/api/serializers.py` |
+| D199 | **A lead already recovered can be written off.** `mark_lost` sets `LOST` whatever the lead was: a `RECOVERED` lead -- one that became an order -- is marked lost, keeping its order and its `recovered_at`, and the recovery figure the list is judged by drops by one. A lost lead can be lost again. The note is `str(request.data.get("note", ""))`: `null` is stored as the word "None", and a body that is not an object is a 500. *Found by the write-off cases.* | Low | Copied by the port. Refuse a lead that is not OPEN; a one-field serializer for the note. `orders/services/leads.py`, `orders/api/views.py` |
+| D200 | **A note on a lead writes back the status it read.** `AbandonedCheckoutViewSet` updates through a plain `serializer.save()`, which writes every column from the lead as read. A lead that checkout recovers while a note on it is in flight is set back to `OPEN`, its `recovered_order` and `recovered_at` cleared -- the order exists and the list says the shopper still needs calling. Measured in both APIs by a mid-flight check. D184 is the same shape. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. `update_fields=["note", "updated_at"]`. `orders/api/views.py` |
+| D201 | **A NUL in the customer search is a 500.** `CustomerViewSet.get_queryset` filters on the raw `search` parameter, where DRF's `SearchFilter` would refuse a NUL: `?search=a%00b` reaches PostgreSQL and fails, on the list and on every detail route. D125, D144 and D172 are the same. *Found by the search cases.* | Low | Copied by the port. Use `SearchFilter`, or refuse the character. `customers/api/views.py` |
 
 ## Still API-only (no UI)
 

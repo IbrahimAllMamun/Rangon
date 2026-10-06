@@ -199,6 +199,9 @@ apps/api-nest/
                               an order raised, sent, received and returned against; its serializers
     purchasing/supplier-payments.service.ts
                               money out to a supplier, under the order's lock and then the account's
+    customers/customers-admin.service.ts, orders/leads-admin.service.ts
+                              the back office's customers (over the storefront's address service)
+                              and the call-back list
     common/model-lookups.ts   what a model DateField or DateTimeField makes of a query-string value
   parity/
     run.ts                    the runner and the read-only cases
@@ -345,7 +348,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D197**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D201**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -450,7 +453,7 @@ Every part of a phase updates, in the same branch:
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger), 3 (suppliers and supplier products), 4 (purchase orders) and 5 (supplier payments) done. Next: 6 customers and the call-back list, then 7 coupons. The owner has said to open the phase's PR when it is built and go on to phase 7 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger), 3 (suppliers and supplier products), 4 (purchase orders), 5 (supplier payments) and 6 (customers, the call-back list) done. Next: 7 coupons, then 8 shipping. The owner has said to open the phase's PR when it is built and go on to phase 7 |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
