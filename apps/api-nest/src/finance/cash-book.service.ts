@@ -172,6 +172,14 @@ export class CashBookService {
     return this.recordForReference(tx, 'REFUND', posting);
   }
 
+  /**
+   * `record_for_reference(transaction_type=SUPPLIER_PAYMENT, ...)`: money out
+   * to a supplier, from the account named or the branch's own for the method.
+   */
+  async recordSupplierPayment(tx: Queryable, posting: Posting): Promise<string | null> {
+    return this.recordForReference(tx, 'SUPPLIER_PAYMENT', posting);
+  }
+
   private async recordForReference(
     tx: Queryable,
     type: MovementType,

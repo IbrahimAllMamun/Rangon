@@ -47,6 +47,8 @@ import { expensesCases } from './expenses-cases.ts';
 import { purchaseOrderCases } from './purchase-order-cases.ts';
 import { purchaseOrderConcurrencyChecks } from './purchase-order-concurrency.ts';
 import { purchasingCases } from './purchasing-cases.ts';
+import { supplierPaymentCases } from './supplier-payment-cases.ts';
+import { supplierPaymentConcurrencyChecks } from './supplier-payment-concurrency.ts';
 import { purchasingConcurrencyChecks } from './purchasing-concurrency.ts';
 import { expensesConcurrencyChecks } from './expenses-concurrency.ts';
 import { financeCases } from './finance-cases.ts';
@@ -596,6 +598,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await expensesCases()));
   cases.push(...(await purchasingCases()));
   cases.push(...(await purchaseOrderCases()));
+  cases.push(...(await supplierPaymentCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -748,6 +751,7 @@ async function main(): Promise<void> {
       ['expenses', () => expensesConcurrencyChecks({ DJANGO, NEST })],
       ['purchasing', () => purchasingConcurrencyChecks({ DJANGO, NEST })],
       ['purchase-orders', () => purchaseOrderConcurrencyChecks({ DJANGO, NEST })],
+      ['supplier-payments', () => supplierPaymentConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

@@ -32,16 +32,28 @@ by its invoice number:
   row: no account is touched), which cancelling refuses.
 - PAR-PO-MIRPUR: sent from PAR3 by its own manager, which staff bound to DHK1
   cannot see.
+
+For supplier payments (their own marker, the account "Parity Payables Float"),
+every one out of an account made here, so no other check's balance moves:
+- "Parity Payables Float" (cash) and "Parity Payables Bank" at DHK1, and
+  "Parity Mirpur Payables" (cash) at PAR3.
+- 1,000.00 by bank transfer against PAR-PO-DONE, dated 20 September, under an
+  `Idempotency-Key` a case replays; a cheque for 300.00 and 500.00 in cash,
+  each an advance against no order; and 200.00 in cash against PAR-PO-MIRPUR,
+  paid at PAR3.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 
 from accounts.models import Branch, User
 from catalog.models import Category, Product, ProductVariant
 from catalog.services import create_variant
+from finance import services as finance
+from finance.models import Account, AccountKind
 from purchasing import services as purchasing
 from purchasing.models import (
     PaymentStatus,
@@ -49,6 +61,7 @@ from purchasing.models import (
     PurchaseOrderStatus,
     PurchaseReturnReason,
     Supplier,
+    SupplierPaymentMethod,
     SupplierProduct,
     SupplierStatus,
 )
@@ -56,6 +69,7 @@ from purchasing.services import PurchaseLine, ReturnLine
 
 MARKER = "PARITY-IDLE"
 ORDERS_MARKER = "PAR-PO-DRAFT"
+PAYMENTS_MARKER = "Parity Payables Float"
 
 
 def apply() -> None:
@@ -217,3 +231,73 @@ if PurchaseOrder.objects.filter(invoice_number=ORDERS_MARKER).exists():
 else:
     with transaction.atomic():
         apply_orders()
+
+
+def apply_payments() -> None:
+    home = Branch.objects.get(code="DHK1")
+    mirpur = Branch.objects.get(code="PAR3")
+    accountant = User.objects.get(email="accounts@rangon.test")
+    sole = Supplier.objects.get(code="PARITY-SOLE")
+
+    def account(branch: Branch, name: str, kind: str, opening: str) -> Account:
+        return finance.create_account(
+            branch=branch,
+            name=name,
+            kind=kind,
+            opening_balance=Decimal(opening),
+            actor=accountant,
+        )
+
+    cash = account(home, PAYMENTS_MARKER, AccountKind.CASH, "20000.00")
+    bank = account(home, "Parity Payables Bank", AccountKind.BANK, "100000.00")
+    away = account(mirpur, "Parity Mirpur Payables", AccountKind.CASH, "5000.00")
+
+    purchasing.record_supplier_payment(
+        supplier=sole,
+        purchase_order=PurchaseOrder.objects.get(invoice_number="PAR-PO-DONE"),
+        amount=Decimal("1000.00"),
+        method=SupplierPaymentMethod.BANK,
+        reference="TT-1001",
+        paid_at=timezone.make_aware(datetime(2026, 9, 20, 10, 0)),
+        actor=accountant,
+        notes="Parity: first instalment",
+        account=bank,
+        idempotency_key="parity-payment-keyed",
+    )
+    purchasing.record_supplier_payment(
+        supplier=sole,
+        amount=Decimal("300.00"),
+        method=SupplierPaymentMethod.CHEQUE,
+        reference="CHQ-77",
+        actor=accountant,
+        notes="Parity: an advance by cheque",
+        account=bank,
+        branch=home,
+    )
+    purchasing.record_supplier_payment(
+        supplier=Supplier.objects.get(code="SUP-002"),
+        amount=Decimal("500.00"),
+        method=SupplierPaymentMethod.CASH,
+        actor=accountant,
+        notes="Parity: an advance in cash",
+        account=cash,
+        branch=home,
+    )
+    order = PurchaseOrder.objects.get(invoice_number="PAR-PO-MIRPUR")
+    purchasing.record_supplier_payment(
+        supplier=order.supplier,
+        purchase_order=order,
+        amount=Decimal("200.00"),
+        method=SupplierPaymentMethod.CASH,
+        actor=User.objects.get(email="parity.mirpur@rangon.test"),
+        notes="Parity: paid at Mirpur",
+        account=away,
+    )
+    print("parity supplier payments fixture applied")
+
+
+if Account.objects.filter(name=PAYMENTS_MARKER).exists():
+    print("parity supplier payments fixture already applied")
+else:
+    with transaction.atomic():
+        apply_payments()

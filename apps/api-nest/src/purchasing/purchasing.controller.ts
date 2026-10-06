@@ -11,6 +11,7 @@ import { ENV, Env } from '../config/env';
 import { idempotencyKey } from '../finance/finance.controller';
 import { requestData } from '../http/request-body';
 import { PurchaseOrdersService } from './purchase-orders.service';
+import { SupplierPaymentsService } from './supplier-payments.service';
 import { SupplierProductsService } from './supplier-products.service';
 import { SuppliersService } from './suppliers.service';
 
@@ -254,5 +255,31 @@ export class PurchaseOrdersController {
   @Action('receipts')
   receipts(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
     return this.orders.receipts(request.user as RequestUser, lookupParam(pk), query);
+  }
+}
+
+/** `SupplierPaymentViewSet`: recorded and listed, never edited or deleted. */
+@StaffView('supplier-payments', { list: VIEW, create: ['purchases.pay'] })
+export class SupplierPaymentsController {
+  constructor(
+    private readonly payments: SupplierPaymentsService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('supplier-payments/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.payments.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Post('supplier-payments/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.payments.create(
+      request.user as RequestUser,
+      requestData(request),
+      idempotencyKey(request),
+      auditContext(request, this.env),
+    );
   }
 }

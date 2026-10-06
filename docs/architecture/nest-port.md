@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -181,6 +181,11 @@ across both APIs where both serve the path:
 | 6 clicks of one return with one `Idempotency-Key`, across both APIs | six 201s naming one return, one unit off the shelf |
 | 6 orders raised at once, across both APIs | six numbers, none shared |
 | Another supplier made a SKU's preferred one while its first delivery from this one is in flight (each API in turn) | the delivery is refused with a bare 409 (D187, copied); the unique index decides, no lock is involved |
+| 6 payments of all a purchase order owes at once, across both APIs | one is recorded and five exceed what is outstanding (422); the order paid once, the account down once and equal to its ledger |
+| All but 100.00 of an order paid while a payment of 500.00 waits on the order's row (each API in turn) | it exceeds what is outstanding; with the port's `FOR UPDATE` removed Nest pays 500.00 over the balance it read |
+| An order cancelled while a payment against it waits on its row (each API in turn) | not paid; with the lock removed Nest pays a cancelled order |
+| An account emptied while a supplier payment waits on the account's row (each API in turn) | refused whole: no payment left behind, the order as it was |
+| 6 clicks of one supplier payment with one `Idempotency-Key`, against an order and as an advance, across both APIs | six 201s naming one payment, the money out once |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -596,6 +601,16 @@ they are read with the statements Django's prefetch sends, `IN (...)` in the pag
 | `POST /api/v1/purchase-orders/<id>/receive/` | `purchases.receive`; 201 with the receipt and the order. The body is validated before the order is looked for: lines of an order line, a quantity of at least 1 and optionally the cost on the delivery note; a line named twice is a 400. Under the order's lock a cancelled or closed order is a 409 -- a draft is received (D186, copied); a receipt numbered `GRN-`; the order's lines locked; each line checked against what is outstanding, put on the shelf at its cost (the branch's average moves, the SKU's latest cost is set), its received count raised, and the supplier's price list updated -- the first supplier a SKU is received from becomes its preferred one, and a withdrawn offer is brought back. Then the order RECEIVED or PARTIALLY_RECEIVED, and a `PURCHASE_RECEIVED` audit entry. No `Idempotency-Key` (D188, copied) |
 | `POST /api/v1/purchase-orders/<id>/return/` | `purchases.receive`; 201 with the return and the order. Lines of an order line and a quantity, a reason from the list, notes. Under the order's lock: a return already made under this `Idempotency-Key` answers as it is -- whichever order it is on, and before anything else is checked (D192, copied); a draft or cancelled order is a 409. The lines locked with their variants; the return claimed under its `PRN-` number in a savepoint; each line checked against what was received and not sent back, taken off the shelf through the ledger at the order line's cost (D185, copied), a `STOCK_ADJUSTMENT` audit entry each; the order credited with the sum and its payment badge refreshed -- credit counts only towards settling in full. Low-stock jobs follow the commit |
 
+Then paying for them (part 5): `purchasing/supplier-payments.service.ts`. A payment is money
+out of one of the business's own accounts -- `CashBookService.recordSupplierPayment`, the same
+`record_for_reference` a sale's payment and a refund post through -- and, against an order,
+what was paid on it. It is recorded once and never edited or deleted.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/supplier-payments/` | `purchases.view`; paginated, newest paid first. A branch-bound user sees the payments against their branch's orders and those out of their branch's accounts (D95): an OR across two outer joins, which Django's query holds before the supplier's -- and the account's branch with them, when the ordering asks for the account. Filters `supplier`, `purchase_order`, `method`. The view names no `ordering_fields`, so `OrderingFilter` takes every serializer field by its source: `supplier` and `supplier__name` by the supplier's name, `purchase_order` by the order's own ordering (newest raised first), `purchase_order__number`, `account` by the account's (its branch's name, kind, name), `account__name`; `supplier_name`, `purchase_number` and `account_name` are not names it knows. There is no detail route |
+| `POST /api/v1/supplier-payments/` | `purchases.pay`; 201. `SupplierPaymentSerializer`: a supplier, optionally an order and an account, a method (cash, bank, cheque, mobile wallet, other), a reference, a moment, notes -- and an amount DRF does not require, the column having a default: a body without one is a 500 (D194, copied). Paying an order is acting on its branch (`resolve_branch`, a 403); `branch` is read from the body as sent and resolved even when the order's branch is the one used (D197, copied). `record_supplier_payment`: an amount above zero; a payment already made under this `Idempotency-Key` answers as it is, looked for before any lock and again under the order's; the order locked -- it must be this supplier's, not a draft or cancelled, and owe at least this much after what was paid and credited (`PAYMENT_EXCEEDS_OUTSTANDING`, a 422); the payment's row claimed in a savepoint; the money out of the account named -- which must be the paying branch's, open and of the method's kind -- or the branch's own for the method, or none at all, the payment standing with no account; refused when the account cannot cover it, taking the payment with it. Then the order's paid total and badge, and a `PAYMENT_RECORDED` audit entry at the paying branch |
+
 ## Running it
 
 ```bash
@@ -867,6 +882,15 @@ the port):
   (D192).
 - A return to a supplier checks `on_hand`, not what is available: units reserved for customers'
   orders can be boxed up and sent back, leaving `available` below zero (D193).
+- A supplier payment with no `amount` is a 500: the serializer does not require the field and
+  the view reads it (D194).
+- A supplier payment may be dated in the future, and its cash-book entry with it; an expense may
+  not (D195).
+- A supplier payment made with an `Idempotency-Key` another payment holds answers 201 with that
+  payment, whatever supplier, order or amount was sent; a key past 80 characters is a 500 (D196).
+- A supplier payment's `branch` is read from the body unvalidated: a value that is not a UUID is
+  a 400 under `non_field_errors`, a number is looked up as one, and a branch that is not
+  available refuses a payment against an order whose own branch is the one that pays (D197).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

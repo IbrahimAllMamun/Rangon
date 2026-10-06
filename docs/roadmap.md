@@ -481,6 +481,43 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 5: supplier payments, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `SupplierPaymentViewSet` (list, record), with
+`record_supplier_payment` behind it and `finance.services.record_for_reference` for the money.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6922/6922 (182 new), 74 by the documented differences
+concurrency ................................... 167/167 (9 new: six payments of all an order owes, a payment
+                                                meeting the order paid and then cancelled under it, an
+                                                account emptied under a payment, six clicks of one payment
+                                                against an order and as an advance)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` gains three accounts of its own -- cash and bank at DHK1, cash at PAR3 --
+and four payments out of them: a bank transfer against an order under a key the cases replay, a
+cheque and cash as advances against no order, and cash against PAR3's order. The demo seed has no
+supplier payment at all.
+
+The cases read the list as every role, through each filter and every ordering `OrderingFilter`
+allows a view that names none; and record a payment a hundred and ten ways -- an advance and a
+payment against an order as every role; each method; an account named, of the wrong kind, of
+another branch, closed, too short, allowed to go overdrawn; no account of the kind at all; an
+order in each status, another supplier's, another branch's, paid in full, in credit; amounts at
+each bound and missing; dates past, future and unreadable; keys new, used and too long.
+
+With the port's `FOR UPDATE` removed from the order, Nest paid 500.00 against an order with
+100.00 outstanding, and paid a cancelled one.
+
+No port bug: the first run compared equal.
+
+Found in Django, and copied: D194 (a payment with no amount is a 500), D195 (a payment may be
+dated in the future), D196 (a payment's key answers with whichever payment holds it), D197 (the
+payment's `branch` is read unvalidated, and can refuse a payment it has no bearing on).
+
 ### The NestJS API, phase 6 part 4: purchase orders, 2026-10-06
 
 Asked for: the rest of phase 6, continued. Ported: `PurchaseOrderViewSet` (list, read, raise,
@@ -4179,6 +4216,10 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D191 | **A purchase order names any UUID as a SKU.** `PurchaseLineSerializer.variant` is a bare `UUIDField`, as the supplier was before D82: a variant that does not exist is inserted and fails the deferred foreign key at the commit -- a bare 409 naming no line -- and an archived SKU or an inactive supplier is accepted without a word. *Found by the raise cases.* | Low | Copied by the port. A related field for the variant; decide about archived SKUs and inactive suppliers. `purchasing/api/serializers.py` |
 | D192 | **A return's `Idempotency-Key` answers with whichever return holds it.** `create_purchase_return` looks the key up before it checks anything about this order: a key another order's return holds answers 201 with that return and that order, and so does a request against a draft, which could never be returned from. D160 and D171 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the return cases.* | Low | Copied by the port. Scope the lookup to the order, or refuse a key that names another. `purchasing/services.py` |
 | D193 | **A return to a supplier can take units reserved for customers' orders.** `return_to_supplier` refuses when `on_hand` is short and never looks at `reserved`: with four on the shelf and three of them reserved for online orders, three go back, leaving one on hand against three promised -- `available` at -2, which [business-rules §1.4](business-rules.md) says may not happen with overselling off. D115 was the counter's version of this. *Found by a case that reserves the shelf first.* | Medium | Copied by the port. `DECISION REQUIRED` in §7b.2; if no, check `available`, as the counter now does. `inventory/services.py` |
+| D194 | **A supplier payment with no amount is a 500.** `SupplierPayment.amount` has a default, so the `ModelSerializer` does not require it, and `SupplierPaymentViewSet.create` reads `data["amount"]`: a body without the field passes validation and raises `KeyError`. *Found by the "no amount" case.* | Low | Copied by the port. Declare the field required. `purchasing/api/serializers.py` |
+| D195 | **A supplier payment may be dated in the future.** `paid_at` is any datetime: `2099-01-01` is recorded, and the cash-book entry carries the same moment, so the money has left the account's balance today and its ledger line sorts decades ahead. `CreateExpenseSerializer` refuses a future `spent_at` for exactly that reason. *Found by the date cases.* | Low | Copied by the port. Refuse a future `paid_at`, as expenses do. `purchasing/api/serializers.py` |
+| D196 | **A supplier payment's `Idempotency-Key` answers with whichever payment holds it.** The lookup comes before every check but the amount's: a key another payment holds answers 201 with that payment, whatever supplier, order or amount this request named -- against a draft too, which cannot be paid. D160, D171 and D192 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the key cases.* | Low | Copied by the port. Refuse a key that names a payment to someone else, or for something else. `purchasing/services.py` |
+| D197 | **A supplier payment's `branch` is read from the body unvalidated.** `resolve_branch(actor, request.data.get("branch"))` runs for every payment: a value that is not a UUID is Django's own `ValidationError`, a 400 filed under `non_field_errors`; a number is looked up as a UUID; and for a payment against an order -- where the order's branch pays and this one is never used -- a branch that is not available is still a 403. *Found by the branch cases.* | Low | Copied by the port. A serializer field for it, resolved only when there is no order. `purchasing/api/views.py` |
 
 ## Still API-only (no UI)
 
