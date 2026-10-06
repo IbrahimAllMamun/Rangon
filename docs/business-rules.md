@@ -1286,6 +1286,23 @@ serializer, because two guards and one audit entry hang off it:
 Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
 has to keep pointing at a real row. Customers never appear in the staff list.
 
+> **DECISION REQUIRED — default: as the code stands.** The first line of this section is not what
+> the code does ([D221](roadmap.md#known-defects)). `ROLE_PERMISSIONS` gives `ADMIN` every
+> permission, `users.manage` and `settings.manage` among them, so an administrator creates and
+> edits staff exactly as an owner does — and that includes owners: an administrator can give the
+> owner role to anyone, themselves included, reset an owner's password, and deactivate or demote
+> any owner but the last. Promoting themselves also hands them the one decision this file reserves
+> to the owner (§1.4, selling reserved stock at the counter). Either the rule is "only an owner
+> manages staff" and `ADMIN` should lose `users.manage`, or administrators manage staff and the
+> rule should be "only an owner may make, edit or remove an owner". Found while porting the staff
+> screens to the NestJS API on 2026-10-07 and left as it was in both.
+
+> **DECISION REQUIRED — default: as the code stands.** `PATCH /organization/` accepts `status`, so
+> the organisation can be set `INACTIVE` — after which it cannot be read, and the next edit
+> creates a second, blank one ([D225](roadmap.md#known-defects)). A one-organisation shop has no
+> use for the field on that route; whether suspending the organisation should mean anything at
+> all is not decided anywhere.
+
 > **DECISION REQUIRED — default chosen: the staff list spans branches.** A manager bound to one
 > branch sees every branch's staff, names and emails included — consistent with the audit log,
 > which already treats staff accounts as organisation-wide (§ on the audit trail, D85). The stricter

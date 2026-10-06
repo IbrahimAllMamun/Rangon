@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons), part 8 (shipping: zones, methods, couriers, parcels), part 9 (review moderation) 2026-10-07 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -203,6 +203,14 @@ across both APIs where both serve the path:
 | 6 couriers of one code, and 6 methods of one code in one zone, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
 | 6 decisions on one review at once, three each way, across both APIs | six 200s and six audit entries; the review is left as one of them decided. No lock is involved |
 | A review rejected with a reason while an approval of it with no note waits at its `UPDATE` (each API in turn) | the approval stands and the reason is gone: a decision writes back the note it read (D215, copied); no lock is involved |
+| A profile's ID number changed while an edit of its title waits on the profile's row (each API in turn) | both changes stand; with the port's `FOR UPDATE` removed the edit writes back the ID number and the notes it read |
+| 6 first saves of one profile at once, across both APIs | six 200s and one profile: each edit writes the account's own row first, and the rest wait on it |
+| The second owner switched off while the first's deactivation waits at its `UPDATE` (each API in turn) | judged with two owners, it goes through: no active owner is left (D221, copied); the guard takes no lock |
+| A password changed while an edit of the account's name waits at its `UPDATE` (each API in turn) | the edit puts back the password it read (D222, copied); no lock is involved |
+| The VAT settled while an edit of the organisation's name waits at its `UPDATE` (each API in turn) | the edit puts back the VAT it read and the settlement is gone (D225, copied); no lock is involved |
+| 6 deactivations of one account at once, across both APIs | six 200s and six audit entries; nothing refuses a repeat |
+| 6 accounts under one email, and 6 branches under one code, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
+| 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -695,6 +703,29 @@ phases 2 and 1.
 | `GET /api/v1/reviews/`, `GET .../<id>/` | `content.review_moderate`, for reading too; paginated, newest first. Filters `status`, `product` (a key that must exist) and `rating` -- django-filter's `NumberFilter`: anything Python's `Decimal` reads, no larger than 1e50, cut to a whole number by the column's lookup, so `rating=4.9` lists the fours (D216, copied) and a number the column cannot hold matches nothing. `ordering` by `created_at` or `rating`. A detail route applies the filters too |
 | `POST /api/v1/reviews/<id>/approve/`, `.../reject/` | `content.review_moderate`; 200. The review is found before the body is read. No rule about what the review was: an approved one can be approved again, or rejected. The status, the moderator and the time are stamped; the note is `str(request.data.get("note", "")).strip()` when that says anything and otherwise the note the review had -- `null` is the note "None", a list or an object is its Python repr, a body that is not an object is a 500, and so is a note of more than 255 characters or one holding a NUL (D214, copied). Then the audit entry, `SETTINGS_CHANGED`, with the status and note before and after and the note, or "Review approved"/"Review rejected", as its reason. No lock, and the two writes are not one transaction (D215, copied) |
 
+Last, staff accounts and the organisation (part 10), in `accounts/`: `branches.service.ts`,
+`staff-users.service.ts` (`UserViewSet`, `UserWriteSerializer`, and `create_staff_user`,
+`update_staff_user`, `save_staff_profile`, `set_user_status` and `check_can_lose_access` of
+`accounts.services`), `roles.service.ts` and `organization-admin.service.ts`. Signing in, `me`,
+registration and a user's own password were phase 2.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/branches/`, `GET .../<id>/` | `settings.view`; paginated, by name; `ordering` by any field. No filter and no search |
+| `POST /api/v1/branches/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name and a code; an address, a phone (a mobile stored canonically, anything else as typed), an email (kept as typed), the default flag, whether it fulfils online orders, its tills, its status. A new branch joins `get_organization()`. The code is unique within the organisation, which the serializer has no field for: a code taken -- or no organisation to join -- is the index's bare 409 (D224, copied). A second default branch is accepted, and the default one can be switched off |
+| `DELETE /api/v1/branches/<id>/` | 204, or a bare 409 while staff, stock, a transfer, a count, labels, a purchase order, an account, an expense, a cart, an order or a lead names it (`PROTECT`). A branch nothing names goes with its parked sales and its notices, and the audit log lets go of it, in Django's order |
+| `GET /api/v1/users/`, `GET .../<id>/` | `users.view`; paginated, by email; every account whose role is not CUSTOMER, one with no role included. Filters `status`, `branch`, `role`; `ordering` by `email` or `date_joined`. `search_fields` is declared and no search backend is installed: `?search=` does nothing (D217, copied). `role_code` and `role_name` are left out of an account with no role, as DRF skips a read-only field whose source is missing; `profile` is there only for a reader who holds `users.manage` -- absent, not null -- and is the same eleven blank fields for an account nobody has filled one in for |
+| `POST /api/v1/users/` | `users.manage`; 201. An email no account has, compared as typed and stored lower-cased (another's in other letters is a bare 409: D218, copied); names; a phone; a branch, closed or not; a password of ten characters that Django's validators pass -- with no account to compare it with, so the email itself will do (D219); a role of the seven the code names, CASHIER unless sent; a nested profile. A password is asked for last, once everything else has passed. `create_staff_user`: always ACTIVE, whatever status was sent (D219), in the one organisation; the profile saved when it says anything; one audit entry, `USER_CHANGED`, naming the email as typed, the role, the branch and which profile fields were recorded |
+| `PUT`/`PATCH /api/v1/users/<id>/` | `users.manage`. `update_staff_user`, in one transaction: a status other than ACTIVE is refused for your own account and for the last active owner; so is a new role for an owner who is you or the last one; then the account saved whole -- every column written back as read (D222, copied) -- a new password ending every session the account holds; the profile; and one audit entry of what changed, with `password_reset`, `sessions_ended` and `profile_updated` naming fields and never values. Nothing changed, nothing logged -- but the row is still written |
+| The profile, in both | Eleven optional fields. A birth date not in the future (by the shop's clock), an ID number of letters, digits, spaces and hyphens, a joining date not before a birth date sent with it. The ID number's uniqueness is a `UniqueValidator` on a nested serializer that never has an instance: an ID number resent with an edit is refused as taken -- by its own profile (D220, copied). `save_staff_profile` takes the profile's row lock, writes only when a field sent differs from what is stored -- a payload of blanks makes no row -- and answers another's ID number with a 400 naming `profile.national_id` |
+| `DELETE /api/v1/users/<id>/`, `POST .../<id>/deactivate/` | `users.manage`; both 200 with the account: staff are never deleted. Found, then the two guards, then `request.data.get("reason", "")`: a body that is not an object is a 500, a reason that is not a string is stored as Python prints it (D223, copied). INACTIVE, and one audit entry. The answer has no profile, for anyone: the view serializes without its request |
+| `POST /api/v1/users/<id>/activate/` | `users.manage`; 200. No guard, the body unread, the reason always "Status changed to ACTIVE" |
+| `GET /api/v1/roles/`, `GET .../<id>/`, `GET /api/v1/permissions/` | `users.view`; unpaginated. Each role with the codes it holds, by group then code, and `holds_every_permission` for the owner's. `ordering` by any field; `permissions` joins them and lists a role once per permission |
+| `GET /api/v1/organization/` | anyone signed in, a customer too. The oldest active organisation with its branches by name, or 404 `{"detail": "No organisation configured."}`, written by hand |
+| `PATCH /api/v1/organization/` | `settings.manage`, checked in the view: a refusal is an envelope with no `request_id`. Its name, legal name, status, email, phone, address, VAT number, currency, footer, and whether the counter sells reserved stock -- which only an owner or a superuser may change. The save writes every column back as read (D225, copied), asks the storefront to drop what it cached as `site`, and is audited with the whole organisation before and after. The answer, a partial serializer's, leaves out `tax_settled_by_name` while nobody has settled the VAT. With no active organisation -- one switched off through this route -- the save creates one, with a blank slug (D225, copied) |
+| `GET /api/v1/organization/tax/` | `settings.view`, checked in the view. The mode, the rate, who settled it and when -- a hand-built answer whose time is DRF's encoding of a raw datetime: UTC, with `Z` -- and how many orders exist |
+| `PATCH /api/v1/organization/tax/` | `settings.manage`. A mode, a rate between 0 and 1 to four places, `confirm`, a reason. `update_tax_settings`: a change while orders exist is a 409 `TAX_CHANGE_NEEDS_CONFIRMATION` unless confirmed; settling, changed or not, stamps who and when and is audited; a change asks the storefront to drop its priced pages (`products`, `home`, `categories`), and the save itself `site` |
+
 ## Running it
 
 ```bash
@@ -1023,6 +1054,31 @@ the port):
   is lost. The row and its audit entry are two transactions (D215).
 - `?rating=4.9` lists the four-star reviews: the number filter's Decimal is cut to a whole
   number by the integer column's lookup (D216).
+- `?search=` on the staff list does nothing: the view declares `search_fields`, and no search
+  backend is installed (D217).
+- A staff account's email is checked for uniqueness as typed and stored lower-cased: another
+  account's email in other letters is a bare 409 (D218).
+- A new staff account is always ACTIVE, whatever status was sent; its password is not compared
+  with its email; and the role CUSTOMER makes an account the staff list then hides (D219).
+- An ID number resent with an edit of the profile it belongs to is refused as already taken
+  (D220).
+- The two guards -- not yourself, not the last owner -- read with no lock: of two owners, each
+  can be switched off while the other's deactivation is in flight. An administrator holds
+  `users.manage` and may make anyone an owner, themselves included, reset an owner's password,
+  and demote themselves: only an owner's own demotion is refused (D221).
+- A staff account's edit writes back every column as read: a password changed meanwhile is put
+  back as it was (D222).
+- Deactivating reads its reason with `request.data.get`: a body that is not an object is a 500,
+  a reason that is not a string is stored as Python prints it; and an account already off is
+  switched off again, with another audit entry (D223).
+- A branch's code taken is a bare 409; a second default branch is accepted and the default one
+  can be switched off; no branch change is audited (D224).
+- The organisation can be switched off through its own edit, after which it cannot be read and
+  the next edit creates a second one with a blank slug. The edit writes back every column as
+  read: a VAT settlement committed meanwhile is undone (D225).
+- The VAT routes answer `tax_settled_at` in UTC with a `Z` where every serializer answers the
+  shop's time, and both organisation views refuse with an envelope that has no `request_id`
+  (D226).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

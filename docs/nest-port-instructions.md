@@ -62,7 +62,18 @@ Read these alongside it:
 | Standing | After finishing a phase, write down the instructions | this file; keep it current |
 | 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
-Nothing is waiting on the owner.
+Waiting on the owner, each written up as DECISION REQUIRED in `business-rules.md` with the code's
+present behaviour as the default, and copied by the port as it stands:
+
+| Where | The question | Found as |
+|---|---|---|
+| §7.1 | May an administrator manage owners -- make one, reset one's password, become one? The rule says only an owner manages staff; the code gives `ADMIN` every permission | D221 |
+| §7.1 | Should the organisation's `status` be editable at all? Switched off, it cannot be read, and the next edit creates a second one | D225 |
+| §8a.3 | Which tracking update ships an order, what a returned parcel does to it, and whether a parcel may go backwards | D209, D210 |
+| §8a.3 | May a parcel be edited or deleted once it has left? | D206 to D208 |
+| §7a.3 | May a supplier that is switched off be a variant's preferred supplier? | D182 |
+| §7b.2, §7b.3 | A return to a supplier of units reserved for orders; and whether it is credited at the order's cost or the delivery's | D193, D185 |
+| §7c | May a draft purchase order be received? | D186 |
 
 ## 3. The machine
 
@@ -211,6 +222,10 @@ apps/api-nest/
                               for the customer's order page
     engagement/review-moderation.service.ts
                               the back office's reviews: the list, and approve and reject
+    accounts/branches.service.ts, accounts/staff-users.service.ts, accounts/roles.service.ts,
+    accounts/organization-admin.service.ts
+                              branches; staff accounts, their profiles and the two guards;
+                              roles and permissions; the organisation and its VAT treatment
     common/model-lookups.ts   what a model DateField or DateTimeField makes of a query-string value
   parity/
     run.ts                    the runner and the read-only cases
@@ -357,7 +372,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D216**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D226**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -421,6 +436,8 @@ apps/api-nest/
 | Nine new cases "matched" as 404s: both APIs were asked for `/purchase-orders/undefined/` | the case file keyed orders by invoice number *or* number, and the cases named the number of an order that has an invoice | a case file's lookup throws for a name the fixture does not hold; the same lesson as the held sale's, now enforced rather than remembered |
 | A parcel's `tracking_url` was a 500 in the port and simply absent in Django | the model property raised KeyError, and DRF's `Field.get_attribute` turns a KeyError or an AttributeError on a field that is not required -- every read-only one -- into `SkipField`: the key is left out of the answer | a property behind a read-only serializer field cannot be ported as "raises, so 500": find out which exception it raises |
 | A full run matched 393 new cases, a third of them as 404s | an earlier suite's reset (`orders-cases.ts`) deletes the reviews of the customers who sign in, and the new fixture had given them three; the cases had looked their ids up before the run began | count the races as well as the cases after a full run -- a group that finds its rows gone returns nothing -- and give a fixture's rows to owners no earlier suite cleans up after; `reviews-concurrency.ts` now fails if its fixture was there at the start and is gone |
+| Sixty-two organisation cases differed by one queued job and nothing else | `content.signals` has a `post_save` receiver on `Organization` that asks the storefront to revalidate `site`; nothing in the view or the service says so | grep `signals.py` for every model a part saves before porting it; and leave `jobs: true` on every write case, which is what found it |
+| The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 
 ## 9. Documentation, per part
 
@@ -464,17 +481,22 @@ Every part of a phase updates, in the same branch:
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger), 3 (suppliers and supplier products), 4 (purchase orders), 5 (supplier payments), 6 (customers, the call-back list), 7 (coupons), 8 (shipping) and 9 (review moderation) done. Next: 10 staff accounts and the organisation, the last. The owner has said to open the phase's PR when it is built and go on to phase 7 |
+| 6 | done 2026-10-07 | on `phase/nest-6-back-office`, ten parts (the list is in `nest-port.md`, "Phase 6: the back office"); its PR is opened when the owner asks |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 6 (parts 2 to 10), open its PR -- the owner asked for that on 2026-10-06 -- and
-   start phase 7.
-2. The owner should see D166 first (the status route cancels without `sales.cancel` and without a
-   refund: a permission the API does not enforce), then D149 (a counter oversell), D158 (a counter
-   refund that moves no account), D164 (a return on a packed order), D167 (a payment recorded
-   twice), and the decisions in business-rules §2.5, §5.6, §5.7 and §6b.1.
+1. Phase 6 is built and committed on `phase/nest-6-back-office`, unpushed. On 2026-10-06 the owner
+   said to open its PR when it was built and go on to phase 7; ask before pushing, as the standing
+   rule is that a PR waits for the create-pr command.
+2. The owner should see D221 first (an administrator can make themselves an owner and reset an
+   owner's password; the business rules say only an owner manages staff), then D166 (the status
+   route cancels without `sales.cancel` and without a refund), D149 (a counter oversell), D158 (a
+   counter refund that moves no account), D164 (a return on a packed order), D167 (a payment
+   recorded twice), D204 (a coupon that adds to the bill), D207 and D222 (edits that undo a
+   delivery and a password change), and the decisions listed in §2.
+3. Phase 7 is reports, the audit log (`AuditLogViewSet`, left out of part 10), notifications and
+   the background jobs, then the cutover.
 
 ### Checklist for a part
 

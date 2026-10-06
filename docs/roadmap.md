@@ -481,6 +481,61 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 10: staff accounts and the organisation, 2026-10-07
+
+Asked for: the rest of phase 6, its last part. Ported: `BranchViewSet`, `UserViewSet` with
+`UserWriteSerializer` and the staff services behind it (`create_staff_user`,
+`update_staff_user`, `save_staff_profile`, `set_user_status`, `check_can_lose_access`),
+`RoleViewSet`, `PermissionViewSet`, `OrganizationView` and `OrganizationTaxView` with
+`update_tax_settings`. `AuditLogViewSet` is phase 7's. **Phase 6 is built.**
+
+```text
+parity (scripts/nest-parity.sh run) ........... 10014/10014 (863 new), 114 by the documented differences
+concurrency ................................... 205/205 (13 new: a profile changed under an edit; six first saves of
+                                                one; the last-owner guard, a password and a VAT settlement lost
+                                                to an edit in flight; bursts of six)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 968 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_team.py` adds a second owner, switched off -- a case that needs two owners switches it
+on first, so `owner@rangon.test` is still the last active owner every earlier suite found --
+a clerk at the second branch with a whole profile and two sessions open, a suspended manager
+with no branch, and a branch nothing protected names, with a parked sale, a notice and an
+audit entry to its name.
+
+The cases read every route as every role; make a branch fifty ways and an account a hundred --
+each rule of the email, the password, the role and each of the profile's eleven fields; edit
+an account sixty ways, then through the two guards as the owner, as an administrator, with
+one owner and with two; deactivate with twenty shapes of reason and body; edit the
+organisation and settle its VAT with each shape of rate, confirmation and reason -- and again
+with no organisation switched on. Each write is compared by the accounts, profiles, branches
+and organisations it made or changed, the sessions it ended, what a deleted branch took with
+it, the audit log and the jobs queued.
+
+The profile's row lock was removed from the port and the checks rerun: the edit then writes
+back the ID number and the notes it read.
+
+One port bug the first run caught, by the jobs it compares: every save of the organisation --
+an edit, a VAT settlement -- fires `content.signals._site_changed`, which asks the storefront
+to drop what it cached as `site`. The port queued nothing for an edit and only the priced
+pages for a settlement. Sixty-two cases differed by that one job and nothing else.
+
+Found in Django, and copied: D217 (the staff list's search does nothing), D218 (an email in
+other letters is a bare 409), D219 (a new account is always ACTIVE; its password may be its
+email; the role CUSTOMER hides it), D220 (an ID number resent with an edit is "taken" by
+itself), D221 (the two guards take no lock -- measured, no active owner is left -- and an
+administrator may make themselves an owner or reset an owner's password), D222 (an account's
+edit writes back the password it read: measured), D223 (deactivating reads its reason by
+hand), D224 (a branch's code taken is a bare 409; two default branches, or none), D225 (the
+organisation can switch itself off, and the next edit makes a second one; its edit undoes a
+VAT settlement: measured), D226 (the VAT routes answer in UTC, and refuse without a request
+id).
+
+For the owner first: D221. The business rules say only an owner manages staff; the code gives
+an administrator every permission, `users.manage` among them.
+
 ### The NestJS API, phase 6 part 9: review moderation, 2026-10-07
 
 Asked for: the rest of phase 6, continued. Ported: `ReviewModerationViewSet` -- the list, a
@@ -4412,6 +4467,16 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D214 | **A moderator's note is whatever the body holds, and any review can be decided again.** `_moderate` reads `str(request.data.get("note", "")).strip()` with no serializer: `{"note": null}` stores the note "None", a number its digits, a list or an object its Python repr; a body that is a list, a string or `null` has no `.get` and is a 500; a note of more than 255 characters, or one holding a NUL, reaches the column and is a 500 from the database. And the decision asks nothing about the review: one already approved can be approved again -- restamped with a new moderator and time, the audit entry reading APPROVED to APPROVED -- or rejected long after it went public. D199 is the same reading of a note. *Found by the decision cases.* | Low | Copied by the port. A one-field serializer (`CharField(max_length=255, allow_blank=True)`); say whether a decided review may be decided again. `engagement/api/views.py` |
 | D215 | **A decision with no note writes back the note it read.** `_moderate` saves `status`, `moderated_by`, `moderated_at` and `moderation_note` from the review as it was read, with no lock. Measured in both APIs: a review rejected with a reason while an approval with no note is in flight ends approved with the note it had before -- the reason is gone from the row. The row and its audit entry are also two transactions: a failure between them leaves a decision with no record. D184, D200, D203 and D207 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Low | Copied by the port. Leave `moderation_note` out of `update_fields` when no note was given; one `transaction.atomic()` around both writes. `engagement/api/views.py` |
 | D216 | **`?rating=4.9` lists the four-star reviews.** `filterset_fields = ["rating"]` gives django-filter's `NumberFilter`, a decimal form field, over a small-integer column; the lookup then calls `int()` on the Decimal. `4.5` and `4.9` both list the fours, `-0.5` asks for zero stars, and `1e0` is one star. Any integer column filtered this way does the same. *Found by the filter cases.* | Low | Copied by the port. Declare the filter with an integer field. `engagement/api/views.py` |
+| D217 | **The staff list's search does nothing.** `UserViewSet` declares `search_fields = ["email", "first_name", "last_name"]`, and `DEFAULT_FILTER_BACKENDS` holds the filter and ordering backends only: no `SearchFilter` runs, so `?search=owner` answers every account. Any other view relying on `search_fields` alone would do the same; the ones that search do it by hand in `get_queryset`. *Found by the list cases.* | Low | Copied by the port. Add `SearchFilter` to the view's `filter_backends`. `accounts/api/views.py` |
+| D218 | **A staff email in other letters is a bare 409.** `User.save()` stores the email lower-cased; `UserWriteSerializer`'s `UniqueValidator` compares it as typed. `OWNER@rangon.test` passes validation against a stored `owner@rangon.test` and meets the unique index, on a create and on an edit. D198 and D202 are the same shape. *Found by the email cases.* | Low | Copied by the port. Lower-case in the field, before the validator. `accounts/api/serializers.py` |
+| D219 | **What a new staff account ignores.** `create_staff_user` always passes `status=ACTIVE`: a `status` sent with the create is validated and dropped. `validate_password(value)` is called with no user, so the similarity check never runs and an account's email is accepted as its password. And `role_code` takes every `RoleCode`, CUSTOMER among them: the account is made with no `Customer` behind it, answered 201, and the staff list -- which excludes that role -- never shows it again; an edit to that role makes a member of staff vanish the same way. With no active organisation the account is made belonging to none. *Found by the create cases.* | Low | Copied by the port. Honour or refuse `status`; pass a user to `validate_password`; take CUSTOMER out of the staff choices. `accounts/api/serializers.py`, `accounts/services.py` |
+| D220 | **An ID number resent with an edit is "already taken" -- by itself.** `StaffProfile.national_id` has a conditional unique constraint, from which DRF builds a `UniqueValidator` on the nested `StaffProfileSerializer`. A nested serializer is never given an instance, so the validator cannot exclude the profile being edited: `PATCH {"profile": {"national_id": <their own>, "designation": "Lead"}}` is a 400, "staff profile with this national id already exists." A form that sends the whole profile back cannot save a member of staff who has an ID number. `save_staff_profile` has the correct check, which is never reached. *Found by the profile cases.* | Medium | Copied by the port. `extra_kwargs = {"national_id": {"validators": []}}`: the service already answers a real duplicate. `accounts/api/serializers.py` |
+| D221 | **The staff guards take no lock, and an administrator is an owner in all but name.** `check_can_lose_access` counts the other active owners with no lock and the write follows: measured in both APIs, the second owner switched off while the first's deactivation is in flight leaves *no* active owner -- the state the guard exists to prevent, with "no recovery path short of the shell". Separately: business rule 7.1 says only `OWNER` holds `users.manage`; `ROLE_PERMISSIONS[ADMIN]` is every permission. An administrator can therefore give anyone the owner role, themselves included -- which also hands them the owner-only decision on reserved stock (D115) -- can reset an owner's password and sign in as them, and can deactivate or demote any owner but the last. And the "not yourself" guard covers a role change only for an owner: an administrator can demote themselves out of `users.manage`. *Found by the guard cases and a mid-flight check.* | High | Copied by the port, as the rule is the owner's to state. **Decision required** (business rule 7.1): may an administrator manage owners at all? Then: lock the owner rows in `check_can_lose_access`; refuse an owner as the target unless the actor is one. `accounts/services.py`, `accounts/permissions.py` |
+| D222 | **A staff account's edit writes back the password it read.** `update_staff_user` ends in `user.save()` with no `update_fields` and no lock: every column goes back as read, `password` and `last_login` among them. Measured in both APIs: a password changed while an edit of the account's name waits at its `UPDATE` is put back as it was -- the member of staff who just changed a leaked password has the old one again, and no session was ended. D184, D200, D203, D207 and D215 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` of what was changed. `accounts/services.py` |
+| D223 | **Deactivating reads its reason by hand.** `deactivate` passes `request.data.get("reason", "")` to the service: a body that is a list, a string or `null` is a 500 -- after the guards, so only for an account that could be deactivated -- and a reason that is a number, a list or an object is stored as Python prints it. An account already off is switched off again and logged again (six at once: six entries); `activate` is the same. A deactivation does not end the account's sessions, though nothing they hold will authenticate. D199 and D214 are the same reading of a body. *Found by the deactivate cases.* | Low | Copied by the port. A one-field serializer; answer an account already in the state as it is. `accounts/api/views.py` |
+| D224 | **Branches: a bare 409, two defaults or none, and no audit.** `accounts_branch_org_code_uniq` is over `(organization, code)` and the serializer has no `organization` field, so DRF builds no validator: a code taken -- or a create with no active organisation -- is the index's bare 409. `is_default` is a plain boolean: a second default branch is accepted, and the default one can be switched off or un-defaulted, leaving `default_branch()` to pick by age. A branch is made, edited and deleted with no audit entry, and deleting one silently removes its parked sales. *Found by the branch cases.* | Low | Copied by the port. A `validate_code`; a partial unique index on `is_default`; `audit.record`. `accounts/api/serializers.py`, `accounts/models.py` |
+| D225 | **The organisation can switch itself off, and its edit undoes a VAT settlement.** `status` is writable on `PATCH /organization/`. Set to INACTIVE, `get_organization()` finds nothing: the organisation reads 404, every new branch is a 409, and the next `PATCH` runs `serializer.save()` on a serializer with no instance -- it *creates* a second organisation, with a blank slug, no branches and the default VAT, which becomes the one the shop runs under; a third attempt meets the slug's unique index. The owner-only check on reserved stock is skipped on that path. Separately, the edit is a plain `save()`: every column is written back as read, so -- measured in both APIs -- a VAT settlement committed while an edit of the name is in flight is undone, mode, rate and stamp. *Found by the organisation cases and a mid-flight check.* | Medium | Copied by the port. Make `status` read-only; refuse the PATCH when there is no organisation; `update_fields`. `accounts/api/views.py`, `accounts/api/serializers.py` |
+| D226 | **The VAT routes answer in UTC, and both organisation views refuse without a request id.** `OrganizationTaxView` builds its answer by hand and puts the raw `tax_settled_at` in it: DRF's encoder writes UTC with a `Z`, where `GET /organization/` -- a serializer -- answers the same instant in the shop's time. Both views check their permission in the method and return a hand-written 403 (and a bare `{"detail": ...}` 404): an error envelope with no `request_id`, unlike every refusal the permission classes make. *Found by the cases that read both.* | Low | Copied by the port. A serializer for the tax answer; `RolePermission` on the views. `accounts/api/views.py` |
 
 ## Still API-only (no UI)
 
