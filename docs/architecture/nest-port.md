@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -189,6 +189,8 @@ across both APIs where both serve the path:
 | 10 addresses added as a customer's default at once from the back office, across both APIs | one default: the customer's row lock, the one phase 2 proved for the storefront, as the back office reaches the same service |
 | 6 customers under one new number at once, across both APIs | one is made; the rest are told the number is taken (400) or meet the unique index (409). No lock is involved |
 | A lead recovered while a note on it waits at its `UPDATE` (each API in turn) | the note's save opens the lead again and forgets its order (D200, copied); no lock is involved |
+| 6 coupons of one code at once, across both APIs | one is made; the rest are told the code is taken (400) or meet the unique index (409). No lock is involved |
+| A coupon redeemed while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the count it read, and the use is forgotten (D203, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -632,6 +634,16 @@ editing their own addresses hold one default per customer under the same row loc
 | `PUT`/`PATCH /api/v1/abandoned-checkouts/<id>/` | `customers.update`; only the note is writable, and a PUT with nothing is accepted. The save writes every column back as read (D200, copied). A PATCH's answer leaves out `recovered_order_number` for a lead with no order, as DRF skips a defaulted read-only field then |
 | `POST /api/v1/abandoned-checkouts/<id>/lost/` | `customers.update`; 200. `mark_lost`: the lead LOST whatever it was -- a recovered one too (D199, copied) -- with `str(request.data.get("note", "")).strip()` as its note when that says anything: `null` is the note "None", a body that is not an object a 500 |
 
+Then coupons (part 7): `promotions/coupons-admin.service.ts`, the screen that makes and edits
+what `checkout/coupons.service.ts` has priced and redeemed since phase 3.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/coupons/`, `GET .../<id>/` | `content.coupons_manage`, for reading too; paginated, newest first. Filters `is_active`, `discount_type`; `ordering` by `created_at` or `used_count`. Each coupon with whether its total limit is used up, the categories it is restricted to (in the category's own order) and the products (newest first), and `channels` as stored -- a list, or whatever JSON an older row holds |
+| `POST /api/v1/coupons/`, `PUT`/`PATCH .../<id>/` | `CouponSerializer`: a code no other coupon has, compared as typed and stored trimmed and upper-cased -- another coupon's code in lower case is the index's bare 409 (D202, copied); a type; a value, a minimum order and a cap; a window; a total limit and one per customer, null for none; categories and products, each a `ManyRelatedField` (a list of keys, the first that fails being the field's error; a JSON object is read by its keys, as Python iterates one); channels, cleaned to the sales channels named, once each in the enum's order, or refused; the active switch. `validate` judges the coupon as it would be left: the window must end after it starts -- two bounds from one request compared by wall clock, a stored one by instant; free delivery carries no value, whatever was sent; any other needs a value above zero, a percentage at most 100. Nothing stops a minimum or a cap below zero (D204, copied). An edit writes every column back as read, `used_count` among them (D203, copied), then sets each restriction that was sent |
+| `DELETE /api/v1/coupons/<id>/` | 204. A coupon ever redeemed -- a released redemption counts -- is switched off and kept; any other is deleted with its restrictions, and the carts and orders that named it are left without one (`SET_NULL`) |
+| `GET /api/v1/coupons/<id>/redemptions/` | every use, newest first, unpaginated: the order's number, the customer's name, the discount, and when a cancelled order gave the use back |
+
 ## Running it
 
 ```bash
@@ -920,6 +932,13 @@ the port):
 - A note on a lead saves every column back as it was read: a lead recovered meanwhile is opened
   again and its order forgotten (D200).
 - A NUL in the customer list's `search` is a 500, on every route of the viewset (D201).
+- A coupon's code is checked for uniqueness as typed and stored upper-cased: another coupon's
+  code in lower case passes the serializer and is a bare 409 (D202).
+- A coupon's edit writes back every column as read, `used_count` among them: a redemption
+  committed while the edit is in flight is forgotten, and a coupon good once can be used again
+  (D203).
+- A coupon's minimum order value and its cap may be below zero. A negative cap replaces any
+  larger discount -- every discount -- so the coupon adds to the bill (D204).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

@@ -481,6 +481,41 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 7: coupons, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `CouponViewSet` (list, read, make, edit,
+delete, `redemptions`) with `CouponSerializer`'s rules. What a coupon is worth at a checkout, and
+its redemption under the coupon's row lock, were phase 3.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 7698/7698 (250 new), 83 by the documented differences
+concurrency ................................... 174/174 (3 new: six coupons of one code, a coupon redeemed
+                                                while an edit of it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 878 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+No fixture was needed: the coupons the cart and checkout fixtures made already cover each type,
+a category and a product restriction, channels stored as a list and as a bare word, coupons
+redeemed and not, and one a cart still names.
+
+The cases read coupons and their redemptions as every role and through each filter and ordering;
+make a coupon ninety ways -- each type, a value at each bound, windows that end as they start
+(in one zone and in two), limits, categories and products that are a list, a word, an object, a
+null, a key that is not one, channels of every shape; edit one forty ways, half of them a PATCH
+of one side of a rule that is judged on the coupon as it would be left; and delete one never
+used, restricted, redeemed, already off, and named by a cart.
+
+One port bug the first run caught: `categories` sent as a JSON object was refused as "not a
+list", where DRF's `ManyRelatedField` iterates it -- a dict is iterable -- and looks up its keys.
+`manyPkRelatedField` now reads an object by its keys.
+
+Found in Django, and copied: D202 (another coupon's code in lower case is a bare 409), D203 (an
+edit writes back the use count it read: measured, a redemption committed meanwhile is
+forgotten), D204 (a cap below zero is accepted, and then replaces every discount: the coupon adds
+to the bill).
+
 ### The NestJS API, phase 6 part 6: customers and the call-back list, 2026-10-06
 
 Asked for: the rest of phase 6, continued. Ported: `CustomerViewSet` (list, read, create, edit,
@@ -4262,6 +4297,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D199 | **A lead already recovered can be written off.** `mark_lost` sets `LOST` whatever the lead was: a `RECOVERED` lead -- one that became an order -- is marked lost, keeping its order and its `recovered_at`, and the recovery figure the list is judged by drops by one. A lost lead can be lost again. The note is `str(request.data.get("note", ""))`: `null` is stored as the word "None", and a body that is not an object is a 500. *Found by the write-off cases.* | Low | Copied by the port. Refuse a lead that is not OPEN; a one-field serializer for the note. `orders/services/leads.py`, `orders/api/views.py` |
 | D200 | **A note on a lead writes back the status it read.** `AbandonedCheckoutViewSet` updates through a plain `serializer.save()`, which writes every column from the lead as read. A lead that checkout recovers while a note on it is in flight is set back to `OPEN`, its `recovered_order` and `recovered_at` cleared -- the order exists and the list says the shopper still needs calling. Measured in both APIs by a mid-flight check. D184 is the same shape. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. `update_fields=["note", "updated_at"]`. `orders/api/views.py` |
 | D201 | **A NUL in the customer search is a 500.** `CustomerViewSet.get_queryset` filters on the raw `search` parameter, where DRF's `SearchFilter` would refuse a NUL: `?search=a%00b` reaches PostgreSQL and fails, on the list and on every detail route. D125, D144 and D172 are the same. *Found by the search cases.* | Low | Copied by the port. Use `SearchFilter`, or refuse the character. `customers/api/views.py` |
+| D202 | **Another coupon's code in lower case is a bare 409.** `Coupon.save()` stores a code trimmed and upper-cased; the serializer's `UniqueValidator` compares it as typed. `rangon10` passes validation against a stored `RANGON10`, is upper-cased on save and meets the unique index, on a create and on an edit. D198 is the same shape. *Found by the code cases.* | Low | Copied by the port. Upper-case in the field, before the validator. `promotions/api/serializers.py` |
+| D203 | **A coupon's edit writes back the use count it read.** `CouponViewSet.update` is a plain `serializer.save()`: every column goes back as read, `used_count` among them. A redemption takes the coupon's row lock and increments the count; an edit that read the coupon before it waits at its own `UPDATE` and then writes the old count over it. Measured in both APIs: a coupon redeemed mid-edit is left at 0 uses, so a coupon good once can be used again. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` without `used_count`, or the row lock in `update`. `promotions/api/views.py` |
+| D204 | **A coupon's cap and minimum may be below zero, and a negative cap raises the price.** `maximum_discount` and `minimum_order_value` are plain decimals with no minimum. `validate_coupon` replaces a discount larger than the cap with the cap -- every discount is larger than a negative one -- and nothing floors the result at zero: a coupon capped at -100.00 "discounts" every order by -100.00, which is 100.00 added to the bill. *Found by the cap cases, then reading `promotions.services`.* | Medium | Copied by the port. `min_value=0` on both fields; floor the discount at zero. `promotions/api/serializers.py`, `promotions/services.py` |
 
 ## Still API-only (no UI)
 
