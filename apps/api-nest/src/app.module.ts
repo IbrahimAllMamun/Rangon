@@ -22,6 +22,7 @@ import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
 import { ShippingModule } from './shipping/shipping.module';
+import { EngagementModule } from './engagement/engagement.module';
 import { ShopModule } from './shop/shop.module';
 
 @Global()
@@ -72,6 +73,7 @@ export class AppModule {
         CustomersModule,
         PromotionsModule,
         ShippingModule,
+        EngagementModule,
       ],
       controllers: [HealthController],
       providers: [
