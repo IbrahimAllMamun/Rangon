@@ -32,7 +32,8 @@ export type FilterKind =
   | { kind: 'boolean' }
   | { kind: 'model'; table: string }
   | { kind: 'choice'; choices: readonly string[] }
-  | { kind: 'char' };
+  | { kind: 'char' }
+  | { kind: 'uuid' };
 
 export interface FilterField {
   /** The query parameter, which is the model field's name. */
@@ -64,6 +65,13 @@ export const charFilter = (param: string, column: string): FilterField => ({
   param,
   column,
   filter: { kind: 'char' },
+});
+
+/** `filters.UUIDFilter`: a `forms.UUIDField`, which strips and reads the value as `uuid.UUID` does. */
+export const uuidFilter = (param: string, column: string): FilterField => ({
+  param,
+  column,
+  filter: { kind: 'uuid' },
 });
 
 /** `BooleanWidget.value_from_datadict`. */
@@ -106,6 +114,17 @@ export async function applyFilters(
         continue;
       }
       if (text !== '') conditions.push(`${field.column} = ${sql.add(text)}`);
+      continue;
+    }
+    if (filter.kind === 'uuid') {
+      const text = raw === undefined ? '' : pyStrip(raw);
+      if (text === '') continue;
+      const id = parseUuid(text);
+      if (id === null) {
+        errors[field.param] = ['Enter a valid UUID.'];
+        continue;
+      }
+      conditions.push(`${field.column} = ${sql.add(id, 'uuid')}`);
       continue;
     }
     const text = raw ?? '';

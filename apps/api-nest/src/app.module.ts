@@ -16,6 +16,7 @@ import { ContentAdminModule } from './content/admin/content-admin.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
 import { PosModule } from './pos/pos.module';
+import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
 import { ShopModule } from './shop/shop.module';
@@ -64,6 +65,7 @@ export class AppModule {
         ContentAdminModule,
         PosModule,
         FinanceModule,
+        PurchasingModule,
       ],
       controllers: [HealthController],
       providers: [

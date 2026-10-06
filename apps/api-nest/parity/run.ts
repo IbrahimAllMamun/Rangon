@@ -44,6 +44,8 @@ import { posVoidCases } from './pos-void-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
 import { expensesCases } from './expenses-cases.ts';
+import { purchasingCases } from './purchasing-cases.ts';
+import { purchasingConcurrencyChecks } from './purchasing-concurrency.ts';
 import { expensesConcurrencyChecks } from './expenses-concurrency.ts';
 import { financeCases } from './finance-cases.ts';
 import { financeConcurrencyChecks } from './finance-concurrency.ts';
@@ -56,6 +58,8 @@ const NEST = new URL(process.env.NEST_BASE ?? 'http://nest:3000');
 const HOST = process.env.PARITY_HOST ?? 'localhost';
 const SIGNING_KEY = process.env.JWT_SIGNING_KEY || process.env.DJANGO_SECRET_KEY || '';
 const ONLY = process.env.PARITY_ONLY ?? '';
+/** With `PARITY_ONLY=concurrency`: only the race groups whose name contains this. */
+const RACES = process.env.PARITY_RACES ?? '';
 // PARITY_VERBOSE=1: print each case's status and side effects, to check a case tests what it says.
 const VERBOSE = Boolean(process.env.PARITY_VERBOSE);
 
@@ -588,6 +592,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await labelsCases()));
   cases.push(...(await financeCases()));
   cases.push(...(await expensesCases()));
+  cases.push(...(await purchasingCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -724,20 +729,26 @@ async function main(): Promise<void> {
   // Invariants that hold only under the right lock, driven concurrently.
   let racesFailed = 0;
   if (!ONLY || 'concurrency'.includes(ONLY)) {
-    const checks = [
-      ...(await concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })),
-      ...(await adminConcurrencyChecks({ DJANGO, NEST })),
-      ...(await inventoryConcurrencyChecks({ DJANGO, NEST })),
-      ...(await contentConcurrencyChecks({ DJANGO, NEST })),
-      ...(await merchandisingConcurrencyChecks({ DJANGO, NEST })),
-      ...(await posConcurrencyChecks({ DJANGO, NEST })),
-      ...(await posSaleConcurrencyChecks({ DJANGO, NEST })),
-      ...(await returnsConcurrencyChecks({ DJANGO, NEST })),
-      ...(await staffOrdersConcurrencyChecks({ DJANGO, NEST })),
-      ...(await labelsConcurrencyChecks({ DJANGO, NEST })),
-      ...(await financeConcurrencyChecks({ DJANGO, NEST })),
-      ...(await expensesConcurrencyChecks({ DJANGO, NEST })),
+    // `PARITY_RACES=returns` runs only the groups whose name contains the text.
+    const groups: [string, () => Promise<{ name: string; passed: boolean; detail: string }[]>][] = [
+      ['checkout', () => concurrencyChecks({ DJANGO, NEST, SIGNING_KEY })],
+      ['admin', () => adminConcurrencyChecks({ DJANGO, NEST })],
+      ['inventory', () => inventoryConcurrencyChecks({ DJANGO, NEST })],
+      ['content', () => contentConcurrencyChecks({ DJANGO, NEST })],
+      ['merchandising', () => merchandisingConcurrencyChecks({ DJANGO, NEST })],
+      ['pos', () => posConcurrencyChecks({ DJANGO, NEST })],
+      ['pos-sale', () => posSaleConcurrencyChecks({ DJANGO, NEST })],
+      ['returns', () => returnsConcurrencyChecks({ DJANGO, NEST })],
+      ['staff-orders', () => staffOrdersConcurrencyChecks({ DJANGO, NEST })],
+      ['labels', () => labelsConcurrencyChecks({ DJANGO, NEST })],
+      ['finance', () => financeConcurrencyChecks({ DJANGO, NEST })],
+      ['expenses', () => expensesConcurrencyChecks({ DJANGO, NEST })],
+      ['purchasing', () => purchasingConcurrencyChecks({ DJANGO, NEST })],
     ];
+    const checks: { name: string; passed: boolean; detail: string }[] = [];
+    for (const [group, run] of groups) {
+      if (!RACES || group.includes(RACES)) checks.push(...(await run()));
+    }
     for (const check of checks) {
       if (!check.passed) racesFailed += 1;
       console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${check.name}: ${check.detail}`);
