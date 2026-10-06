@@ -481,6 +481,58 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 5 part 6: the staff order screens, 2026-10-06
+
+Asked for: phase 5 of the port, continued. Ported: `OrderViewSet` -- the list with its search,
+dates and filters, an order, its timeline, invoice and packing slip, and the four things staff do
+to one: `status` (`lifecycle.transition`, whole: PACKED consumes the reservation, CANCELLED
+releases it and the coupon), `cancel` (`cancel_order`), `payments` (`capture_payment` or
+`record_payment`) and `refunds` (`refund_order`). `capture_payment` moved from the webhook's
+service into `OrderPayments`, so a gateway's event and a member of staff capture through one
+function. Part 7, the label sheet, is what is left of the phase.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 4906/4906 (655 new), 54 by the documented differences
+concurrency ................................... 112/112 (15 new: two requests to pack one order and
+                                                to record one pending payment, queued on the row; an
+                                                order packed or refunded, and a shelf emptied, mid-flight;
+                                                six refunds at once, six clicks of one, pack against cancel)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 818 passed (28 new: the list's search digits and dates)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_staff_orders.py` (new, in the seed list) makes eight online orders whose stock is
+reserved by `inventory.reserve` and moved by the status machine itself: confirmed with cash on
+delivery pending; paid by card with a coupon used; part paid; packed; shipped; at PAR3, on stock
+received there for it; paid and refunded in full; delivered and paid.
+
+The cases read the list as every role and by some ninety query strings -- every filter value,
+searches by number, name and each spelling of a phone number, LIKE's own wildcards, dates that
+are and are not dates -- and each of the four read routes for every fixture order, across
+branches and through each filter. They send every fixture order, a counter sale, a voided sale
+and a returned order to each of the ten statuses; pack with the shelf counted away, one short,
+its reservation released and its row gone; cancel as every role, each order, with sixteen shapes
+of reason; record payments by every method, into every kind of account, for less, exactly and
+more than is pending; refund by every method and account, past what was paid, and with keys.
+
+With the port's `FOR UPDATE` removed from the order in `transition` and `refund_order` and from
+the payment in `capture`, nine race checks failed: two Nest requests to pack one order deducted
+its stock twice; a Nest cancel went through, with its refund, on an order packed mid-flight; a
+Nest refund was paid on an order refunded in full mid-flight; six refunds at once paid 8460.00
+back on 4230.00; a pending payment was captured twice on the timeline -- and both of the
+webhook's own capture checks failed with it, the function now being one.
+
+A port bug the first run caught: the cancel answered with the order as finally read, where
+Django answers with it as it stood before the refund (D170).
+
+Found in Django, and copied: D166 (the status route cancels an order without `sales.cancel` and
+without a refund), D167 (a payment recorded twice is the money twice: no `Idempotency-Key`,
+nothing compared with what is owed), D168 (a cancel's reason is not validated), D169 (an order
+refunded in full cannot be cancelled), D170, D171 (D160 on the refunds route), D172 (a NUL in
+`search` is a 500). D166 is a permission the API does not enforce, and by the port's own rule is
+Django's to fix before the port's copy of it is merged.
+
 ### The NestJS API, phase 5 part 5: returns, at the counter and in the back office, 2026-10-06
 
 Asked for: phase 5 of the port, continued. Ported: `ReturnRequestViewSet` (list, read, open,
@@ -3866,6 +3918,13 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D163 | **Rejecting a return marks the order delivered, now.** `reject` sends an order in RETURN_REQUESTED to DELIVERED through `transition`, which stamps `delivered_at` with the current time -- whatever other returns the order has, and whatever it was before the return. Measured: a SHIPPED order with a return opened and rejected is DELIVERED though it never was; an order delivered earlier has its `delivered_at` moved to the moment of the rejection, so its 14-day return window starts again; and on an order with two returns, rejecting the second while the first is RECEIVED leaves the order DELIVERED, so completing the first refunds it (`payment_status` REFUNDED) and the order stays DELIVERED. *Found by the reject cases.* | Medium | Copied by the port. Remember the status the order came from, and keep it RETURN_REQUESTED while another return is open. `orders/services/returns.py`, `orders/services/lifecycle.py` |
 | D164 | **A return on a packed order puts goods on the shelf that then ship.** `request_return` asks only that stock is committed, which it is from PACKED on, and moves the order to RETURN_REQUESTED only from SHIPPED or DELIVERED. Measured: a counter return of a PACKED, unpaid online order is a 201 -- the unit goes back on the shelf (42 to 43), the line is marked returned, nothing is refunded -- and the order stays PACKED; `POST /orders/<id>/status/` then ships it, and the shelf still says 43 for a unit that has left. *Found by the cases for each order status.* | Medium | Copied by the port. Refuse a return before SHIPPED (a packed order is cancelled or unpacked, not returned). `orders/services/returns.py` |
 | D165 | **A return past the window, let through by the override, leaves no audit entry.** [business-rules.md](business-rules.md) §2.2 says a return beyond the window needs `sales.refund_override` "and a reason, which is recorded in the audit log". `request_return` checks the permission and records nothing: the only audit row is the order's status change, and no reason is asked for beyond the return's own. Measured: an administrator opens a return on a sale delivered 40 days earlier; one `ORDER_STATUS_CHANGED` row, nothing naming the override. *Found comparing the rule with the rows the request writes.* | Low | Copied by the port. Write an audit entry when the override is what let the return through. `orders/services/returns.py` |
+| D166 | **The status route cancels an order without the right to cancel, and without a refund.** `POST /orders/<id>/status/` asks for `orders.update_status` and takes any `to_status`; CANCELLED goes through `transition`, not `cancel_order`. [business-rules.md](business-rules.md) §5.2 gives cancelling to staff with `sales.cancel` and has it refund what was captured. Measured on the parity stack: the inventory manager, who holds `orders.update_status` and not `sales.cancel`, is refused by `POST /orders/<id>/cancel/` (403) and cancels the same order with `{"to_status": "CANCELLED"}` (200); an order paid 1602.00 by card and cancelled this way is left CANCELLED and PAID, its stock and coupon released and nothing refunded. *Found by the status cases, run as every role.* | High | Copied by the port, which must not be the fix: this is a permission the API fails to enforce. Refuse CANCELLED on the status route, or send it through `cancel_order` behind `sales.cancel`. `orders/api/views.py` |
+| D167 | **Recording a payment can record the money twice.** `POST /orders/<id>/payments/` takes no `Idempotency-Key`, though §5.5 has every operation that moves money honour one, and nothing compares the amount with what the order still owes. A pending payment of the same method and amount is captured; anything else -- the same request sent again included -- is a new captured payment. Measured: the cash on delivery of a delivered order, 4230.00, recorded a second time is a 201 and a second 4230.00 into the drawer; 9999.00 in cash on a 5790.00 order is recorded as paid; a voided sale and an order refunded in full both accept a payment. And an account the money cannot land in is refused only after it has been saved: asking to capture cash on delivery into the bank is a 400 that leaves the pending payment pointing at the bank, because the view saves the account before the service's transaction begins. *Found porting the payments action.* | High | Copied by the port. Honour the header as `refund_order` does, refuse a payment past what is outstanding, and set the account inside the capture. `orders/api/views.py`, `orders/services/payments.py` |
+| D168 | **A cancel's reason is not validated.** `cancel` reads `request.data.get("reason", "")` and `transition` slices it (`reason[:255]`) after the stock is released. Measured: `{"reason": null}`, a number, `true` or an object is a 500 on an order that could be cancelled (and the 409 it would otherwise be on one that could not); a list goes through, stored as Python prints it (`['Changed', 'mind']`) in the order, the ledger and the audit log; a body that is a JSON list is a 500. *Found by the reason cases.* | Low | Copied by the port. Give the action a serializer. `orders/api/views.py` |
+| D169 | **An order paid and refunded in full cannot be cancelled.** `cancel_order` refunds `paid_total - refunded_total` whenever `paid_total` is above zero; when everything has already gone back that is a refund of 0.00, which `refund_order` refuses ("Refund amount must be positive."), and the cancellation is rolled back with it. Measured: a PENDING order paid 890.00 and refunded 890.00 answers 400 to `POST /orders/<id>/cancel/` and stays PENDING, its stock still reserved; only the status route (D166) cancels it. *Found by a fixture order with nothing left to refund.* | Medium | Copied by the port. Refund only when something is left. `orders/services/lifecycle.py` |
+| D170 | **A cancel answers with the payment status from before its own refund.** `cancel_order` returns the order `transition` loaded; `refund_order` then loads and saves its own copy. Measured: cancelling an order paid 1602.00 answers `payment_status: PAID`, `refunded_total: 0.00` beside a `refunds` list holding the 1602.00 refund; the next read says REFUNDED and 1602.00. *Found comparing the answer with the row.* | Low | Copied by the port. Refresh the order before serialising it. `orders/services/lifecycle.py` |
+| D171 | **A refund asked for with another refund's `Idempotency-Key` answers with that refund.** D160 on the back office's route: `refund_order` looks the key up across every order. Measured: `POST /orders/<id>/refunds/` for 100.00 with the key of a refund on another order is a 201 whose body is the other order's 890.00 refund; nothing is refunded on the order asked about. *Found by a case that reuses a key.* | Medium | Copied by the port. Fixed with D160. `orders/services/payments.py` |
+| D172 | **A NUL in the order list's `search` is a 500.** `get_queryset` passes `search` to `icontains` unchecked, on every route of the viewset: `GET /orders/?search=a%00b` and `GET /orders/<id>/?search=a%00b` both fail in PostgreSQL. The same family as D144. *Found by the search cases.* | Low | Copied by the port. Refuse a NUL as the filter backends do. `orders/api/views.py` |
 
 ## Still API-only (no UI)
 

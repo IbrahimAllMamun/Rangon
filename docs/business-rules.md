@@ -800,6 +800,27 @@ One thing here is not a decision but a defect, and breaks §1.4: a counter sale 
 two lines** is checked line by line against the same shelf figure and can take it below zero
 (D149).
 
+### 5.7 In the back office: where the code and these rules part
+
+Found while porting the staff order screens to the NestJS API (2026-10-06). The port copies each;
+the defect numbers are in [roadmap.md](roadmap.md).
+
+- **§5.2 is not enforced on the status route.** Changing an order's status to `CANCELLED` asks
+  only for `orders.update_status`, and refunds nothing: an inventory manager, who may not cancel,
+  cancels; a paid order is left cancelled and paid (D166). Not a decision -- the rule is written
+  -- but the fix is a choice: refuse `CANCELLED` there, or send it through the cancel service
+  behind `sales.cancel`.
+- **§5.5 is not honoured when a payment is recorded.** The route takes no `Idempotency-Key`, so
+  the same request twice is the money twice, and nothing stops a payment past what the order
+  owes, or on an order that is cancelled or refunded (D167).
+  *`DECISION REQUIRED` -- should a payment past what is outstanding be refused, or kept as credit
+  owed to the customer? Until decided, it is recorded as paid.*
+- **The return statuses can be set by hand.** `RETURN_REQUESTED`, `RETURNED` and `REFUNDED` are
+  edges of §5.1 that the status route follows like any other: a delivered order can be walked to
+  `REFUNDED` with no return raised and no money paid back.
+  *`DECISION REQUIRED` -- should those three statuses be reachable only through a return (§2.1)?
+  Until decided, staff with `orders.update_status` can set them.*
+
 ## 6. Customers
 
 - Identity is **phone-first**: `phone` is unique per organisation when present; `email` is optional and

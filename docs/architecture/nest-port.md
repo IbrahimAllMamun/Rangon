@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt), part 4 (voiding a sale), part 5 (returns, at the counter and in the back office) 2026-10-06 |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt), part 4 (voiding a sale), part 5 (returns, at the counter and in the back office), part 6 (the staff order screens) 2026-10-06 |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -149,6 +149,14 @@ across both APIs where both serve the path:
 | A drawer emptied while a completion's refund waits on the account's row (each API in turn) | the completion is refused whole: the return still RECEIVED, nothing refunded |
 | 6 returns opened at once on one sale, across both APIs | six 201s and six numbers in a row, none shared; with the port's order lock removed most of the six are 500s |
 | 6 counter returns of a sale's one unit at once, across both APIs | one 201: the unit and the money come back once, the sale REFUNDED |
+| Two requests to pack one order queued on its row (one per API, then both through each API) | both answer 200, the order is packed once and its stock deducted once; with the port's `FOR UPDATE` removed the two Nest requests deduct the stock twice |
+| Two requests to record one pending payment queued on its row (one per API, then both through each API) | both answer 201, the payment is captured once and the money entered once; with the port's `FOR UPDATE` removed the Nest pair capture it twice on the timeline -- and the webhook's own capture checks fail with them, the function being one |
+| An order packed while a cancel of it waits on the order's row (each API in turn) | the cancel is refused by the status machine, nothing released or refunded; with the port's `FOR UPDATE` removed Nest cancels and refunds an order whose goods have left the shelf |
+| An order refunded in full while a refund of it waits on the order's row (each API in turn) | refused, a 422; with the port's `FOR UPDATE` removed Nest pays it again |
+| A shelf emptied while an order being packed waits on the stock row (each API in turn) | packing is refused whole: the order stays PROCESSING, nothing deducted |
+| 6 refunds of an order's whole payment at once, across both APIs | one 201 and five 422s: refunded once; with the port's `FOR UPDATE` removed the order is refunded twice over |
+| 6 clicks of one refund with one `Idempotency-Key`, across both APIs | six 201s naming one refund |
+| An order packed through one API and cancelled through the other at once | one wins and the other is a 409; the stock and the money agree with whichever it was |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -440,6 +448,27 @@ one a void uses.
 | `POST /api/v1/returns/<id>/complete/` | `sales.refund`; the body is validated before the return is looked for. `CompleteReturnSerializer`: an amount of at least 0.01 (the return's own unless given, and any amount up to what is left to refund on the order), a method the ledger knows or blank, any account. A COMPLETED return answers as it is; only a RECEIVED one is completed, else a 409. The order locked, then `refund_order` keyed by the `Idempotency-Key` header, or by the return when there is none: a retry pays once, and a key another refund holds completes the return with nothing paid (D160, copied). An order waiting on the return, with every line back, goes RETURNED and then REFUNDED, whatever was refunded. Audited as `REFUND_ISSUED` on the return |
 | `POST /api/v1/pos/returns/` | `sales.refund`, `pos` scope; 201. The same body as opening a return, its comment dropped: requested, approved, received and refunded in one transaction, by the same four steps. The refund's method is `request.data.get("refund_method", "CASH")`, unvalidated: a blank or `null` is the method of the largest payment, and one the ledger does not know -- `BITCOIN`, a number, a list -- is recorded against no account and moves no balance; past 20 characters it is a 500 (D158, copied) |
 
+Then the back office's orders (part 6): `OrderViewSet`, every channel's orders read and acted on.
+The reads are `orders/staff-order.service.ts`, whose `OrderDetailSerializer` the counter already
+answers with. The writes are `orders/staff-order-actions.service.ts`, over three shared pieces:
+`OrderLifecycle` (`lifecycle.transition` with the stock side of its two edges -- PACKED turns the
+order's reservation into a sale through `StockService.consumeReservation`, CANCELLED gives the
+reservation and the coupon's use back through `releaseReservation` and `CouponsService.release`),
+`OrderPayments.capture` (`capture_payment`, moved out of the webhook's service so that a gateway's
+event and a member of staff capture through one function and one lock) and `refundOrder`.
+
+Every route runs the viewset's queryset and filters, so an order at another branch, or one the
+query string excludes, is a 404 on a write as on a read.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/orders/` | `orders.view`; `OrderListSerializer`, paginated, newest placed first, the orders of the user's branch. `search` matches the number or the customer's name in any case, or the digits of a phone number once country and trunk prefixes are taken off (`880` alone matches nobody); `date_from` and `date_to` are days in Dhaka, read as Django's `DateField` reads one -- a value that is not a date is a 400 naming it. Filters `channel`, `status`, `payment_status`, `branch`, `customer`; `ordering` by `placed_at` or `grand_total`. A NUL in `search` is a 500 (D172, copied) |
+| `GET /api/v1/orders/<id>/`, `.../timeline/`, `.../invoice/`, `.../packing-slip/` | `orders.view`; the order with its lines, payments, refunds and events; its events alone; the order with `document_type: INVOICE` and the organisation; the same as `PACKING_SLIP` with no prices on the lines |
+| `POST /api/v1/orders/<id>/status/` | `orders.update_status`; the body is validated first (`to_status`, any string; a reason of up to 255 characters). `transition`: the order locked; an order already there answers as it is; an edge the status machine does not have is a 409 with both ends. PACKED locks the stock rows, releases what the order holds and deducts each line at the row's average cost -- a line already sold for this order is skipped -- and a shelf that cannot cover it is a 409 that leaves the order where it was. CANCELLED is refused once stock has left the shelf, releases the reservation and the coupon's use, and keeps the reason; it asks for no `sales.cancel` and refunds nothing (D166, copied). SHIPPED and DELIVERED tell the customer after the commit: an in-app notice, then the email and SMS jobs |
+| `POST /api/v1/orders/<id>/cancel/` | `sales.cancel`; `cancel_order`: only a PENDING, CONFIRMED or PROCESSING order, else a 409; cancelled through the status machine, then whatever was paid and not refunded goes back through `refund_order`, in one transaction. The reason is `request.data.get("reason")` as sent: Python slices it, so a string or a list passes and anything else is a 500 (D168, copied). An order paid and refunded in full cannot be cancelled: the refund of nothing is a 400 (D169, copied). The answer carries the payment status and totals from before the refund (D170, copied) |
+| `POST /api/v1/orders/<id>/payments/` | `sales.payment_record`; 201 with the order. `RecordPaymentSerializer`: a method, an amount of zero or more, a reference, an open account. A pending payment of the same method and amount is captured -- its account set first, in a statement of its own, when the body names one -- under the payment's row lock, into the account it lands in; anything else is recorded as a new captured payment. Nothing compares the amount with what the order owes, no order is refused, and the route takes no `Idempotency-Key`: the same request twice is the money twice (D167, copied) |
+| `POST /api/v1/orders/<id>/refunds/` | `sales.refund`; 201 with the refund. `RefundRequestSerializer`: an amount, a reason, a method the ledger knows, an open account. `refund_order` under the order's row lock, keyed by the `Idempotency-Key` header: never more than was paid and not yet refunded (a 422), through the largest captured payment (D153), out of the account the method's money moves through. A key another refund holds answers with that refund, whichever order it is on (D171, copied) |
+
 ## Running it
 
 ```bash
@@ -653,6 +682,17 @@ the port):
   shipped (D164).
 - A return past the window that the override lets through writes no audit entry of its own
   (D165).
+- The status route cancels an order for anyone who may change a status, with no `sales.cancel`
+  and no refund: a paid order is left CANCELLED and PAID (D166).
+- Recording a payment takes no `Idempotency-Key`, compares nothing with what is owed and refuses
+  no order; an account the money cannot land in is refused after it has been saved on the pending
+  payment (D167).
+- A cancel's reason is taken as sent: anything but a string or a list is a 500 (D168).
+- An order paid and refunded in full cannot be cancelled (D169).
+- A cancel answers with the payment status and totals from before its own refund (D170).
+- A refund asked for with an `Idempotency-Key` another refund holds answers with that refund,
+  whichever order it belongs to (D171).
+- A NUL in the order list's `search` is a 500, on every route of the viewset (D172).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

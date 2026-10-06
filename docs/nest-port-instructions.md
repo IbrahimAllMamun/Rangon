@@ -182,11 +182,13 @@ apps/api-nest/
                               the staff's OrderDetailSerializer; record_payment as staff take money
     orders/returns.service.ts, returns.controller.ts
                               orders.services.returns and its two views: back office and counter
+    orders/staff-order-actions.service.ts, orders.controller.ts, order-lifecycle.service.ts
+                              OrderViewSet's writes; lifecycle.transition with its stock edges
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
     concurrency.ts            the race checks; admin-, inventory-, content-, merchandising- and
-                              pos- and returns-concurrency.ts for staff writes
+                              pos-, returns- and staff-orders-concurrency.ts for staff writes
     restore.ts                snapshot-and-restore of whole tables for the admin write cases
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
@@ -326,7 +328,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D165**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D172**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -383,6 +385,8 @@ apps/api-nest/
 | Two requests for one return passed "one wins, one is refused" with the return's lock removed | a request that takes no `FOR UPDATE` still queues at its `UPDATE`; when it happened to be first in the queue the other re-read the row and refused itself | run the pair through each API on its own as well as one per API, and assert the refusal's own message |
 | A return's two lines came back in a different order on the second run, in Django alone | no `ORDER BY` anywhere: `ReturnItem` has no `Meta.ordering` (D161), and the restore between the two sides moves rows in the heap | send Django's statement as it is; compare what it leaves unordered by a stable key, and say so in the case file |
 | The port stored a comment the counter route should have dropped | `PosReturnView` validates `customer_comment` with the shared serializer and `pos_return` never passes it on | read what the service is called with, not only what the serializer accepts |
+| A fixture for one part broke another part's race check | it reserved a unit of the SKU the check sells the last of at the second branch | a fixture brings its own stock (`receive_stock`) rather than borrowing a SKU a check counts on; rerun every race check after adding one |
+| A cancel's answer differed only in its payment totals | Django serialises the object the status machine returned, not the row the refund then saved (D170) | compare the answer and the rows separately: each can be right while the other is stale |
 
 ## 9. Documentation, per part
 
@@ -425,16 +429,18 @@ Every part of a phase updates, in the same branch:
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Parts 1 (session, scan, grid, held sales), 2 (the quote, the manager's approval) and 3 (the sale and its receipt, with D115's rule) done. Part 4 (voiding a sale: `refund_order`, the cash book's `REFUND`, `release`) done too. Part 5 (returns: `orders.services.returns`, `ReturnRequestViewSet`, `pos/returns/`) done. Next: 6 the staff order screens (`OrderViewSet`: list, read, timeline, invoice, packing slip, status, cancel, `payments`, `refunds`) -- `transition` in `order-writes.service.ts` still refuses the PACKED and CANCELLED edges, which move stock -- then 7 the label sheet; each write needs races |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Parts 1 (session, scan, grid, held sales), 2 (the quote, the manager's approval) and 3 (the sale and its receipt, with D115's rule) done. Part 4 (voiding a sale: `refund_order`, the cash book's `REFUND`, `release`) done too. Part 5 (returns: `orders.services.returns`, `ReturnRequestViewSet`, `pos/returns/`) done. Part 6 (the staff order screens: `OrderViewSet`, with `OrderLifecycle` for the PACKED and CANCELLED edges) done. Next: 7 the label sheet (`products/<id>/labels/`, `inventory/labels.py`; re-introspect `schema.ts` for `inventory_labelprint`); each write needs races |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 5 (parts 6 and 7: the staff order screens, the label sheet), then open its PR
-   when the owner asks.
-2. The owner should see D149 (a counter oversell), D158 (a counter refund that moves no account),
-   D164 (a return on a packed order), and the decisions in business-rules §2.5 and §5.6.
+1. Finish phase 5 (part 7, the label sheet), then open its PR when the owner asks.
+2. The owner should see D166 first (the status route cancels without `sales.cancel` and without a
+   refund: a permission the API does not enforce, to be fixed in Django before the port's copy of
+   it is merged), then D149 (a counter oversell), D158 (a counter refund that moves no account),
+   D164 (a return on a packed order), D167 (a payment recorded twice), and the decisions in
+   business-rules §2.5, §5.6 and §5.7.
 
 ### Checklist for a part
 
