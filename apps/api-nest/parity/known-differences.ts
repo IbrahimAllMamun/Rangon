@@ -41,6 +41,14 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
   },
   {
     reason:
+      'A path Django resolves to no view (a converter refuses a segment) with a `format` no renderer ' +
+      "has: Django's resolver answers its HTML 404 before any view negotiates; the Nest API checks the " +
+      'segment in the handler, after the negotiation, and answers the JSON 404. Both are a 404.',
+    appliesTo: (testCase) =>
+      testCase.name === 'negotiation: a path no converter takes, and an unknown format',
+  },
+  {
+    reason:
       'Form bodies: every Django view parses `application/x-www-form-urlencoded` and multipart; the ' +
       'Nest API parses them only on the views that take uploads and answers 415 elsewhere. The web ' +
       'app posts JSON to all of those.',

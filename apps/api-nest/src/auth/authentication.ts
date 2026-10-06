@@ -14,6 +14,8 @@ import { AuthenticationRequired, PermissionDenied } from '../common/errors';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { negotiate } from '../http/negotiation';
+import { PLAIN_VIEWS } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
 import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
 import {
@@ -154,6 +156,7 @@ export class AuthGuard implements CanActivate {
     private readonly authenticator: Authenticator,
     private readonly permissions: RolePermissions,
     private readonly routes: RouteRegistry,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -170,6 +173,9 @@ export class AuthGuard implements CanActivate {
       throw new NotFoundException();
 
     request.user = null;
+    // `APIView.initial()` settles the response's format before it authenticates.
+    const pattern = request.routeOptions.url ?? '';
+    if (!PLAIN_VIEWS.has(pattern)) negotiate(request, pattern, this.env);
     if (this.reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)) return true;
 
     request.user = await this.authenticator.authenticate(request);

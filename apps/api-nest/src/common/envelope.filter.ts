@@ -13,6 +13,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { Authenticator } from '../auth/authentication';
 import { RolePermissions, staffViewFor } from '../auth/permissions';
+import { negotiate } from '../http/negotiation';
 import { allowedMethods, markShortCircuit, PLAIN_VIEWS, plainViewRefusal } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
 import { ENV, Env } from '../config/env';
@@ -86,9 +87,9 @@ export class EnvelopeFilter implements ExceptionFilter {
     const question = url.indexOf('?');
     const path = question === -1 ? url : url.slice(0, question);
 
-    // The path exists for some other method: DRF still runs the view's
-    // authentication and permission checks first, and puts `Allow` on
-    // whatever it answers. A staff view's `RolePermission` sees no action
+    // The path exists for some other method: DRF still settles the format
+    // and runs the view's authentication and permission checks first, and
+    // puts `Allow` on whatever it answers. A staff view's `RolePermission` sees no action
     // here, so it reads the method's name, and a signed-in owner reaches
     // the 405 where a manager is refused with a 403.
     const pattern = this.routes.match(path)[0]?.pattern;
@@ -101,6 +102,7 @@ export class EnvelopeFilter implements ExceptionFilter {
       const allow = allowedMethods(fastify, pattern, this.allowCache);
       if (allow) reply.header('allow', allow);
       try {
+        negotiate(request, pattern, this.env);
         const user = await this.authenticator.authenticate(request);
         const view = staffViewFor(pattern);
         if (view) {

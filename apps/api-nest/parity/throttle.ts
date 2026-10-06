@@ -117,6 +117,16 @@ async function main(): Promise<void> {
       path: '/api/v1/shop/search/suggest/?q=sh',
       auth: true,
     },
+    // The format is settled before the throttles are asked: a request refused
+    // there spends nothing, and the 60 that follow are all served.
+    {
+      name: 'a format nobody renders, 70 times, then 62 requests',
+      count: 132,
+      path: [
+        ...Array<string>(70).fill('/api/v1/shop/categories/?format=xml'),
+        ...Array<string>(62).fill('/api/v1/shop/categories/'),
+      ],
+    },
     // Plain Django views are never throttled.
     { name: 'health, 70 requests', count: 70, path: '/api/health/' },
     // The `auth` scope, 10/min, refuses before the anon budget does.
