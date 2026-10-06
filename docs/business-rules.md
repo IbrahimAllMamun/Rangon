@@ -1829,6 +1829,22 @@ correction can unpick.
 delivery attempt is normally retried the next day, and that retry is another
 event on the same parcel.
 
+> **DECISION REQUIRED — default: as the code stands.** Three things about a parcel's updates are
+> not decided anywhere, and were found while porting ([D209, D210](roadmap.md#known-defects)).
+> *Which update ships the order:* only `DISPATCHED` does. An update with no status is recorded as
+> `IN_TRANSIT`, and as a packed order's first update it leaves the order `PACKED` with its parcel
+> on the road; a later `DELIVERED` takes the order straight to `DELIVERED`. *What a returned
+> parcel means for its order:* nothing — the order stays `SHIPPED`. *Whether an update may take
+> a parcel backwards:* it may — `PENDING` after `DISPATCHED` is recorded and becomes the status.
+> The likely rules are that any first movement ships the order, that a returned parcel opens a
+> return, and that a parcel that has left cannot be pending again.
+
+> **DECISION REQUIRED — default: as the code stands.** A parcel can be **edited and deleted**
+> through the API with none of the rules above ([D206–D208](roadmap.md#known-defects)): an edit
+> may move it to another order or give it a number with no courier, and a delete removes a
+> delivered parcel together with its append-only history. Whether a parcel may be corrected at
+> all once it has left, and whether one may ever be deleted, is the owner's to say.
+
 **A tracking number needs the courier that issued it**, and one courier cannot
 give one number to two parcels (`shipping_shipment_courier_tracking_uniq`,
 conditional on a non-blank number because the number usually arrives after the

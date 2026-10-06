@@ -481,6 +481,64 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 8: shipping, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `ShippingZoneViewSet`, `ShippingMethodViewSet`
+and `CourierViewSet` (plain `ModelViewSet`s), and `ShipmentViewSet` over `shipping.services`:
+`create_shipment` under the order's row lock, `record_event` under the order's and then the
+parcel's, with the order moved through the status machine the staff order screens already use.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 8758/8758 (1060 new), 99 by the documented differences
+concurrency ................................... 189/189 (15 new: one tracking number booked six times, on one order
+                                                and across two; an order cancelled, and one taken off the bench,
+                                                while a request waits on its row; a parcel delivered while an
+                                                update waits on the parcel's; bursts of six; a split delivery;
+                                                the edit that undoes a delivery)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 941 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_shipping.py` adds a zone nothing names, a courier switched off, and eight orders of one
+tee each (H01 to H08) with the parcels on them: pending on a confirmed and on a packed order, a
+split delivery half on its way, a delivered order with its second parcel not yet gone, a parcel
+at the second branch, one returned to sender and one whose delivery failed. Each order's unit is
+received first, so no other suite's available stock moves.
+
+The cases read all four resources as every role and through each filter and ordering; make a
+zone, a method and a courier each some fifty ways and edit and delete them; read a parcel
+through sixteen spellings of its courier's tracking page; book a parcel for an order in each
+status, at each branch, with each shape of number, cost, courier and method; edit, replace and
+delete parcels; and post every status for a parcel in each of nine states, then again with the
+order moved under it to each of nine statuses. Every update is compared by the queries a sale
+is compared by -- the order, its timeline, the notices and the jobs queued -- and then by the
+parcels and their history.
+
+Each lock was removed in turn from the port and the checks rerun: without the order's lock a
+cancelled order gets a parcel and a parcel leaves an order taken off the bench; without the
+parcel's a FAILED is recorded over a delivery; and two of six simultaneous DELIVEREDs are 500s.
+
+Port bugs the first run caught, all in what a write answers with: a price or a cost of "-0" is
+answered "-0.00" by Django, which answers from the validated value, not the stored one; a PATCH
+of a parcel with no courier leaves `courier_name` out; and a tracking page with a placeholder it
+is not given does not fail -- DRF reads the KeyError as a missing read-only field and leaves
+`tracking_url` out. The last was wrong in phase 2's customer order page too, which answered 500;
+both now share `shipping/tracking-url.ts`. `pyFormatNamed` gained Python's string format spec and
+indexing, which it had refused: staff can now write a courier's page through this API.
+
+One difference is declared: a tracking page that reads an attribute of the number
+(`{tracking_number.upper}`) prints a memory address in Django.
+
+Found in Django, and copied: D205 (a new method's days judged only when both are sent), D206 (a
+parcel's edit has none of the booking's rules), D207 (and writes back the status it read:
+measured, a delivery is undone), D208 (a delivered parcel and its history can be deleted), D209
+(an update's status replaces the parcel's whatever it was, and repeats are recorded), D210 (only
+DISPATCHED ships an order), D211 (a courier's tracking page is not checked: a wrong placeholder
+hides every link, a stray brace is a 500 on every read), D212 (a second fallback zone; a parcel
+for a courier switched off), D213 (shipping settings leave no audit entry, and deleting a method
+takes it off past orders).
+
 ### The NestJS API, phase 6 part 7: coupons, 2026-10-07
 
 Asked for: the rest of phase 6, continued. Ported: `CouponViewSet` (list, read, make, edit,
@@ -4300,6 +4358,15 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D202 | **Another coupon's code in lower case is a bare 409.** `Coupon.save()` stores a code trimmed and upper-cased; the serializer's `UniqueValidator` compares it as typed. `rangon10` passes validation against a stored `RANGON10`, is upper-cased on save and meets the unique index, on a create and on an edit. D198 is the same shape. *Found by the code cases.* | Low | Copied by the port. Upper-case in the field, before the validator. `promotions/api/serializers.py` |
 | D203 | **A coupon's edit writes back the use count it read.** `CouponViewSet.update` is a plain `serializer.save()`: every column goes back as read, `used_count` among them. A redemption takes the coupon's row lock and increments the count; an edit that read the coupon before it waits at its own `UPDATE` and then writes the old count over it. Measured in both APIs: a coupon redeemed mid-edit is left at 0 uses, so a coupon good once can be used again. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` without `used_count`, or the row lock in `update`. `promotions/api/views.py` |
 | D204 | **A coupon's cap and minimum may be below zero, and a negative cap raises the price.** `maximum_discount` and `minimum_order_value` are plain decimals with no minimum. `validate_coupon` replaces a discount larger than the cap with the cap -- every discount is larger than a negative one -- and nothing floors the result at zero: a coupon capped at -100.00 "discounts" every order by -100.00, which is 100.00 added to the bill. *Found by the cap cases, then reading `promotions.services`.* | Medium | Copied by the port. `min_value=0` on both fields; floor the discount at zero. `promotions/api/serializers.py`, `promotions/services.py` |
+| D205 | **A new shipping method's days are judged only when both are sent.** `ShippingMethodSerializer.validate` reads the bound that was not sent from `self.instance`, which a create does not have: `min_days: 5` alone (the longest defaults to 3), or `max_days: 0` alone, passes validation and meets `shipping_method_days_ordered` -- a bare 409 where the same mistake with both sent is the `max_days` field error. *Found by the method cases.* | Low | Copied by the port. Fall back to the model's defaults when there is no instance. `shipping/api/serializers.py` |
+| D206 | **A parcel's edit has none of the booking's rules.** `ShipmentViewSet` routes `PUT`/`PATCH` to a plain `serializer.save()`, past `create_shipment`: a tracking number is accepted on a parcel with no courier, a cost below zero is stored, a courier can be taken away from a numbered parcel, and `order` is writable -- a parcel can be moved to another order, a cancelled one included, leaving "Shipment created" on the timeline of an order that no longer has it. A number its courier already used is the index's bare 409, not the named conflict. Nothing is written to the timeline or the audit log. *Found by the edit cases.* | Medium | Copied by the port. An `update_shipment` service with the same checks; `order` read-only after creation. `shipping/api/views.py`, `shipping/services.py` |
+| D207 | **A parcel's edit writes back the status it read.** The same plain save writes every column from the parcel as read, with no lock. `record_event` takes the parcel's row lock and sets `status` and `delivered_at`; an edit of the notes that read the parcel before it waits at its own `UPDATE` and then puts the old status back. Measured in both APIs: a parcel delivered mid-edit is left DISPATCHED with no `delivered_at`, while its history says delivered and its order is DELIVERED -- and, no longer finished, it takes updates again. D184, D200 and D203 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` of what the serializer may write, or the row lock. `shipping/api/views.py` |
+| D208 | **A parcel can be deleted, with its history.** `ShipmentViewSet` is a `ModelViewSet`, so `DELETE` is routed: a parcel -- a delivered one too -- is hard-deleted and its `ShipmentEvent`s, which business rule 8a.3 calls append-only, cascade with it. The order keeps timeline entries naming a `shipment_id` that no longer exists, what was paid the courier is gone, and no audit entry is written. *Found by the delete cases.* | Medium | Copied by the port. Drop `destroy` from the viewset, or refuse once a parcel has left. `shipping/api/views.py` |
+| D209 | **A tracking update's status replaces the parcel's, whatever it was.** `record_event` refuses only a finished parcel. A `PENDING` posted for a parcel on its way rewinds it to PENDING -- after which its next movement is judged as a first one; an update dated before the last one (`occurred_at` is free, the future included) still sets the status, so the parcel shows the older of the two. And nothing refuses a repeat: six simultaneous DISPATCHEDs are six rows of append-only history (the order ships once, under the lock). *Found by the update cases and the burst check.* | Low | Copied by the port. Refuse PENDING once a parcel has left; set the status from the latest `occurred_at`; refuse a repeat of the last status within a short window, or take an `Idempotency-Key`. `shipping/services.py` |
+| D210 | **Only DISPATCHED ships an order.** An update with no status means IN_TRANSIT. As a packed order's parcel's first movement it -- or a FAILED, or a RETURNED -- is allowed (the order is packed) and moves nothing: the parcel is on the road, the order still PACKED, the customer not told. A later DELIVERED then takes the order from PACKED to DELIVERED, with `shipped_at` never set. A parcel RETURNED closes its history and leaves the order SHIPPED: nothing tells anyone the goods came back. *Found by the update cases.* | Medium | Copied by the port. **Decision required** (business rule 8a.3): ship the order on a parcel's first movement of any kind, and say what a returned parcel does to its order. `shipping/services.py` |
+| D211 | **A courier's tracking page is not checked when it is written.** `tracking_url_template` is any 255 characters, formatted with `str.format` at every read. A placeholder other than `{tracking_number}` raises KeyError inside the `tracking_url` property, which DRF reads as a missing read-only field: the answer silently has no `tracking_url`, for staff and on the customer's order page. `{0}`, `{}` or an unbalanced brace raises IndexError or ValueError: every read of a numbered parcel of that courier is a 500 -- the shipment list, the parcel, the customer's own order. *Found by the tracking-page cases.* | Medium | Copied by the port. Validate the template in `CourierSerializer` by formatting it once; catch in `Courier.tracking_url`. `shipping/api/serializers.py`, `shipping/models.py` |
+| D212 | **A second fallback zone, and parcels for what is switched off.** `is_default` has no uniqueness: a second default zone is accepted, and which one a shopper in an unlisted city gets is decided by `position`. A parcel can be booked with a courier or a method whose `is_active` is false. *Found by the zone and booking cases.* | Low | Copied by the port. A partial unique index on `is_default`; refuse inactive ones in `create_shipment`. `shipping/models.py`, `shipping/services.py` |
+| D213 | **Shipping settings leave no audit entry, and deleting a method rewrites past orders.** Zones, methods -- their prices and free-shipping thresholds -- and couriers are made, changed and deleted through plain `ModelViewSet`s that write nothing to the audit log, where the rest of the settings do (CLAUDE.md §3.5). Deleting a zone cascades to its methods, and `Order.shipping_method` and `Shipment.shipping_method` are `SET_NULL`: every past order that used the method loses the record of how it was sent. *Found by reading the captured statements of a zone's delete.* | Low | Copied by the port. `audit.record` in the three viewsets; switch a used method off instead of deleting it, as a redeemed coupon is. `shipping/api/views.py` |
 
 ## Still API-only (no UI)
 

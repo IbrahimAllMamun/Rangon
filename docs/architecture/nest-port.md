@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons), part 8 (shipping: zones, methods, couriers, parcels) 2026-10-07 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -191,6 +191,16 @@ across both APIs where both serve the path:
 | A lead recovered while a note on it waits at its `UPDATE` (each API in turn) | the note's save opens the lead again and forgets its order (D200, copied); no lock is involved |
 | 6 coupons of one code at once, across both APIs | one is made; the rest are told the code is taken (400) or meet the unique index (409). No lock is involved |
 | A coupon redeemed while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the count it read, and the use is forgotten (D203, copied); no lock is involved |
+| 6 bookings of one tracking number for one order at once, across both APIs | one parcel and one timeline entry; five are told the courier already has a parcel with that number: the order's row lock makes the check and the insert one step |
+| 6 bookings of one tracking number across two orders at once, across both APIs | one parcel; five conflicts and no 500: only the unique index stands between two orders, and the savepoint around the insert turns its refusal into the named conflict |
+| An order cancelled while a booking for it waits on its row (each API in turn) | no parcel; with the port's `FOR UPDATE` removed the booking never waits and the cancelled order gets one |
+| An order taken off the packing bench while its parcel's DISPATCHED waits on the order's row (each API in turn) | the parcel does not leave; with the lock removed the update is decided on the status it read and fails only inside the status machine |
+| A parcel delivered while a FAILED for it waits on the parcel's row (each API in turn) | its history is closed; with the lock removed the FAILED is recorded over the delivery |
+| 6 DELIVERED for one parcel at once, across both APIs | one is recorded, five find the parcel delivered; the order delivered once and its customer told once. With the locks removed two of the six are 500s |
+| 6 DISPATCHED for a packed order's parcel at once, across both APIs | six updates recorded, as nothing refuses a repeat (D209, copied); the order shipped once, `dispatched_at` stamped once, its customer told once |
+| Both parcels of a split delivery updated at once while the order is marked delivered by hand, across both APIs | no deadlock and no 500: every path takes the order's row first; the order delivered once |
+| A parcel delivered while an edit of its notes waits at its `UPDATE` (each API in turn) | the edit writes back the status it read and the delivery is gone (D207, copied); no lock is involved |
+| 6 couriers of one code, and 6 methods of one code in one zone, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -644,6 +654,36 @@ what `checkout/coupons.service.ts` has priced and redeemed since phase 3.
 | `DELETE /api/v1/coupons/<id>/` | 204. A coupon ever redeemed -- a released redemption counts -- is switched off and kept; any other is deleted with its restrictions, and the carts and orders that named it are left without one (`SET_NULL`) |
 | `GET /api/v1/coupons/<id>/redemptions/` | every use, newest first, unpaginated: the order's number, the customer's name, the discount, and when a cancelled order gave the use back |
 
+Then shipping (part 8): `shipping/shipping-settings.service.ts` -- zones, methods and couriers,
+three plain `ModelViewSet`s -- and `shipping/shipments.service.ts`, `ShipmentViewSet` over
+`shipping.services`: a parcel booked against an order, and the tracking updates that move the
+order. What a shopper is offered at checkout was phase 3's reading of the same rows.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/shipping-zones/`, `GET .../<id>/` | `settings.view`; unpaginated, by position then name. Each zone with its methods (by position, then price) and its `cities` as stored. The view names no `ordering_fields`, so `ordering` takes every serializer field by its source: `methods` joins them and lists a zone once per method |
+| `POST /api/v1/shipping-zones/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name no other zone has; `cities` a list of names, stored trimmed, lower-cased and once each -- a bare string, an object or a list holding anything but strings is refused; a zone whose stored cities are not clean keeps them through an edit of anything else. A second fallback zone is accepted (D212, copied) |
+| `DELETE /api/v1/shipping-zones/<id>/` | 204. Its methods go with it, and the orders and parcels that named one are left without a method (`SET_NULL`), in Django's order: methods read, orders and parcels updated, methods deleted, the zone deleted |
+| `GET /api/v1/shipping-methods/`, `GET .../<id>/` | `settings.view`; unpaginated, by position then price. Filters `zone` (a key that must exist) and `is_active`, which a detail route applies too: a retired method read with `?is_active=true` is a 404. `ordering` by any model field, `zone` (its position, then name) or `zone__name`; `eta_label` is "Collect in store", "1 day", "2 days" or "1–3 days" |
+| `POST /api/v1/shipping-methods/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A zone, a name, a slug of a code; `(zone, code)` unique, judged before anything else in `validate` ("The fields zone, code must make a unique set."); a price and a free-over not below zero; the days read forwards, judged on the method as it would be left -- but on a create only when both are sent, so one alone that crosses the other's default meets the check constraint, a bare 409 (D205, copied). The answer carries the money validated, not stored: a price of "-0" is answered "-0.00" and kept as 0.00 |
+| `DELETE /api/v1/shipping-methods/<id>/` | 204; the orders and parcels that named it are left without one |
+| `GET /api/v1/couriers/`, `GET .../<id>/` | `settings.view`; unpaginated, by name; `ordering` by any field |
+| `POST /api/v1/couriers/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name and a slug of a code, each unique; a phone kept as typed unless it is a mobile, which is stored canonically (`ContactPhoneField`); a tracking page of up to 255 characters, not checked for its placeholder (D211, copied); an integration, "manual" unless sent |
+| `DELETE /api/v1/couriers/<id>/` | 204, or a bare 409 while a parcel names it (`PROTECT`) |
+| `GET /api/v1/shipments/`, `GET .../<id>/` | `orders.view`; paginated, newest first, scoped to the branches the user may see through the order (D68's fix). Filters `order`, `status`, `courier`; `ordering` by any serializer field's source -- `order` is by the order's `placed_at`, newest first, `events` joins the history and lists a parcel once per update. Each parcel with its history, oldest first, and `tracking_url`: the courier's page with the number in it, filled as Python's `str.format` fills it (below) |
+| `POST /api/v1/shipments/` | `orders.fulfil`; 201. `ShipmentSerializer`, its `order` narrowed to the orders the user may see; `status`, `dispatched_at` and `delivered_at` are not writable. `create_shipment`: the number trimmed, the cost quantized; a negative cost and a number with no courier are 400s before any lock; then the order's row lock; only a CONFIRMED, PROCESSING, PACKED or SHIPPED order ("A delivered order cannot be shipped."); a number its courier already has is a 409 naming the courier, from the check or -- inside a savepoint -- from the unique index; the parcel PENDING, and "Shipment created (courier)" on the order's timeline |
+| `PUT`/`PATCH /api/v1/shipments/<id>/` | `orders.fulfil`; a plain save with none of those rules (D206, copied): every column written back as read (D207), no timeline entry. A PATCH's answer leaves out `courier_name` for a parcel with no courier, as DRF skips a defaulted read-only field then |
+| `DELETE /api/v1/shipments/<id>/` | `orders.fulfil`; 204. The parcel and its history deleted, a delivered one too (D208, copied) |
+| `POST /api/v1/shipments/<id>/events/` | `orders.fulfil`; 201. The parcel is found before the body is read. A status of the six (IN_TRANSIT when none is sent), a message, a place, a time (now when none is sent, stamped before the row is). `record_event`: the order's row lock, then the parcel's; a DELIVERED or RETURNED parcel takes no more; a PENDING parcel's first movement needs its order PACKED, SHIPPED or DELIVERED ("Pack RGN-... before its parcel leaves: the order is still confirmed."); the update appended, the parcel's status and its first `dispatched_at` and `delivered_at` set, "STATUS: message" on the order's timeline; a DISPATCHED moves a PACKED order to SHIPPED and a DELIVERED moves a SHIPPED or PACKED one to DELIVERED, through `OrderLifecycle.transition`, and the customer is told once the transaction commits |
+
+A courier's tracking page is filled by `common/python.ts`'s `pyFormatNamed`: `{tracking_number}`,
+a conversion (`!r`), a string format spec (`:>12`, `:.3`, `:*^11s`, one built from the number
+itself), an index (`[0]`) and doubled braces. What Python raises decides the answer, in the back
+office and on the customer's order page alike: a KeyError or an AttributeError -- a placeholder
+the template is not given, an attribute a string does not have -- is what DRF reads as "this
+read-only field is not there", so the parcel is answered without a `tracking_url`; a ValueError
+or an IndexError -- `{0}`, `{}`, a brace left open -- is a 500 (D211, copied).
+
 ## Running it
 
 ```bash
@@ -734,6 +774,7 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
+| A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
 **Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
 images run as different users (`appuser`, uid 1001, and `node`, uid 1000). The shared volume needs
@@ -939,6 +980,30 @@ the port):
   (D203).
 - A coupon's minimum order value and its cap may be below zero. A negative cap replaces any
   larger discount -- every discount -- so the coupon adds to the bill (D204).
+- A new shipping method judges its delivery days only when both are sent: one alone that
+  crosses the other's default meets the check constraint, a bare 409 (D205).
+- A parcel's edit is a plain save with none of the booking's rules: a number with no courier, a
+  cost below zero, the parcel moved to another order -- a cancelled one too -- are all accepted,
+  a number its courier has already used is the index's bare 409, and nothing is written to the
+  order's timeline (D206). It writes every column back as read, so a parcel delivered while the
+  edit is in flight is set back to the status the edit read (D207).
+- A parcel can be deleted, delivered or not, and its append-only history goes with it; no audit
+  entry is written (D208).
+- A tracking update's status becomes the parcel's whatever the parcel's was: PENDING after
+  DISPATCHED, an update dated before the last one. Nothing refuses a repeat, so six clicks are
+  six rows of history (D209).
+- Only DISPATCHED ships an order. A packed order's parcel whose first update is IN_TRANSIT --
+  what an update with no status means -- FAILED or RETURNED is on its way while the order stays
+  PACKED; a DELIVERED then takes the order from PACKED to DELIVERED, never shipped. A parcel
+  RETURNED leaves its order SHIPPED (D210).
+- A courier's tracking page is not checked when it is written. One naming any placeholder but
+  `{tracking_number}` silently drops `tracking_url` from every parcel of that courier; `{0}`,
+  `{}` or an unbalanced brace makes every read of such a parcel a 500, the shipment list and
+  the customer's order page among them (D211).
+- A second fallback zone is accepted, and a parcel can be booked with a courier or a method
+  that is switched off (D212).
+- Zones, methods and couriers are made, repriced and deleted with no audit entry, and deleting
+  a zone or a method takes it off every past order and parcel that used it (D213).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
@@ -956,8 +1021,9 @@ which business rule 1.4 says may never happen with overselling off. Fixed in Dja
 the owner's decision: the counter checks `available` unless the owner's `counter_sells_reserved`
 is on, and then flags the online orders left short. Phase 5 ports that rule with the POS.
 
-A courier's tracking-URL template is filled as Python's `str.format` fills it, except that a
-format spec (`{tracking_number:>12}`) is refused -- a 500 where Django would pad. No template uses one.
+A courier's tracking-URL template is filled as Python's `str.format` fills it, format specs
+included since phase 6 part 8 (until then one was a 500 where Django would pad). The one
+exception is an attribute of the number, listed under "Deliberate differences".
 
 ## Performance, measured 2026-09-30
 
