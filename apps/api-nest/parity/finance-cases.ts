@@ -43,6 +43,7 @@ export const FINANCE_EFFECTS = [
   `SELECT a.name AS account, t.transaction_type, t.amount::text, t.balance_after::text,
           t.reference_type,
           COALESCE((SELECT x.number FROM finance_accounttransfer x WHERE x.id::text = t.reference_id),
+                   (SELECT x.number FROM finance_expense x WHERE x.id::text = t.reference_id),
                    (SELECT x.name FROM finance_account x WHERE x.id::text = t.reference_id),
                    t.reference_id) AS reference,
           t.reason, t.notes, u.email AS created_by, t.idempotency_key,

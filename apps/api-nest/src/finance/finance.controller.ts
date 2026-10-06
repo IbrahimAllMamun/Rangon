@@ -1,5 +1,5 @@
-import { Get, HttpCode, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import { Get, HttpCode, Inject, Param, Patch, Post, Put, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import type { RequestUser } from '../auth/authentication';
 import { Action, StaffView } from '../auth/permissions';
@@ -10,6 +10,8 @@ import { Params, QueryDict } from '../common/query-dict';
 import { ENV, Env } from '../config/env';
 import { requestData } from '../http/request-body';
 import { AccountsService } from './accounts.service';
+import { ExpensesService } from './expenses.service';
+import { PartyLedgerService } from './party-ledger.service';
 
 /** `request.headers.get("Idempotency-Key")`: null when the header is absent, "" when it is empty. */
 export function idempotencyKey(request: FastifyRequest): string | null {
@@ -189,5 +191,166 @@ export class AccountTransfersController {
   @Action('retrieve')
   retrieve(@Param('pk') pk: string, @Req() request: FastifyRequest) {
     return this.accounts.transferById(request.user as RequestUser, lookupParam(pk));
+  }
+}
+
+/** `ExpenseCategoryViewSet`: what money is spent on. No delete: a category is retired. */
+@StaffView('expense-categories', {
+  list: VIEW,
+  retrieve: VIEW,
+  create: MANAGE,
+  update: MANAGE,
+  partial_update: MANAGE,
+})
+export class ExpenseCategoriesController {
+  constructor(
+    private readonly expenses: ExpensesService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('expense-categories/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.categories(query, absoluteUri(request, this.env));
+  }
+
+  @Post('expense-categories/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.expenses.createCategory(
+      request.user as RequestUser,
+      requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Get('expense-categories/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Params() query: QueryDict) {
+    return this.expenses.retrieveCategory(lookupParam(pk), query);
+  }
+
+  @Put('expense-categories/:pk/')
+  @Action('update')
+  update(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.updateCategory(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      () => requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Patch('expense-categories/:pk/')
+  @Action('partial_update')
+  partialUpdate(
+    @Param('pk') pk: string,
+    @Params() query: QueryDict,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.expenses.updateCategory(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      () => requestData(request),
+      auditContext(request, this.env),
+    );
+  }
+}
+
+const SPEND = ['finance.expense'] as const;
+
+/**
+ * `ExpenseViewSet`: expenses, recorded and voided, never edited. Its parsers
+ * take a form as well as JSON, since a receipt is attached as a file.
+ */
+@StaffView('expenses', {
+  list: VIEW,
+  retrieve: VIEW,
+  create: SPEND,
+  void: SPEND,
+  summary: VIEW,
+  attachment: VIEW,
+})
+export class ExpensesController {
+  constructor(
+    private readonly expenses: ExpensesService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('expenses/summary/')
+  @Action('summary')
+  summary(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.summary(request.user as RequestUser, query);
+  }
+
+  @Get('expenses/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Post('expenses/')
+  @Action('create')
+  create(@Req() request: FastifyRequest) {
+    return this.expenses.create(
+      request.user as RequestUser,
+      requestData(request, { forms: true }),
+      idempotencyKey(request),
+      auditContext(request, this.env),
+    );
+  }
+
+  @Get('expenses/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.retrieve(request.user as RequestUser, lookupParam(pk), query);
+  }
+
+  /** The receipt itself: never cached, and typed by its extension alone. */
+  @Get('expenses/:pk/attachment/')
+  @Action('attachment')
+  async attachment(
+    @Param('pk') pk: string,
+    @Params() query: QueryDict,
+    @Req() request: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    const receipt = await this.expenses.attachment(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+    );
+    reply.header('content-type', receipt.contentType);
+    reply.header('content-length', receipt.bytes.length);
+    reply.header('content-disposition', `inline; filename="${receipt.fileName}"`);
+    reply.header('cache-control', 'private, no-store');
+    reply.header('x-content-type-options', 'nosniff');
+    return receipt.bytes;
+  }
+
+  @Post('expenses/:pk/void/')
+  @Action('void')
+  @HttpCode(200)
+  void(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.expenses.void(
+      request.user as RequestUser,
+      lookupParam(pk),
+      query,
+      requestData(request, { forms: true }),
+      auditContext(request, this.env),
+    );
+  }
+}
+
+/** `PartyLedgerView`: the shop's whole debtor and creditor position. */
+@StaffView('party-ledger', ['reports.financial'])
+export class PartyLedgerController {
+  constructor(private readonly parties: PartyLedgerService) {}
+
+  @Get('party-ledger/')
+  ledger(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.parties.ledger(request.user as RequestUser, query);
   }
 }
