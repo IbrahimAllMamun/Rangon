@@ -13,11 +13,16 @@ import { CeleryService } from './jobs/celery.service';
 import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
 import { ContentAdminModule } from './content/admin/content-admin.module';
+import { CustomersModule } from './customers/customers.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
 import { PosModule } from './pos/pos.module';
+import { PromotionsModule } from './promotions/promotions.module';
+import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
+import { ShippingModule } from './shipping/shipping.module';
+import { EngagementModule } from './engagement/engagement.module';
 import { ShopModule } from './shop/shop.module';
 
 @Global()
@@ -64,6 +69,11 @@ export class AppModule {
         ContentAdminModule,
         PosModule,
         FinanceModule,
+        PurchasingModule,
+        CustomersModule,
+        PromotionsModule,
+        ShippingModule,
+        EngagementModule,
       ],
       controllers: [HealthController],
       providers: [

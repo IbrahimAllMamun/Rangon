@@ -481,6 +481,379 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 10: staff accounts and the organisation, 2026-10-07
+
+Asked for: the rest of phase 6, its last part. Ported: `BranchViewSet`, `UserViewSet` with
+`UserWriteSerializer` and the staff services behind it (`create_staff_user`,
+`update_staff_user`, `save_staff_profile`, `set_user_status`, `check_can_lose_access`),
+`RoleViewSet`, `PermissionViewSet`, `OrganizationView` and `OrganizationTaxView` with
+`update_tax_settings`. `AuditLogViewSet` is phase 7's. **Phase 6 is built.**
+
+```text
+parity (scripts/nest-parity.sh run) ........... 10014/10014 (863 new), 114 by the documented differences
+concurrency ................................... 205/205 (13 new: a profile changed under an edit; six first saves of
+                                                one; the last-owner guard, a password and a VAT settlement lost
+                                                to an edit in flight; bursts of six)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 968 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_team.py` adds a second owner, switched off -- a case that needs two owners switches it
+on first, so `owner@rangon.test` is still the last active owner every earlier suite found --
+a clerk at the second branch with a whole profile and two sessions open, a suspended manager
+with no branch, and a branch nothing protected names, with a parked sale, a notice and an
+audit entry to its name.
+
+The cases read every route as every role; make a branch fifty ways and an account a hundred --
+each rule of the email, the password, the role and each of the profile's eleven fields; edit
+an account sixty ways, then through the two guards as the owner, as an administrator, with
+one owner and with two; deactivate with twenty shapes of reason and body; edit the
+organisation and settle its VAT with each shape of rate, confirmation and reason -- and again
+with no organisation switched on. Each write is compared by the accounts, profiles, branches
+and organisations it made or changed, the sessions it ended, what a deleted branch took with
+it, the audit log and the jobs queued.
+
+The profile's row lock was removed from the port and the checks rerun: the edit then writes
+back the ID number and the notes it read.
+
+One port bug the first run caught, by the jobs it compares: every save of the organisation --
+an edit, a VAT settlement -- fires `content.signals._site_changed`, which asks the storefront
+to drop what it cached as `site`. The port queued nothing for an edit and only the priced
+pages for a settlement. Sixty-two cases differed by that one job and nothing else.
+
+Found in Django, and copied: D217 (the staff list's search does nothing), D218 (an email in
+other letters is a bare 409), D219 (a new account is always ACTIVE; its password may be its
+email; the role CUSTOMER hides it), D220 (an ID number resent with an edit is "taken" by
+itself), D221 (the two guards take no lock -- measured, no active owner is left -- and an
+administrator may make themselves an owner or reset an owner's password), D222 (an account's
+edit writes back the password it read: measured), D223 (deactivating reads its reason by
+hand), D224 (a branch's code taken is a bare 409; two default branches, or none), D225 (the
+organisation can switch itself off, and the next edit makes a second one; its edit undoes a
+VAT settlement: measured), D226 (the VAT routes answer in UTC, and refuse without a request
+id).
+
+For the owner first: D221. The business rules say only an owner manages staff; the code gives
+an administrator every permission, `users.manage` among them.
+
+### The NestJS API, phase 6 part 9: review moderation, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `ReviewModerationViewSet` -- the list, a
+review, `approve` and `reject`.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 9151/9151 (393 new), 107 by the documented differences
+concurrency ................................... 192/192 (3 new: six decisions at once; a rejection's reason lost to
+                                                an approval that waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 957 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_reviews.py` adds five reviews to the six the earlier fixtures wrote: three waiting --
+five stars on a delivered order, one star from a guest with a long comment, three stars and
+nothing said -- one rejected with its reason and one approved with a note.
+
+The cases read the list as every role, through each filter and ordering, and the rating filter
+through fifty spellings of a number; then approve and reject a waiting, a rejected and an
+approved review with thirty-four shapes of body each: no note, a blank one, one of every JSON
+type, the longest the column takes and one character more, a NUL, and bodies that are not
+objects. Each decision is compared by the review as it is left and by its audit entry.
+
+The first run of the new cases matched. `common/filtering.ts` gained `numberFilter`,
+django-filter's `NumberFilter` over an integer column, which no earlier view had used.
+
+The first *full* run matched too, and was wrong: `orders-cases.ts` (phase 2) deletes every
+review of the customers who sign in before each of its cases, three of the fixture's five were
+theirs, and every case about those three "matched" as a 404 from both APIs. The race group gave
+it away by returning no checks -- 189 where 192 were due. The fixture's reviews now belong to
+customers who do not sign in, and the race group fails outright if the reviews it needs were
+there when the run began and are gone when it starts.
+
+No lock is taken in Django and none was added: the two race checks record what that leaves,
+the same in both APIs.
+
+Found in Django, and copied: D214 (the note is whatever `request.data.get` returns: `null` is
+the note "None", a body that is not an object a 500, a note too long a 500; any review can be
+decided again), D215 (a decision with no note writes back the note it read: measured, a reason
+given meanwhile is lost), D216 (`?rating=4.9` lists the fours).
+
+### The NestJS API, phase 6 part 8: shipping, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `ShippingZoneViewSet`, `ShippingMethodViewSet`
+and `CourierViewSet` (plain `ModelViewSet`s), and `ShipmentViewSet` over `shipping.services`:
+`create_shipment` under the order's row lock, `record_event` under the order's and then the
+parcel's, with the order moved through the status machine the staff order screens already use.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 8758/8758 (1060 new), 99 by the documented differences
+concurrency ................................... 189/189 (15 new: one tracking number booked six times, on one order
+                                                and across two; an order cancelled, and one taken off the bench,
+                                                while a request waits on its row; a parcel delivered while an
+                                                update waits on the parcel's; bursts of six; a split delivery;
+                                                the edit that undoes a delivery)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 941 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_shipping.py` adds a zone nothing names, a courier switched off, and eight orders of one
+tee each (H01 to H08) with the parcels on them: pending on a confirmed and on a packed order, a
+split delivery half on its way, a delivered order with its second parcel not yet gone, a parcel
+at the second branch, one returned to sender and one whose delivery failed. Each order's unit is
+received first, so no other suite's available stock moves.
+
+The cases read all four resources as every role and through each filter and ordering; make a
+zone, a method and a courier each some fifty ways and edit and delete them; read a parcel
+through sixteen spellings of its courier's tracking page; book a parcel for an order in each
+status, at each branch, with each shape of number, cost, courier and method; edit, replace and
+delete parcels; and post every status for a parcel in each of nine states, then again with the
+order moved under it to each of nine statuses. Every update is compared by the queries a sale
+is compared by -- the order, its timeline, the notices and the jobs queued -- and then by the
+parcels and their history.
+
+Each lock was removed in turn from the port and the checks rerun: without the order's lock a
+cancelled order gets a parcel and a parcel leaves an order taken off the bench; without the
+parcel's a FAILED is recorded over a delivery; and two of six simultaneous DELIVEREDs are 500s.
+
+Port bugs the first run caught, all in what a write answers with: a price or a cost of "-0" is
+answered "-0.00" by Django, which answers from the validated value, not the stored one; a PATCH
+of a parcel with no courier leaves `courier_name` out; and a tracking page with a placeholder it
+is not given does not fail -- DRF reads the KeyError as a missing read-only field and leaves
+`tracking_url` out. The last was wrong in phase 2's customer order page too, which answered 500;
+both now share `shipping/tracking-url.ts`. `pyFormatNamed` gained Python's string format spec and
+indexing, which it had refused: staff can now write a courier's page through this API.
+
+One difference is declared: a tracking page that reads an attribute of the number
+(`{tracking_number.upper}`) prints a memory address in Django.
+
+Found in Django, and copied: D205 (a new method's days judged only when both are sent), D206 (a
+parcel's edit has none of the booking's rules), D207 (and writes back the status it read:
+measured, a delivery is undone), D208 (a delivered parcel and its history can be deleted), D209
+(an update's status replaces the parcel's whatever it was, and repeats are recorded), D210 (only
+DISPATCHED ships an order), D211 (a courier's tracking page is not checked: a wrong placeholder
+hides every link, a stray brace is a 500 on every read), D212 (a second fallback zone; a parcel
+for a courier switched off), D213 (shipping settings leave no audit entry, and deleting a method
+takes it off past orders).
+
+### The NestJS API, phase 6 part 7: coupons, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `CouponViewSet` (list, read, make, edit,
+delete, `redemptions`) with `CouponSerializer`'s rules. What a coupon is worth at a checkout, and
+its redemption under the coupon's row lock, were phase 3.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 7698/7698 (250 new), 83 by the documented differences
+concurrency ................................... 174/174 (3 new: six coupons of one code, a coupon redeemed
+                                                while an edit of it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 878 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+No fixture was needed: the coupons the cart and checkout fixtures made already cover each type,
+a category and a product restriction, channels stored as a list and as a bare word, coupons
+redeemed and not, and one a cart still names.
+
+The cases read coupons and their redemptions as every role and through each filter and ordering;
+make a coupon ninety ways -- each type, a value at each bound, windows that end as they start
+(in one zone and in two), limits, categories and products that are a list, a word, an object, a
+null, a key that is not one, channels of every shape; edit one forty ways, half of them a PATCH
+of one side of a rule that is judged on the coupon as it would be left; and delete one never
+used, restricted, redeemed, already off, and named by a cart.
+
+One port bug the first run caught: `categories` sent as a JSON object was refused as "not a
+list", where DRF's `ManyRelatedField` iterates it -- a dict is iterable -- and looks up its keys.
+`manyPkRelatedField` now reads an object by its keys.
+
+Found in Django, and copied: D202 (another coupon's code in lower case is a bare 409), D203 (an
+edit writes back the use count it read: measured, a redemption committed meanwhile is
+forgotten), D204 (a cap below zero is accepted, and then replaces every discount: the coupon adds
+to the bill).
+
+### The NestJS API, phase 6 part 6: customers and the call-back list, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `CustomerViewSet` (list, read, create, edit,
+deactivate, `lookup`, `orders`, `addresses`, `notes`) and `AbandonedCheckoutViewSet` (list, read,
+the note, `lost`), with `customers.services` -- `add_address`, `update_address`,
+`delete_address`, `add_note`, `delete_note` -- and `leads.mark_lost` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 7448/7448 (526 new), 81 by the documented differences
+concurrency ................................... 171/171 (4 new: ten addresses added as the default, six
+                                                customers under one number, a lead recovered while a note
+                                                on it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+The address rules were ported in phase 2 for the storefront's account; the back office now
+reaches the same `AddressesService`, so nothing about the one-default invariant was written
+twice. `fixture_customers.py` is new: a wholesale customer with a birthday, tags that hold a
+float and an object, two addresses and two notes; one with an email and no phone; one
+deactivated; one with a single address; and three more leads -- recovered by an order, written
+off, and open at PAR3.
+
+The cases read customers, their orders, addresses and notes, and the call-back list, as every
+role and through every search, filter and ordering -- the search by a number spelled five ways,
+by a country code alone and by a trunk zero; look a number up eighteen ways; add a customer
+forty-five ways and edit one thirty; add, edit and delete addresses -- the default, the only one,
+another customer's, a key that is not a UUID; add and delete notes; note a lead and write one
+off, with each shape of body.
+
+No port bug: the first run compared equal.
+
+Found in Django, and copied: D198 (another customer's email in another case is a bare 409), D199
+(a recovered lead can be written off), D200 (a note on a lead writes back the status it read:
+measured, a lead recovered meanwhile is opened again and its order forgotten), D201 (a NUL in the
+customer search is a 500).
+
+### The NestJS API, phase 6 part 5: supplier payments, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `SupplierPaymentViewSet` (list, record), with
+`record_supplier_payment` behind it and `finance.services.record_for_reference` for the money.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6922/6922 (182 new), 74 by the documented differences
+concurrency ................................... 167/167 (9 new: six payments of all an order owes, a payment
+                                                meeting the order paid and then cancelled under it, an
+                                                account emptied under a payment, six clicks of one payment
+                                                against an order and as an advance)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` gains three accounts of its own -- cash and bank at DHK1, cash at PAR3 --
+and four payments out of them: a bank transfer against an order under a key the cases replay, a
+cheque and cash as advances against no order, and cash against PAR3's order. The demo seed has no
+supplier payment at all.
+
+The cases read the list as every role, through each filter and every ordering `OrderingFilter`
+allows a view that names none; and record a payment a hundred and ten ways -- an advance and a
+payment against an order as every role; each method; an account named, of the wrong kind, of
+another branch, closed, too short, allowed to go overdrawn; no account of the kind at all; an
+order in each status, another supplier's, another branch's, paid in full, in credit; amounts at
+each bound and missing; dates past, future and unreadable; keys new, used and too long.
+
+With the port's `FOR UPDATE` removed from the order, Nest paid 500.00 against an order with
+100.00 outstanding, and paid a cancelled one.
+
+No port bug: the first run compared equal.
+
+Found in Django, and copied: D194 (a payment with no amount is a 500), D195 (a payment may be
+dated in the future), D196 (a payment's key answers with whichever payment holds it), D197 (the
+payment's `branch` is read unvalidated, and can refuse a payment it has no bearing on).
+
+### The NestJS API, phase 6 part 4: purchase orders, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `PurchaseOrderViewSet` (list, read, raise,
+`send`, `cancel`, `receive`, `return`, `receipts`), with `create_purchase_order`,
+`recalculate_totals`, `send_purchase_order`, `cancel_purchase_order`, `receive_purchase`,
+`record_supplier_product`, `create_purchase_return` and the inventory service's
+`return_to_supplier` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6740/6740 (398 new), 73 by the documented differences
+concurrency ................................... 158/158 (20 new: a send, a cancel and a delivery each meeting
+                                                the order changed under them; a delivery and a return each
+                                                meeting a line changed under them; six deliveries of one line;
+                                                two returns queued on the order; a shelf emptied under a
+                                                return; six clicks of one return; six orders raised; a
+                                                first delivery racing another supplier's preference)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` gains three draft products of its own (so no other check's stock moves)
+and eight orders named by their invoice numbers: a draft with a discount, VAT and shipping; one
+sent; one part received below its order's cost; one received in full with two units sent back
+under a key the cases replay; one cancelled; one closed by hand; one with money recorded
+against it; and one at PAR3.
+
+The cases read orders and receipts as every role, through every filter, ordering and window;
+raise an order eighty ways -- costs, discounts and tax rates at each bound, a SKU twice, a SKU
+that is not there, each branch a user may and may not act for; send and cancel every status,
+with fourteen shapes of reason; receive forty-five ways -- in part, in full, the lines either
+way round, at a cost above and below the order's, at none, onto a shelf below zero, a draft, a
+closed order, a SKU nobody supplied before and one its supplier had withdrawn; and send goods
+back fifty ways -- past what came, one line twice, each reason, keys new, used and another
+order's, from a shelf too short, worth less than the goods, reserved, and on an order paid in
+full.
+
+With the port's `FOR UPDATE` removed from the order and from its lines, six checks failed for
+Nest: it sent a cancelled order, cancelled one with goods on the shelf, received into a
+cancelled one, received a line twice over, lost one of two returns' credit, and returned units
+already gone.
+
+No port bug reached a run: the first compared equal but for one of the harness's own queries.
+Two mistakes of the harness were caught by reading the verbose statuses, as the instructions
+ask: nine cases looked an order up by a key the fixture's invoice number had replaced, and
+asked both APIs for `/purchase-orders/undefined/`, which "matched" as a 404. The lookups now
+throw for a name the fixture does not hold.
+
+Found in Django, and copied: D185 (a return is credited at the order's cost, not the
+delivery's -- measured: five units received at 190.00 credited 1,000.00), D186 (a draft is
+received without being sent), D187 (a first delivery racing another supplier's preference is a
+bare 409), D188 (a delivery takes no `Idempotency-Key`), D189 (a cancel's reason is taken as
+sent), D190 (a quantity past an integer is a 500), D191 (a SKU that does not exist is a bare 409
+at the commit), D192 (a return's key answers with another order's return), D193 (a return takes
+units reserved for customers' orders).
+
+Three decisions are the owner's, each marked in the business rules: which cost a return is
+credited at when the delivery's differed from the order's (§7b.3), whether a return may take
+reserved units (§7b.2), and whether a draft may be received (§7c). Both APIs do what Django does
+today until then.
+
+### The NestJS API, phase 6 part 3: suppliers and their price lists, 2026-10-06
+
+Asked for: the rest of phase 6 (parts 3 to 10). Ported first: `SupplierViewSet` and
+`SupplierProductViewSet` (list, read, create, edit, delete, and `set-preferred`), with
+`unique_supplier_code` and `set_preferred_supplier` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6342/6342 (376 new), 69 by the documented differences
+concurrency ................................... 138/138 (6 new: an offer withdrawn while its promotion waits,
+                                                six promotions of one SKU's two offers, six suppliers of
+                                                one name, an offer promoted while an edit of it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 851 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` is new: an INACTIVE supplier never ordered from, with a landline and two
+offers -- one under its own code, lead time and minimum, one withdrawn -- and a second supplier
+whose offer for the same SKU the service made the preferred one.
+
+The harness gains `PARITY_RACES`, which runs one group of race checks (with
+`PARITY_ONLY=concurrency`), and `parity/races.ts`, which holds what the race files of this phase
+share: the mid-flight helper, written out seven times before.
+
+The cases read suppliers and offers as every role and through every filter, search, ordering and
+page; add a supplier seventy ways -- names that make a code, that make none, whose code is taken;
+mobiles, landlines and a hotline; terms at each bound -- and edit and delete one; add an offer
+thirty-five ways, edit it twenty, move it to a supplier or a SKU that has one already, delete the
+preferred one, and promote an offer over an incumbent, onto itself, when withdrawn, and through
+filters that exclude it.
+
+With the port's `FOR UPDATE` removed from the offer in `set-preferred`, the mid-flight check
+failed: the request waited only at its own `UPDATE`, and promoted an offer withdrawn meanwhile.
+
+No port bug: the first run compared equal. The supplier list's order with ties is the plan's, so
+the offers' statement carries Django's joins in Django's order -- which depends on which filters
+and search terms a request names, since each puts its tables into the query first.
+
+Found in Django, and copied: D180 (an offer's cost below zero or minimum of nothing is a bare
+409), D181 (a supplier's code is unique by exact spelling and stored as typed), D182 (an inactive
+supplier's offer can be made preferred), D183 (suppliers and offers change with no audit entry),
+D184 (an offer's edit writes back the preference it read).
+
+One decision is the owner's: whether an inactive supplier may be a SKU's preferred one
+([business-rules §7a.3](business-rules.md#7a3-the-preferred-supplier)). Both APIs allow it until
+then.
+
 ### The NestJS API, phase 6 part 2: expenses and the party ledger, 2026-10-06
 
 Asked for: phase 6 of the port, continued. Ported: `ExpenseCategoryViewSet`, `ExpenseViewSet`
@@ -4057,6 +4430,53 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D177 | **`date_to` on the cash book leaves the day out.** `GET /accounts/<id>/transactions/` and `GET /account-transactions/` pass `date_to` straight to `occurred_at__lte`, where a bare date is its midnight: `date_to=2026-09-15` ends as that day begins. The cash position on the same screen reads the same parameter through `core.dates.parse_window`, which runs to the end of the day, so the two disagree about one day. *Found porting the two readings of one parameter.* | Low | Copied by the port. Read both through `parse_window`. `finance/api/views.py`, `finance/selectors.py` |
 | D178 | **A receipt is stored before its expense is known to be good, and its content is never looked at.** `record_expense` saves the upload as it creates the row, then posts the movement: an expense refused for want of funds (409) is rolled back and its file stays in `media/expenses/`, belonging to nothing. And `CreateExpenseSerializer` judges the file by the content type the client states and by its name: bytes that are no image are stored as `.png` when sent as `image/png`, and an upload with no stated type is judged by its extension alone. The route that serves receipts sends `nosniff`, so this is clutter and a weak check, not an exposure. *Found by the form cases.* | Low | Copied by the port. Store the file after the movement succeeds, and identify it as product images are identified. `finance/services.py`, `finance/api/serializers.py` |
 | D179 | **An expense cannot be voided once its account is closed.** `void_expense` puts the money back with `record_movement`, which refuses a closed account: voiding an expense paid from a drawer that has since been closed is a 400 ("... is closed; money cannot move through it."), and the mistaken expense stands. *Found by a case that closes the account first.* | Low | Copied by the port. Let a void's compensating movement into a closed account, or name the account that must be reopened. `finance/services.py` |
+| D180 | **An offer with a cost below zero, or a minimum order of nothing, is a bare 409.** `SupplierProductSerializer` takes `last_cost` as any decimal and `minimum_order_quantity` from 0, while the table's check constraints want a cost of at least 0.00 and a minimum of at least 1: `{"last_cost": "-1"}` and `{"minimum_order_quantity": 0}` reach PostgreSQL and come back as "The request conflicts with the current state of the data.", naming no field. *Found by the offer cases.* | Low | Copied by the port. Give both fields their `min_value`. `purchasing/api/serializers.py` |
+| D181 | **A supplier's code is unique by its exact spelling, and stored as typed.** A code derived from the name is upper-cased and hyphenated (`RAHMAN-SONS-PVT-LTD`); one typed by hand is kept as it is, so `pnm 01` is a code and `sup-001` is accepted beside `SUP-001`. And `unique_supplier_code` reads then inserts: two suppliers of one name created at once race for one code, and the loser is a bare 409. Measured: six at once, three made and three refused. *Found by the supplier cases and the race check.* | Low | Copied by the port. Normalise a typed code as the derived one is, compare without case, and retry the derivation on a unique violation. `purchasing/services.py`, `purchasing/api/serializers.py` |
+| D182 | **An inactive supplier's offer can be made the preferred one, and an offer recorded for an archived SKU.** `set_preferred_supplier` refuses an offer that is itself withdrawn (`is_active`), and never looks at `Supplier.status`: "Parity Idle Traders", INACTIVE, becomes the supplier the purchase order form suggests. `SupplierProductSerializer` takes any variant, an archived one included. *Found by the cases that promote the fixture's inactive supplier.* | Low | Copied by the port. Decide whether an inactive supplier may be preferred ([business-rules §7a.3](business-rules.md#7a3-the-preferred-supplier), `DECISION REQUIRED`); refuse or warn. `purchasing/services.py` |
+| D183 | **Suppliers and their price lists change with no audit entry.** Creating, editing and deleting a supplier or an offer writes nothing to the audit log -- a cost changed from 210.00 to 1.00 leaves no trace of who or when -- and only `set-preferred` records anything. Deleting the preferred offer, or the supplier that holds it, leaves the SKU preferring nobody, also unrecorded. CLAUDE.md §3.5 asks for who, what, when, before and after on anything important; a supplier's price is what a purchase order is pre-filled with. *Found by comparing the audit log after each write case: it was empty.* | Medium | Copied by the port. Audit the three writes on both models. `purchasing/api/views.py` |
+| D184 | **An offer's edit writes back the preference it read.** `SupplierProductViewSet.update` is a plain `serializer.save()`: every column goes back as the row was read, `is_preferred` among them though the serializer marks it read only. An edit that read an offer before `set-preferred` promoted it writes `false` over the promotion -- the incumbent already demoted -- and the SKU prefers nobody; the other way round it is the index's 409. Measured in both APIs by the mid-flight check: the harness promotes the offer while a `PATCH` of its notes waits at its `UPDATE`. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. Save only the fields the serializer may write (`update_fields`), or take the offer's row lock in `update`. `purchasing/api/views.py` |
+| D185 | **A return to a supplier is valued at the order line's cost, not at what the goods came in at.** `create_purchase_return`'s docstring says the credit is "what the goods were received at"; the code, and [business-rules §7b.3](business-rules.md#7b3-the-money-is-a-credit-not-a-refund), read the order line (`item.unit_cost`) for the credit, the return line and the cost the units leave the shelf at. `receive_purchase` lets a delivery state its own cost. Measured: five PAR-BUY-A received at 190.00 against an order at 200.00, all five sent back: credit 1,000.00, 50.00 more than the supplier was owed for them, and the shelf's average unwound by the same wrong figure. *Found by reading the service for the port, then a case that returns from the part delivery.* | Medium | Copied by the port. `DECISION REQUIRED` in §7b.3: which cost is "what the supplier charged". If the delivery's, value a return from the receipt lines it draws on. `purchasing/services.py` |
+| D186 | **A draft purchase order can be received.** `receive_purchase` refuses CANCELLED and CLOSED and nothing else, so a draft nobody sent takes a delivery: stock in, the order RECEIVED, `ordered_at` still empty. Whether that is a shortcut the shop wants (goods that arrive with their invoice) or a slip is not written down. *Found by a case that receives the fixture's draft.* | Low | Copied by the port. `DECISION REQUIRED` in [business-rules §7c](business-rules.md#7c-raising-and-cancelling-a-purchase-order); stamp `ordered_at` on first receipt or refuse a draft. `purchasing/services.py` |
+| D187 | **A SKU's first delivery can be refused with a bare 409 when another supplier becomes its preferred one at that moment.** `record_supplier_product` creates the offer, reads "no other offer is preferred" and sets `is_preferred`; its comment says losing that race quietly "is better than a 500 on a delivery that did arrive", but nothing catches the unique index's refusal, so the whole delivery rolls back as a 409. Measured in both APIs by a mid-flight check. *Found by reading the comment against the code.* | Low | Copied by the port. Set the flag in a savepoint and keep the delivery when the index refuses. `purchasing/services.py` |
+| D188 | **A delivery takes no `Idempotency-Key`.** `receive` writes stock and a receipt and reads no key (CLAUDE.md §7 asks for one where a retry could double-deduct or double-add). A retried full delivery is refused by the outstanding check; a retried *part* delivery is received twice, up to what is outstanding -- two of six, sent twice, is four on the shelf and two receipts. The return beside it does take a key. *Found by reading the view.* | Medium | Copied by the port. Honour the header as `purchase_return` does, on `PurchaseReceipt`. `purchasing/api/views.py`, `purchasing/services.py`, a migration |
+| D189 | **A purchase order's cancel takes its reason as sent.** `request.data.get("reason", "")` goes to the audit entry unvalidated: `null` is the column's refusal, a bare 409 for an order that could be cancelled; a JSON list or string as the body is a 500; a number or an object is stored as Python prints it. D162 and D168 are the same shape. *Found by the cancel cases.* | Low | Copied by the port. A one-field serializer. `purchasing/api/views.py` |
+| D190 | **A purchase order line's quantity past an integer is a 500.** `PurchaseLineSerializer.quantity` has a minimum and no maximum: 2147483648 reaches PostgreSQL's `integer` (`DataError`), and a quantity of 31 digits makes the line total pass Decimal's 28 (`InvalidOperation`). Both are 500s. *Found by the raise cases.* | Low | Copied by the port. `max_value` on the field. `purchasing/api/serializers.py` |
+| D191 | **A purchase order names any UUID as a SKU.** `PurchaseLineSerializer.variant` is a bare `UUIDField`, as the supplier was before D82: a variant that does not exist is inserted and fails the deferred foreign key at the commit -- a bare 409 naming no line -- and an archived SKU or an inactive supplier is accepted without a word. *Found by the raise cases.* | Low | Copied by the port. A related field for the variant; decide about archived SKUs and inactive suppliers. `purchasing/api/serializers.py` |
+| D192 | **A return's `Idempotency-Key` answers with whichever return holds it.** `create_purchase_return` looks the key up before it checks anything about this order: a key another order's return holds answers 201 with that return and that order, and so does a request against a draft, which could never be returned from. D160 and D171 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the return cases.* | Low | Copied by the port. Scope the lookup to the order, or refuse a key that names another. `purchasing/services.py` |
+| D193 | **A return to a supplier can take units reserved for customers' orders.** `return_to_supplier` refuses when `on_hand` is short and never looks at `reserved`: with four on the shelf and three of them reserved for online orders, three go back, leaving one on hand against three promised -- `available` at -2, which [business-rules §1.4](business-rules.md) says may not happen with overselling off. D115 was the counter's version of this. *Found by a case that reserves the shelf first.* | Medium | Copied by the port. `DECISION REQUIRED` in §7b.2; if no, check `available`, as the counter now does. `inventory/services.py` |
+| D194 | **A supplier payment with no amount is a 500.** `SupplierPayment.amount` has a default, so the `ModelSerializer` does not require it, and `SupplierPaymentViewSet.create` reads `data["amount"]`: a body without the field passes validation and raises `KeyError`. *Found by the "no amount" case.* | Low | Copied by the port. Declare the field required. `purchasing/api/serializers.py` |
+| D195 | **A supplier payment may be dated in the future.** `paid_at` is any datetime: `2099-01-01` is recorded, and the cash-book entry carries the same moment, so the money has left the account's balance today and its ledger line sorts decades ahead. `CreateExpenseSerializer` refuses a future `spent_at` for exactly that reason. *Found by the date cases.* | Low | Copied by the port. Refuse a future `paid_at`, as expenses do. `purchasing/api/serializers.py` |
+| D196 | **A supplier payment's `Idempotency-Key` answers with whichever payment holds it.** The lookup comes before every check but the amount's: a key another payment holds answers 201 with that payment, whatever supplier, order or amount this request named -- against a draft too, which cannot be paid. D160, D171 and D192 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the key cases.* | Low | Copied by the port. Refuse a key that names a payment to someone else, or for something else. `purchasing/services.py` |
+| D197 | **A supplier payment's `branch` is read from the body unvalidated.** `resolve_branch(actor, request.data.get("branch"))` runs for every payment: a value that is not a UUID is Django's own `ValidationError`, a 400 filed under `non_field_errors`; a number is looked up as a UUID; and for a payment against an order -- where the order's branch pays and this one is never used -- a branch that is not available is still a 403. *Found by the branch cases.* | Low | Copied by the port. A serializer field for it, resolved only when there is no order. `purchasing/api/views.py` |
+| D198 | **Another customer's email in another case is a bare 409.** `Customer.save()` stores an email lower-cased and trimmed; `CustomerSerializer`'s `UniqueValidator` compares the value as typed. `Ledger.Lady@Parity.Test` passes validation against a stored `ledger.lady@parity.test`, is lower-cased on save and meets the unique index: "The request conflicts with the current state of the data.", on a create and on an edit, naming no field. The phone beside it was fixed for exactly this (it is made canonical before the validator runs). *Found by the email cases.* | Low | Copied by the port. Lower-case in the field, as `BangladeshiPhoneField` normalises in its own. `customers/api/serializers.py` |
+| D199 | **A lead already recovered can be written off.** `mark_lost` sets `LOST` whatever the lead was: a `RECOVERED` lead -- one that became an order -- is marked lost, keeping its order and its `recovered_at`, and the recovery figure the list is judged by drops by one. A lost lead can be lost again. The note is `str(request.data.get("note", ""))`: `null` is stored as the word "None", and a body that is not an object is a 500. *Found by the write-off cases.* | Low | Copied by the port. Refuse a lead that is not OPEN; a one-field serializer for the note. `orders/services/leads.py`, `orders/api/views.py` |
+| D200 | **A note on a lead writes back the status it read.** `AbandonedCheckoutViewSet` updates through a plain `serializer.save()`, which writes every column from the lead as read. A lead that checkout recovers while a note on it is in flight is set back to `OPEN`, its `recovered_order` and `recovered_at` cleared -- the order exists and the list says the shopper still needs calling. Measured in both APIs by a mid-flight check. D184 is the same shape. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. `update_fields=["note", "updated_at"]`. `orders/api/views.py` |
+| D201 | **A NUL in the customer search is a 500.** `CustomerViewSet.get_queryset` filters on the raw `search` parameter, where DRF's `SearchFilter` would refuse a NUL: `?search=a%00b` reaches PostgreSQL and fails, on the list and on every detail route. D125, D144 and D172 are the same. *Found by the search cases.* | Low | Copied by the port. Use `SearchFilter`, or refuse the character. `customers/api/views.py` |
+| D202 | **Another coupon's code in lower case is a bare 409.** `Coupon.save()` stores a code trimmed and upper-cased; the serializer's `UniqueValidator` compares it as typed. `rangon10` passes validation against a stored `RANGON10`, is upper-cased on save and meets the unique index, on a create and on an edit. D198 is the same shape. *Found by the code cases.* | Low | Copied by the port. Upper-case in the field, before the validator. `promotions/api/serializers.py` |
+| D203 | **A coupon's edit writes back the use count it read.** `CouponViewSet.update` is a plain `serializer.save()`: every column goes back as read, `used_count` among them. A redemption takes the coupon's row lock and increments the count; an edit that read the coupon before it waits at its own `UPDATE` and then writes the old count over it. Measured in both APIs: a coupon redeemed mid-edit is left at 0 uses, so a coupon good once can be used again. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` without `used_count`, or the row lock in `update`. `promotions/api/views.py` |
+| D204 | **A coupon's cap and minimum may be below zero, and a negative cap raises the price.** `maximum_discount` and `minimum_order_value` are plain decimals with no minimum. `validate_coupon` replaces a discount larger than the cap with the cap -- every discount is larger than a negative one -- and nothing floors the result at zero: a coupon capped at -100.00 "discounts" every order by -100.00, which is 100.00 added to the bill. *Found by the cap cases, then reading `promotions.services`.* | Medium | Copied by the port. `min_value=0` on both fields; floor the discount at zero. `promotions/api/serializers.py`, `promotions/services.py` |
+| D205 | **A new shipping method's days are judged only when both are sent.** `ShippingMethodSerializer.validate` reads the bound that was not sent from `self.instance`, which a create does not have: `min_days: 5` alone (the longest defaults to 3), or `max_days: 0` alone, passes validation and meets `shipping_method_days_ordered` -- a bare 409 where the same mistake with both sent is the `max_days` field error. *Found by the method cases.* | Low | Copied by the port. Fall back to the model's defaults when there is no instance. `shipping/api/serializers.py` |
+| D206 | **A parcel's edit has none of the booking's rules.** `ShipmentViewSet` routes `PUT`/`PATCH` to a plain `serializer.save()`, past `create_shipment`: a tracking number is accepted on a parcel with no courier, a cost below zero is stored, a courier can be taken away from a numbered parcel, and `order` is writable -- a parcel can be moved to another order, a cancelled one included, leaving "Shipment created" on the timeline of an order that no longer has it. A number its courier already used is the index's bare 409, not the named conflict. Nothing is written to the timeline or the audit log. *Found by the edit cases.* | Medium | Copied by the port. An `update_shipment` service with the same checks; `order` read-only after creation. `shipping/api/views.py`, `shipping/services.py` |
+| D207 | **A parcel's edit writes back the status it read.** The same plain save writes every column from the parcel as read, with no lock. `record_event` takes the parcel's row lock and sets `status` and `delivered_at`; an edit of the notes that read the parcel before it waits at its own `UPDATE` and then puts the old status back. Measured in both APIs: a parcel delivered mid-edit is left DISPATCHED with no `delivered_at`, while its history says delivered and its order is DELIVERED -- and, no longer finished, it takes updates again. D184, D200 and D203 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` of what the serializer may write, or the row lock. `shipping/api/views.py` |
+| D208 | **A parcel can be deleted, with its history.** `ShipmentViewSet` is a `ModelViewSet`, so `DELETE` is routed: a parcel -- a delivered one too -- is hard-deleted and its `ShipmentEvent`s, which business rule 8a.3 calls append-only, cascade with it. The order keeps timeline entries naming a `shipment_id` that no longer exists, what was paid the courier is gone, and no audit entry is written. *Found by the delete cases.* | Medium | Copied by the port. Drop `destroy` from the viewset, or refuse once a parcel has left. `shipping/api/views.py` |
+| D209 | **A tracking update's status replaces the parcel's, whatever it was.** `record_event` refuses only a finished parcel. A `PENDING` posted for a parcel on its way rewinds it to PENDING -- after which its next movement is judged as a first one; an update dated before the last one (`occurred_at` is free, the future included) still sets the status, so the parcel shows the older of the two. And nothing refuses a repeat: six simultaneous DISPATCHEDs are six rows of append-only history (the order ships once, under the lock). *Found by the update cases and the burst check.* | Low | Copied by the port. Refuse PENDING once a parcel has left; set the status from the latest `occurred_at`; refuse a repeat of the last status within a short window, or take an `Idempotency-Key`. `shipping/services.py` |
+| D210 | **Only DISPATCHED ships an order.** An update with no status means IN_TRANSIT. As a packed order's parcel's first movement it -- or a FAILED, or a RETURNED -- is allowed (the order is packed) and moves nothing: the parcel is on the road, the order still PACKED, the customer not told. A later DELIVERED then takes the order from PACKED to DELIVERED, with `shipped_at` never set. A parcel RETURNED closes its history and leaves the order SHIPPED: nothing tells anyone the goods came back. *Found by the update cases.* | Medium | Copied by the port. **Decision required** (business rule 8a.3): ship the order on a parcel's first movement of any kind, and say what a returned parcel does to its order. `shipping/services.py` |
+| D211 | **A courier's tracking page is not checked when it is written.** `tracking_url_template` is any 255 characters, formatted with `str.format` at every read. A placeholder other than `{tracking_number}` raises KeyError inside the `tracking_url` property, which DRF reads as a missing read-only field: the answer silently has no `tracking_url`, for staff and on the customer's order page. `{0}`, `{}` or an unbalanced brace raises IndexError or ValueError: every read of a numbered parcel of that courier is a 500 -- the shipment list, the parcel, the customer's own order. *Found by the tracking-page cases.* | Medium | Copied by the port. Validate the template in `CourierSerializer` by formatting it once; catch in `Courier.tracking_url`. `shipping/api/serializers.py`, `shipping/models.py` |
+| D212 | **A second fallback zone, and parcels for what is switched off.** `is_default` has no uniqueness: a second default zone is accepted, and which one a shopper in an unlisted city gets is decided by `position`. A parcel can be booked with a courier or a method whose `is_active` is false. *Found by the zone and booking cases.* | Low | Copied by the port. A partial unique index on `is_default`; refuse inactive ones in `create_shipment`. `shipping/models.py`, `shipping/services.py` |
+| D213 | **Shipping settings leave no audit entry, and deleting a method rewrites past orders.** Zones, methods -- their prices and free-shipping thresholds -- and couriers are made, changed and deleted through plain `ModelViewSet`s that write nothing to the audit log, where the rest of the settings do (CLAUDE.md §3.5). Deleting a zone cascades to its methods, and `Order.shipping_method` and `Shipment.shipping_method` are `SET_NULL`: every past order that used the method loses the record of how it was sent. *Found by reading the captured statements of a zone's delete.* | Low | Copied by the port. `audit.record` in the three viewsets; switch a used method off instead of deleting it, as a redeemed coupon is. `shipping/api/views.py` |
+| D214 | **A moderator's note is whatever the body holds, and any review can be decided again.** `_moderate` reads `str(request.data.get("note", "")).strip()` with no serializer: `{"note": null}` stores the note "None", a number its digits, a list or an object its Python repr; a body that is a list, a string or `null` has no `.get` and is a 500; a note of more than 255 characters, or one holding a NUL, reaches the column and is a 500 from the database. And the decision asks nothing about the review: one already approved can be approved again -- restamped with a new moderator and time, the audit entry reading APPROVED to APPROVED -- or rejected long after it went public. D199 is the same reading of a note. *Found by the decision cases.* | Low | Copied by the port. A one-field serializer (`CharField(max_length=255, allow_blank=True)`); say whether a decided review may be decided again. `engagement/api/views.py` |
+| D215 | **A decision with no note writes back the note it read.** `_moderate` saves `status`, `moderated_by`, `moderated_at` and `moderation_note` from the review as it was read, with no lock. Measured in both APIs: a review rejected with a reason while an approval with no note is in flight ends approved with the note it had before -- the reason is gone from the row. The row and its audit entry are also two transactions: a failure between them leaves a decision with no record. D184, D200, D203 and D207 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Low | Copied by the port. Leave `moderation_note` out of `update_fields` when no note was given; one `transaction.atomic()` around both writes. `engagement/api/views.py` |
+| D216 | **`?rating=4.9` lists the four-star reviews.** `filterset_fields = ["rating"]` gives django-filter's `NumberFilter`, a decimal form field, over a small-integer column; the lookup then calls `int()` on the Decimal. `4.5` and `4.9` both list the fours, `-0.5` asks for zero stars, and `1e0` is one star. Any integer column filtered this way does the same. *Found by the filter cases.* | Low | Copied by the port. Declare the filter with an integer field. `engagement/api/views.py` |
+| D217 | **The staff list's search does nothing.** `UserViewSet` declares `search_fields = ["email", "first_name", "last_name"]`, and `DEFAULT_FILTER_BACKENDS` holds the filter and ordering backends only: no `SearchFilter` runs, so `?search=owner` answers every account. Any other view relying on `search_fields` alone would do the same; the ones that search do it by hand in `get_queryset`. *Found by the list cases.* | Low | Copied by the port. Add `SearchFilter` to the view's `filter_backends`. `accounts/api/views.py` |
+| D218 | **A staff email in other letters is a bare 409.** `User.save()` stores the email lower-cased; `UserWriteSerializer`'s `UniqueValidator` compares it as typed. `OWNER@rangon.test` passes validation against a stored `owner@rangon.test` and meets the unique index, on a create and on an edit. D198 and D202 are the same shape. *Found by the email cases.* | Low | Copied by the port. Lower-case in the field, before the validator. `accounts/api/serializers.py` |
+| D219 | **What a new staff account ignores.** `create_staff_user` always passes `status=ACTIVE`: a `status` sent with the create is validated and dropped. `validate_password(value)` is called with no user, so the similarity check never runs and an account's email is accepted as its password. And `role_code` takes every `RoleCode`, CUSTOMER among them: the account is made with no `Customer` behind it, answered 201, and the staff list -- which excludes that role -- never shows it again; an edit to that role makes a member of staff vanish the same way. With no active organisation the account is made belonging to none. *Found by the create cases.* | Low | Copied by the port. Honour or refuse `status`; pass a user to `validate_password`; take CUSTOMER out of the staff choices. `accounts/api/serializers.py`, `accounts/services.py` |
+| D220 | **An ID number resent with an edit is "already taken" -- by itself.** `StaffProfile.national_id` has a conditional unique constraint, from which DRF builds a `UniqueValidator` on the nested `StaffProfileSerializer`. A nested serializer is never given an instance, so the validator cannot exclude the profile being edited: `PATCH {"profile": {"national_id": <their own>, "designation": "Lead"}}` is a 400, "staff profile with this national id already exists." A form that sends the whole profile back cannot save a member of staff who has an ID number. `save_staff_profile` has the correct check, which is never reached. *Found by the profile cases.* | Medium | Copied by the port. `extra_kwargs = {"national_id": {"validators": []}}`: the service already answers a real duplicate. `accounts/api/serializers.py` |
+| D221 | **The staff guards take no lock, and an administrator is an owner in all but name.** `check_can_lose_access` counts the other active owners with no lock and the write follows: measured in both APIs, the second owner switched off while the first's deactivation is in flight leaves *no* active owner -- the state the guard exists to prevent, with "no recovery path short of the shell". Separately: business rule 7.1 says only `OWNER` holds `users.manage`; `ROLE_PERMISSIONS[ADMIN]` is every permission. An administrator can therefore give anyone the owner role, themselves included -- which also hands them the owner-only decision on reserved stock (D115) -- can reset an owner's password and sign in as them, and can deactivate or demote any owner but the last. And the "not yourself" guard covers a role change only for an owner: an administrator can demote themselves out of `users.manage`. *Found by the guard cases and a mid-flight check.* | High | Copied by the port, as the rule is the owner's to state. **Decision required** (business rule 7.1): may an administrator manage owners at all? Then: lock the owner rows in `check_can_lose_access`; refuse an owner as the target unless the actor is one. `accounts/services.py`, `accounts/permissions.py` |
+| D222 | **A staff account's edit writes back the password it read.** `update_staff_user` ends in `user.save()` with no `update_fields` and no lock: every column goes back as read, `password` and `last_login` among them. Measured in both APIs: a password changed while an edit of the account's name waits at its `UPDATE` is put back as it was -- the member of staff who just changed a leaked password has the old one again, and no session was ended. D184, D200, D203, D207 and D215 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` of what was changed. `accounts/services.py` |
+| D223 | **Deactivating reads its reason by hand.** `deactivate` passes `request.data.get("reason", "")` to the service: a body that is a list, a string or `null` is a 500 -- after the guards, so only for an account that could be deactivated -- and a reason that is a number, a list or an object is stored as Python prints it. An account already off is switched off again and logged again (six at once: six entries); `activate` is the same. A deactivation does not end the account's sessions, though nothing they hold will authenticate. D199 and D214 are the same reading of a body. *Found by the deactivate cases.* | Low | Copied by the port. A one-field serializer; answer an account already in the state as it is. `accounts/api/views.py` |
+| D224 | **Branches: a bare 409, two defaults or none, and no audit.** `accounts_branch_org_code_uniq` is over `(organization, code)` and the serializer has no `organization` field, so DRF builds no validator: a code taken -- or a create with no active organisation -- is the index's bare 409. `is_default` is a plain boolean: a second default branch is accepted, and the default one can be switched off or un-defaulted, leaving `default_branch()` to pick by age. A branch is made, edited and deleted with no audit entry, and deleting one silently removes its parked sales. *Found by the branch cases.* | Low | Copied by the port. A `validate_code`; a partial unique index on `is_default`; `audit.record`. `accounts/api/serializers.py`, `accounts/models.py` |
+| D225 | **The organisation can switch itself off, and its edit undoes a VAT settlement.** `status` is writable on `PATCH /organization/`. Set to INACTIVE, `get_organization()` finds nothing: the organisation reads 404, every new branch is a 409, and the next `PATCH` runs `serializer.save()` on a serializer with no instance -- it *creates* a second organisation, with a blank slug, no branches and the default VAT, which becomes the one the shop runs under; a third attempt meets the slug's unique index. The owner-only check on reserved stock is skipped on that path. Separately, the edit is a plain `save()`: every column is written back as read, so -- measured in both APIs -- a VAT settlement committed while an edit of the name is in flight is undone, mode, rate and stamp. *Found by the organisation cases and a mid-flight check.* | Medium | Copied by the port. Make `status` read-only; refuse the PATCH when there is no organisation; `update_fields`. `accounts/api/views.py`, `accounts/api/serializers.py` |
+| D226 | **The VAT routes answer in UTC, and both organisation views refuse without a request id.** `OrganizationTaxView` builds its answer by hand and puts the raw `tax_settled_at` in it: DRF's encoder writes UTC with a `Z`, where `GET /organization/` -- a serializer -- answers the same instant in the shop's time. Both views check their permission in the method and return a hand-written 403 (and a bare `{"detail": ...}` 404): an error envelope with no `request_id`, unlike every refusal the permission classes make. *Found by the cases that read both.* | Low | Copied by the port. A serializer for the tax answer; `RolePermission` on the views. `accounts/api/views.py` |
 
 ## Still API-only (no UI)
 

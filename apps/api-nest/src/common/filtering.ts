@@ -24,7 +24,8 @@
 import type { Queryable } from '../database/database.service';
 import type { Params as SqlParams } from '../database/sql';
 import { ValidationError } from './errors';
-import { pyStr, pyStrip } from './python';
+import { Dec } from './decimal';
+import { isFiniteDecimal, pyDecimal, pyStr, pyStrip } from './python';
 import type { QueryDict } from './query-dict';
 import { parseUuid } from './uuid';
 
@@ -32,7 +33,9 @@ export type FilterKind =
   | { kind: 'boolean' }
   | { kind: 'model'; table: string }
   | { kind: 'choice'; choices: readonly string[] }
-  | { kind: 'char' };
+  | { kind: 'char' }
+  | { kind: 'uuid' }
+  | { kind: 'number'; min: number; max: number };
 
 export interface FilterField {
   /** The query parameter, which is the model field's name. */
@@ -65,6 +68,39 @@ export const charFilter = (param: string, column: string): FilterField => ({
   column,
   filter: { kind: 'char' },
 });
+
+/** `filters.UUIDFilter`: a `forms.UUIDField`, which strips and reads the value as `uuid.UUID` does. */
+export const uuidFilter = (param: string, column: string): FilterField => ({
+  param,
+  column,
+  filter: { kind: 'uuid' },
+});
+
+/** What Django knows an integer column can hold: a value outside it matches nothing. */
+const INTEGER_RANGES = {
+  smallint: [-32768, 32767],
+  positiveSmallint: [0, 32767],
+  integer: [-2147483648, 2147483647],
+  positiveInteger: [0, 2147483647],
+} as const;
+
+/**
+ * `filters.NumberFilter` on an integer column: a `forms.DecimalField` no
+ * larger than 1e50, whose value the column's lookup then cuts to a whole
+ * number -- `rating=4.9` finds the fours.
+ */
+export const numberFilter = (
+  param: string,
+  column: string,
+  type: keyof typeof INTEGER_RANGES,
+): FilterField => ({
+  param,
+  column,
+  filter: { kind: 'number', min: INTEGER_RANGES[type][0], max: INTEGER_RANGES[type][1] },
+});
+
+/** The float 1e50, exactly: what `MaxValueValidator(1e50)` compares a Decimal with. */
+const NUMBER_FILTER_MAX = '100000000000000007629769841091887003294964970946560';
 
 /** `BooleanWidget.value_from_datadict`. */
 export function booleanValue(raw: string | undefined): boolean | null {
@@ -106,6 +142,39 @@ export async function applyFilters(
         continue;
       }
       if (text !== '') conditions.push(`${field.column} = ${sql.add(text)}`);
+      continue;
+    }
+    if (filter.kind === 'uuid') {
+      const text = raw === undefined ? '' : pyStrip(raw);
+      if (text === '') continue;
+      const id = parseUuid(text);
+      if (id === null) {
+        errors[field.param] = ['Enter a valid UUID.'];
+        continue;
+      }
+      conditions.push(`${field.column} = ${sql.add(id, 'uuid')}`);
+      continue;
+    }
+    if (filter.kind === 'number') {
+      const text = raw === undefined ? '' : pyStrip(raw);
+      if (text === '') continue;
+      const parsed = pyDecimal(text);
+      if (parsed === null || !isFiniteDecimal(parsed)) {
+        errors[field.param] = ['Enter a number.'];
+        continue;
+      }
+      const value = new Dec(parsed);
+      if (value.gt(NUMBER_FILTER_MAX)) {
+        errors[field.param] = ['Ensure this value is less than or equal to 1e+50.'];
+        continue;
+      }
+      // `int(value)`: toward zero. Past the column's range Django asks nothing.
+      const whole = value.trunc();
+      conditions.push(
+        whole.lt(filter.min) || whole.gt(filter.max)
+          ? 'FALSE'
+          : `${field.column} = ${sql.add(whole.toNumber())}`,
+      );
       continue;
     }
     const text = raw ?? '';

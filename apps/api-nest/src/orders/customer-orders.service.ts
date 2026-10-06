@@ -2,9 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import { primaryImageUrl } from '../catalog/primary-image';
 import { localIso, parsePgTimestamptz } from '../common/datetime';
-import { pyFormatNamed, pyStr } from '../common/python';
+import { pyStr } from '../common/python';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { trackingUrl } from '../shipping/tracking-url';
 
 /** `orders_order`'s columns in model order: Django's own SELECT, so the plan -- and a tie's order -- is the same. */
 const ORDER_COLUMNS = [
@@ -502,11 +503,7 @@ export class CustomerOrdersService {
         id: row[at('id')],
         courier_name: courierId ? row[courierAt('name')] : '',
         tracking_number: trackingNumber,
-        // `Courier.tracking_url`: nothing without both a template and a number.
-        tracking_url:
-          courierId && template && trackingNumber
-            ? pyFormatNamed(template, { tracking_number: trackingNumber })
-            : '',
+        tracking_url: trackingUrl(courierId, template, trackingNumber),
         status: row[at('status')],
         dispatched_at: this.iso(row[at('dispatched_at')] as string | null),
         delivered_at: this.iso(row[at('delivered_at')] as string | null),

@@ -1,6 +1,6 @@
 # ADR-0013 — A NestJS API beside Django, on the same database, ported module by module
 
-**Status:** Accepted · 2026-09-30 · phases 1 (storefront catalogue and content), 2 (accounts, customer orders, addresses, tracking, reviews), 3 (cart, checkout, payment webhook), 4 (catalogue, inventory and content admin) and 5 (the counter, returns and refunds, the staff order screens) done
+**Status:** Accepted · 2026-09-30 · phases 1 (storefront catalogue and content), 2 (accounts, customer orders, addresses, tracking, reviews), 3 (cart, checkout, payment webhook), 4 (catalogue, inventory and content admin), 5 (the counter, returns and refunds, the staff order screens) and 6 (the back office: money, buying, customers, coupons, shipping, review moderation, staff accounts and the organisation) done
 
 ## Context
 

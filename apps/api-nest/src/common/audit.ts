@@ -69,6 +69,23 @@ export function scrub(value: unknown): unknown {
   return value;
 }
 
+/**
+ * `audit.diff(before, after)`: only what changed, so an entry stays readable.
+ * The keys are `after`'s; one `before` lacks reads as null.
+ */
+export function auditDiff(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): [before: Record<string, unknown>, after: Record<string, unknown>] {
+  const changed = Object.keys(after).filter(
+    (key) => (before[key] ?? null) !== (after[key] ?? null),
+  );
+  return [
+    Object.fromEntries(changed.map((key) => [key, before[key] ?? null])),
+    Object.fromEntries(changed.map((key) => [key, after[key] ?? null])),
+  ];
+}
+
 export interface AuditEntity {
   /** `type(entity).__name__`: "User", "CustomerAddress". */
   type: string;
@@ -91,7 +108,8 @@ export interface AuditRecord {
   actor?: AuditActor | null;
   oldValues?: Record<string, unknown>;
   newValues?: Record<string, unknown>;
-  reason?: string;
+  /** Null is what Django passes on when a view hands it `None`: the column refuses it. */
+  reason?: string | null;
   branchId?: string | null;
 }
 
@@ -131,7 +149,7 @@ export async function recordAudit(
       pySlice(entityLabel, 255),
       JSON.stringify(scrub(entry.oldValues ?? {})),
       JSON.stringify(scrub(entry.newValues ?? {})),
-      entry.reason ?? '',
+      entry.reason === undefined ? '' : entry.reason,
       context.ipAddress,
       context.userAgent,
       context.requestId,

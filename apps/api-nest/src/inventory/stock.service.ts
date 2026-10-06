@@ -146,6 +146,23 @@ function skuOf(inventory: LockedInventory): string {
   return inventory.sku;
 }
 
+/**
+ * What a shelf's units are worth each once some go back to the supplier at
+ * `unitCost`: `((on_hand * avg) - (qty * cost)) / (on_hand - qty)`, clamped at
+ * nothing. A shelf emptied keeps the average it had.
+ */
+export function averageAfterReturn(
+  onHand: number,
+  average: string,
+  quantity: number,
+  unitCost: Dec,
+): string {
+  const remaining = onHand - quantity;
+  if (remaining <= 0) return average;
+  const value = new Dec(onHand).times(average).minus(new Dec(quantity).times(unitCost));
+  return quantize((value.lt(0) ? new Dec(0) : value).div(new Dec(remaining))).toFixed(2);
+}
+
 @Injectable()
 export class StockService {
   constructor(
@@ -871,6 +888,85 @@ export class StockService {
     ]);
     return entry;
   }
+  /**
+   * `return_to_supplier`: purchased stock sent back, at what it cost. The
+   * shelf must hold the units -- overselling is no excuse for a box of goods
+   * that never existed -- and the average of what is left is what is left's
+   * own: `((on_hand * avg) - (qty * cost)) / (on_hand - qty)`, never below
+   * nothing. An emptied shelf keeps its last average. Audited, and the
+   * low-stock check follows the commit.
+   */
+  async returnToSupplier(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    goods: {
+      branch: Branch;
+      variantId: string;
+      quantity: number;
+      unitCost: string;
+      actor: AuditActor | null;
+      referenceType: string;
+      referenceId: string | null;
+      notes: string;
+    },
+  ): Promise<LedgerEntry> {
+    if (goods.quantity <= 0) throw new ValidationError('Returned quantity must be positive.');
+    const unitCost = quantize(new Dec(goods.unitCost));
+    if (unitCost.lt(0)) throw new ValidationError('Unit cost cannot be negative.');
+    const inventory = (await this.lock(tx, goods.branch.id, [goods.variantId])).get(
+      goods.variantId,
+    ) as LockedInventory;
+    if (inventory.on_hand < goods.quantity) {
+      const sku = skuOf(inventory);
+      throw new InsufficientStock(
+        `Only ${inventory.on_hand} unit(s) of ${sku} are in stock at ${inventory.branch_code}, ` +
+          `so ${goods.quantity} cannot be returned.`,
+        {
+          details: {
+            variant_id: inventory.variant_id,
+            sku,
+            branch: inventory.branch_code,
+            requested: goods.quantity,
+            on_hand: inventory.on_hand,
+          },
+        },
+      );
+    }
+    const before = { on_hand: inventory.on_hand, average_cost: inventory.average_cost };
+    inventory.average_cost = averageAfterReturn(
+      inventory.on_hand,
+      inventory.average_cost,
+      goods.quantity,
+      unitCost,
+    );
+    const entry = await this.writeLedger(tx, inventory, {
+      type: 'PURCHASE_RETURN',
+      delta: -goods.quantity,
+      actor: goods.actor,
+      referenceType: goods.referenceType,
+      referenceId: goods.referenceId,
+      reason: '',
+      notes: goods.notes,
+      unitCost: unitCost.toFixed(2),
+    });
+    await recordAudit(tx, context, {
+      action: 'STOCK_ADJUSTMENT',
+      entity: { type: 'Inventory', id: inventory.id, label: this.label(inventory) },
+      actor: goods.actor,
+      oldValues: before,
+      newValues: {
+        on_hand: inventory.on_hand,
+        average_cost: inventory.average_cost,
+        returned: goods.quantity,
+      },
+      reason: 'Returned to supplier',
+      branchId: goods.branch.id,
+    });
+    after.lowStockCheck(inventory);
+    return entry;
+  }
+
   /**
    * `transfer`: stock out of one branch and into another in one transaction,
    * at the source's average cost (ADR-0006). Idempotent on its key, claimed

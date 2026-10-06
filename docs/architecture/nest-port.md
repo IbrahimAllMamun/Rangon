@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -166,6 +166,51 @@ across both APIs where both serve the path:
 | Two voids of one expense queued on its row (one per API, then both through each API) | one voids it and the other is told it is voided already; the money goes back once. With the port's `FOR UPDATE` removed both Nest voids go through and the money goes back twice |
 | 6 expenses of all a drawer holds at once; an expense whose drawer is emptied mid-flight (each API in turn) | one is recorded; a refused one leaves no document |
 | 6 clicks of one expense with one `Idempotency-Key`, across both APIs | six 201s, one expense, one movement |
+| An offer withdrawn while its promotion to preferred waits on the offer's row (each API in turn) | the promotion is refused and the SKU keeps the supplier it preferred; with the port's `FOR UPDATE` removed it waits only at its `UPDATE`, and promotes the withdrawn offer |
+| 6 promotions at once, three for each of a SKU's two offers, across both APIs | one preferred offer, every promotion audited. The unique index, not a lock, allows only one |
+| 6 suppliers of one name at once, across both APIs | each one made has a code of its own; a loser is the unique index's 409. No lock is involved |
+| An offer promoted while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the preference it read, and the SKU prefers nobody (D184, copied); no lock is involved |
+| A purchase order cancelled while a send of it waits on the order's row (each API in turn) | the send is refused and the order stays cancelled; with the port's `FOR UPDATE` removed Nest sends it |
+| An order part received while a cancel of it waits on its row (each API in turn) | the cancel is refused; with the lock removed Nest cancels an order with goods on the shelf |
+| An order cancelled while a delivery against it waits on its row (each API in turn) | nothing is received; with the lock removed Nest receives into the cancelled order and marks it part received |
+| Part of a line received while a delivery of all of it waits on the line's row (each API in turn) | refused for what is still outstanding; with the port's `FOR UPDATE` removed from the lines Nest receives the whole line again |
+| 6 deliveries of one whole line at once, across both APIs | one is received: the shelf up once and equal to its ledger, one receipt |
+| Two returns of different lines queued on the order's row (one per API, then both through each API) | both go back, and the order's credit is the sum of the two; with the order's lock removed the Nest pair lose one credit |
+| Part of a line sent back while a return of all of it waits on the line's row (each API in turn) | refused for what is left; with the lines' lock removed Nest returns units already gone, and credits them |
+| A shelf emptied while a return waits on the shelf's row (each API in turn) | the return is refused whole: nothing credited, the line as it was |
+| 6 clicks of one return with one `Idempotency-Key`, across both APIs | six 201s naming one return, one unit off the shelf |
+| 6 orders raised at once, across both APIs | six numbers, none shared |
+| Another supplier made a SKU's preferred one while its first delivery from this one is in flight (each API in turn) | the delivery is refused with a bare 409 (D187, copied); the unique index decides, no lock is involved |
+| 6 payments of all a purchase order owes at once, across both APIs | one is recorded and five exceed what is outstanding (422); the order paid once, the account down once and equal to its ledger |
+| All but 100.00 of an order paid while a payment of 500.00 waits on the order's row (each API in turn) | it exceeds what is outstanding; with the port's `FOR UPDATE` removed Nest pays 500.00 over the balance it read |
+| An order cancelled while a payment against it waits on its row (each API in turn) | not paid; with the lock removed Nest pays a cancelled order |
+| An account emptied while a supplier payment waits on the account's row (each API in turn) | refused whole: no payment left behind, the order as it was |
+| 6 clicks of one supplier payment with one `Idempotency-Key`, against an order and as an advance, across both APIs | six 201s naming one payment, the money out once |
+| 10 addresses added as a customer's default at once from the back office, across both APIs | one default: the customer's row lock, the one phase 2 proved for the storefront, as the back office reaches the same service |
+| 6 customers under one new number at once, across both APIs | one is made; the rest are told the number is taken (400) or meet the unique index (409). No lock is involved |
+| A lead recovered while a note on it waits at its `UPDATE` (each API in turn) | the note's save opens the lead again and forgets its order (D200, copied); no lock is involved |
+| 6 coupons of one code at once, across both APIs | one is made; the rest are told the code is taken (400) or meet the unique index (409). No lock is involved |
+| A coupon redeemed while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the count it read, and the use is forgotten (D203, copied); no lock is involved |
+| 6 bookings of one tracking number for one order at once, across both APIs | one parcel and one timeline entry; five are told the courier already has a parcel with that number: the order's row lock makes the check and the insert one step |
+| 6 bookings of one tracking number across two orders at once, across both APIs | one parcel; five conflicts and no 500: only the unique index stands between two orders, and the savepoint around the insert turns its refusal into the named conflict |
+| An order cancelled while a booking for it waits on its row (each API in turn) | no parcel; with the port's `FOR UPDATE` removed the booking never waits and the cancelled order gets one |
+| An order taken off the packing bench while its parcel's DISPATCHED waits on the order's row (each API in turn) | the parcel does not leave; with the lock removed the update is decided on the status it read and fails only inside the status machine |
+| A parcel delivered while a FAILED for it waits on the parcel's row (each API in turn) | its history is closed; with the lock removed the FAILED is recorded over the delivery |
+| 6 DELIVERED for one parcel at once, across both APIs | one is recorded, five find the parcel delivered; the order delivered once and its customer told once. With the locks removed two of the six are 500s |
+| 6 DISPATCHED for a packed order's parcel at once, across both APIs | six updates recorded, as nothing refuses a repeat (D209, copied); the order shipped once, `dispatched_at` stamped once, its customer told once |
+| Both parcels of a split delivery updated at once while the order is marked delivered by hand, across both APIs | no deadlock and no 500: every path takes the order's row first; the order delivered once |
+| A parcel delivered while an edit of its notes waits at its `UPDATE` (each API in turn) | the edit writes back the status it read and the delivery is gone (D207, copied); no lock is involved |
+| 6 couriers of one code, and 6 methods of one code in one zone, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
+| 6 decisions on one review at once, three each way, across both APIs | six 200s and six audit entries; the review is left as one of them decided. No lock is involved |
+| A review rejected with a reason while an approval of it with no note waits at its `UPDATE` (each API in turn) | the approval stands and the reason is gone: a decision writes back the note it read (D215, copied); no lock is involved |
+| A profile's ID number changed while an edit of its title waits on the profile's row (each API in turn) | both changes stand; with the port's `FOR UPDATE` removed the edit writes back the ID number and the notes it read |
+| 6 first saves of one profile at once, across both APIs | six 200s and one profile: each edit writes the account's own row first, and the rest wait on it |
+| The second owner switched off while the first's deactivation waits at its `UPDATE` (each API in turn) | judged with two owners, it goes through: no active owner is left (D221, copied); the guard takes no lock |
+| A password changed while an edit of the account's name waits at its `UPDATE` (each API in turn) | the edit puts back the password it read (D222, copied); no lock is involved |
+| The VAT settled while an edit of the organisation's name waits at its `UPDATE` (each API in turn) | the edit puts back the VAT it read and the settlement is gone (D225, copied); no lock is involved |
+| 6 deactivations of one account at once, across both APIs | six 200s and six audit entries; nothing refuses a repeat |
+| 6 accounts under one email, and 6 branches under one code, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
+| 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -541,6 +586,146 @@ the first outside uploads to read a form as well as JSON, since a receipt is att
 | `GET /api/v1/expenses/summary/` | `finance.view`; what was spent in the window at the branch asked for (or the user's own), voided expenses left out, and each category's total, count and share |
 | `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first |
 
+Then who the shop buys from (part 3): `purchasing/suppliers.service.ts` and
+`purchasing/supplier-products.service.ts`. Neither moves stock or money. A supplier is a plain
+`ModelViewSet`; an offer -- one supplier's price for one SKU -- is reference data too, and of a
+SKU's offers one is the preferred one, which the purchase order form suggests. That flag moves
+only through `set-preferred`.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/suppliers/`, `GET .../<id>/` | `purchases.view`; paginated, by name, each with the count of its orders sent and not yet received in full (`outstanding_orders`, an annotation: a supplier just made answers without it). Filter `status`, `SearchFilter` over name, code and phone, `ordering` by `name` or `created_at` |
+| `POST /api/v1/suppliers/`, `PUT`/`PATCH .../<id>/` | `purchases.create`. `SupplierSerializer`: a name; a code no other supplier has, or one made from the name as `unique_supplier_code` makes it -- the ASCII letters and digits, hyphenated, upper-cased, cut at 24, `SUPPLIER` when nothing is left, numbered `-2`, `-3` until free -- on a create only; a phone kept as typed unless it is a mobile, which is stored canonically (`ContactPhoneField`: the length is checked after that); an email; terms and a lead time of 0 to 32767 days; a status. An edit writes every column back from the row as read. Nothing is audited (D183, copied) |
+| `DELETE /api/v1/suppliers/<id>/` | `settings.manage`; refused once the supplier was ordered from or paid (`PROTECT`: the bare 409); otherwise its price list goes with it |
+| `GET /api/v1/supplier-products/`, `GET .../<id>/` | `purchases.view`; paginated, the preferred offers first, then the cheapest -- an order with many ties, so the statement carries Django's joins in the order its query holds them: each filter and then the search names its tables first, and `select_related` adds the rest. Filters `supplier`, `variant`, `product` (a `UUIDFilter`: stripped, read as `uuid.UUID` reads it, "Enter a valid UUID."), `is_preferred`, `is_active`; `SearchFilter` over the supplier's code for the item, the SKU, the product's name and the supplier's; `ordering` by `last_cost`, `last_purchased_at` or `created_at`. Each offer with its supplier's name, code and status, the SKU, its label, and the lead time that applies -- its own, else the supplier's |
+| `POST /api/v1/supplier-products/`, `PUT`/`PATCH .../<id>/` | `purchases.create`. A supplier and a SKU, each a `PrimaryKeyRelatedField`, the pair not already quoted (`UniqueTogetherValidator`, in the shop's words, as a non-field error; on an edit a missing half is read from the row and an unchanged pair is not checked); the supplier's own code, a cost, a lead time, a minimum order quantity, the active switch, notes. `is_preferred` is read only. A cost below zero and a minimum of nothing pass the serializer and are the table's check constraints' 409 (D180, copied). An edit writes every column back as read, the preference included (D184, copied) |
+| `DELETE /api/v1/supplier-products/<id>/` | `purchases.create`; the preferred offer too, which leaves the SKU preferring nobody |
+| `POST /api/v1/supplier-products/<id>/set-preferred/` | `purchases.create`; 200 with the offer. The body is never read. `set_preferred_supplier`: the offer locked by its supplier and SKU; a withdrawn offer refused; the incumbent locked and demoted, this one promoted, and an `UPDATE` audit entry naming both suppliers -- written even when the offer was preferred already. The supplier's own status is not looked at (D182, copied) |
+
+Then the orders themselves (part 4): `purchasing/purchase-orders.service.ts`, with
+`purchasing/purchase-documents.ts` for `PurchaseOrderSerializer` and what nests in it. An order
+is raised as a draft, sent, received in one delivery or several, and what is faulty goes back
+for a credit; nothing is edited. Every step takes the order's row first; a delivery and a return
+then take the order's lines, and the shelf through the stock service. Receiving is
+`StockService.receiveStock`, which transfers and the import already used; a return is the new
+`returnToSupplier` -- the shelf must hold the units, overselling or not, and what is left is
+valued at what it cost: `((on_hand * avg) - (qty * cost)) / (on_hand - qty)`, never below
+nothing, an emptied shelf keeping its last average.
+
+An order's lines, a receipt's and a return's have no ordering of their own (D161's kind), so
+they are read with the statements Django's prefetch sends, `IN (...)` in the page's order.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/purchase-orders/` | `purchases.view`; paginated, newest raised first, the orders of the user's branch. `date_from` and `date_to` are `core.dates`' window on the day raised, and a value that is not a date is a 400 on every route of the viewset; filters `status`, `supplier`, `branch`, `payment_status`; `ordering` by `created_at` or `expected_at`. Each order with its lines (SKU, product, label, ordered, received, returned, outstanding), its receipts newest first and its returns, and `outstanding`: the total less what was paid and what was credited, which goes below zero |
+| `GET /api/v1/purchase-orders/<id>/` | the same, and `unpublished_products`: the products on the order a shopper cannot see yet, each with whether it could be published -- an active variant priced above zero, as `publish_product` asks |
+| `GET /api/v1/purchase-orders/<id>/receipts/` | `purchases.view`; the order's deliveries, newest first, unpaginated |
+| `POST /api/v1/purchase-orders/` | `purchases.create`; 201. `CreatePurchaseOrderSerializer`: a supplier that exists (an inactive one too), a branch (`resolve_branch`), lines of a variant, a quantity of at least 1, a cost of at least 0, a discount, and VAT as a fraction of 0 to 1; a date expected, an invoice number, shipping, notes. `_check_lines`: at least one line, no discount past its line, no SKU twice. Numbered `PO-` from the row-locked sequence; each line's total and the order's worked out from the rows as stored, tax rounded half up per line. A variant is any UUID: one that does not exist fails at the commit, a bare 409, and a quantity past an integer is a 500 (D190, D191, copied). Nothing is audited |
+| `POST /api/v1/purchase-orders/<id>/send/` | `purchases.create`; 200. The body is never read. Under the order's lock: only a draft, else a 409; `ordered_at` stamped; audited |
+| `POST /api/v1/purchase-orders/<id>/cancel/` | `purchases.create`; 200. Under the lock: a draft or a sent order with nothing received and nothing paid, each refusal a 409 in its own words. The reason is `request.data.get("reason", "")` as sent, written to the audit entry as a `TextField` takes it: a number or a list as Python prints it, `null` the column's 409, a body that is not an object a 500 (D189, copied) |
+| `POST /api/v1/purchase-orders/<id>/receive/` | `purchases.receive`; 201 with the receipt and the order. The body is validated before the order is looked for: lines of an order line, a quantity of at least 1 and optionally the cost on the delivery note; a line named twice is a 400. Under the order's lock a cancelled or closed order is a 409 -- a draft is received (D186, copied); a receipt numbered `GRN-`; the order's lines locked; each line checked against what is outstanding, put on the shelf at its cost (the branch's average moves, the SKU's latest cost is set), its received count raised, and the supplier's price list updated -- the first supplier a SKU is received from becomes its preferred one, and a withdrawn offer is brought back. Then the order RECEIVED or PARTIALLY_RECEIVED, and a `PURCHASE_RECEIVED` audit entry. No `Idempotency-Key` (D188, copied) |
+| `POST /api/v1/purchase-orders/<id>/return/` | `purchases.receive`; 201 with the return and the order. Lines of an order line and a quantity, a reason from the list, notes. Under the order's lock: a return already made under this `Idempotency-Key` answers as it is -- whichever order it is on, and before anything else is checked (D192, copied); a draft or cancelled order is a 409. The lines locked with their variants; the return claimed under its `PRN-` number in a savepoint; each line checked against what was received and not sent back, taken off the shelf through the ledger at the order line's cost (D185, copied), a `STOCK_ADJUSTMENT` audit entry each; the order credited with the sum and its payment badge refreshed -- credit counts only towards settling in full. Low-stock jobs follow the commit |
+
+Then paying for them (part 5): `purchasing/supplier-payments.service.ts`. A payment is money
+out of one of the business's own accounts -- `CashBookService.recordSupplierPayment`, the same
+`record_for_reference` a sale's payment and a refund post through -- and, against an order,
+what was paid on it. It is recorded once and never edited or deleted.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/supplier-payments/` | `purchases.view`; paginated, newest paid first. A branch-bound user sees the payments against their branch's orders and those out of their branch's accounts (D95): an OR across two outer joins, which Django's query holds before the supplier's -- and the account's branch with them, when the ordering asks for the account. Filters `supplier`, `purchase_order`, `method`. The view names no `ordering_fields`, so `OrderingFilter` takes every serializer field by its source: `supplier` and `supplier__name` by the supplier's name, `purchase_order` by the order's own ordering (newest raised first), `purchase_order__number`, `account` by the account's (its branch's name, kind, name), `account__name`; `supplier_name`, `purchase_number` and `account_name` are not names it knows. There is no detail route |
+| `POST /api/v1/supplier-payments/` | `purchases.pay`; 201. `SupplierPaymentSerializer`: a supplier, optionally an order and an account, a method (cash, bank, cheque, mobile wallet, other), a reference, a moment, notes -- and an amount DRF does not require, the column having a default: a body without one is a 500 (D194, copied). Paying an order is acting on its branch (`resolve_branch`, a 403); `branch` is read from the body as sent and resolved even when the order's branch is the one used (D197, copied). `record_supplier_payment`: an amount above zero; a payment already made under this `Idempotency-Key` answers as it is, looked for before any lock and again under the order's; the order locked -- it must be this supplier's, not a draft or cancelled, and owe at least this much after what was paid and credited (`PAYMENT_EXCEEDS_OUTSTANDING`, a 422); the payment's row claimed in a savepoint; the money out of the account named -- which must be the paying branch's, open and of the method's kind -- or the branch's own for the method, or none at all, the payment standing with no account; refused when the account cannot cover it, taking the payment with it. Then the order's paid total and badge, and a `PAYMENT_RECORDED` audit entry at the paying branch |
+
+Then the people (part 6): `customers/customers-admin.service.ts` for `CustomerViewSet`, over the
+`AddressesService` the storefront's account already used -- so the back office and a customer
+editing their own addresses hold one default per customer under the same row lock -- and
+`orders/leads-admin.service.ts` for the call-back list.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/customers/`, `GET .../<id>/` | `customers.view`; paginated, newest first, each with its addresses (the default first, then the newest) and whether it has a storefront login. `search` matches the name or the email in any case, or the phone by the digits that identify a subscriber -- `+8801911...` finds the number stored as `8801911...`, and a country code or a trunk `0` alone adds no clause -- and applies on every route, as it is `get_queryset` that reads it: a NUL in it is a 500 (D201, copied). Filters `customer_type`, `is_active`; `ordering` by `name`, `created_at`, `total_spent` or `last_order_at`. `tags` is whatever JSON was stored, a float kept a float |
+| `POST /api/v1/customers/`, `PUT`/`PATCH .../<id>/` | `customers.create`; `customers.update` to edit. `CustomerSerializer`: a name; a phone made canonical before `UniqueValidator` sees it, so two spellings of one number collide in words; an email, unique as typed and stored lower-cased -- another customer's email in another case is the index's bare 409 (D198, copied); a type, the active switch, a birthday, notes, tags. A customer must be left with a phone or an email, judged on the record as it would be saved. The walk-in flag, the totals and the points are read only. An edit writes every column back as read |
+| `DELETE /api/v1/customers/<id>/` | `customers.update`; 204. The customer is deactivated, never deleted: its orders stay |
+| `GET /api/v1/customers/lookup/?phone=` | `customers.view`; the counter's search. Not the list's queryset: active customers who are not a branch's walk-in record whose number holds the digits typed, by name, ten at most, each with no more than a name, a number, an email, a type, a count of orders and the last one's date. Fewer than three identifying digits answers `{"results": [], "min_length": 3}` |
+| `GET /api/v1/customers/<id>/orders/` | `customers.view`; the customer's last hundred orders, newest placed first, as the order list writes them, whatever their branch |
+| `GET/POST /api/v1/customers/<id>/addresses/`, `PATCH/DELETE .../addresses/<address>/` | a requirement per method: `customers.view` to read, `customers.update` to write, and a method the action does not serve is a 403 for all but an owner or superuser. The customer comes from the URL, never the body. `add_address`, `update_address`, `delete_address`: the first address is the default whatever was asked, the only address stays it, and a deleted default hands the flag to the newest left -- each audited. An address key that is not a UUID is Django's own `ValidationError`, a 400 under `non_field_errors` |
+| `GET/POST /api/v1/customers/<id>/notes/`, `DELETE .../notes/<note>/` | the same per-method rule. Staff commentary, the pinned first; a note is added and deleted, audited both ways, never edited |
+| `GET /api/v1/abandoned-checkouts/`, `GET .../<id>/` | `customers.view`; the call-back list, paginated, last seen first, the leads of the user's branch. Filters `status`, `branch`; the view names no `ordering_fields`, so every serializer field orders by its source (`branch__code`, `recovered_order__number`) |
+| `PUT`/`PATCH /api/v1/abandoned-checkouts/<id>/` | `customers.update`; only the note is writable, and a PUT with nothing is accepted. The save writes every column back as read (D200, copied). A PATCH's answer leaves out `recovered_order_number` for a lead with no order, as DRF skips a defaulted read-only field then |
+| `POST /api/v1/abandoned-checkouts/<id>/lost/` | `customers.update`; 200. `mark_lost`: the lead LOST whatever it was -- a recovered one too (D199, copied) -- with `str(request.data.get("note", "")).strip()` as its note when that says anything: `null` is the note "None", a body that is not an object a 500 |
+
+Then coupons (part 7): `promotions/coupons-admin.service.ts`, the screen that makes and edits
+what `checkout/coupons.service.ts` has priced and redeemed since phase 3.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/coupons/`, `GET .../<id>/` | `content.coupons_manage`, for reading too; paginated, newest first. Filters `is_active`, `discount_type`; `ordering` by `created_at` or `used_count`. Each coupon with whether its total limit is used up, the categories it is restricted to (in the category's own order) and the products (newest first), and `channels` as stored -- a list, or whatever JSON an older row holds |
+| `POST /api/v1/coupons/`, `PUT`/`PATCH .../<id>/` | `CouponSerializer`: a code no other coupon has, compared as typed and stored trimmed and upper-cased -- another coupon's code in lower case is the index's bare 409 (D202, copied); a type; a value, a minimum order and a cap; a window; a total limit and one per customer, null for none; categories and products, each a `ManyRelatedField` (a list of keys, the first that fails being the field's error; a JSON object is read by its keys, as Python iterates one); channels, cleaned to the sales channels named, once each in the enum's order, or refused; the active switch. `validate` judges the coupon as it would be left: the window must end after it starts -- two bounds from one request compared by wall clock, a stored one by instant; free delivery carries no value, whatever was sent; any other needs a value above zero, a percentage at most 100. Nothing stops a minimum or a cap below zero (D204, copied). An edit writes every column back as read, `used_count` among them (D203, copied), then sets each restriction that was sent |
+| `DELETE /api/v1/coupons/<id>/` | 204. A coupon ever redeemed -- a released redemption counts -- is switched off and kept; any other is deleted with its restrictions, and the carts and orders that named it are left without one (`SET_NULL`) |
+| `GET /api/v1/coupons/<id>/redemptions/` | every use, newest first, unpaginated: the order's number, the customer's name, the discount, and when a cancelled order gave the use back |
+
+Then shipping (part 8): `shipping/shipping-settings.service.ts` -- zones, methods and couriers,
+three plain `ModelViewSet`s -- and `shipping/shipments.service.ts`, `ShipmentViewSet` over
+`shipping.services`: a parcel booked against an order, and the tracking updates that move the
+order. What a shopper is offered at checkout was phase 3's reading of the same rows.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/shipping-zones/`, `GET .../<id>/` | `settings.view`; unpaginated, by position then name. Each zone with its methods (by position, then price) and its `cities` as stored. The view names no `ordering_fields`, so `ordering` takes every serializer field by its source: `methods` joins them and lists a zone once per method |
+| `POST /api/v1/shipping-zones/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name no other zone has; `cities` a list of names, stored trimmed, lower-cased and once each -- a bare string, an object or a list holding anything but strings is refused; a zone whose stored cities are not clean keeps them through an edit of anything else. A second fallback zone is accepted (D212, copied) |
+| `DELETE /api/v1/shipping-zones/<id>/` | 204. Its methods go with it, and the orders and parcels that named one are left without a method (`SET_NULL`), in Django's order: methods read, orders and parcels updated, methods deleted, the zone deleted |
+| `GET /api/v1/shipping-methods/`, `GET .../<id>/` | `settings.view`; unpaginated, by position then price. Filters `zone` (a key that must exist) and `is_active`, which a detail route applies too: a retired method read with `?is_active=true` is a 404. `ordering` by any model field, `zone` (its position, then name) or `zone__name`; `eta_label` is "Collect in store", "1 day", "2 days" or "1–3 days" |
+| `POST /api/v1/shipping-methods/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A zone, a name, a slug of a code; `(zone, code)` unique, judged before anything else in `validate` ("The fields zone, code must make a unique set."); a price and a free-over not below zero; the days read forwards, judged on the method as it would be left -- but on a create only when both are sent, so one alone that crosses the other's default meets the check constraint, a bare 409 (D205, copied). The answer carries the money validated, not stored: a price of "-0" is answered "-0.00" and kept as 0.00 |
+| `DELETE /api/v1/shipping-methods/<id>/` | 204; the orders and parcels that named it are left without one |
+| `GET /api/v1/couriers/`, `GET .../<id>/` | `settings.view`; unpaginated, by name; `ordering` by any field |
+| `POST /api/v1/couriers/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name and a slug of a code, each unique; a phone kept as typed unless it is a mobile, which is stored canonically (`ContactPhoneField`); a tracking page of up to 255 characters, not checked for its placeholder (D211, copied); an integration, "manual" unless sent |
+| `DELETE /api/v1/couriers/<id>/` | 204, or a bare 409 while a parcel names it (`PROTECT`) |
+| `GET /api/v1/shipments/`, `GET .../<id>/` | `orders.view`; paginated, newest first, scoped to the branches the user may see through the order (D68's fix). Filters `order`, `status`, `courier`; `ordering` by any serializer field's source -- `order` is by the order's `placed_at`, newest first, `events` joins the history and lists a parcel once per update. Each parcel with its history, oldest first, and `tracking_url`: the courier's page with the number in it, filled as Python's `str.format` fills it (below) |
+| `POST /api/v1/shipments/` | `orders.fulfil`; 201. `ShipmentSerializer`, its `order` narrowed to the orders the user may see; `status`, `dispatched_at` and `delivered_at` are not writable. `create_shipment`: the number trimmed, the cost quantized; a negative cost and a number with no courier are 400s before any lock; then the order's row lock; only a CONFIRMED, PROCESSING, PACKED or SHIPPED order ("A delivered order cannot be shipped."); a number its courier already has is a 409 naming the courier, from the check or -- inside a savepoint -- from the unique index; the parcel PENDING, and "Shipment created (courier)" on the order's timeline |
+| `PUT`/`PATCH /api/v1/shipments/<id>/` | `orders.fulfil`; a plain save with none of those rules (D206, copied): every column written back as read (D207), no timeline entry. A PATCH's answer leaves out `courier_name` for a parcel with no courier, as DRF skips a defaulted read-only field then |
+| `DELETE /api/v1/shipments/<id>/` | `orders.fulfil`; 204. The parcel and its history deleted, a delivered one too (D208, copied) |
+| `POST /api/v1/shipments/<id>/events/` | `orders.fulfil`; 201. The parcel is found before the body is read. A status of the six (IN_TRANSIT when none is sent), a message, a place, a time (now when none is sent, stamped before the row is). `record_event`: the order's row lock, then the parcel's; a DELIVERED or RETURNED parcel takes no more; a PENDING parcel's first movement needs its order PACKED, SHIPPED or DELIVERED ("Pack RGN-... before its parcel leaves: the order is still confirmed."); the update appended, the parcel's status and its first `dispatched_at` and `delivered_at` set, "STATUS: message" on the order's timeline; a DISPATCHED moves a PACKED order to SHIPPED and a DELIVERED moves a SHIPPED or PACKED one to DELIVERED, through `OrderLifecycle.transition`, and the customer is told once the transaction commits |
+
+A courier's tracking page is filled by `common/python.ts`'s `pyFormatNamed`: `{tracking_number}`,
+a conversion (`!r`), a string format spec (`:>12`, `:.3`, `:*^11s`, one built from the number
+itself), an index (`[0]`) and doubled braces. What Python raises decides the answer, in the back
+office and on the customer's order page alike: a KeyError or an AttributeError -- a placeholder
+the template is not given, an attribute a string does not have -- is what DRF reads as "this
+read-only field is not there", so the parcel is answered without a `tracking_url`; a ValueError
+or an IndexError -- `{0}`, `{}`, a brace left open -- is a 500 (D211, copied).
+
+Then review moderation (part 9): `engagement/review-moderation.service.ts`,
+`ReviewModerationViewSet`. What a shopper writes, and what a product page shows of it, were
+phases 2 and 1.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/reviews/`, `GET .../<id>/` | `content.review_moderate`, for reading too; paginated, newest first. Filters `status`, `product` (a key that must exist) and `rating` -- django-filter's `NumberFilter`: anything Python's `Decimal` reads, no larger than 1e50, cut to a whole number by the column's lookup, so `rating=4.9` lists the fours (D216, copied) and a number the column cannot hold matches nothing. `ordering` by `created_at` or `rating`. A detail route applies the filters too |
+| `POST /api/v1/reviews/<id>/approve/`, `.../reject/` | `content.review_moderate`; 200. The review is found before the body is read. No rule about what the review was: an approved one can be approved again, or rejected. The status, the moderator and the time are stamped; the note is `str(request.data.get("note", "")).strip()` when that says anything and otherwise the note the review had -- `null` is the note "None", a list or an object is its Python repr, a body that is not an object is a 500, and so is a note of more than 255 characters or one holding a NUL (D214, copied). Then the audit entry, `SETTINGS_CHANGED`, with the status and note before and after and the note, or "Review approved"/"Review rejected", as its reason. No lock, and the two writes are not one transaction (D215, copied) |
+
+Last, staff accounts and the organisation (part 10), in `accounts/`: `branches.service.ts`,
+`staff-users.service.ts` (`UserViewSet`, `UserWriteSerializer`, and `create_staff_user`,
+`update_staff_user`, `save_staff_profile`, `set_user_status` and `check_can_lose_access` of
+`accounts.services`), `roles.service.ts` and `organization-admin.service.ts`. Signing in, `me`,
+registration and a user's own password were phase 2.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/branches/`, `GET .../<id>/` | `settings.view`; paginated, by name; `ordering` by any field. No filter and no search |
+| `POST /api/v1/branches/`, `PUT`/`PATCH .../<id>/` | `settings.manage`. A name and a code; an address, a phone (a mobile stored canonically, anything else as typed), an email (kept as typed), the default flag, whether it fulfils online orders, its tills, its status. A new branch joins `get_organization()`. The code is unique within the organisation, which the serializer has no field for: a code taken -- or no organisation to join -- is the index's bare 409 (D224, copied). A second default branch is accepted, and the default one can be switched off |
+| `DELETE /api/v1/branches/<id>/` | 204, or a bare 409 while staff, stock, a transfer, a count, labels, a purchase order, an account, an expense, a cart, an order or a lead names it (`PROTECT`). A branch nothing names goes with its parked sales and its notices, and the audit log lets go of it, in Django's order |
+| `GET /api/v1/users/`, `GET .../<id>/` | `users.view`; paginated, by email; every account whose role is not CUSTOMER, one with no role included. Filters `status`, `branch`, `role`; `ordering` by `email` or `date_joined`. `search_fields` is declared and no search backend is installed: `?search=` does nothing (D217, copied). `role_code` and `role_name` are left out of an account with no role, as DRF skips a read-only field whose source is missing; `profile` is there only for a reader who holds `users.manage` -- absent, not null -- and is the same eleven blank fields for an account nobody has filled one in for |
+| `POST /api/v1/users/` | `users.manage`; 201. An email no account has, compared as typed and stored lower-cased (another's in other letters is a bare 409: D218, copied); names; a phone; a branch, closed or not; a password of ten characters that Django's validators pass -- with no account to compare it with, so the email itself will do (D219); a role of the seven the code names, CASHIER unless sent; a nested profile. A password is asked for last, once everything else has passed. `create_staff_user`: always ACTIVE, whatever status was sent (D219), in the one organisation; the profile saved when it says anything; one audit entry, `USER_CHANGED`, naming the email as typed, the role, the branch and which profile fields were recorded |
+| `PUT`/`PATCH /api/v1/users/<id>/` | `users.manage`. `update_staff_user`, in one transaction: a status other than ACTIVE is refused for your own account and for the last active owner; so is a new role for an owner who is you or the last one; then the account saved whole -- every column written back as read (D222, copied) -- a new password ending every session the account holds; the profile; and one audit entry of what changed, with `password_reset`, `sessions_ended` and `profile_updated` naming fields and never values. Nothing changed, nothing logged -- but the row is still written |
+| The profile, in both | Eleven optional fields. A birth date not in the future (by the shop's clock), an ID number of letters, digits, spaces and hyphens, a joining date not before a birth date sent with it. The ID number's uniqueness is a `UniqueValidator` on a nested serializer that never has an instance: an ID number resent with an edit is refused as taken -- by its own profile (D220, copied). `save_staff_profile` takes the profile's row lock, writes only when a field sent differs from what is stored -- a payload of blanks makes no row -- and answers another's ID number with a 400 naming `profile.national_id` |
+| `DELETE /api/v1/users/<id>/`, `POST .../<id>/deactivate/` | `users.manage`; both 200 with the account: staff are never deleted. Found, then the two guards, then `request.data.get("reason", "")`: a body that is not an object is a 500, a reason that is not a string is stored as Python prints it (D223, copied). INACTIVE, and one audit entry. The answer has no profile, for anyone: the view serializes without its request |
+| `POST /api/v1/users/<id>/activate/` | `users.manage`; 200. No guard, the body unread, the reason always "Status changed to ACTIVE" |
+| `GET /api/v1/roles/`, `GET .../<id>/`, `GET /api/v1/permissions/` | `users.view`; unpaginated. Each role with the codes it holds, by group then code, and `holds_every_permission` for the owner's. `ordering` by any field; `permissions` joins them and lists a role once per permission |
+| `GET /api/v1/organization/` | anyone signed in, a customer too. The oldest active organisation with its branches by name, or 404 `{"detail": "No organisation configured."}`, written by hand |
+| `PATCH /api/v1/organization/` | `settings.manage`, checked in the view: a refusal is an envelope with no `request_id`. Its name, legal name, status, email, phone, address, VAT number, currency, footer, and whether the counter sells reserved stock -- which only an owner or a superuser may change. The save writes every column back as read (D225, copied), asks the storefront to drop what it cached as `site`, and is audited with the whole organisation before and after. The answer, a partial serializer's, leaves out `tax_settled_by_name` while nobody has settled the VAT. With no active organisation -- one switched off through this route -- the save creates one, with a blank slug (D225, copied) |
+| `GET /api/v1/organization/tax/` | `settings.view`, checked in the view. The mode, the rate, who settled it and when -- a hand-built answer whose time is DRF's encoding of a raw datetime: UTC, with `Z` -- and how many orders exist |
+| `PATCH /api/v1/organization/tax/` | `settings.manage`. A mode, a rate between 0 and 1 to four places, `confirm`, a reason. `update_tax_settings`: a change while orders exist is a 409 `TAX_CHANGE_NEEDS_CONFIRMATION` unless confirmed; settling, changed or not, stamps who and when and is audited; a change asks the storefront to drop its priced pages (`products`, `home`, `categories`), and the save itself `site` |
+
 ## Running it
 
 ```bash
@@ -631,6 +816,7 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
+| A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
 **Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
 images run as different users (`appuser`, uid 1001, and `node`, uid 1000). The shared volume needs
@@ -777,6 +963,122 @@ the port):
   looked at (D178).
 - An expense cannot be voided once its account is closed: the compensating movement is refused
   (D179).
+- An offer with a cost below zero, or a minimum order quantity of 0, passes the serializer and is
+  the database's check constraint: a bare 409 naming no field (D180).
+- A supplier's code is unique by its exact spelling, and one typed by hand is stored as typed:
+  `sup-001` sits beside `SUP-001`, and `pnm 01` is a code. Two suppliers of one name created at
+  once race for one derived code, and the loser is a bare 409 (D181).
+- An offer can be recorded for an archived SKU, and an INACTIVE supplier's offer can be made the
+  preferred one: `set_preferred_supplier` asks whether the offer is active, not the supplier
+  (D182).
+- Suppliers and offers are created, edited and deleted with no audit entry; only `set-preferred`
+  writes one. Deleting the preferred offer, or its supplier, leaves the SKU preferring nobody
+  (D183).
+- An offer's edit writes back every column as it read them, `is_preferred` among them: an edit
+  that read the offer before it was promoted demotes it again, and the SKU prefers nobody (D184).
+- A return to a supplier is credited, and leaves the shelf, at the order line's cost, not at the
+  cost on the delivery it came in on: goods received at 190.00 against an order at 200.00 go
+  back for 200.00 each (D185).
+- A draft purchase order can be received without ever being sent: it goes straight to RECEIVED
+  and `ordered_at` stays empty (D186).
+- A SKU's first delivery from one supplier, racing another supplier's becoming its preferred one,
+  is refused with a bare 409: `record_supplier_product` reads "nobody is preferred" and then
+  meets the unique index (D187).
+- A delivery takes no `Idempotency-Key`: a retried part delivery is received twice, up to what is
+  outstanding (D188).
+- A purchase order's cancel takes its reason as sent: `null` is a bare 409, a body that is not an
+  object a 500, and a number or a list is stored as Python prints it (D189).
+- A purchase order line's quantity past PostgreSQL's integer is a 500, as is one large enough for
+  the line to pass Decimal's 28 digits (D190).
+- A purchase order names any UUID as a SKU: one that does not exist fails at the commit, a bare
+  409 naming no line; an archived SKU and an inactive supplier are accepted without a word
+  (D191).
+- A return made with an `Idempotency-Key` another return holds answers 201 with that return,
+  whichever order it is on and whatever this order's status; a key past 80 characters is a 500
+  (D192).
+- A return to a supplier checks `on_hand`, not what is available: units reserved for customers'
+  orders can be boxed up and sent back, leaving `available` below zero (D193).
+- A supplier payment with no `amount` is a 500: the serializer does not require the field and
+  the view reads it (D194).
+- A supplier payment may be dated in the future, and its cash-book entry with it; an expense may
+  not (D195).
+- A supplier payment made with an `Idempotency-Key` another payment holds answers 201 with that
+  payment, whatever supplier, order or amount was sent; a key past 80 characters is a 500 (D196).
+- A supplier payment's `branch` is read from the body unvalidated: a value that is not a UUID is
+  a 400 under `non_field_errors`, a number is looked up as one, and a branch that is not
+  available refuses a payment against an order whose own branch is the one that pays (D197).
+- A customer's email is checked for uniqueness as typed and stored lower-cased: another
+  customer's email in another case passes the serializer and is a bare 409 (D198).
+- A lead already recovered can be written off as LOST, and one written off can be written off
+  again; `lost` reads its note with `request.data.get`, so `null` is stored as "None" and a body
+  that is not an object is a 500 (D199).
+- A note on a lead saves every column back as it was read: a lead recovered meanwhile is opened
+  again and its order forgotten (D200).
+- A NUL in the customer list's `search` is a 500, on every route of the viewset (D201).
+- A coupon's code is checked for uniqueness as typed and stored upper-cased: another coupon's
+  code in lower case passes the serializer and is a bare 409 (D202).
+- A coupon's edit writes back every column as read, `used_count` among them: a redemption
+  committed while the edit is in flight is forgotten, and a coupon good once can be used again
+  (D203).
+- A coupon's minimum order value and its cap may be below zero. A negative cap replaces any
+  larger discount -- every discount -- so the coupon adds to the bill (D204).
+- A new shipping method judges its delivery days only when both are sent: one alone that
+  crosses the other's default meets the check constraint, a bare 409 (D205).
+- A parcel's edit is a plain save with none of the booking's rules: a number with no courier, a
+  cost below zero, the parcel moved to another order -- a cancelled one too -- are all accepted,
+  a number its courier has already used is the index's bare 409, and nothing is written to the
+  order's timeline (D206). It writes every column back as read, so a parcel delivered while the
+  edit is in flight is set back to the status the edit read (D207).
+- A parcel can be deleted, delivered or not, and its append-only history goes with it; no audit
+  entry is written (D208).
+- A tracking update's status becomes the parcel's whatever the parcel's was: PENDING after
+  DISPATCHED, an update dated before the last one. Nothing refuses a repeat, so six clicks are
+  six rows of history (D209).
+- Only DISPATCHED ships an order. A packed order's parcel whose first update is IN_TRANSIT --
+  what an update with no status means -- FAILED or RETURNED is on its way while the order stays
+  PACKED; a DELIVERED then takes the order from PACKED to DELIVERED, never shipped. A parcel
+  RETURNED leaves its order SHIPPED (D210).
+- A courier's tracking page is not checked when it is written. One naming any placeholder but
+  `{tracking_number}` silently drops `tracking_url` from every parcel of that courier; `{0}`,
+  `{}` or an unbalanced brace makes every read of such a parcel a 500, the shipment list and
+  the customer's order page among them (D211).
+- A second fallback zone is accepted, and a parcel can be booked with a courier or a method
+  that is switched off (D212).
+- Zones, methods and couriers are made, repriced and deleted with no audit entry, and deleting
+  a zone or a method takes it off every past order and parcel that used it (D213).
+- A moderator's note is read with `request.data.get`: `null` is stored as "None", a list or an
+  object as its Python repr, a body that is not an object is a 500, and a note longer than the
+  column, or holding a NUL, is a 500 from the database. Nothing asks what the review was: one
+  already approved can be approved again (D214).
+- A decision with no note writes back the note it read, with no lock: a reason given meanwhile
+  is lost. The row and its audit entry are two transactions (D215).
+- `?rating=4.9` lists the four-star reviews: the number filter's Decimal is cut to a whole
+  number by the integer column's lookup (D216).
+- `?search=` on the staff list does nothing: the view declares `search_fields`, and no search
+  backend is installed (D217).
+- A staff account's email is checked for uniqueness as typed and stored lower-cased: another
+  account's email in other letters is a bare 409 (D218).
+- A new staff account is always ACTIVE, whatever status was sent; its password is not compared
+  with its email; and the role CUSTOMER makes an account the staff list then hides (D219).
+- An ID number resent with an edit of the profile it belongs to is refused as already taken
+  (D220).
+- The two guards -- not yourself, not the last owner -- read with no lock: of two owners, each
+  can be switched off while the other's deactivation is in flight. An administrator holds
+  `users.manage` and may make anyone an owner, themselves included, reset an owner's password,
+  and demote themselves: only an owner's own demotion is refused (D221).
+- A staff account's edit writes back every column as read: a password changed meanwhile is put
+  back as it was (D222).
+- Deactivating reads its reason with `request.data.get`: a body that is not an object is a 500,
+  a reason that is not a string is stored as Python prints it; and an account already off is
+  switched off again, with another audit entry (D223).
+- A branch's code taken is a bare 409; a second default branch is accepted and the default one
+  can be switched off; no branch change is audited (D224).
+- The organisation can be switched off through its own edit, after which it cannot be read and
+  the next edit creates a second one with a blank slug. The edit writes back every column as
+  read: a VAT settlement committed meanwhile is undone (D225).
+- The VAT routes answer `tax_settled_at` in UTC with a `Z` where every serializer answers the
+  shop's time, and both organisation views refuse with an envelope that has no `request_id`
+  (D226).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
@@ -794,8 +1096,9 @@ which business rule 1.4 says may never happen with overselling off. Fixed in Dja
 the owner's decision: the counter checks `available` unless the owner's `counter_sells_reserved`
 is on, and then flags the online orders left short. Phase 5 ports that rule with the POS.
 
-A courier's tracking-URL template is filled as Python's `str.format` fills it, except that a
-format spec (`{tracking_number:>12}`) is refused -- a 500 where Django would pad. No template uses one.
+A courier's tracking-URL template is filled as Python's `str.format` fills it, format specs
+included since phase 6 part 8 (until then one was a 500 where Django would pad). The one
+exception is an attribute of the number, listed under "Deliberate differences".
 
 ## Performance, measured 2026-09-30
 

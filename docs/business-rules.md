@@ -1286,6 +1286,23 @@ serializer, because two guards and one audit entry hang off it:
 Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
 has to keep pointing at a real row. Customers never appear in the staff list.
 
+> **DECISION REQUIRED — default: as the code stands.** The first line of this section is not what
+> the code does ([D221](roadmap.md#known-defects)). `ROLE_PERMISSIONS` gives `ADMIN` every
+> permission, `users.manage` and `settings.manage` among them, so an administrator creates and
+> edits staff exactly as an owner does — and that includes owners: an administrator can give the
+> owner role to anyone, themselves included, reset an owner's password, and deactivate or demote
+> any owner but the last. Promoting themselves also hands them the one decision this file reserves
+> to the owner (§1.4, selling reserved stock at the counter). Either the rule is "only an owner
+> manages staff" and `ADMIN` should lose `users.manage`, or administrators manage staff and the
+> rule should be "only an owner may make, edit or remove an owner". Found while porting the staff
+> screens to the NestJS API on 2026-10-07 and left as it was in both.
+
+> **DECISION REQUIRED — default: as the code stands.** `PATCH /organization/` accepts `status`, so
+> the organisation can be set `INACTIVE` — after which it cannot be read, and the next edit
+> creates a second, blank one ([D225](roadmap.md#known-defects)). A one-organisation shop has no
+> use for the field on that route; whether suspending the organisation should mean anything at
+> all is not decided anywhere.
+
 > **DECISION REQUIRED — default chosen: the staff list spans branches.** A manager bound to one
 > branch sees every branch's staff, names and emails included — consistent with the audit log,
 > which already treats staff accounts as organisation-wide (§ on the audit trail, D85). The stricter
@@ -1431,6 +1448,13 @@ Promoting a supplier demotes the incumbent in the same transaction, through
 refused for a supplier that does not supply the variant, and for an offer marked discontinued.
 `is_preferred` is read-only on the serializer: writable, a PATCH would hit the index and surface as a
 500 on an ordinary business action.
+
+> **DECISION REQUIRED** — may a supplier marked INACTIVE be a variant's preferred one? Nothing says,
+> and the code allows it: `set_preferred_supplier` refuses a discontinued *offer* and never reads
+> `Supplier.status`, so an inactive supplier can be promoted, and stays preferred when it is made
+> inactive afterwards (D182). Until decided, both APIs allow it and the purchase order form goes on
+> suggesting that supplier. The alternatives: refuse the promotion, or drop the preference when a
+> supplier is made inactive.
 
 ### 7a.4 Minimum order quantity
 
@@ -1605,6 +1629,12 @@ box was sent back containing units that never existed.
 The endpoint honours `Idempotency-Key`, because a replay would take the stock off the shelf twice and
 credit the order twice (CLAUDE.md §7).
 
+> **DECISION REQUIRED** — may a return take units that are *reserved* for customers' orders? The
+> check is against `on_hand` alone: with four on the shelf and three of them reserved, three can go
+> back, leaving `available` at −2, which §1.4 says may not happen with overselling off (D193). The
+> units are physically there, which is why the code allows it; D115 settled the same question for the
+> counter the other way. Until decided, both APIs allow it.
+
 ### 7b.3 The money is a credit, not a refund
 
 A supplier is rarely paid back in cash; the value is set against what is owed.
@@ -1622,6 +1652,13 @@ sitting in their own warehouse.
 The credit is valued at **what the supplier charged** — the cost on the order line, not today's price
 and not the branch's blended average. The client never names it; sending a `unit_cost` in the request
 is ignored (CLAUDE.md §13).
+
+> **DECISION REQUIRED** — which cost is "what the supplier charged" when a delivery was received at a
+> cost other than the order's? Receiving lets the storekeeper enter the cost on the delivery note, and
+> that is the cost the stock came in at; the return reads the order line. Goods received at 190.00
+> against an order at 200.00 go back for 200.00 each (D185) — 10.00 a unit more than was owed for
+> them, and the shelf's average is unwound by the same figure. Until decided, both APIs credit the
+> order line's cost, as this section says.
 
 ### 7b.4 What the payment badge means
 
@@ -1664,6 +1701,11 @@ its line is allowed — a free sample or a replacement is a real delivery.
 
 **A delivery names each order line once.** Two entries for one line used to keep only the last
 quantity (D83); now the request is refused and the storekeeper enters the total.
+
+> **DECISION REQUIRED** — may a `DRAFT` order be received? Only `CANCELLED` and `CLOSED` are refused,
+> so a draft nobody sent takes a delivery and becomes `RECEIVED` with no `ordered_at` (D186). That
+> may be wanted — goods that arrive with their invoice, entered after the fact — or a slip. Until
+> decided, both APIs receive it.
 
 **Cancelling is for an order nothing has happened to.** An order can be cancelled only while it is
 `DRAFT` or `SENT`, has no receipt, and has **no money paid against it**. The last is D80: payables
@@ -1803,6 +1845,22 @@ correction can unpick.
 `RETURNED` its history is closed. `FAILED` is deliberately not final: a failed
 delivery attempt is normally retried the next day, and that retry is another
 event on the same parcel.
+
+> **DECISION REQUIRED — default: as the code stands.** Three things about a parcel's updates are
+> not decided anywhere, and were found while porting ([D209, D210](roadmap.md#known-defects)).
+> *Which update ships the order:* only `DISPATCHED` does. An update with no status is recorded as
+> `IN_TRANSIT`, and as a packed order's first update it leaves the order `PACKED` with its parcel
+> on the road; a later `DELIVERED` takes the order straight to `DELIVERED`. *What a returned
+> parcel means for its order:* nothing — the order stays `SHIPPED`. *Whether an update may take
+> a parcel backwards:* it may — `PENDING` after `DISPATCHED` is recorded and becomes the status.
+> The likely rules are that any first movement ships the order, that a returned parcel opens a
+> return, and that a parcel that has left cannot be pending again.
+
+> **DECISION REQUIRED — default: as the code stands.** A parcel can be **edited and deleted**
+> through the API with none of the rules above ([D206–D208](roadmap.md#known-defects)): an edit
+> may move it to another order or give it a number with no courier, and a delete removes a
+> delivered parcel together with its append-only history. Whether a parcel may be corrected at
+> all once it has left, and whether one may ever be deleted, is the owner's to say.
 
 **A tracking number needs the courier that issued it**, and one courier cannot
 give one number to two parcels (`shipping_shipment_courier_tracking_uniq`,

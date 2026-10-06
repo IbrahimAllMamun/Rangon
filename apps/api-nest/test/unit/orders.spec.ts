@@ -41,9 +41,61 @@ describe("Python's str.format with named fields", () => {
     }
   });
 
-  it('refuses a format spec, which Python would apply', () => {
-    // Deliberately unsupported: no courier template uses one.
-    expect(() => pyFormatNamed('{tracking_number:>5}', fields)).toThrow();
+  // `Courier(tracking_url_template=...).tracking_url(number)`, printed by Django.
+  it.each([
+    ['https://t.test/{tracking_number}', 'PT 0001/ü', 'https://t.test/PT 0001/ü'],
+    ['https://t.test/track', 'X', 'https://t.test/track'],
+    ['https://t.test/{{tracking_number}}', 'X', 'https://t.test/{tracking_number}'],
+    ['https://t.test/{tracking_number}/{tracking_number}', 'A1', 'https://t.test/A1/A1'],
+    ['https://t.test/{tracking_number!r}', "A'1", 'https://t.test/"A\'1"'],
+    ['https://t.test/{tracking_number:>12}', 'PAR-H03', 'https://t.test/     PAR-H03'],
+    ['https://t.test/{tracking_number:.3}', 'PAR-H03', 'https://t.test/PAR'],
+    ['https://t.test/{tracking_number:*^11s}', 'PAR-H03', 'https://t.test/**PAR-H03**'],
+    ['https://t.test/{tracking_number:<10}|', 'ab', 'https://t.test/ab        |'],
+    ['https://t.test/{tracking_number:10}|', 'ab', 'https://t.test/ab        |'],
+    ['https://t.test/{tracking_number:^5.1}|', 'ab', 'https://t.test/  a  |'],
+    ['https://t.test/{tracking_number:010}|', 'ab', 'https://t.test/ab00000000|'],
+    ['https://t.test/{tracking_number:}', '12', 'https://t.test/12'],
+    ['https://t.test/{tracking_number:x<4}', '12', 'https://t.test/12xx'],
+    ['https://t.test/{tracking_number:{tracking_number}}', '12', 'https://t.test/12          '],
+    ['https://t.test/{tracking_number[0]}', 'ab', 'https://t.test/a'],
+    ['https://t.test/{tracking_number:5s}|', 'ü', 'https://t.test/ü    |'],
+    ['https://t.test/{tracking_number!s:>4}', 'ab', 'https://t.test/  ab'],
+    ['https://t.test/{tracking_number!r:>6}', 'ab', "https://t.test/  'ab'"],
+    ['https://t.test/{tracking_number:>0}', 'ab', 'https://t.test/ab'],
+    ['https://t.test/{tracking_number:.0}', 'ab', 'https://t.test/'],
+  ])('%j with %j is %j', (template, number, url) => {
+    expect(pyFormatNamed(template, { tracking_number: number })).toBe(url);
+  });
+
+  // Each of these raises in Python: ValueError, KeyError, IndexError or AttributeError.
+  it.each([
+    '{tracking_number:=10}',
+    '{tracking_number:d}',
+    '{tracking_number.real}',
+    '{number}',
+    '{0}',
+    '{}',
+    '{tracking_number',
+    'tracking_number}',
+    '{tracking_number!x}',
+    '{ tracking_number }',
+    '{tracking_number:,}',
+    '{tracking_number:+}',
+    '{tracking_number: }',
+    '{tracking_number:#}',
+    '{tracking_number:5.}',
+    '{tracking_number:}}',
+    '{tracking_number:{}}',
+    '{tracking_number[9]}',
+    '{tracking_number[-1]}',
+  ])('%j raises', (template) => {
+    expect(() => pyFormatNamed(template, { tracking_number: 'ab' })).toThrow();
+  });
+
+  it('refuses an attribute, where Python would print the object found', () => {
+    // Deliberately unsupported: `{tracking_number.upper}` is a method's memory address.
+    expect(() => pyFormatNamed('{tracking_number.upper}', fields)).toThrow();
   });
 });
 

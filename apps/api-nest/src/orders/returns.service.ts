@@ -239,7 +239,7 @@ const RECEIVE_RULES = {
  * Text PostgreSQL cannot hold -- a lone surrogate -- fails as it does for
  * psycopg, rather than being stored as U+FFFD.
  */
-function textValue(value: unknown): string | null {
+export function textValue(value: unknown): string | null {
   if (value === null) return null;
   const text = pyStr(value);
   for (const char of text) {
