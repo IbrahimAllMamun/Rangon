@@ -186,6 +186,12 @@ apps/api-nest/
                               OrderViewSet's writes; lifecycle.transition with its stock edges
     catalog/admin/labels.service.ts
                               inventory.labels: the barcode label sheet and its ticks
+    finance/cash-book.service.ts, accounts.service.ts, finance.controller.ts
+                              finance.services: every movement of money, under the account's lock;
+                              accounts, the cash book and transfers
+    finance/expenses.service.ts, party-ledger.service.ts
+                              expenses with their receipts, and who owes whom
+    common/model-lookups.ts   what a model DateField or DateTimeField makes of a query-string value
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
@@ -330,7 +336,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D172**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D179**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -389,6 +395,8 @@ apps/api-nest/
 | The port stored a comment the counter route should have dropped | `PosReturnView` validates `customer_comment` with the shared serializer and `pos_return` never passes it on | read what the service is called with, not only what the serializer accepts |
 | A fixture for one part broke another part's race check | it reserved a unit of the SKU the check sells the last of at the second branch | a fixture brings its own stock (`receive_stock`) rather than borrowing a SKU a check counts on; rerun every race check after adding one |
 | A cancel's answer differed only in its payment totals | Django serialises the object the status machine returned, not the row the refund then saved (D170) | compare the answer and the rows separately: each can be right while the other is stale |
+| Five cases differed by a few milliseconds in a date | their `prepare` set a row to `now() - interval ...`, and `prepare` runs once per API | a moment a case needs is fixed when the cases are built, and written into the statement |
+| A form's blank date was refused where Django took it as null | the port's `dateTimeField` had no `html` meta, so a form's `''` reached the parser | a field read from a form says how DRF reads a blank for it; check every field of a serializer a form reaches |
 
 ## 9. Documentation, per part
 
@@ -432,20 +440,17 @@ Every part of a phase updates, in the same branch:
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers) and 2 (expenses, their categories, the party ledger) done. Next: 3 suppliers and supplier products, then 4 purchase orders (receiving posts stock in at its cost). The owner has said to open the phase's PR when it is built and go on to phase 7 |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Open phase 5's PR when the owner asks, and not before.
+1. Finish phase 6 (parts 2 to 10), open its PR -- the owner asked for that on 2026-10-06 -- and
+   start phase 7.
 2. The owner should see D166 first (the status route cancels without `sales.cancel` and without a
-   refund: a permission the API does not enforce, to be fixed in Django before the port's copy of
-   it is merged), then D149 (a counter oversell), D158 (a counter refund that moves no account),
-   D164 (a return on a packed order), D167 (a payment recorded twice), and the decisions in
-   business-rules §2.5, §5.6 and §5.7.
-3. Phase 6 starts with finance: the cash book's own routes (movements with idempotency keys,
-   D89 and D90's rules). `CashBookService` already posts sale payments and refunds; its
-   `InsufficientFunds`, named-account and default-account rules are ported and proven.
+   refund: a permission the API does not enforce), then D149 (a counter oversell), D158 (a counter
+   refund that moves no account), D164 (a return on a packed order), D167 (a payment recorded
+   twice), and the decisions in business-rules §2.5, §5.6, §5.7 and §6b.1.
 
 ### Checklist for a part
 

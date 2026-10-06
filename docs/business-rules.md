@@ -1102,6 +1102,14 @@ how many money events posted nowhere, so the gap is stated rather than hidden.
 `SupplierPayment.account` are nullable and stay that way: every payment taken before the `finance`
 app existed has no honest answer, and §3.3 of CLAUDE.md forbids inventing one after the fact.
 
+**Closing an account that still holds money.** An account is closed by switching `is_active` off,
+whatever its balance; the cash position counts open accounts only, so money in a closed account
+drops out of it though nothing moved. Likewise the overdraft switch can be turned off on an
+account that is overdrawn. Found while porting accounts to the NestJS API (2026-10-06); the port
+copies both.
+*`DECISION REQUIRED` -- should an account have to be emptied (by a transfer) before it is closed,
+and brought back to zero before its overdraft is withdrawn? Until decided, both are allowed.*
+
 **An account cannot pay out money it does not hold.** A withdrawal, transfer or supplier payment
 that would take a balance below zero raises `INSUFFICIENT_FUNDS` (409) under `SELECT … FOR UPDATE`,
 unless the account is explicitly marked `allow_overdraft` — a bank account with an overdraft line

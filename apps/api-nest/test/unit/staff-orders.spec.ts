@@ -1,6 +1,6 @@
 import { ValidationError } from '../../src/common/errors';
 import { searchDigits } from '../../src/common/phone';
-import { lookupDate } from '../../src/orders/staff-order.service';
+import { lookupDate } from '../../src/common/model-lookups';
 
 /**
  * What the staff order list makes of `search`, `date_from` and `date_to`.

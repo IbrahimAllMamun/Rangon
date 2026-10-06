@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -158,6 +158,14 @@ across both APIs where both serve the path:
 | 6 clicks of one refund with one `Idempotency-Key`, across both APIs | six 201s naming one refund |
 | An order packed through one API and cancelled through the other at once | one wins and the other is a 409; the stock and the money agree with whichever it was |
 | 6 marks of one variant's labels at once, across both APIs | six rows, none lost: `mark_labels` takes no lock and needs none, the newest row being the state |
+| 6 withdrawals of all a drawer holds at once, across both APIs | one 201 and five 409s; the drawer at nothing, equal to its ledger. With the port's `FOR UPDATE` removed from the account, three were paid and the ledger summed to minus twice the drawer |
+| A drawer emptied while a withdrawal, and then a transfer out of it, waits on the account's row (each API in turn) | each is refused, nothing moved; with the lock removed Nest paid both |
+| 6 clicks of one deposit, and of one transfer, with one `Idempotency-Key`, across both APIs; two deposits under one key queued on the account through each API | every request answers 201 with the one movement or transfer |
+| 8 transfers between two accounts, four each way, at once across both APIs | all go through under eight numbers; the two accounts hold together what they held, each equal to its ledger. With the lock removed, four were 500s |
+| 6 accounts opened as one branch's default cash account at once; 6 under one name | one default remains, one account of the name: the two unique indexes decide, no lock is involved |
+| Two voids of one expense queued on its row (one per API, then both through each API) | one voids it and the other is told it is voided already; the money goes back once. With the port's `FOR UPDATE` removed both Nest voids go through and the money goes back twice |
+| 6 expenses of all a drawer holds at once; an expense whose drawer is emptied mid-flight (each API in turn) | one is recorded; a refused one leaves no document |
+| 6 clicks of one expense with one `Idempotency-Key`, across both APIs | six 201s, one expense, one movement |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -479,6 +487,60 @@ row for a branch and a variant is the state.
 | `GET /api/v1/products/<id>/labels/?branch=` | `products.view`; the product through the viewset's declared filters only (the list's `search` and `never_ordered` do not apply here), at the branch `resolve_branch` allows. Every variant as `ProductVariantSerializer` writes it, with its stock at the branch, and two more fields: `label_status` -- null for a variant never marked, else whether its labels are printed, how many, the stock when it was marked, when (`isoformat()`, so `+00:00`) and by whom (the name, or the email of someone with none, or nothing when the account is gone), and the units purchased in since a printed mark -- and `suggested_labels`: one per unit on hand, or per unit delivered since a printed mark, never more than are on hand, never more than 500, and none for a shelf below zero |
 | `POST /api/v1/products/<id>/labels/` | `products.update`; 200 with the sheet as it then stands. `LabelMarksSerializer`: a branch (in the body; the query string's is not read), and 1 to 200 marks of a variant, `printed` and a count of 0 to 500. `mark_labels`: each variant once, every one the product's own, else a 400 naming the strays; all the marks written or none; `on_hand` read from the branch's stock row, never from the request; an un-mark records no count |
 
+## Phase 6: the back office
+
+Phase 6 ports what is left of the staff API outside reports: money, buying, customers, coupons
+and delivery. Its parts, in order:
+
+1. accounts, the cash book and transfers (below);
+2. expenses and their categories, and the party ledger;
+3. suppliers and supplier products;
+4. purchase orders: raising, receiving (stock in at its cost) and cancelling;
+5. supplier payments;
+6. customers, and the call-back list (`abandoned-checkouts`);
+7. coupons;
+8. shipping: zones, methods, couriers and shipments;
+9. review moderation;
+10. staff accounts and the organisation (`branches`, `users`, `roles`, `permissions`,
+    `organization`, `organization/tax`), which no phase had named.
+
+`CashBookService` (`finance/cash-book.service.ts`) is now the whole of `finance.services`' money
+movement: `move` is `record_movement` for every transaction type -- the account locked, an
+`Idempotency-Key` looked for before the lock and again under it, a retry that loses the race for
+its key answered with the winner's movement -- and `transfer` is `transfer`, both accounts locked
+lowest id first. A sale's payment, a refund, a void and a return already posted through it; they
+now post through the same `move`.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/accounts/` | `finance.view`; paginated, by branch name, kind and name; the accounts of the user's branch. Filters `branch`, `kind`, `is_active`; DRF's `SearchFilter` over the name, the account number and the bank's name; `ordering` by `name`, `balance` or `created_at` |
+| `POST /api/v1/accounts/` | `finance.manage`; 201. `AccountSerializer`: a branch (one the user may act on), a name of up to 120 characters that no other account at the branch has, a kind, an account number, a bank, the default and overdraft switches, notes, an opening balance. The account is opened with nothing and the opening balance posted as an `OPENING` movement, so a balance is the sum of its ledger from the first row; a negative one needs the overdraft switch. A new default takes the place of the branch's old one for the kind in the same transaction. `is_active` is validated and not used: an account opens active (D175, copied). Audited as `SETTINGS_CHANGED` |
+| `GET /api/v1/accounts/<id>/`, `PUT`, `PATCH` | `finance.view`; `finance.manage` to edit. A PUT is read as a PATCH is. The descriptive fields only: `branch`, `opening_balance` and `balance` are dropped. Making an account the default demotes the kind's other default; changing a default's kind to one that has a default is the index's 409 (D176, copied). Only what changed is audited. There is no DELETE: an account is closed with `is_active` |
+| `GET /api/v1/accounts/<id>/transactions/` | `finance.view`; the account's cash book, paginated, newest first. `date_from`, `date_to` and `transaction_type` go to the lookup as sent: a date is read as a model `DateTimeField` reads one, so a bare day is its midnight in Dhaka at either end -- `date_to=2026-09-15` leaves that day out (D177, copied) -- and a value that is not one is a 400 naming it |
+| `GET /api/v1/accounts/cash-position/` | `finance.view`; the open accounts' total, by kind and one by one, for the branch asked for (or the user's own, unless they may cross branches), and money in, out and net over `core.dates`' window -- transfers and opening balances left out of both sides |
+| `POST /api/v1/accounts/record-movement/` | `finance.adjust`; 201 with the movement. A deposit, a withdrawal or a correction, never a type a sale or a payment makes; the amount positive, except a correction's, which is signed and not zero; a withdrawal and a correction need a reason; the account at a branch the user may act on, open, and not paid out past what it holds unless it may go overdrawn. Once per `Idempotency-Key`. A deposit that takes the balance past the column is a 500 (D173, copied). Audited as `PAYMENT_RECORDED` |
+| `POST /api/v1/accounts/verify-integrity/` | `settings.manage`; 200. Every account's cached balance beside the sum of its ledger, and the ones that differ, for the body's `branch` or for all. The body is read with `request.data.get`: one that is not an object is a 500 (D174, copied) |
+| `GET /api/v1/account-transactions/`, `GET .../<id>/` | `finance.view`; the whole cash book the user may see, by the account's branch. Filters `account`, `transaction_type`, `reference_type`; the same `date_from` and `date_to`; `ordering` by `occurred_at` or `amount` |
+| `GET /api/v1/account-transfers/`, `GET .../<id>/` | `finance.view`; transfers out of an account at the user's branch, newest first |
+| `POST /api/v1/account-transfers/` | `finance.transfer`; 201. Two different accounts, both at branches the user may act on, both open, and an amount the source holds. The transfer's row is written first, under its `ATR-` number and its key, so a retry claims the key or loses it before any money moves; then `TRANSFER_OUT` and `TRANSFER_IN` in the same transaction. Audited as `PAYMENT_RECORDED` |
+
+Then what the money is spent on (part 2): `finance/expenses.service.ts` and
+`finance/party-ledger.service.ts`. An expense is a document and a movement written in one
+transaction -- the document first, under its `EXP-` number and its key, so a retry claims the key
+or loses it before any money leaves -- and it is never edited or deleted: a void puts the money
+back with a compensating `ADJUSTMENT`, under the expense's own row lock. The expense routes are
+the first outside uploads to read a form as well as JSON, since a receipt is attached as a file.
+
+| Endpoint | Notes |
+|---|---|
+| `GET/POST /api/v1/expense-categories/`, `GET/PUT/PATCH .../<id>/` | `finance.view`; `finance.manage` to write. Paginated, by name, each with the count of its recorded expenses; filter `is_active`, search over name, code and description. A category is made with a name and a code -- the code normalised (`RENT`, `TEA_MONEY`) or made from the name -- neither already used, the name in any case. An edit, by PUT or PATCH alike, takes a name, a description and the active switch; the code is the key expenses were filed under and is dropped. No DELETE: a category is retired |
+| `GET /api/v1/expenses/`, `GET .../<id>/` | `finance.view`; paginated, newest spent first, the expenses of the user's branch. `date_from` and `date_to` are `core.dates`' window, and a value that is not a date is a 400 on every route of the viewset; voided expenses are listed unless `include_void=false`; filters `branch`, `category`, `account`, `status`; search over number, note and the category's name. A receipt is named by the route that serves it, never by where it is stored |
+| `POST /api/v1/expenses/` | `finance.expense`; 201, JSON or a form. A category still in use, an account of the branch spending the money, an amount above zero, a moment not in the future, a note, a receipt -- an image or a PDF by its stated type and its extension, up to 10 MB, stored under a random name that keeps only the extension. `record_expense`: once per `Idempotency-Key`; the `EXPENSE` movement refused if the account is closed or cannot cover it, taking the document with it. Audited as `EXPENSE_RECORDED` |
+| `GET /api/v1/expenses/<id>/attachment/` | `finance.view`, through the same queryset as reading the expense; the file, typed by its extension, `inline` under the expense's number, `private, no-store`, `nosniff`. No receipt, or a file that is gone, is a 404 |
+| `POST /api/v1/expenses/<id>/void/` | `finance.expense`; a reason is required and validated before the expense is looked for. The expense locked; one already voided is a 400; the money back as an `ADJUSTMENT` naming the expense; the row marked void. An expense whose account has since been closed cannot be voided (D179, copied). Audited as `EXPENSE_VOIDED` |
+| `GET /api/v1/expenses/summary/` | `finance.view`; what was spent in the window at the branch asked for (or the user's own), voided expenses left out, and each category's total, count and share |
+| `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first |
+
 ## Running it
 
 ```bash
@@ -703,6 +765,18 @@ the port):
 - A refund asked for with an `Idempotency-Key` another refund holds answers with that refund,
   whichever order it belongs to (D171).
 - A NUL in the order list's `search` is a 500, on every route of the viewset (D172).
+- A deposit or correction that takes a balance past the column's fourteen digits is a 500
+  (D173).
+- The integrity check reads its body with `request.data.get`: a list or `null` is a 500 (D174).
+- An account's `is_active` is accepted when it is opened and not used: it opens active (D175).
+- Changing a default account's kind to one that already has a default is the index's 409 (D176).
+- `date_to` on the cash book is read as a moment, so a bare day ends at its own midnight and that
+  day's movements are left out; the cash position's window includes the day (D177).
+- A receipt is stored before the expense is known to be good, and is judged by its stated type
+  and its name alone: a refused expense leaves its file behind, and a file's content is never
+  looked at (D178).
+- An expense cannot be voided once its account is closed: the compensating movement is refused
+  (D179).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

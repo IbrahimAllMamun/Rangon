@@ -68,7 +68,19 @@ export function compare(django: Captured, nest: Captured, sentRequestId?: string
   if (type !== mediaType(nest.headers))
     out.push({ path: 'content-type', django: type, nest: mediaType(nest.headers) });
 
-  for (const header of ['location', 'allow', 'www-authenticate']) {
+  // A download says how it is to be saved, cached and typed: where either
+  // side sends a `Content-Disposition`, those headers are compared with it.
+  const download =
+    django.headers['content-disposition'] !== undefined ||
+    nest.headers['content-disposition'] !== undefined;
+  for (const header of [
+    'location',
+    'allow',
+    'www-authenticate',
+    ...(download
+      ? ['content-disposition', 'cache-control', 'x-content-type-options', 'content-length']
+      : []),
+  ]) {
     if ((django.headers[header] ?? null) !== (nest.headers[header] ?? null)) {
       out.push({
         path: `header:${header}`,

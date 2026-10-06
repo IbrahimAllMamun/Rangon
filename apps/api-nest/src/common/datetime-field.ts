@@ -209,6 +209,11 @@ export function dateTimeField(
   options: { required?: boolean; allowNull?: boolean } = {},
 ): Field<AwareMoment | null> {
   return {
+    html: {
+      required: options.required ?? true,
+      allowNull: options.allowNull ?? false,
+      allowBlank: false,
+    },
     run(data, partial) {
       const settled = emptyValue<AwareMoment>(data, partial, {
         required: options.required ?? true,

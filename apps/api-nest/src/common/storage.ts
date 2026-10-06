@@ -8,7 +8,7 @@
  * made `0o644`. The name stored in the row is what this answers.
  */
 import { randomInt } from 'node:crypto';
-import { chmod, mkdir, open, stat } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, stat } from 'node:fs/promises';
 import { posix } from 'node:path';
 
 import { zoneOffsetSeconds } from './datetime';
@@ -66,6 +66,16 @@ export class MediaStorage {
     private readonly root: string,
     private readonly timeZone: string,
   ) {}
+
+  /** `FieldFile.open("rb").read()`: the stored bytes, or null where the file is not there. */
+  async read(name: string): Promise<Buffer | null> {
+    try {
+      return await readFile(posix.join(this.root, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
 
   /**
    * `FieldFile.save(name, content)`: store `bytes` as an upload named
