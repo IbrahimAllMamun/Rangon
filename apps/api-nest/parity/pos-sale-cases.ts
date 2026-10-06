@@ -43,9 +43,10 @@ const NO_IDS = (column: string) =>
  */
 const CHANGED = (alias: string, table: string) =>
   `to_jsonb(${alias}) IS DISTINCT FROM (SELECT to_jsonb(s) FROM "snap_${table}" s WHERE s.id = ${alias}.id)`;
-/** An order, old or new, by its number. */
+/** An order or a return, old or new, by its number. */
 const ORDER_NUMBER = (column: string) =>
-  `COALESCE((SELECT x.number FROM orders_order x WHERE x.id::text = ${column}), ${column})`;
+  `COALESCE((SELECT x.number FROM orders_order x WHERE x.id::text = ${column}),
+            (SELECT x.number FROM orders_returnrequest x WHERE x.id::text = ${column}), ${column})`;
 
 export const SALE_EFFECTS = [
   // 0. Orders: the ones a request made in full, and the totals of every other.
@@ -82,7 +83,11 @@ export const SALE_EFFECTS = [
     WHERE ${CHANGED('p', 'orders_payment')}
     ORDER BY o.number, p.created_at`,
   `SELECT o.number, r.amount::text, r.method, r.status, r.reason, r.provider_reference,
-          r.idempotency_key, a.name AS account, u.email AS created_by,
+          COALESCE((SELECT 'return:' || x.number FROM orders_returnrequest x
+                     WHERE 'return:' || x.id::text = r.idempotency_key),
+                   r.idempotency_key) AS idempotency_key,
+          (SELECT x.number FROM orders_returnrequest x WHERE x.id = r.return_request_id) AS return,
+          a.name AS account, u.email AS created_by,
           (SELECT p.method FROM orders_payment p WHERE p.id = r.payment_id) AS payment
      FROM orders_refund r JOIN orders_order o ON o.id = r.order_id
      LEFT JOIN finance_account a ON a.id = r.account_id

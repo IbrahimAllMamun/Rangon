@@ -70,6 +70,9 @@ const schema = z.object({
   // `settings.RANGON["DISCOUNT_APPROVAL_PERCENT"]`: a cashier's own discount above this
   // share of the sale needs a manager (docs/business-rules.md section 3.3).
   RANGON_DISCOUNT_APPROVAL_PERCENT: z.string().default('20'),
+  // `settings.RANGON["RETURN_WINDOW_DAYS"]`: how long after delivery a return needs no
+  // override (docs/business-rules.md section 2).
+  RANGON_RETURN_WINDOW_DAYS: z.coerce.number().int().default(14),
   // `settings.RANGON`: the reorder point a new inventory row starts with, and
   // the provider recorded on an online payment.
   RANGON_LOW_STOCK_THRESHOLD: z.coerce.number().int().default(5),

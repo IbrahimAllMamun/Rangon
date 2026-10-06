@@ -7,6 +7,8 @@ import { CashBookService } from '../finance/cash-book.service';
 import { InventoryModule } from '../inventory/inventory.module';
 import { OrderPayments } from '../orders/order-payments.service';
 import { OrderWritesService } from '../orders/order-writes.service';
+import { PosReturnsController, ReturnsController } from '../orders/returns.controller';
+import { ReturnsService } from '../orders/returns.service';
 import { StaffOrders } from '../orders/staff-order.service';
 import { HoldsService } from './holds.service';
 import {
@@ -23,7 +25,7 @@ import { PosReadsService } from './pos-reads.service';
 import { PosSales } from './pos-sales.service';
 import { SalePricing } from './sale-pricing.service';
 
-/** The counter: `orders.api.pos_views` (phase 5). */
+/** The counter, and the returns it shares with the back office: `orders.api.pos_views`, `ReturnRequestViewSet` (phase 5). */
 @Module({
   imports: [AccountsModule, InventoryModule, CatalogAdminModule, CheckoutModule],
   controllers: [
@@ -34,6 +36,8 @@ import { SalePricing } from './sale-pricing.service';
     PosElevateController,
     PosSalesController,
     HeldSalesController,
+    PosReturnsController,
+    ReturnsController,
   ],
   providers: [
     PosReadsService,
@@ -45,6 +49,7 @@ import { SalePricing } from './sale-pricing.service';
     OrderPayments,
     OrderWritesService,
     CashBookService,
+    ReturnsService,
   ],
 })
 export class PosModule {}

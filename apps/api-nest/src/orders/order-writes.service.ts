@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 
 import { quantize, money, ZERO } from '../checkout/pricing';
-import { AuditContext, recordAudit } from '../common/audit';
+import { type AuditActor, AuditContext, recordAudit } from '../common/audit';
 import { Dec } from '../common/decimal';
 import { InvalidStatusTransition, ValidationError } from '../common/errors';
 import { pySlice } from '../common/python';
@@ -168,6 +168,7 @@ export class OrderWritesService {
     order: OrderRef,
     toStatus: string,
     reason: string,
+    actor: AuditActor | null = null,
   ): Promise<void> {
     if (toStatus === 'PACKED' || toStatus === 'CANCELLED') {
       throw new Error(`The ${toStatus} transition moves stock and is not ported yet.`);
@@ -193,10 +194,12 @@ export class OrderWritesService {
     );
     await this.logEvent(tx, order.id, 'STATUS_CHANGED', `${from} → ${toStatus}`, {
       data: { from, to: toStatus, reason },
+      actorId: actor?.id ?? null,
     });
     await recordAudit(tx, context, {
       action: 'ORDER_STATUS_CHANGED',
       entity: { type: 'Order', id: order.id, label: order.number },
+      actor,
       oldValues: { status: from },
       newValues: { status: toStatus },
       reason,

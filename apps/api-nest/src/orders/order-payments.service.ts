@@ -161,6 +161,8 @@ export class OrderPayments {
       actor: AuditActor;
       reason: string;
       method?: string | null;
+      /** The method as the caller sent it, where a view passes it on unvalidated (D158). */
+      auditMethod?: unknown;
       accountId?: string | null;
       idempotencyKey?: string | null;
       returnRequestId?: string | null;
@@ -331,7 +333,11 @@ export class OrderPayments {
       action: 'REFUND_ISSUED',
       entity: { type: 'Refund', id: refundId, label: `Refund ${money(amount)} on ${order.id}` },
       actor: refund.actor,
-      newValues: { order: order.number, amount: money(amount), method },
+      newValues: {
+        order: order.number,
+        amount: money(amount),
+        method: refund.method && refund.auditMethod !== undefined ? refund.auditMethod : method,
+      },
       reason: refund.reason,
       branchId: order.branch_id,
     });
