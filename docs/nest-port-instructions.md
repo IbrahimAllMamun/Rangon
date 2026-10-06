@@ -324,7 +324,9 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D151**.
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D155**. Read the
+  latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
+  numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
 - **A security hole:** fixed in Django first, on `fix/<slug>`, with tests, ahead of the port.
 - **A rule the code breaks, or never had:** mark it `DECISION REQUIRED` in `business-rules.md`,
@@ -425,7 +427,7 @@ Every part of a phase updates, in the same branch:
 Before the next phase:
 
 1. Finish phase 5 (parts 5-7), then open its PR when the owner asks.
-2. The owner should see D145 (a counter oversell) and the three decisions in business-rules §5.6.
+2. The owner should see D149 (a counter oversell) and the three decisions in business-rules §5.6.
 
 ### Checklist for a part
 

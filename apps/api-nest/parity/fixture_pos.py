@@ -33,7 +33,7 @@ For the sale (its own marker, the key `parity-pos-replayed`):
 - "Parity Caller": a customer whose number has an open call-back lead, which
   a counter sale to them closes.
 - Four counter sales, made by `create_pos_sale` itself: one whose
-  `Idempotency-Key` is replayed, one whose key is the empty string (D143),
+  `Idempotency-Key` is replayed, one whose key is the empty string (D147),
   one at PAR3 by its manager (for a named customer: PAR3 keeps no walk-in
   record until a case makes one), and one by the DHK1 manager for a named
   customer with a coupon, a discount past the threshold, and cash and a card.

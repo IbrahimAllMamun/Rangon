@@ -150,7 +150,7 @@ export class OrderPayments {
    * captured payment: that payment's method unless the caller names one, and
    * its account when the refund goes back the way the money came -- else the
    * branch's own for the method (D95). The whole amount is entered against
-   * that one payment, whatever the others took (D149, copied).
+   * that one payment, whatever the others took (D153, copied).
    */
   async refundOrder(
     tx: Queryable,

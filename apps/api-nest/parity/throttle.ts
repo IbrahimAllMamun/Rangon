@@ -167,7 +167,7 @@ async function main(): Promise<void> {
       body: {},
     },
     // The register: the `pos` scope allows 1200/min, but the `user` rate of
-    // 600/min counts the same requests and refuses first (D139).
+    // 600/min counts the same requests and refuses first (D143).
     {
       name: 'the register, 602 scans by a cashier',
       count: 602,

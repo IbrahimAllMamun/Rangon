@@ -2,7 +2,7 @@
  * Race checks for the counter (phase 5), run by run.ts after the comparison
  * cases. Each puts its tables back.
  *
- * Held sales take no lock (D138): `resume` reads the hold and then deletes
+ * Held sales take no lock (D142): `resume` reads the hold and then deletes
  * it, and an edit reads it and then saves it. Nothing in the port may be
  * stricter, so the harness shows the gap the same way on both APIs: it holds
  * the hold's row, starts the requests, waits until they are queued behind it
@@ -96,7 +96,7 @@ export async function posConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): Pr
         .rows[0]?.count,
     );
     checks.push({
-      name: 'holds: two resumes of one hold that both read it, one per API, both get the cart (D138, copied)',
+      name: 'holds: two resumes of one hold that both read it, one per API, both get the cart (D142, copied)',
       passed: resumed.waiting === 2 && carts === 2 && left === 0,
       detail: `statuses ${resumed.responses.map((response) => response.status).join(',')}, ${resumed.waiting} queued on the row, ${carts} cart(s) handed back, ${left} hold(s) left`,
     });
@@ -120,7 +120,7 @@ export async function posConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): Pr
       ).rows[0];
       const status = edited.responses[0]?.status;
       checks.push({
-        name: `holds: an edit (${side}) that meets a resume mid-flight puts the hold back (D138, copied)`,
+        name: `holds: an edit (${side}) that meets a resume mid-flight puts the hold back (D142, copied)`,
         passed:
           edited.waiting === 1 &&
           status === 200 &&

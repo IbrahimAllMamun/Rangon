@@ -64,7 +64,7 @@ interface SaleData extends BasketData {
  * `OrderingFilter` over `PosSaleSerializer`'s fields, which is what the
  * viewset offers when it names no `ordering_fields`: some are fields of an
  * order, and the rest are not on the model at all -- `order_by` refuses
- * those (D144).
+ * those (D148).
  */
 const ORDERING_NOT_A_FIELD = new Set([
   'lines',
@@ -523,7 +523,7 @@ export class PosSales {
   /**
    * `get_object()`: any order by id. The viewset names no `ordering_fields`,
    * so `?ordering=` takes the sale serializer's field names, and one that is
-   * not a column of an order fails as Django builds the query (D144,
+   * not a column of an order fails as Django builds the query (D148,
    * copied). One that is -- `payments` too -- changes nothing: `get()` drops
    * the ordering.
    */
@@ -546,7 +546,7 @@ export class PosSales {
    * shelf under a compensating RETURN, whatever was paid and not yet refunded
    * goes back through `refund_order`, the coupon's use is released, and the
    * order is cancelled. A sale already cancelled answers as it is. The checks
-   * are made on the order as read, before its row is locked (D150, copied).
+   * are made on the order as read, before its row is locked (D154, copied).
    */
   async void(
     user: RequestUser,

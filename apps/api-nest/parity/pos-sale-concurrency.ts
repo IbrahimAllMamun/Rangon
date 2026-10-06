@@ -382,7 +382,7 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
       });
     }
 
-    // 8. D146, copied: a customer's totals are written from the figures read
+    // 8. D150, copied: a customer's totals are written from the figures read
     //    when the sale was priced. One that changed while the sale was under
     //    way is overwritten: the five orders committed mid-flight are lost.
     for (const [side, api] of sides) {
@@ -414,7 +414,7 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
         [shopper.id],
       );
       checks.push({
-        name: `counter: a sale (${side}) to a customer whose totals changed mid-flight writes its own stale figures over them (D146, copied)`,
+        name: `counter: a sale (${side}) to a customer whose totals changed mid-flight writes its own stale figures over them (D150, copied)`,
         passed:
           waited &&
           response.status === 201 &&
@@ -463,7 +463,7 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
           refunded: string;
         };
 
-      // 9. D150, copied: `void_sale` checks the order as read and locks it
+      // 9. D154, copied: `void_sale` checks the order as read and locks it
       //    afterwards. Two voids that both read it before either locks it both
       //    go through: the unit goes back on the shelf twice.
       await restore();
@@ -491,7 +491,7 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
       const answers = (await Promise.all(voids)).map((response) => response.status);
       const twice = await afterVoid();
       checks.push({
-        name: 'counter: two voids of one sale that both read it before either locks it, one per API, put the goods back twice (D150, copied)',
+        name: 'counter: two voids of one sale that both read it before either locks it, one per API, put the goods back twice (D154, copied)',
         passed:
           queued === 2 &&
           answers.every((status) => status === 200) &&

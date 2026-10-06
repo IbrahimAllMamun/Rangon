@@ -705,7 +705,7 @@ export async function posSaleCases(): Promise<Case[]> {
     ['three units: the newest order and half the next', [{ variant: TWA, quantity: 3 }]],
     ['all five: every order short', [{ variant: TWA, quantity: 5 }]],
     ['six: more than the shelf', [{ variant: TWA, quantity: 6 }]],
-    // Each line is within what nobody holds; together they are not (D145).
+    // Each line is within what nobody holds; together they are not (D149).
     [
       'two lines of one unit each',
       [
@@ -731,7 +731,7 @@ export async function posSaleCases(): Promise<Case[]> {
     sale(`reserved stock, allowed: ${name}`, { lines, payments: card }, 'cashier', reservedForSale);
     sale(`reserved stock, not allowed: ${name}`, { lines, payments: card });
   }
-  // What is not for sale (D142).
+  // What is not for sale (D146).
   sale('stock: an archived SKU with units on the shelf', paid, 'cashier', {
     setup: [`UPDATE catalog_productvariant SET status = 'ARCHIVED' WHERE sku = 'RGN-ESS-XL-WHI'`],
     teardown: [`UPDATE catalog_productvariant SET status = 'ACTIVE' WHERE sku = 'RGN-ESS-XL-WHI'`],
