@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
+| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: part 1 of 5 (the audit log; content negotiation on every view), parity 10372/10372 and 205 race checks |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -726,6 +726,67 @@ registration and a user's own password were phase 2.
 | `GET /api/v1/organization/tax/` | `settings.view`, checked in the view. The mode, the rate, who settled it and when -- a hand-built answer whose time is DRF's encoding of a raw datetime: UTC, with `Z` -- and how many orders exist |
 | `PATCH /api/v1/organization/tax/` | `settings.manage`. A mode, a rate between 0 and 1 to four places, `confirm`, a reason. `update_tax_settings`: a change while orders exist is a 409 `TAX_CHANGE_NEEDS_CONFIRMATION` unless confirmed; settling, changed or not, stamps who and when and is audited; a change asks the storefront to drop its priced pages (`products`, `home`, `categories`), and the save itself `site` |
 
+## Phase 7: reports, the log, notices, jobs and the cutover
+
+Phase 7 ports what is left and then moves the traffic. Its parts, in order:
+
+1. the audit log (`audit-logs`), which part 10 of phase 6 left out -- and, found on the way,
+   content negotiation on every view (below);
+2. notifications (`notifications/`: the list, a notice, the unread count, marking read);
+3. reports (`reports/`: the eleven views over `reports.services`, with their CSV exports);
+4. the background jobs: what Celery's worker and beat run today, on BullMQ
+   ([ADR-0014](decisions/0014-nest-enqueues-celery-jobs.md) names `CeleryService.delay` as the
+   one place to swap);
+5. the cutover, path by path at the proxy.
+
+### Content negotiation
+
+DRF settles the format of a response in `APIView.initial`, before it authenticates, checks a
+permission, throttles or looks for the method's handler. Six phases of cases never sent a
+`format` or an `Accept` a JSON renderer would refuse, so the port had none of it; the audit
+log's cases asked for `?format=csv` and found a 404 where the port answered 200. It is
+`http/negotiation.ts` now, called by the authentication guard and by the answer for a path
+that has no handler for the method, on every DRF view -- the feeds, sign-out and the payment
+webhook among them, the two health checks (plain Django views) not:
+
+- `?format=` naming a format no renderer of the view has is a 404, the envelope's, whoever asks
+  and whatever the method: an anonymous `PUT /brands/?format=xml` is a 404, not a 401. A blank
+  one is no format; of two, the last counts; `JSON` is not `json`.
+- An `Accept` no renderer satisfies is a 406. `core.handlers` has no code for DRF's
+  `NotAcceptable`, so it is answered as `SERVER_ERROR`, "Unexpected error." (D227, copied).
+  The header is read as `rest_framework.utils.mediatypes` reads it -- Django's
+  `parse_header_parameters`, a `*` on either side matching anything, the most specific type the
+  client named tried first, `q` ignored (`application/json;q=0` is accepted) -- and compared with
+  DRF's own answers on 1,504 combinations of renderers, formats and headers. A request with no
+  `Accept` takes anything; one with an empty `Accept` takes nothing.
+- A format is looked at before the header: `?format=xml` with nothing acceptable is the 404.
+- A refusal here spends nothing from a rate limit (a scenario in `parity/throttle.ts`).
+
+The product feeds are DRF views with JSON's renderer alone, so a client that asks for one by its
+own type -- `Accept: application/xml` for `feed.xml`, `text/csv` for `feed.csv`, or
+`feed.csv?format=csv` -- is refused, where `*/*` or no header is served (D227, copied).
+
+Outside production Django also has the browsable API's renderer (`text/html`, `?format=api`).
+The port lists it for the same settings and answers what negotiates it in JSON: see "Deliberate
+differences".
+
+### The audit log (part 1)
+
+`accounts/audit-log.service.ts`. Read-only: the log is written by `core.audit.record`
+(`common/audit.ts`, ported in phase 2) and never changed.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/audit-logs/` | `audit.view`, a flat requirement: every method needs it, so a `POST` is a 403 for a manager and a 405 for an accountant. Paginated, newest first with the key breaking ties. A reader bound to a branch sees that branch's entries and those that name no branch -- the catalogue, settings, staff accounts, sign-ins (D85's rule); an owner, an administrator, a superuser or staff with no branch sees them all. `date_from` and `date_to` are `core.dates`' window on the moment written, read before anything else: one that is not a date is a 400 whatever the filters say. `search` is trimmed and looked for, in any case, in what was touched, why and by whom (`entity_label`, `reason`, `actor_label`), `%`, `_` and a backslash as themselves; a NUL in it reaches PostgreSQL and is a 500 (D228, copied). django-filter on `action` (one of the choices), `entity_type` and `entity_id` (trimmed, exact), `actor` and `branch` (keys that must exist). `ordering=created_at` replaces the order whole, so two entries of one instant come back as the plan leaves them: the statement is therefore Django's, every column of the log, the account and the branch -- with the account's columns PostgreSQL hashes the log against the accounts, without them it drops the join, and the tie falls the other way. A filter on the actor makes that join an inner one, written last, as Django writes it |
+| `GET /api/v1/audit-logs/<id>/` | the same queryset, so the window, the search and the filters apply -- and refuse -- here too; an ordering does nothing. Each entry: who (`actor`, and `actor_email`, the label kept when the account is gone), `action` and its label (an action the choices do not name is shown as it is), the branch and its code, the record's type, key and label, `old_values` and `new_values` as stored -- read from jsonb's own text, so `1.0` stays a float and an integer past 2^53 stays exact -- the reason, the address as `inet` prints it, the request id, and the moment in the shop's time |
+
+`fixture_audit.py` dates six entries in March 2025, where a window finds them and nothing the
+run writes: at two branches and at none, by an owner, a manager, an account since deleted and
+nobody, two of them at one instant, with values that are a float, a 23-digit integer, Bengali,
+a list and a bare string, and addresses in IPv4, IPv6 and IPv4 written as IPv6. It adds an
+accountant with no branch, `parity.auditor@rangon.test`: `audit.view` with nothing to be scoped
+to.
+
 ## Running it
 
 ```bash
@@ -816,6 +877,9 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
+| The browsable API: `?format=api`, or an `Accept` of `text/html` (or `text/*`), under any settings but production's | DRF's HTML page | the JSON answer | The port has no HTML pages. Under production's settings Django has no such renderer either and both refuse: 404 and 406 |
+| `Accept: application/json; indent=4` | the JSON indented, as `JSONRenderer` honours the parameter | compact | The same document; the harness compares parsed bodies and sees no difference |
+| A path Django resolves to no view (a converter refuses a segment: `/shop/products/not a slug/`) with a `format` no renderer has, or an `Accept` none satisfies | the resolver's HTML 404, before any view negotiates | the JSON 404 (or 406): the port checks a segment in its handler, after the negotiation | A request wrong twice over; a 404 either way for a format |
 | A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
 **Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
@@ -1079,6 +1143,12 @@ the port):
 - The VAT routes answer `tax_settled_at` in UTC with a `Z` where every serializer answers the
   shop's time, and both organisation views refuse with an envelope that has no `request_id`
   (D226).
+- A response no renderer of the view can give the client -- an `Accept` of `image/png`, or of
+  `application/xml` for the XML feed -- is a 406 that `core.handlers` has no code for:
+  `SERVER_ERROR`, "Unexpected error.". The product feeds negotiate as JSON views, so asking for
+  one by its own media type, or as `feed.csv?format=csv`, is refused (D227).
+- A NUL in the audit log's `search` reaches PostgreSQL: a 500, on the list and on an entry
+  (D228).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
