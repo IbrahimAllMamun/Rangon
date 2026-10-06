@@ -5,8 +5,7 @@ import { branchCondition } from '../auth/permissions';
 import { likeContains } from '../catalog/discovery.service';
 import { primaryImageUrl } from '../catalog/primary-image';
 import { localIso } from '../common/datetime';
-import { gregorian } from '../common/drf';
-import { NotFound, ValidationError } from '../common/errors';
+import { NotFound } from '../common/errors';
 import {
   applyFilters,
   choiceFilter,
@@ -14,10 +13,9 @@ import {
   modelFilter,
   orderingFrom,
 } from '../common/filtering';
-import { dateFromIsoformat } from '../common/isoformat';
+import { lookupDate } from '../common/model-lookups';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { searchDigits } from '../common/phone';
-import { pyIntText } from '../common/python';
 import type { QueryDict } from '../common/query-dict';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
@@ -109,26 +107,6 @@ const FROM = `FROM "orders_order" o
   INNER JOIN "accounts_branch" ON (o."branch_id" = "accounts_branch"."id")
   INNER JOIN "customers_customer" ON (o."customer_id" = "customers_customer"."id")
   LEFT OUTER JOIN "accounts_user" ON (o."created_by_id" = "accounts_user"."id")`;
-
-/**
- * A date as Django's `DateField.to_python` reads one for a `__date` lookup:
- * `date.fromisoformat`, else `YYYY-M-D`. Anything else is Django's own
- * `ValidationError`, which the API answers as a 400.
- */
-export function lookupDate(value: string): string {
-  const refuse = (message: string) =>
-    new ValidationError('Invalid input.', { details: { non_field_errors: [message] } });
-  const iso = dateFromIsoformat(value);
-  if (iso) return gregorian(iso.year, iso.month, iso.day) as string;
-  const match = /^(\p{Nd}{4})-(\p{Nd}{1,2})-(\p{Nd}{1,2})\n?$/u.exec(value);
-  if (!match)
-    throw refuse(`“${value}” value has an invalid date format. It must be in YYYY-MM-DD format.`);
-  const [year, month, day] = match.slice(1).map((part) => Number(pyIntText(part as string)));
-  const date = gregorian(year as number, month as number, day as number);
-  if (!date)
-    throw refuse(`“${value}” value has the correct format (YYYY-MM-DD) but it is an invalid date.`);
-  return date;
-}
 
 /**
  * `OrderDetailSerializer`: an order with its lines, payments, refunds and

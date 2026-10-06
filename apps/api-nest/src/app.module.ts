@@ -14,6 +14,7 @@ import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
 import { ContentAdminModule } from './content/admin/content-admin.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
+import { FinanceModule } from './finance/finance.module';
 import { PosModule } from './pos/pos.module';
 import { RedisService } from './redis/redis.service';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
@@ -62,6 +63,7 @@ export class AppModule {
         InventoryAdminModule,
         ContentAdminModule,
         PosModule,
+        FinanceModule,
       ],
       controllers: [HealthController],
       providers: [

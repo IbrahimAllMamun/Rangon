@@ -43,6 +43,8 @@ import { posSaleCases } from './pos-sale-cases.ts';
 import { posVoidCases } from './pos-void-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
+import { financeCases } from './finance-cases.ts';
+import { financeConcurrencyChecks } from './finance-concurrency.ts';
 import { labelsCases, labelsConcurrencyChecks } from './labels-cases.ts';
 import { staffOrdersCases } from './staff-orders-cases.ts';
 import { staffOrdersConcurrencyChecks } from './staff-orders-concurrency.ts';
@@ -582,6 +584,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await returnsCases()));
   cases.push(...(await staffOrdersCases()));
   cases.push(...(await labelsCases()));
+  cases.push(...(await financeCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -729,6 +732,7 @@ async function main(): Promise<void> {
       ...(await returnsConcurrencyChecks({ DJANGO, NEST })),
       ...(await staffOrdersConcurrencyChecks({ DJANGO, NEST })),
       ...(await labelsConcurrencyChecks({ DJANGO, NEST })),
+      ...(await financeConcurrencyChecks({ DJANGO, NEST })),
     ];
     for (const check of checks) {
       if (!check.passed) racesFailed += 1;
