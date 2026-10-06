@@ -481,6 +481,71 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 5 part 5: returns, at the counter and in the back office, 2026-10-06
+
+Asked for: phase 5 of the port, continued. Ported: `ReturnRequestViewSet` (list, read, open,
+approve, reject, receive, complete) and `PosReturnView`, with `orders.services.returns` and
+`pos_return` behind them -- the return window, what a line gives back (`_line_paid` and the
+once-per-request rounding), the restock decision at receipt, and the refund through the same
+`refund_order` a void uses. The staff order screens are part 6.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 4251/4251 (680 new), 48 by the documented differences
+concurrency ................................... 97/97 (20 new: two approvals, receipts and completions
+                                                of one return queued on its row, a change to the order,
+                                                the order line and the drawer landing mid-flight, six
+                                                returns opened at once, six counter returns of one unit)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 790 passed (6 new: what a return gives back)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_returns.py` (new, in the seed list) rings up ten counter sales with `create_pos_sale` and
+raises returns on them with the return service itself: three sales to open returns on (two shirts
+and a tee with 20.00 off the sale, paid in cash and by card; one tee on each of three lines; a
+tee paid by card), and one return in each state -- REQUESTED, APPROVED over two lines,
+RECEIVED, COMPLETED, REJECTED -- with two returns for one unit and a return at PAR3.
+
+The cases read the list as every role, by every filter and every ordering the view offers, and
+each return by id, across branches. They open a return, in the back office and at the counter
+with the same bodies: every role; one unit, a whole line, every line in either order, three lines
+of one SKU; every reason; every restock decision; a sale with a return open, one with a unit
+back, one refunded, one voided, one that came to nothing, one at another branch; the seed's
+online orders in each state; a sale delivered fifteen days ago by a manager and by the roles that
+hold the override, and five seconds either side of the window; a final-sale product; VAT inside
+the price and on top, shipping charged, a discount that does not divide, most of the order
+refunded already; and some fifty bodies that will not do. The counter then refunds by every
+method, by ones the ledger does not know, and by values that are not strings. Approve and
+reject: every role, every state of return, nineteen shapes of comment. Receive: decisions per
+line, and thirty shapes of them. Complete: amounts, methods, accounts, `Idempotency-Key`s, a short
+drawer. Each write is compared by the sale's sixteen queries and two for returns and their lines.
+
+Django reads a return's lines in no stated order, and the same request gave them in two orders
+across runs (D161). The harness therefore compares a return's lines by the order line each is
+for, and the ledger entries one request made by SKU.
+
+With the port's `FOR UPDATE` removed from the return's row, the order's row (opening and
+completing) and the order line's row, seven race checks failed: two approvals through Nest both
+went through, with two timeline entries; two returns for one unit were both received; a return
+was opened as far as the status change on a sale cancelled mid-flight; a completion acted on the
+order's status as first read and paid nothing; and six returns opened at once answered mostly
+500s. Two requests for one return are run through each API on its own as well as one per API: a
+request that takes no lock still queues at its `UPDATE`, and which of the two then wins is chance.
+
+Found in Django, and copied: D156 (a return is opened, and at the counter refunded, on another
+branch's order), D157 (two returns for one unit), D158 (the counter's refund method is not
+validated: one the ledger does not know moves no account), D159 (`?ordering=items` lists a
+return once per line), D160 (a completion with another refund's `Idempotency-Key` pays nothing
+and closes the return), D161 (lines in no stated order), D162 (approve and reject take any
+`comment`), D163 (rejecting a return marks the order delivered, now, and restarts its return
+window), D164 (a return on a packed order restocks goods that then ship), D165 (the override of
+the return window is not audited).
+
+**The port's defect numbers moved.** Parts 1 to 4 numbered their findings D138 to D151, which
+`main` had already given D138 to D141 to four Django defects found on 2026-10-05. Each of the
+port's is now four higher -- D142 to D155 -- in the table below, in the port's documents, code
+comments and case names. The commits of parts 3 and 4 name the old numbers in their subjects.
+
 ### The NestJS API, phase 5 part 4: voiding a counter sale, 2026-10-06
 
 Asked for: phase 5 of the port, continued. Ported: `PosSaleViewSet.void` -- `void_sale`, with
@@ -3791,6 +3856,16 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D153 | **A void refunds everything through one payment.** `refund_order` enters the whole amount against the largest captured payment, in that payment's method and out of its account. Measured on the parity stack: a sale of 3983.00 paid 2000.00 in cash and 1983.00 by card, voided, makes one refund of 3983.00 in CASH out of the cash drawer; the cash payment reads `REFUNDED` with `refunded_total` 3983.00 against an amount of 2000.00, the card payment stays `CAPTURED`, and the bank account keeps the card money. Each account's ledger agrees with its balance, so `verify_accounts` sees nothing | `apps/api/orders/services/payments.py` (`refund_order`), `apps/api/orders/services/pos.py` (`void_sale`) | Found porting the void to NestJS, which copies it. Refunding each payment back the way it came, largest first, would do it; a drawer that cannot cover the cash part is already refused (`INSUFFICIENT_FUNDS`) |
 | D154 | **Two voids of one sale put the goods back twice.** `void_sale` checks the channel and the status on the order as the view read it, and locks the row afterwards without reading the status again. Measured on the parity stack: two voids that both read a sale of one unit before either locked it both answer 200; the shelf goes from 10 to 12, with two RETURN rows and one refund | `apps/api/orders/services/pos.py` | Found porting the void to NestJS, which copies it. Reading the order with `select_for_update()` before the checks would do it |
 | D155 | **A void restocks every line in full, whatever has already come back.** `void_sale` asks only that the order is a POS sale and not cancelled: one with a return under way, or partly returned and refunded, is voided like any other, and every line goes back on the shelf at its sold quantity. Measured: `RGN-POS-000023`, with one of its two RGN-LIN-M-WHI already returned and 1450.00 already refunded, voided: both units restocked again, the remaining 6350.00 refunded. A void does not take the sale back out of the customer's `total_orders` and `total_spent` either. A `reason` that is `null` or a number is a 500 (`reason.strip()`) | `apps/api/orders/services/pos.py` | Found porting the void to NestJS, which copies it. Restocking `quantity - returned_quantity` and refusing a sale with an open return would do it |
+| D156 | **A return is opened on any order, whatever its branch.** `ReturnRequestViewSet.create` and `PosReturnView` fetch the order with `Order.objects.get(pk=...)`, where the viewset's own queryset is scoped through `order__branch`. Measured on the parity stack: a manager bound to DHK1 opens a return on a PAR3 sale and is answered 201 with a return they then cannot read (`GET /returns/<id>/` is a 404 for them); at the counter the same manager returns and refunds the PAR3 sale in one request, the cash leaving PAR3's till. The same gap as D152, on the route that pays money out. *Found porting returns, by a case for a manager bound elsewhere.* | Medium | Copied by the port. Fetch the order through `branch_queryset`. `orders/api/views.py`, `orders/api/pos_views.py` |
+| D157 | **Two returns can be opened for the same unit.** `request_return` checks a line against `returnable_quantity`, which is `quantity - returned_quantity`, and `returned_quantity` moves only when goods are received: units on a return still open are not counted. Measured: two returns for a sale's one tee are both opened (each promising the full 890.00) and both approved; the first is received, and receiving the second is the table's own check (`orders_item_returned_lte_qty`) answering the generic 409 "The request conflicts with the current state of the data." -- the return can then only be rejected. One order line asked for twice in one request is likewise the unique index's generic 409, not a 400. *Found reading `returnable_quantity`.* | Low | Copied by the port. Count the units on open returns, and refuse a repeated line in the serializer. `orders/services/returns.py`, `orders/models.py` |
+| D158 | **The counter's refund method is not validated.** D95 made `refund_method` a choice on `POST /returns/<id>/complete/`; `PosReturnView` still passes `request.data.get("refund_method", "CASH")` straight to `refund_order`. Measured: a counter return with `"refund_method": "BITCOIN"` is a 201 whose refund of 5770.00 is recorded against no account, with no cash-book entry -- the customer has been paid and no balance has moved. A number, `true`, a list or an object does the same, stored as Python prints it (`"5"`, `"True"`, `"['CASH']"`); `"cash"` in lower case does reach the drawer and is stored as `cash`; a method past the column's 20 characters, or holding a NUL, is a 500. *Found porting the counter return.* | Medium | Copied by the port. Validate it as `CompleteReturnSerializer` does. `orders/api/pos_views.py` |
+| D159 | **Ordering the returns list by `items` lists a return once per line.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field, the nested `items` among them; ordering by it joins the lines in. Measured: with one two-line return among ten, `?ordering=items` answers `count: 10` and ten rows in which the two-line return appears twice and another return is missing. *Found porting the list's ordering.* | Low | Copied by the port. Name the `ordering_fields`. `orders/api/views.py` |
+| D160 | **A return completed with an `Idempotency-Key` another refund holds pays nothing.** `complete` passes the header's key to `refund_order`, which answers with whatever refund already holds that key -- any order's -- and `complete` then marks the return COMPLETED. Measured: `POST /returns/<id>/complete/` with the key of another return's refund is a 200; the return is COMPLETED and its order REFUNDED, with no refund row, no cash-book entry, `refunded_total` 0.00 and `payment_status` still PAID. The same family as D147. *Found by a case that reuses a key.* | Medium | Copied by the port. Key the lookup by order as well, or refuse a key that belongs to another order. `orders/services/payments.py`, `orders/services/returns.py` |
+| D161 | **A return's lines come back in no stated order.** `ReturnItem` has no `Meta.ordering` and neither the prefetch nor `receive` asks for one, so the `items` of an answer, and the order in which lines are restocked, are whatever order the table yields. Measured: across runs of one request the two lines of a return swapped places, in Django alone. *Found when the parity harness compared the same request twice.* | Low | Copied by the port, which sends the same statements; the harness compares a return's lines by the order line each is for. Order them by `created_at`. `orders/models.py` |
+| D162 | **Approve and reject take the comment unvalidated.** Both read `request.data.get("comment", "")`. Measured: `{"comment": null}` is the column's `NOT NULL` answering the generic 409; a number, a list or an object is stored as Python prints it (`"5"`, `"{'a': 1}"`) and, on reject, written into the timeline that way; a NUL is a 500; a body that is a JSON list is a 500 (`'list' object has no attribute 'get'`). *Found by the comment cases.* | Low | Copied by the port. Give the two actions a serializer. `orders/api/views.py` |
+| D163 | **Rejecting a return marks the order delivered, now.** `reject` sends an order in RETURN_REQUESTED to DELIVERED through `transition`, which stamps `delivered_at` with the current time -- whatever other returns the order has, and whatever it was before the return. Measured: a SHIPPED order with a return opened and rejected is DELIVERED though it never was; an order delivered earlier has its `delivered_at` moved to the moment of the rejection, so its 14-day return window starts again; and on an order with two returns, rejecting the second while the first is RECEIVED leaves the order DELIVERED, so completing the first refunds it (`payment_status` REFUNDED) and the order stays DELIVERED. *Found by the reject cases.* | Medium | Copied by the port. Remember the status the order came from, and keep it RETURN_REQUESTED while another return is open. `orders/services/returns.py`, `orders/services/lifecycle.py` |
+| D164 | **A return on a packed order puts goods on the shelf that then ship.** `request_return` asks only that stock is committed, which it is from PACKED on, and moves the order to RETURN_REQUESTED only from SHIPPED or DELIVERED. Measured: a counter return of a PACKED, unpaid online order is a 201 -- the unit goes back on the shelf (42 to 43), the line is marked returned, nothing is refunded -- and the order stays PACKED; `POST /orders/<id>/status/` then ships it, and the shelf still says 43 for a unit that has left. *Found by the cases for each order status.* | Medium | Copied by the port. Refuse a return before SHIPPED (a packed order is cancelled or unpacked, not returned). `orders/services/returns.py` |
+| D165 | **A return past the window, let through by the override, leaves no audit entry.** [business-rules.md](business-rules.md) §2.2 says a return beyond the window needs `sales.refund_override` "and a reason, which is recorded in the audit log". `request_return` checks the permission and records nothing: the only audit row is the order's status change, and no reason is asked for beyond the return's own. Measured: an administrator opens a return on a sale delivered 40 days earlier; one `ORDER_STATUS_CHANGED` row, nothing naming the override. *Found comparing the rule with the rows the request writes.* | Low | Copied by the port. Write an audit entry when the override is what let the return through. `orders/services/returns.py` |
 
 ## Still API-only (no UI)
 

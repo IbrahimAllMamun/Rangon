@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt), part 4 (voiding a sale) 2026-10-06 |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt), part 4 (voiding a sale), part 5 (returns, at the counter and in the back office) 2026-10-06 |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -140,6 +140,15 @@ across both APIs where both serve the path:
 | A customer's totals changed while a sale to them waits on the customer's row (each API in turn) | the sale writes its own stale figures over them: the orders committed meanwhile are lost (D150, copied); no lock is involved |
 | Two voids of one sale that both read it before either locks it, one per API | both go through: the unit goes back on the shelf twice, with one refund (D154, copied) |
 | A drawer emptied while a void's refund waits on the account's row (each API in turn) | the void is refused whole -- nothing restocked, the sale standing; with the port's `FOR UPDATE` removed it pays the refund and overwrites the withdrawal |
+| Two approvals of one return queued on its row (one per API, then both through each API) | one approves and the other is told it is approved already; with the port's `FOR UPDATE` removed both Nest approvals go through and the timeline says so twice |
+| Two receipts of one return queued on its row (one per API, then both through each API); six at once across both APIs | one receives -- the goods go back once, each line's returned count moves once -- and the rest are told the return is no longer approved; with the port's `FOR UPDATE` removed the second Nest receipt gets as far as the line's own check |
+| Two completions of one return queued on its row (one per API, then both through each API) | both answer 200 and the refund is paid once: one refund, one cash-book entry, one audit entry; with the port's `FOR UPDATE` removed the second Nest completion is a 409 |
+| An order set back to DELIVERED while a completion waits on the order's row (each API in turn) | the refund is paid and the order's status left alone; with the port's `FOR UPDATE` removed the Nest completion acts on the status it read and is refused by the status machine, paying nothing |
+| A sale cancelled while a return being opened on it waits on the order's row (each API in turn) | refused as a return on a cancelled order is; with the port's `FOR UPDATE` removed Nest gets as far as the status change before it is stopped |
+| Two returns for one unit (D157), neither restocking, received at once through one API, queued on the order line | one is received and the other is refused: the unit comes back once; with the port's `FOR UPDATE` removed both Nest receipts go through |
+| A drawer emptied while a completion's refund waits on the account's row (each API in turn) | the completion is refused whole: the return still RECEIVED, nothing refunded |
+| 6 returns opened at once on one sale, across both APIs | six 201s and six numbers in a row, none shared; with the port's order lock removed most of the six are 500s |
+| 6 counter returns of a sale's one unit at once, across both APIs | one 201: the unit and the money come back once, the sale REFUNDED |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -408,6 +417,29 @@ queued after the commit. The answer is the staff's `OrderDetailSerializer`
 | `GET /api/v1/pos/sales/<id>/receipt/` | the same lookup; the order, `document_type: RECEIPT`, the organisation's name, address, phone, email, VAT number and receipt footer, the order's branch, and the cashier's name |
 | `POST /api/v1/pos/sales/<id>/void/` | `sales.cancel`; the same lookup, so any branch's sale (D152). `void_sale`: an online order is a 409, a sale already cancelled answers as it is, and a reason is required -- read with `request.data.get` and `.strip()`, so a body that is not an object, or a reason that is not a string, is a 500. Then one transaction: the order locked; every line back on the shelf at the row's average cost (`RETURN`, reference `order_void`); what was paid and not yet refunded sent back through `refund_order` -- one refund against the largest captured payment, in its method and out of its account, or the branch's own for the method, refused when a drawer does not hold that much (`INSUFFICIENT_FUNDS`, with the balance as `format_money` prints it) or is closed; the coupon's use released under its lock; the order `CANCELLED`, with the reason, on the timeline and in the audit log. The status is not read again under the lock (D154), a line is restocked whether or not it was returned (D155), and a sale paid two ways is refunded one way (D153); all copied |
 
+Then returns (part 5), in the back office step by step and at the counter in one
+(`orders/returns.service.ts`). A return is its own record -- the order and its payments are never
+edited -- and moves REQUESTED, APPROVED, RECEIVED, COMPLETED, or to REJECTED before the goods are
+back. Every step takes the return's row first; opening one and paying its refund take the order's
+row, and receiving takes each order line's. What comes back is worked out once, when the return is
+opened (`returnShares`): the line's total less its share of any whole-order discount, plus its VAT
+where VAT sat on top, for the units returned -- rounded once for the request, the last line
+carrying the odd paisa -- with shipping added when the shop was at fault, and never more than is
+left to refund on the order. Goods go back on the shelf at RECEIVED, only for lines to RESTOCK,
+through `StockService.restockReturn`; money goes back at COMPLETED through `refundOrder`, the same
+one a void uses.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/returns/` | `orders.view`; paginated, newest first, the returns of orders at the user's branch (every branch for an owner, an administrator or staff with no branch). Filters `status`, `reason`, `order`; `ordering` takes every serializer field by its source (`order__number`, `order__customer__name`; `order` orders by the order's own default, newest placed first) -- and `items`, which lists a return once per line (D159, copied). Each return with its lines, read in no stated order (D161, copied) |
+| `GET /api/v1/returns/<id>/` | the same scope and filters: another branch's return, or one the filters exclude, is a 404; a filter value that is not a choice is a 400 |
+| `POST /api/v1/returns/` | `sales.refund`; 201. `CreateReturnSerializer`: an order, a reason, lines of an order line, a quantity of at least 1 and a restock decision (RESTOCK unless said), a comment. The order is any order by id, whatever its branch (D156, copied); one not there is a 404. `request_return`: the order locked; a cancelled or refunded order, and an online order whose goods have not left, are 409s; no lines is a 400; past the return window (`RANGON_RETURN_WINDOW_DAYS`, 14, from delivery or else from placing) it takes `sales.refund_override` or is a 403; the order's lines locked; a line not on the order, more units than are still returnable, and a final-sale product are 400s. A line's returnable count moves only when goods are received, so a second return for the same unit is opened too (D157, copied); one line asked for twice is the unique index's 409. A DELIVERED or SHIPPED order goes to RETURN_REQUESTED. The staff who refund at the order's branch are notified after the commit |
+| `POST /api/v1/returns/<id>/approve/` | `sales.refund`; REQUESTED to APPROVED, anything else a 409. The comment is `request.data.get("comment")`, unvalidated: a number or a list is stored as Python prints it, `null` is the column's 409, a body that is not an object is a 500 (D162, copied) |
+| `POST /api/v1/returns/<id>/reject/` | `sales.refund`; a REQUESTED or APPROVED return to REJECTED, anything else a 409. An order waiting on a return goes back to DELIVERED, whatever other returns it has and whatever it was before (D163, copied) |
+| `POST /api/v1/returns/<id>/receive/` | `sales.refund`; the body is validated before the return is looked for. `ReceiveReturnSerializer`: optionally one decision per line -- a restock decision, a condition note of up to 255 characters -- a line named twice a 400. Only an APPROVED return, else a 409. The decisions are written in one statement that leaves each line's `updated_at` as it was, as `bulk_update` does; a line not on the return is a 400. RESTOCK lines go back on the shelf under a `RETURN` referring to the return; every line's returned count moves under the line's row lock, and the table's own check refuses a unit coming back twice (a 409). The timeline entry records how many lines were restocked and the decision for each SKU |
+| `POST /api/v1/returns/<id>/complete/` | `sales.refund`; the body is validated before the return is looked for. `CompleteReturnSerializer`: an amount of at least 0.01 (the return's own unless given, and any amount up to what is left to refund on the order), a method the ledger knows or blank, any account. A COMPLETED return answers as it is; only a RECEIVED one is completed, else a 409. The order locked, then `refund_order` keyed by the `Idempotency-Key` header, or by the return when there is none: a retry pays once, and a key another refund holds completes the return with nothing paid (D160, copied). An order waiting on the return, with every line back, goes RETURNED and then REFUNDED, whatever was refunded. Audited as `REFUND_ISSUED` on the return |
+| `POST /api/v1/pos/returns/` | `sales.refund`, `pos` scope; 201. The same body as opening a return, its comment dropped: requested, approved, received and refunded in one transaction, by the same four steps. The refund's method is `request.data.get("refund_method", "CASH")`, unvalidated: a blank or `null` is the method of the largest payment, and one the ledger does not know -- `BITCOIN`, a number, a list -- is recorded against no account and moves no balance; past 20 characters it is a 500 (D158, copied) |
+
 ## Running it
 
 ```bash
@@ -600,6 +632,27 @@ the port):
   go back on the shelf twice (D154).
 - A void restocks every line at its sold quantity, units already returned included, and leaves the
   customer's totals as they were; a reason that is not a string is a 500 (D155).
+- A return is opened, and at the counter refunded, on any order by id, whatever its branch
+  (D156).
+- A second return may be opened for a unit already on an open return; it can be approved and never
+  received. One line asked for twice in a request is the unique index's 409 (D157).
+- The counter's `refund_method` is taken as sent: one the ledger does not know is recorded against
+  no account and moves no balance (D158).
+- `?ordering=items` on the returns list shows a return once per line, inside a count of returns
+  (D159).
+- A return completed with an `Idempotency-Key` another refund holds is COMPLETED with nothing
+  paid (D160).
+- A return's lines are read in no stated order; the port sends the same statements, and the
+  harness compares a return's lines by the order line each is for, and the ledger entries of one
+  request by SKU (D161).
+- Approve and reject store whatever `comment` holds: Python's `str()` of a number or a list, a 409
+  for `null`, a 500 for a body that is not an object (D162).
+- Rejecting a return sends its order to DELIVERED and stamps `delivered_at` now, whatever other
+  returns the order has and whatever status it came from (D163).
+- A return is taken on a PACKED order: the goods go back on the shelf and the order can still be
+  shipped (D164).
+- A return past the window that the override lets through writes no audit entry of its own
+  (D165).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

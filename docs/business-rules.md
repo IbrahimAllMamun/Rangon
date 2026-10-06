@@ -282,6 +282,34 @@ stock even if it was raised as `RESTOCK`.
 - Restocking fee: none.
   *`DECISION REQUIRED` — assumed 0%.*
 
+### 2.5 What the code does where no rule was written
+
+Found while porting returns to the NestJS API (2026-10-06). The port copies each; the defect
+numbers are in [roadmap.md](roadmap.md).
+
+- **A return for less, or more, than the goods were worth.** Completing a return takes any amount
+  from 0.01 up to what is left to refund on the whole order: a one-tee return worth 886.93 can be
+  completed for the order's full 5,770.00, or for 0.01. An order whose every line is back becomes
+  `REFUNDED` whatever was paid back, while its `payment_status` says `PARTIALLY_REFUNDED`.
+  *`DECISION REQUIRED` -- cap a return's refund at what its own lines came to, and decide what an
+  order is called when its goods are back and only part of the money is. Until decided, any amount
+  up to the order's is taken, and the order is `REFUNDED`.*
+- **Whose return it is.** A return is opened -- and at the counter refunded, from the order's own
+  branch's till -- by anyone who may refund, on any order whose id they have, whatever branch it
+  was sold at; they cannot then read the return back (D156).
+  *`DECISION REQUIRED` -- may a branch take back another branch's sale? Shops often do. If so the
+  refund should leave the till of the branch handing the money over, and the return should be
+  visible there. Until decided, it is allowed and the money leaves the selling branch's till.*
+- **A return before the goods have left.** An online order that is `PACKED` can be returned: the
+  goods go back on the shelf and the order can still be shipped (D164). Not a decision: §1.3 has the
+  goods leave the shelf at `PACKED` and nothing brings them back but a return of goods that left.
+
+Three things here break rules already written. §2.2 has an override of the window "recorded in the
+audit log", and it is not (D165). §2.4's "the method is stated at the refund, and the account
+follows it" does not hold at the counter, where a method the ledger does not know is accepted and
+moves no account (D158). And §2.2's window can be restarted: rejecting a return stamps the order
+delivered at that moment (D163).
+
 ---
 
 ## 3. Pricing, discounts, tax
