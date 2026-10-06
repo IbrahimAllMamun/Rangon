@@ -238,6 +238,58 @@ export class StaffOrders {
     );
   }
 
+  /**
+   * `OrderListSerializer(customer.orders.select_related("branch")
+   * .order_by("-placed_at")[:100], many=True).data`: a customer's last
+   * hundred orders, whatever their branch.
+   */
+  async ofCustomer(customer: { id: string; name: string; phone: string | null }) {
+    const rows = await this.db.query<
+      StaffOrderRow & { branch_code: string; created_by_email: string | null }
+    >(
+      `SELECT ${ORDER_COLUMNS}, "accounts_branch"."code" AS "branch_code",
+              (SELECT u."email" FROM "accounts_user" u WHERE u."id" = o."created_by_id")
+                AS "created_by_email"
+         FROM "orders_order" o
+         INNER JOIN "accounts_branch" ON (o."branch_id" = "accounts_branch"."id")
+        WHERE o."customer_id" = $1 ORDER BY o."placed_at" DESC LIMIT 100`,
+      [customer.id],
+    );
+    const counts = new Map(
+      (
+        await this.db.query<{ order_id: string; units: string }>(
+          `SELECT "order_id", SUM("quantity") AS "units" FROM "orders_orderitem"
+            WHERE "order_id" = ANY($1::uuid[]) GROUP BY "order_id"`,
+          [rows.map((row) => row.id)],
+        )
+      ).map((row) => [row.order_id, Number(row.units)]),
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      number: row.number,
+      channel: row.channel,
+      status: row.status,
+      payment_status: row.payment_status,
+      branch: row.branch_id,
+      branch_code: row.branch_code,
+      customer: row.customer_id,
+      customer_name: customer.name,
+      customer_phone: customer.phone,
+      item_count: counts.get(row.id) ?? 0,
+      subtotal: row.subtotal,
+      discount_total: row.discount_total,
+      tax_total: row.tax_total,
+      shipping_total: row.shipping_total,
+      grand_total: row.grand_total,
+      paid_total: row.paid_total,
+      refunded_total: row.refunded_total,
+      currency: row.currency,
+      created_by_email: row.created_by_email ?? '',
+      placed_at: this.iso(row.placed_at),
+      created_at: this.iso(row.created_at),
+    }));
+  }
+
   /** `get_object()`: the filtered queryset, then the primary key -- a 404 either way. */
   async find(user: RequestUser, pk: string, query: QueryDict): Promise<StaffOrderRow> {
     const sql = new SqlParams();

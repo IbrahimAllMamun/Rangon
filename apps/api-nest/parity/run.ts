@@ -36,6 +36,8 @@ import { inventoryCases } from './inventory-cases.ts';
 import { stockDocumentCases } from './stock-document-cases.ts';
 import { importCases } from './import-cases.ts';
 import { contentAdminCases } from './content-admin-cases.ts';
+import { customersCases } from './customers-cases.ts';
+import { customersConcurrencyChecks } from './customers-concurrency.ts';
 import { merchandisingCases } from './merchandising-cases.ts';
 import { posCases } from './pos-cases.ts';
 import { posQuoteCases } from './pos-quote-cases.ts';
@@ -599,6 +601,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await purchasingCases()));
   cases.push(...(await purchaseOrderCases()));
   cases.push(...(await supplierPaymentCases()));
+  cases.push(...(await customersCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -752,6 +755,7 @@ async function main(): Promise<void> {
       ['purchasing', () => purchasingConcurrencyChecks({ DJANGO, NEST })],
       ['purchase-orders', () => purchaseOrderConcurrencyChecks({ DJANGO, NEST })],
       ['supplier-payments', () => supplierPaymentConcurrencyChecks({ DJANGO, NEST })],
+      ['customers', () => customersConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

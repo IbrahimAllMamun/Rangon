@@ -13,6 +13,7 @@ import { CeleryService } from './jobs/celery.service';
 import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
 import { ContentAdminModule } from './content/admin/content-admin.module';
+import { CustomersModule } from './customers/customers.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
 import { PosModule } from './pos/pos.module';
@@ -66,6 +67,7 @@ export class AppModule {
         PosModule,
         FinanceModule,
         PurchasingModule,
+        CustomersModule,
       ],
       controllers: [HealthController],
       providers: [
