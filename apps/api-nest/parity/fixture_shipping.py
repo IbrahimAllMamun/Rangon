@@ -112,7 +112,11 @@ def apply() -> None:
 
     def parcel(made, courier=None, number="", cost="0.00", **fields):
         return shipping.create_shipment(
-            order=made, courier=courier, tracking_number=number, cost=Decimal(cost), actor=manager,
+            order=made,
+            courier=courier,
+            tracking_number=number,
+            cost=Decimal(cost),
+            actor=manager,
             **fields,
         )
 

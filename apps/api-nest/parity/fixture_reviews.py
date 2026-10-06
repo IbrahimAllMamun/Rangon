@@ -41,7 +41,9 @@ def apply() -> None:
     shirt = ProductVariant.objects.get(sku="RGN-CLA-M-WHI").product
     tee = ProductVariant.objects.get(sku="RGN-ESS-M-OLI").product
     delivered = (
-        Order.objects.filter(customer=buyer, status=OrderStatus.DELIVERED).order_by("number").first()
+        Order.objects.filter(customer=buyer, status=OrderStatus.DELIVERED)
+        .order_by("number")
+        .first()
     )
     bought = delivered.items.order_by("created_at", "sku").first().variant.product
     now = timezone.now()
