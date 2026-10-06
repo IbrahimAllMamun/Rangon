@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons), part 8 (shipping: zones, methods, couriers, parcels) 2026-10-07 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders), part 5 (supplier payments), part 6 (customers, the call-back list), part 7 (coupons), part 8 (shipping: zones, methods, couriers, parcels), part 9 (review moderation) 2026-10-07 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -201,6 +201,8 @@ across both APIs where both serve the path:
 | Both parcels of a split delivery updated at once while the order is marked delivered by hand, across both APIs | no deadlock and no 500: every path takes the order's row first; the order delivered once |
 | A parcel delivered while an edit of its notes waits at its `UPDATE` (each API in turn) | the edit writes back the status it read and the delivery is gone (D207, copied); no lock is involved |
 | 6 couriers of one code, and 6 methods of one code in one zone, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
+| 6 decisions on one review at once, three each way, across both APIs | six 200s and six audit entries; the review is left as one of them decided. No lock is involved |
+| A review rejected with a reason while an approval of it with no note waits at its `UPDATE` (each API in turn) | the approval stands and the reason is gone: a decision writes back the note it read (D215, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -684,6 +686,15 @@ the template is not given, an attribute a string does not have -- is what DRF re
 read-only field is not there", so the parcel is answered without a `tracking_url`; a ValueError
 or an IndexError -- `{0}`, `{}`, a brace left open -- is a 500 (D211, copied).
 
+Then review moderation (part 9): `engagement/review-moderation.service.ts`,
+`ReviewModerationViewSet`. What a shopper writes, and what a product page shows of it, were
+phases 2 and 1.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/reviews/`, `GET .../<id>/` | `content.review_moderate`, for reading too; paginated, newest first. Filters `status`, `product` (a key that must exist) and `rating` -- django-filter's `NumberFilter`: anything Python's `Decimal` reads, no larger than 1e50, cut to a whole number by the column's lookup, so `rating=4.9` lists the fours (D216, copied) and a number the column cannot hold matches nothing. `ordering` by `created_at` or `rating`. A detail route applies the filters too |
+| `POST /api/v1/reviews/<id>/approve/`, `.../reject/` | `content.review_moderate`; 200. The review is found before the body is read. No rule about what the review was: an approved one can be approved again, or rejected. The status, the moderator and the time are stamped; the note is `str(request.data.get("note", "")).strip()` when that says anything and otherwise the note the review had -- `null` is the note "None", a list or an object is its Python repr, a body that is not an object is a 500, and so is a note of more than 255 characters or one holding a NUL (D214, copied). Then the audit entry, `SETTINGS_CHANGED`, with the status and note before and after and the note, or "Review approved"/"Review rejected", as its reason. No lock, and the two writes are not one transaction (D215, copied) |
+
 ## Running it
 
 ```bash
@@ -1004,6 +1015,14 @@ the port):
   that is switched off (D212).
 - Zones, methods and couriers are made, repriced and deleted with no audit entry, and deleting
   a zone or a method takes it off every past order and parcel that used it (D213).
+- A moderator's note is read with `request.data.get`: `null` is stored as "None", a list or an
+  object as its Python repr, a body that is not an object is a 500, and a note longer than the
+  column, or holding a NUL, is a 500 from the database. Nothing asks what the review was: one
+  already approved can be approved again (D214).
+- A decision with no note writes back the note it read, with no lock: a reason given meanwhile
+  is lost. The row and its audit entry are two transactions (D215).
+- `?rating=4.9` lists the four-star reviews: the number filter's Decimal is cut to a whole
+  number by the integer column's lookup (D216).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

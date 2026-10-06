@@ -481,6 +481,48 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 9: review moderation, 2026-10-07
+
+Asked for: the rest of phase 6, continued. Ported: `ReviewModerationViewSet` -- the list, a
+review, `approve` and `reject`.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 9151/9151 (393 new), 107 by the documented differences
+concurrency ................................... 192/192 (3 new: six decisions at once; a rejection's reason lost to
+                                                an approval that waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 957 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_reviews.py` adds five reviews to the six the earlier fixtures wrote: three waiting --
+five stars on a delivered order, one star from a guest with a long comment, three stars and
+nothing said -- one rejected with its reason and one approved with a note.
+
+The cases read the list as every role, through each filter and ordering, and the rating filter
+through fifty spellings of a number; then approve and reject a waiting, a rejected and an
+approved review with thirty-four shapes of body each: no note, a blank one, one of every JSON
+type, the longest the column takes and one character more, a NUL, and bodies that are not
+objects. Each decision is compared by the review as it is left and by its audit entry.
+
+The first run of the new cases matched. `common/filtering.ts` gained `numberFilter`,
+django-filter's `NumberFilter` over an integer column, which no earlier view had used.
+
+The first *full* run matched too, and was wrong: `orders-cases.ts` (phase 2) deletes every
+review of the customers who sign in before each of its cases, three of the fixture's five were
+theirs, and every case about those three "matched" as a 404 from both APIs. The race group gave
+it away by returning no checks -- 189 where 192 were due. The fixture's reviews now belong to
+customers who do not sign in, and the race group fails outright if the reviews it needs were
+there when the run began and are gone when it starts.
+
+No lock is taken in Django and none was added: the two race checks record what that leaves,
+the same in both APIs.
+
+Found in Django, and copied: D214 (the note is whatever `request.data.get` returns: `null` is
+the note "None", a body that is not an object a 500, a note too long a 500; any review can be
+decided again), D215 (a decision with no note writes back the note it read: measured, a reason
+given meanwhile is lost), D216 (`?rating=4.9` lists the fours).
+
 ### The NestJS API, phase 6 part 8: shipping, 2026-10-07
 
 Asked for: the rest of phase 6, continued. Ported: `ShippingZoneViewSet`, `ShippingMethodViewSet`
@@ -4367,6 +4409,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D211 | **A courier's tracking page is not checked when it is written.** `tracking_url_template` is any 255 characters, formatted with `str.format` at every read. A placeholder other than `{tracking_number}` raises KeyError inside the `tracking_url` property, which DRF reads as a missing read-only field: the answer silently has no `tracking_url`, for staff and on the customer's order page. `{0}`, `{}` or an unbalanced brace raises IndexError or ValueError: every read of a numbered parcel of that courier is a 500 -- the shipment list, the parcel, the customer's own order. *Found by the tracking-page cases.* | Medium | Copied by the port. Validate the template in `CourierSerializer` by formatting it once; catch in `Courier.tracking_url`. `shipping/api/serializers.py`, `shipping/models.py` |
 | D212 | **A second fallback zone, and parcels for what is switched off.** `is_default` has no uniqueness: a second default zone is accepted, and which one a shopper in an unlisted city gets is decided by `position`. A parcel can be booked with a courier or a method whose `is_active` is false. *Found by the zone and booking cases.* | Low | Copied by the port. A partial unique index on `is_default`; refuse inactive ones in `create_shipment`. `shipping/models.py`, `shipping/services.py` |
 | D213 | **Shipping settings leave no audit entry, and deleting a method rewrites past orders.** Zones, methods -- their prices and free-shipping thresholds -- and couriers are made, changed and deleted through plain `ModelViewSet`s that write nothing to the audit log, where the rest of the settings do (CLAUDE.md §3.5). Deleting a zone cascades to its methods, and `Order.shipping_method` and `Shipment.shipping_method` are `SET_NULL`: every past order that used the method loses the record of how it was sent. *Found by reading the captured statements of a zone's delete.* | Low | Copied by the port. `audit.record` in the three viewsets; switch a used method off instead of deleting it, as a redeemed coupon is. `shipping/api/views.py` |
+| D214 | **A moderator's note is whatever the body holds, and any review can be decided again.** `_moderate` reads `str(request.data.get("note", "")).strip()` with no serializer: `{"note": null}` stores the note "None", a number its digits, a list or an object its Python repr; a body that is a list, a string or `null` has no `.get` and is a 500; a note of more than 255 characters, or one holding a NUL, reaches the column and is a 500 from the database. And the decision asks nothing about the review: one already approved can be approved again -- restamped with a new moderator and time, the audit entry reading APPROVED to APPROVED -- or rejected long after it went public. D199 is the same reading of a note. *Found by the decision cases.* | Low | Copied by the port. A one-field serializer (`CharField(max_length=255, allow_blank=True)`); say whether a decided review may be decided again. `engagement/api/views.py` |
+| D215 | **A decision with no note writes back the note it read.** `_moderate` saves `status`, `moderated_by`, `moderated_at` and `moderation_note` from the review as it was read, with no lock. Measured in both APIs: a review rejected with a reason while an approval with no note is in flight ends approved with the note it had before -- the reason is gone from the row. The row and its audit entry are also two transactions: a failure between them leaves a decision with no record. D184, D200, D203 and D207 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Low | Copied by the port. Leave `moderation_note` out of `update_fields` when no note was given; one `transaction.atomic()` around both writes. `engagement/api/views.py` |
+| D216 | **`?rating=4.9` lists the four-star reviews.** `filterset_fields = ["rating"]` gives django-filter's `NumberFilter`, a decimal form field, over a small-integer column; the lookup then calls `int()` on the Decimal. `4.5` and `4.9` both list the fours, `-0.5` asks for zero stars, and `1e0` is one star. Any integer column filtered this way does the same. *Found by the filter cases.* | Low | Copied by the port. Declare the filter with an integer field. `engagement/api/views.py` |
 
 ## Still API-only (no UI)
 
