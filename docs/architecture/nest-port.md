@@ -18,7 +18,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 2 | Accounts: login, refresh, logout, me, register, password change; customer orders and addresses; guest order tracking; review submission | **Done** 2026-09-30, parity 370/370 and two race checks |
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | In progress: part 1 (the register's reads and held sales) 2026-10-05, part 2 (the quote and the manager's approval), part 3 (the sale and its receipt), part 4 (voiding a sale), part 5 (returns, at the counter and in the back office), part 6 (the staff order screens) 2026-10-06 |
+| 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
@@ -157,6 +157,7 @@ across both APIs where both serve the path:
 | 6 refunds of an order's whole payment at once, across both APIs | one 201 and five 422s: refunded once; with the port's `FOR UPDATE` removed the order is refunded twice over |
 | 6 clicks of one refund with one `Idempotency-Key`, across both APIs | six 201s naming one refund |
 | An order packed through one API and cancelled through the other at once | one wins and the other is a 409; the stock and the money agree with whichever it was |
+| 6 marks of one variant's labels at once, across both APIs | six rows, none lost: `mark_labels` takes no lock and needs none, the newest row being the state |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -223,12 +224,11 @@ Then variants (part 3b):
 | `GET /api/v1/variants/lookup/?code=&branch=` | the barcode exactly, else the SKU in any case, with stock at the branch; not found is the view's own hand-written envelope, with no request id |
 | `POST /api/v1/variants/<id>/barcode/` | the variant's in-store barcode, assigned under its row lock when it has none, audited |
 
-**Added to Django after phase 4 closed, not ported yet:** `GET/POST /api/v1/products/<id>/labels/`
-(2026-10-03, the label sheet: every variant with its stock and its newest `inventory_labelprint`
-mark; [business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)).
-Django serves it. What the port already does is treat a variant or product with a mark as history
-when deleting it, as Django now does, so the two still agree on `DELETE`. `src/database/schema.ts`
-has not been re-introspected for the new table; nothing in the port reads it through Drizzle.
+**Added to Django after phase 4 closed:** `GET/POST /api/v1/products/<id>/labels/` (2026-10-03,
+the label sheet; [business-rules §1.10](../business-rules.md#110-barcode-labels-which-variants-are-printed)).
+Ported as part 7 of phase 5, below; `src/database/schema.ts` was re-introspected for
+`inventory_labelprint` then. A variant or product with a mark is history when it is deleted, in
+the port as in Django, so the two agree on `DELETE`.
 
 Then product images (part 3c), the first endpoint that takes a form:
 
@@ -468,6 +468,16 @@ query string excludes, is a 404 on a write as on a read.
 | `POST /api/v1/orders/<id>/cancel/` | `sales.cancel`; `cancel_order`: only a PENDING, CONFIRMED or PROCESSING order, else a 409; cancelled through the status machine, then whatever was paid and not refunded goes back through `refund_order`, in one transaction. The reason is `request.data.get("reason")` as sent: Python slices it, so a string or a list passes and anything else is a 500 (D168, copied). An order paid and refunded in full cannot be cancelled: the refund of nothing is a 400 (D169, copied). The answer carries the payment status and totals from before the refund (D170, copied) |
 | `POST /api/v1/orders/<id>/payments/` | `sales.payment_record`; 201 with the order. `RecordPaymentSerializer`: a method, an amount of zero or more, a reference, an open account. A pending payment of the same method and amount is captured -- its account set first, in a statement of its own, when the body names one -- under the payment's row lock, into the account it lands in; anything else is recorded as a new captured payment. Nothing compares the amount with what the order owes, no order is refused, and the route takes no `Idempotency-Key`: the same request twice is the money twice (D167, copied) |
 | `POST /api/v1/orders/<id>/refunds/` | `sales.refund`; 201 with the refund. `RefundRequestSerializer`: an amount, a reason, a method the ledger knows, an open account. `refund_order` under the order's row lock, keyed by the `Idempotency-Key` header: never more than was paid and not yet refunded (a 422), through the largest captured payment (D153), out of the account the method's money moves through. A key another refund holds answers with that refund, whichever order it is on (D171, copied) |
+
+Last, the barcode label sheet (part 7), which Django gained after phase 4 closed
+(`catalog/admin/labels.service.ts`: `inventory.labels` and `ProductViewSet.labels`). Nothing in
+it moves stock and it takes no lock: a tick is a new `inventory_labelprint` row, and the newest
+row for a branch and a variant is the state.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/products/<id>/labels/?branch=` | `products.view`; the product through the viewset's declared filters only (the list's `search` and `never_ordered` do not apply here), at the branch `resolve_branch` allows. Every variant as `ProductVariantSerializer` writes it, with its stock at the branch, and two more fields: `label_status` -- null for a variant never marked, else whether its labels are printed, how many, the stock when it was marked, when (`isoformat()`, so `+00:00`) and by whom (the name, or the email of someone with none, or nothing when the account is gone), and the units purchased in since a printed mark -- and `suggested_labels`: one per unit on hand, or per unit delivered since a printed mark, never more than are on hand, never more than 500, and none for a shelf below zero |
+| `POST /api/v1/products/<id>/labels/` | `products.update`; 200 with the sheet as it then stands. `LabelMarksSerializer`: a branch (in the body; the query string's is not read), and 1 to 200 marks of a variant, `printed` and a count of 0 to 500. `mark_labels`: each variant once, every one the product's own, else a 400 naming the strays; all the marks written or none; `on_hand` read from the branch's stock row, never from the request; an un-mark records no count |
 
 ## Running it
 

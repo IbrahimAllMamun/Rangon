@@ -184,6 +184,8 @@ apps/api-nest/
                               orders.services.returns and its two views: back office and counter
     orders/staff-order-actions.service.ts, orders.controller.ts, order-lifecycle.service.ts
                               OrderViewSet's writes; lifecycle.transition with its stock edges
+    catalog/admin/labels.service.ts
+                              inventory.labels: the barcode label sheet and its ticks
   parity/
     run.ts                    the runner and the read-only cases
     *-cases.ts                write cases per area: accounts, orders, cart, checkout, payment
@@ -429,18 +431,21 @@ Every part of a phase updates, in the same branch:
 |---|---|---|
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
-| 5 | POS: sales, held sales, registers, discounts; returns and refunds | in progress on `phase/nest-5-pos`; its parts are listed in `nest-port.md` ("Phase 5: the counter"). Parts 1 (session, scan, grid, held sales), 2 (the quote, the manager's approval) and 3 (the sale and its receipt, with D115's rule) done. Part 4 (voiding a sale: `refund_order`, the cash book's `REFUND`, `release`) done too. Part 5 (returns: `orders.services.returns`, `ReturnRequestViewSet`, `pos/returns/`) done. Part 6 (the staff order screens: `OrderViewSet`, with `OrderLifecycle` for the PACKED and CANCELLED edges) done. Next: 7 the label sheet (`products/<id>/labels/`, `inventory/labels.py`; re-introspect `schema.ts` for `inventory_labelprint`); each write needs races |
+| 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin | finance movements with idempotency keys (D89 and D90's rules) |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:
 
-1. Finish phase 5 (part 7, the label sheet), then open its PR when the owner asks.
+1. Open phase 5's PR when the owner asks, and not before.
 2. The owner should see D166 first (the status route cancels without `sales.cancel` and without a
    refund: a permission the API does not enforce, to be fixed in Django before the port's copy of
    it is merged), then D149 (a counter oversell), D158 (a counter refund that moves no account),
    D164 (a return on a packed order), D167 (a payment recorded twice), and the decisions in
    business-rules §2.5, §5.6 and §5.7.
+3. Phase 6 starts with finance: the cash book's own routes (movements with idempotency keys,
+   D89 and D90's rules). `CashBookService` already posts sale payments and refunds; its
+   `InsufficientFunds`, named-account and default-account rules are ported and proven.
 
 ### Checklist for a part
 

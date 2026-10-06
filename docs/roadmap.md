@@ -481,6 +481,44 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 5 part 7: the label sheet -- phase 5 done, 2026-10-06
+
+Asked for: phase 5 of the port, to its end. Ported: `GET` and `POST /products/<id>/labels/`, the
+barcode label sheet Django gained after phase 4 closed (`inventory.labels`: `latest_marks`,
+`received_since`, `suggested_labels`, `mark_labels`). `src/database/schema.ts` was re-introspected
+for `inventory_labelprint`. With it phase 5 is complete: the counter (session, scan, grid, held
+sales, quote, approval, sale, receipt, void), returns at the counter and in the back office, the
+staff order screens, and the label sheet.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 5015/5015 (109 new), 55 by the documented differences
+concurrency ................................... 113/113 (1 new: six marks of one variant at once)
+throttle-check ................................ 12/12, rerun on the finished phase
+nest unit tests ............................... 822 passed (4 new: a `ListField`'s length bounds)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_labels.py` (new, in the seed list) marks a four-variant product at DHK1 through
+`mark_labels` itself: one variant printed and then restocked, one printed by a member of staff
+with no name, one printed and un-marked, one never marked; the same product marked at PAR3,
+which holds none of it; and a mark whose author's account has gone.
+
+The cases read the sheet as every role, at each branch and at ones that are not there, through
+the viewset's filters and the list's own (which do not apply), and with a shelf below zero, of
+800, and smaller than what came in since the mark. They mark as every role: every variant, an
+un-mark with a count, counts of 0, 500 and 501, eight spellings of `printed`, a variant of
+another product, one twice, 200 and 201 marks, and each branch a role may and may not act on.
+
+No lock is ported because Django takes none, and says why: a mark is a new row and the newest is
+the state. The one race check sends six marks of a variant at once across both APIs and counts
+six rows. Nothing was found in Django here.
+
+Over the whole phase the harness went from 2737 cases and 58 race checks to 5015 and 113, and thirty-one Django defects were found and copied (D142 to D172). The ones the owner
+should read first: D166 (the status route cancels an order without `sales.cancel` and refunds
+nothing), D149 (one SKU on two lines of a counter sale oversells), D158 (a counter refund by a
+method the ledger does not know moves no account), D164 (a return on a packed order puts goods on
+the shelf that then ship) and D167 (a payment recorded twice is the money twice).
+
 ### The NestJS API, phase 5 part 6: the staff order screens, 2026-10-06
 
 Asked for: phase 5 of the port, continued. Ported: `OrderViewSet` -- the list with its search,
