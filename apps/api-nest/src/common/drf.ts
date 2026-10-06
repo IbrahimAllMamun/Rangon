@@ -890,7 +890,13 @@ export function imageField(
  */
 export function listField<T>(
   child: Field<T>,
-  options: { required?: boolean; allowNull?: boolean; allowEmpty?: boolean } = {},
+  options: {
+    required?: boolean;
+    allowNull?: boolean;
+    allowEmpty?: boolean;
+    minLength?: number;
+    maxLength?: number;
+  } = {},
 ): Field<T[] | null> {
   return {
     async run(data, partial) {
@@ -921,6 +927,21 @@ export function listField<T>(
         }
       }
       if (Object.keys(errors).length) throw new InvalidNested(errors);
+      // `MaxLengthValidator`, then `MinLengthValidator`, once every item has passed.
+      const size: ErrorDetail[] = [];
+      if (options.maxLength !== undefined && values.length > options.maxLength) {
+        size.push({
+          message: `Ensure this field has no more than ${options.maxLength} elements.`,
+          code: 'max_length',
+        });
+      }
+      if (options.minLength !== undefined && values.length < options.minLength) {
+        size.push({
+          message: `Ensure this field has at least ${options.minLength} elements.`,
+          code: 'min_length',
+        });
+      }
+      if (size.length) throw new Invalid(size);
       return values;
     },
   };

@@ -204,6 +204,25 @@ export class ProductsService {
     return row;
   }
 
+  /**
+   * `get_object()` for the label sheet, whose queryset is every product: the
+   * declared filters still apply, the list's `search` and `never_ordered` do not.
+   */
+  async findForLabels(pk: string, query: QueryDict): Promise<ProductRow> {
+    const sql = new SqlParams();
+    const where: string[] = [];
+    await applyFilters(this.db, query, FILTERS, sql, where);
+    const id = parseUuid(pk);
+    if (!id) throw new NotFound();
+    where.push(`${P}."id" = ${sql.add(id, 'uuid')}`);
+    const row = await this.db.one<ProductRow>(
+      `SELECT ${SELECT} ${FROM} WHERE ${where.join(' AND ')} ${GROUP} LIMIT 21`,
+      sql.values,
+    );
+    if (!row) throw new NotFound();
+    return row;
+  }
+
   /** A product as `ProductDetailSerializer` reads it, with or without the stock context. */
   async detail(
     product: ProductRow,
