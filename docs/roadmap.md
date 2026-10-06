@@ -481,6 +481,50 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 2: expenses and the party ledger, 2026-10-06
+
+Asked for: phase 6 of the port, continued. Ported: `ExpenseCategoryViewSet`, `ExpenseViewSet`
+(list, read, record -- as JSON or as a form with a receipt -- the receipt's download, void, the
+summary) and `PartyLedgerView`, with `create_expense_category`, `update_expense_category`,
+`record_expense`, `void_expense` and the selectors `expense_totals`, `receivables` and `payables`
+behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 5966/5966 (408 new), 65 by the documented differences
+concurrency ................................... 132/132 (7 new: two voids of one expense queued on its row,
+                                                six expenses of a whole drawer, six clicks of one, an
+                                                expense whose drawer is emptied mid-flight)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 836 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_finance.py` gains a retired category with one expense under it, an expense with a
+receipt (a one-pixel PNG) under a key the cases replay, one dated five weeks ago, one voided and
+one at PAR3.
+
+The harness now compares a download's headers: where either API sends `Content-Disposition`, it
+and `Cache-Control`, `X-Content-Type-Options` and `Content-Length` must match.
+
+The cases read categories, expenses, the summary, a receipt and the party ledger as every role
+and through every filter, search, ordering and window; add and edit categories some fifty ways;
+record an expense as JSON forty ways and as a form twenty -- PNG, JPEG and PDF receipts, names
+with paths and capitals, a script named as a picture and a picture named as a script, an empty
+file -- with keys new and used; void with fourteen shapes of reason, and after the account is
+closed and the category retired; and read the party ledger with orders and purchase orders aged
+into each bucket, overpaid, settled by credit, and with no date.
+
+With the port's `FOR UPDATE` removed from the expense in `void`, two Nest voids of one expense
+both went through and the money went back twice.
+
+Two port bugs the first runs caught: the audit entry's `spent_at` was cut to milliseconds, where
+Django writes `isoformat()` whole; and a blank date in a form was refused, where DRF reads a
+blank as null for a field that allows one (`dateTimeField` now says so, as the other fields do).
+
+Found in Django, and copied: D178 (a receipt is stored before its expense is known to be good,
+and its content is never looked at), D179 (an expense cannot be voided once its account is
+closed).
+
 ### The NestJS API, phase 6 part 1: accounts, the cash book and transfers, 2026-10-06
 
 Asked for: phase 6 of the port. Ported: `AccountViewSet` (list, read, open, edit, an account's
@@ -4011,6 +4055,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D175 | **An account cannot be opened closed.** `AccountSerializer` accepts `is_active` and `create` does not pass it to `create_account`: `{"is_active": false}` is a 201 for an account that is active. *Found comparing the request with the row.* | Low | Copied by the port. Pass it on, or make the field read-only on create. `finance/api/views.py` |
 | D176 | **Changing a default account's kind can answer the generic 409.** `update_account` demotes the kind's other default only when the request sets `is_default`; changing the kind of an account that already is the default, to a kind whose default is another account, breaks `finance_account_branch_kind_default_uniq` and answers "The request conflicts with the current state of the data." *Found by the edit cases.* | Low | Copied by the port. Demote, or refuse with the reason. `finance/services.py` |
 | D177 | **`date_to` on the cash book leaves the day out.** `GET /accounts/<id>/transactions/` and `GET /account-transactions/` pass `date_to` straight to `occurred_at__lte`, where a bare date is its midnight: `date_to=2026-09-15` ends as that day begins. The cash position on the same screen reads the same parameter through `core.dates.parse_window`, which runs to the end of the day, so the two disagree about one day. *Found porting the two readings of one parameter.* | Low | Copied by the port. Read both through `parse_window`. `finance/api/views.py`, `finance/selectors.py` |
+| D178 | **A receipt is stored before its expense is known to be good, and its content is never looked at.** `record_expense` saves the upload as it creates the row, then posts the movement: an expense refused for want of funds (409) is rolled back and its file stays in `media/expenses/`, belonging to nothing. And `CreateExpenseSerializer` judges the file by the content type the client states and by its name: bytes that are no image are stored as `.png` when sent as `image/png`, and an upload with no stated type is judged by its extension alone. The route that serves receipts sends `nosniff`, so this is clutter and a weak check, not an exposure. *Found by the form cases.* | Low | Copied by the port. Store the file after the movement succeeds, and identify it as product images are identified. `finance/services.py`, `finance/api/serializers.py` |
+| D179 | **An expense cannot be voided once its account is closed.** `void_expense` puts the money back with `record_movement`, which refuses a closed account: voiding an expense paid from a drawer that has since been closed is a 400 ("... is closed; money cannot move through it."), and the mistaken expense stands. *Found by a case that closes the account first.* | Low | Copied by the port. Let a void's compensating movement into a closed account, or name the account that must be reopened. `finance/services.py` |
 
 ## Still API-only (no UI)
 
