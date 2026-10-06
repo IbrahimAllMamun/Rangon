@@ -46,4 +46,14 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
       'app posts JSON to all of those.',
     appliesTo: (testCase) => testCase.name.endsWith(': a form body'),
   },
+  {
+    reason:
+      "A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`): " +
+      'Django prints the Python object found, a method with its memory address, different at every ' +
+      'request; the Nest API treats every attribute as one a string does not have, which in Django ' +
+      'leaves `tracking_url` out of the answer. No tracking page is written that way.',
+    appliesTo: (testCase, difference) =>
+      testCase.name.endsWith("courier's page has a method of the number") &&
+      difference.path === '$.tracking_url',
+  },
 ];

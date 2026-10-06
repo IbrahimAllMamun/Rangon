@@ -348,12 +348,83 @@ function decimalDigitValue(char: string): number {
 }
 
 /**
- * `template.format(**fields)` for templates that name their fields:
- * `{name}`, `{name!s}`, `{name!r}`, and `{{`/`}}` for braces. Anything Python
- * would refuse -- an unknown or positional field, a stray brace -- throws, as
- * Python raises; so does a format spec, which no template here uses.
+ * Python's format spec applied to a string: `[[fill]align][0][width][.precision][s]`.
+ * Whatever Python refuses for a string -- a sign, `=`, `#`, a thousands
+ * separator, any type but `s` -- throws.
  */
-export function pyFormatNamed(template: string, fields: Record<string, string>): string {
+function pyFormatStrSpec(value: string, spec: string): string {
+  if (spec === '') return value;
+  const chars = [...spec];
+  let at = 0;
+  let fill = ' ';
+  let align = '<';
+  if (chars.length > 1 && '<>=^'.includes(chars[1] as string)) {
+    fill = chars[0] as string;
+    align = chars[1] as string;
+    at = 2;
+  } else if (chars.length > 0 && '<>=^'.includes(chars[0] as string)) {
+    align = chars[0] as string;
+    at = 1;
+  }
+  const filled = at === 2;
+  if (chars[at] === '+' || chars[at] === '-')
+    throw new Error('ValueError: Sign not allowed in string format specifier');
+  if (chars[at] === ' ')
+    throw new Error('ValueError: Space not allowed in string format specifier');
+  if (chars[at] === 'z')
+    throw new Error('ValueError: Negative zero coercion (z) not allowed in format specifier');
+  if (chars[at] === '#')
+    throw new Error('ValueError: Alternate form (#) not allowed in string format specifier');
+  if (!filled && chars[at] === '0') {
+    fill = '0';
+    at += 1;
+  }
+  const digits = (): number | null => {
+    let text = '';
+    while (at < chars.length && /^[0-9]$/.test(chars[at] as string)) text += chars[at++];
+    if (text.length > 9) throw new Error('ValueError: Too many decimal digits in format string');
+    return text === '' ? null : Number(text);
+  };
+  const width = digits();
+  if (chars[at] === ',' || chars[at] === '_')
+    throw new Error(`ValueError: Cannot specify '${chars[at]}' with 's'.`);
+  let precision: number | null = null;
+  if (chars[at] === '.') {
+    at += 1;
+    precision = digits();
+    if (precision === null) throw new Error('ValueError: Format specifier missing precision');
+  }
+  if (at < chars.length - 1) throw new Error('ValueError: Invalid format specifier');
+  if (at === chars.length - 1 && chars[at] !== 's')
+    throw new Error(`ValueError: Unknown format code '${chars[at]}' for object of type 'str'`);
+  if (align === '=')
+    throw new Error("ValueError: '=' alignment not allowed in string format specifier");
+
+  let points = [...value];
+  if (precision !== null) points = points.slice(0, precision);
+  const pad = Math.max(0, (width ?? 0) - points.length);
+  const left = align === '>' ? pad : align === '^' ? Math.floor(pad / 2) : 0;
+  return fill.repeat(left) + points.join('') + fill.repeat(pad - left);
+}
+
+/** A `KeyError` or an `AttributeError`: the two DRF reads as "this field is not there". */
+export class PyLookupError extends Error {}
+
+/**
+ * `template.format(**fields)` for templates that name their fields, every
+ * field a string: `{name}`, `{name!r}`, `{name:>12}`, `{name[0]}`, a spec
+ * built from fields (`{name:{name}}`), and `{{`/`}}` for braces. Anything
+ * Python would refuse -- an unknown or positional field, a stray brace, a
+ * spec no string takes -- throws, as Python raises: a `PyLookupError` where
+ * Python's is a KeyError or an AttributeError. Every attribute is one
+ * (`{name.upper}`): for those a string has, Python prints the object found,
+ * a method's memory address and all, and no template is meant to.
+ */
+export function pyFormatNamed(
+  template: string,
+  fields: Record<string, string>,
+  nested = false,
+): string {
   let out = '';
   for (let i = 0; i < template.length; i++) {
     const char = template[i] as string;
@@ -372,13 +443,43 @@ export function pyFormatNamed(template: string, fields: Record<string, string>):
       i += 1;
       continue;
     }
-    const end = template.indexOf('}', i);
-    if (end === -1) throw new Error("expected '}' before end of string");
+    // The field runs to its own closing brace: a spec may hold fields of its own.
+    let depth = 1;
+    let end = i + 1;
+    for (; end < template.length; end++) {
+      if (template[end] === '{') depth += 1;
+      else if (template[end] === '}' && --depth === 0) break;
+    }
+    if (depth !== 0) throw new Error("ValueError: expected '}' before end of string");
     const field = template.slice(i + 1, end);
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)(?:!([rsa]))?$/.exec(field);
-    if (!match || !Object.hasOwn(fields, match[1] as string)) throw new Error(`KeyError: ${field}`);
-    const value = fields[match[1] as string] as string;
-    out += match[2] === 'r' || match[2] === 'a' ? pyReprStr(value) : value;
+    const match = /^([^!:]*)(?:!([^:]*))?(?::([\s\S]*))?$/.exec(field) as RegExpExecArray;
+    const [, path = '', conversion, spec = ''] = match;
+    if (conversion !== undefined && !/^[rsa]$/.test(conversion))
+      throw new Error(`ValueError: Unknown conversion specifier ${conversion}`);
+    const name = /^[^.[]*/.exec(path)?.[0] ?? '';
+    if (name === '' || /^[0-9]+$/.test(name))
+      throw new Error('IndexError: Replacement index out of range for positional args tuple');
+    if (!Object.hasOwn(fields, name)) throw new PyLookupError(`KeyError: ${name}`);
+    let value = fields[name] as string;
+    let rest = path.slice(name.length);
+    while (rest !== '') {
+      const index = /^\[([^\]]*)\]/.exec(rest);
+      if (!index)
+        throw new PyLookupError(`AttributeError: 'str' object has no usable attribute ${rest}`);
+      if (!/^[0-9]+$/.test(index[1] as string))
+        throw new Error('TypeError: string indices must be integers');
+      const point = [...value][Number(index[1])];
+      if (point === undefined) throw new Error('IndexError: string index out of range');
+      value = point;
+      rest = rest.slice(index[0].length);
+    }
+    if (conversion === 'r' || conversion === 'a') value = pyReprStr(value);
+    if (spec.includes('{') || spec.includes('}')) {
+      if (nested) throw new Error('ValueError: Max string recursion exceeded');
+      out += pyFormatStrSpec(value, pyFormatNamed(spec, fields, true));
+    } else {
+      out += pyFormatStrSpec(value, spec);
+    }
     i = end;
   }
   return out;
