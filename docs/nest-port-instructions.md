@@ -195,6 +195,8 @@ apps/api-nest/
                               expenses with their receipts, and who owes whom
     purchasing/suppliers.service.ts, supplier-products.service.ts
                               who the shop buys from, and each supplier's price for each SKU
+    purchasing/purchase-orders.service.ts, purchase-documents.ts
+                              an order raised, sent, received and returned against; its serializers
     common/model-lookups.ts   what a model DateField or DateTimeField makes of a query-string value
   parity/
     run.ts                    the runner and the read-only cases
@@ -341,7 +343,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D184**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D193**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -402,6 +404,7 @@ apps/api-nest/
 | A cancel's answer differed only in its payment totals | Django serialises the object the status machine returned, not the row the refund then saved (D170) | compare the answer and the rows separately: each can be right while the other is stale |
 | Five cases differed by a few milliseconds in a date | their `prepare` set a row to `now() - interval ...`, and `prepare` runs once per API | a moment a case needs is fixed when the cases are built, and written into the statement |
 | A form's blank date was refused where Django took it as null | the port's `dateTimeField` had no `html` meta, so a form's `''` reached the parser | a field read from a form says how DRF reads a blank for it; check every field of a serializer a form reaches |
+| Nine new cases "matched" as 404s: both APIs were asked for `/purchase-orders/undefined/` | the case file keyed orders by invoice number *or* number, and the cases named the number of an order that has an invoice | a case file's lookup throws for a name the fixture does not hold; the same lesson as the held sale's, now enforced rather than remembered |
 
 ## 9. Documentation, per part
 
@@ -445,7 +448,7 @@ Every part of a phase updates, in the same branch:
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger) and 3 (suppliers and supplier products) done. Next: 4 purchase orders (receiving posts stock in at its cost), then 5 supplier payments. The owner has said to open the phase's PR when it is built and go on to phase 7 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger), 3 (suppliers and supplier products) and 4 (purchase orders) done. Next: 5 supplier payments, then 6 customers and the call-back list. The owner has said to open the phase's PR when it is built and go on to phase 7 |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:

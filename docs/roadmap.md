@@ -481,6 +481,67 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 4: purchase orders, 2026-10-06
+
+Asked for: the rest of phase 6, continued. Ported: `PurchaseOrderViewSet` (list, read, raise,
+`send`, `cancel`, `receive`, `return`, `receipts`), with `create_purchase_order`,
+`recalculate_totals`, `send_purchase_order`, `cancel_purchase_order`, `receive_purchase`,
+`record_supplier_product`, `create_purchase_return` and the inventory service's
+`return_to_supplier` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6740/6740 (398 new), 73 by the documented differences
+concurrency ................................... 158/158 (20 new: a send, a cancel and a delivery each meeting
+                                                the order changed under them; a delivery and a return each
+                                                meeting a line changed under them; six deliveries of one line;
+                                                two returns queued on the order; a shelf emptied under a
+                                                return; six clicks of one return; six orders raised; a
+                                                first delivery racing another supplier's preference)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 863 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` gains three draft products of its own (so no other check's stock moves)
+and eight orders named by their invoice numbers: a draft with a discount, VAT and shipping; one
+sent; one part received below its order's cost; one received in full with two units sent back
+under a key the cases replay; one cancelled; one closed by hand; one with money recorded
+against it; and one at PAR3.
+
+The cases read orders and receipts as every role, through every filter, ordering and window;
+raise an order eighty ways -- costs, discounts and tax rates at each bound, a SKU twice, a SKU
+that is not there, each branch a user may and may not act for; send and cancel every status,
+with fourteen shapes of reason; receive forty-five ways -- in part, in full, the lines either
+way round, at a cost above and below the order's, at none, onto a shelf below zero, a draft, a
+closed order, a SKU nobody supplied before and one its supplier had withdrawn; and send goods
+back fifty ways -- past what came, one line twice, each reason, keys new, used and another
+order's, from a shelf too short, worth less than the goods, reserved, and on an order paid in
+full.
+
+With the port's `FOR UPDATE` removed from the order and from its lines, six checks failed for
+Nest: it sent a cancelled order, cancelled one with goods on the shelf, received into a
+cancelled one, received a line twice over, lost one of two returns' credit, and returned units
+already gone.
+
+No port bug reached a run: the first compared equal but for one of the harness's own queries.
+Two mistakes of the harness were caught by reading the verbose statuses, as the instructions
+ask: nine cases looked an order up by a key the fixture's invoice number had replaced, and
+asked both APIs for `/purchase-orders/undefined/`, which "matched" as a 404. The lookups now
+throw for a name the fixture does not hold.
+
+Found in Django, and copied: D185 (a return is credited at the order's cost, not the
+delivery's -- measured: five units received at 190.00 credited 1,000.00), D186 (a draft is
+received without being sent), D187 (a first delivery racing another supplier's preference is a
+bare 409), D188 (a delivery takes no `Idempotency-Key`), D189 (a cancel's reason is taken as
+sent), D190 (a quantity past an integer is a 500), D191 (a SKU that does not exist is a bare 409
+at the commit), D192 (a return's key answers with another order's return), D193 (a return takes
+units reserved for customers' orders).
+
+Three decisions are the owner's, each marked in the business rules: which cost a return is
+credited at when the delivery's differed from the order's (§7b.3), whether a return may take
+reserved units (§7b.2), and whether a draft may be received (§7c). Both APIs do what Django does
+today until then.
+
 ### The NestJS API, phase 6 part 3: suppliers and their price lists, 2026-10-06
 
 Asked for: the rest of phase 6 (parts 3 to 10). Ported first: `SupplierViewSet` and
@@ -4109,6 +4170,15 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D182 | **An inactive supplier's offer can be made the preferred one, and an offer recorded for an archived SKU.** `set_preferred_supplier` refuses an offer that is itself withdrawn (`is_active`), and never looks at `Supplier.status`: "Parity Idle Traders", INACTIVE, becomes the supplier the purchase order form suggests. `SupplierProductSerializer` takes any variant, an archived one included. *Found by the cases that promote the fixture's inactive supplier.* | Low | Copied by the port. Decide whether an inactive supplier may be preferred ([business-rules §7a.3](business-rules.md#7a3-the-preferred-supplier), `DECISION REQUIRED`); refuse or warn. `purchasing/services.py` |
 | D183 | **Suppliers and their price lists change with no audit entry.** Creating, editing and deleting a supplier or an offer writes nothing to the audit log -- a cost changed from 210.00 to 1.00 leaves no trace of who or when -- and only `set-preferred` records anything. Deleting the preferred offer, or the supplier that holds it, leaves the SKU preferring nobody, also unrecorded. CLAUDE.md §3.5 asks for who, what, when, before and after on anything important; a supplier's price is what a purchase order is pre-filled with. *Found by comparing the audit log after each write case: it was empty.* | Medium | Copied by the port. Audit the three writes on both models. `purchasing/api/views.py` |
 | D184 | **An offer's edit writes back the preference it read.** `SupplierProductViewSet.update` is a plain `serializer.save()`: every column goes back as the row was read, `is_preferred` among them though the serializer marks it read only. An edit that read an offer before `set-preferred` promoted it writes `false` over the promotion -- the incumbent already demoted -- and the SKU prefers nobody; the other way round it is the index's 409. Measured in both APIs by the mid-flight check: the harness promotes the offer while a `PATCH` of its notes waits at its `UPDATE`. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. Save only the fields the serializer may write (`update_fields`), or take the offer's row lock in `update`. `purchasing/api/views.py` |
+| D185 | **A return to a supplier is valued at the order line's cost, not at what the goods came in at.** `create_purchase_return`'s docstring says the credit is "what the goods were received at"; the code, and [business-rules §7b.3](business-rules.md#7b3-the-money-is-a-credit-not-a-refund), read the order line (`item.unit_cost`) for the credit, the return line and the cost the units leave the shelf at. `receive_purchase` lets a delivery state its own cost. Measured: five PAR-BUY-A received at 190.00 against an order at 200.00, all five sent back: credit 1,000.00, 50.00 more than the supplier was owed for them, and the shelf's average unwound by the same wrong figure. *Found by reading the service for the port, then a case that returns from the part delivery.* | Medium | Copied by the port. `DECISION REQUIRED` in §7b.3: which cost is "what the supplier charged". If the delivery's, value a return from the receipt lines it draws on. `purchasing/services.py` |
+| D186 | **A draft purchase order can be received.** `receive_purchase` refuses CANCELLED and CLOSED and nothing else, so a draft nobody sent takes a delivery: stock in, the order RECEIVED, `ordered_at` still empty. Whether that is a shortcut the shop wants (goods that arrive with their invoice) or a slip is not written down. *Found by a case that receives the fixture's draft.* | Low | Copied by the port. `DECISION REQUIRED` in [business-rules §7c](business-rules.md#7c-raising-and-cancelling-a-purchase-order); stamp `ordered_at` on first receipt or refuse a draft. `purchasing/services.py` |
+| D187 | **A SKU's first delivery can be refused with a bare 409 when another supplier becomes its preferred one at that moment.** `record_supplier_product` creates the offer, reads "no other offer is preferred" and sets `is_preferred`; its comment says losing that race quietly "is better than a 500 on a delivery that did arrive", but nothing catches the unique index's refusal, so the whole delivery rolls back as a 409. Measured in both APIs by a mid-flight check. *Found by reading the comment against the code.* | Low | Copied by the port. Set the flag in a savepoint and keep the delivery when the index refuses. `purchasing/services.py` |
+| D188 | **A delivery takes no `Idempotency-Key`.** `receive` writes stock and a receipt and reads no key (CLAUDE.md §7 asks for one where a retry could double-deduct or double-add). A retried full delivery is refused by the outstanding check; a retried *part* delivery is received twice, up to what is outstanding -- two of six, sent twice, is four on the shelf and two receipts. The return beside it does take a key. *Found by reading the view.* | Medium | Copied by the port. Honour the header as `purchase_return` does, on `PurchaseReceipt`. `purchasing/api/views.py`, `purchasing/services.py`, a migration |
+| D189 | **A purchase order's cancel takes its reason as sent.** `request.data.get("reason", "")` goes to the audit entry unvalidated: `null` is the column's refusal, a bare 409 for an order that could be cancelled; a JSON list or string as the body is a 500; a number or an object is stored as Python prints it. D162 and D168 are the same shape. *Found by the cancel cases.* | Low | Copied by the port. A one-field serializer. `purchasing/api/views.py` |
+| D190 | **A purchase order line's quantity past an integer is a 500.** `PurchaseLineSerializer.quantity` has a minimum and no maximum: 2147483648 reaches PostgreSQL's `integer` (`DataError`), and a quantity of 31 digits makes the line total pass Decimal's 28 (`InvalidOperation`). Both are 500s. *Found by the raise cases.* | Low | Copied by the port. `max_value` on the field. `purchasing/api/serializers.py` |
+| D191 | **A purchase order names any UUID as a SKU.** `PurchaseLineSerializer.variant` is a bare `UUIDField`, as the supplier was before D82: a variant that does not exist is inserted and fails the deferred foreign key at the commit -- a bare 409 naming no line -- and an archived SKU or an inactive supplier is accepted without a word. *Found by the raise cases.* | Low | Copied by the port. A related field for the variant; decide about archived SKUs and inactive suppliers. `purchasing/api/serializers.py` |
+| D192 | **A return's `Idempotency-Key` answers with whichever return holds it.** `create_purchase_return` looks the key up before it checks anything about this order: a key another order's return holds answers 201 with that return and that order, and so does a request against a draft, which could never be returned from. D160 and D171 are the same. A key past the column's 80 characters is a 500 (D124). *Found by the return cases.* | Low | Copied by the port. Scope the lookup to the order, or refuse a key that names another. `purchasing/services.py` |
+| D193 | **A return to a supplier can take units reserved for customers' orders.** `return_to_supplier` refuses when `on_hand` is short and never looks at `reserved`: with four on the shelf and three of them reserved for online orders, three go back, leaving one on hand against three promised -- `available` at -2, which [business-rules §1.4](business-rules.md) says may not happen with overselling off. D115 was the counter's version of this. *Found by a case that reserves the shelf first.* | Medium | Copied by the port. `DECISION REQUIRED` in §7b.2; if no, check `available`, as the counter now does. `inventory/services.py` |
 
 ## Still API-only (no UI)
 

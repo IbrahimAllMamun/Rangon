@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists), part 4 (purchase orders) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -170,6 +170,17 @@ across both APIs where both serve the path:
 | 6 promotions at once, three for each of a SKU's two offers, across both APIs | one preferred offer, every promotion audited. The unique index, not a lock, allows only one |
 | 6 suppliers of one name at once, across both APIs | each one made has a code of its own; a loser is the unique index's 409. No lock is involved |
 | An offer promoted while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the preference it read, and the SKU prefers nobody (D184, copied); no lock is involved |
+| A purchase order cancelled while a send of it waits on the order's row (each API in turn) | the send is refused and the order stays cancelled; with the port's `FOR UPDATE` removed Nest sends it |
+| An order part received while a cancel of it waits on its row (each API in turn) | the cancel is refused; with the lock removed Nest cancels an order with goods on the shelf |
+| An order cancelled while a delivery against it waits on its row (each API in turn) | nothing is received; with the lock removed Nest receives into the cancelled order and marks it part received |
+| Part of a line received while a delivery of all of it waits on the line's row (each API in turn) | refused for what is still outstanding; with the port's `FOR UPDATE` removed from the lines Nest receives the whole line again |
+| 6 deliveries of one whole line at once, across both APIs | one is received: the shelf up once and equal to its ledger, one receipt |
+| Two returns of different lines queued on the order's row (one per API, then both through each API) | both go back, and the order's credit is the sum of the two; with the order's lock removed the Nest pair lose one credit |
+| Part of a line sent back while a return of all of it waits on the line's row (each API in turn) | refused for what is left; with the lines' lock removed Nest returns units already gone, and credits them |
+| A shelf emptied while a return waits on the shelf's row (each API in turn) | the return is refused whole: nothing credited, the line as it was |
+| 6 clicks of one return with one `Idempotency-Key`, across both APIs | six 201s naming one return, one unit off the shelf |
+| 6 orders raised at once, across both APIs | six numbers, none shared |
+| Another supplier made a SKU's preferred one while its first delivery from this one is in flight (each API in turn) | the delivery is refused with a bare 409 (D187, copied); the unique index decides, no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -561,6 +572,30 @@ only through `set-preferred`.
 | `DELETE /api/v1/supplier-products/<id>/` | `purchases.create`; the preferred offer too, which leaves the SKU preferring nobody |
 | `POST /api/v1/supplier-products/<id>/set-preferred/` | `purchases.create`; 200 with the offer. The body is never read. `set_preferred_supplier`: the offer locked by its supplier and SKU; a withdrawn offer refused; the incumbent locked and demoted, this one promoted, and an `UPDATE` audit entry naming both suppliers -- written even when the offer was preferred already. The supplier's own status is not looked at (D182, copied) |
 
+Then the orders themselves (part 4): `purchasing/purchase-orders.service.ts`, with
+`purchasing/purchase-documents.ts` for `PurchaseOrderSerializer` and what nests in it. An order
+is raised as a draft, sent, received in one delivery or several, and what is faulty goes back
+for a credit; nothing is edited. Every step takes the order's row first; a delivery and a return
+then take the order's lines, and the shelf through the stock service. Receiving is
+`StockService.receiveStock`, which transfers and the import already used; a return is the new
+`returnToSupplier` -- the shelf must hold the units, overselling or not, and what is left is
+valued at what it cost: `((on_hand * avg) - (qty * cost)) / (on_hand - qty)`, never below
+nothing, an emptied shelf keeping its last average.
+
+An order's lines, a receipt's and a return's have no ordering of their own (D161's kind), so
+they are read with the statements Django's prefetch sends, `IN (...)` in the page's order.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/purchase-orders/` | `purchases.view`; paginated, newest raised first, the orders of the user's branch. `date_from` and `date_to` are `core.dates`' window on the day raised, and a value that is not a date is a 400 on every route of the viewset; filters `status`, `supplier`, `branch`, `payment_status`; `ordering` by `created_at` or `expected_at`. Each order with its lines (SKU, product, label, ordered, received, returned, outstanding), its receipts newest first and its returns, and `outstanding`: the total less what was paid and what was credited, which goes below zero |
+| `GET /api/v1/purchase-orders/<id>/` | the same, and `unpublished_products`: the products on the order a shopper cannot see yet, each with whether it could be published -- an active variant priced above zero, as `publish_product` asks |
+| `GET /api/v1/purchase-orders/<id>/receipts/` | `purchases.view`; the order's deliveries, newest first, unpaginated |
+| `POST /api/v1/purchase-orders/` | `purchases.create`; 201. `CreatePurchaseOrderSerializer`: a supplier that exists (an inactive one too), a branch (`resolve_branch`), lines of a variant, a quantity of at least 1, a cost of at least 0, a discount, and VAT as a fraction of 0 to 1; a date expected, an invoice number, shipping, notes. `_check_lines`: at least one line, no discount past its line, no SKU twice. Numbered `PO-` from the row-locked sequence; each line's total and the order's worked out from the rows as stored, tax rounded half up per line. A variant is any UUID: one that does not exist fails at the commit, a bare 409, and a quantity past an integer is a 500 (D190, D191, copied). Nothing is audited |
+| `POST /api/v1/purchase-orders/<id>/send/` | `purchases.create`; 200. The body is never read. Under the order's lock: only a draft, else a 409; `ordered_at` stamped; audited |
+| `POST /api/v1/purchase-orders/<id>/cancel/` | `purchases.create`; 200. Under the lock: a draft or a sent order with nothing received and nothing paid, each refusal a 409 in its own words. The reason is `request.data.get("reason", "")` as sent, written to the audit entry as a `TextField` takes it: a number or a list as Python prints it, `null` the column's 409, a body that is not an object a 500 (D189, copied) |
+| `POST /api/v1/purchase-orders/<id>/receive/` | `purchases.receive`; 201 with the receipt and the order. The body is validated before the order is looked for: lines of an order line, a quantity of at least 1 and optionally the cost on the delivery note; a line named twice is a 400. Under the order's lock a cancelled or closed order is a 409 -- a draft is received (D186, copied); a receipt numbered `GRN-`; the order's lines locked; each line checked against what is outstanding, put on the shelf at its cost (the branch's average moves, the SKU's latest cost is set), its received count raised, and the supplier's price list updated -- the first supplier a SKU is received from becomes its preferred one, and a withdrawn offer is brought back. Then the order RECEIVED or PARTIALLY_RECEIVED, and a `PURCHASE_RECEIVED` audit entry. No `Idempotency-Key` (D188, copied) |
+| `POST /api/v1/purchase-orders/<id>/return/` | `purchases.receive`; 201 with the return and the order. Lines of an order line and a quantity, a reason from the list, notes. Under the order's lock: a return already made under this `Idempotency-Key` answers as it is -- whichever order it is on, and before anything else is checked (D192, copied); a draft or cancelled order is a 409. The lines locked with their variants; the return claimed under its `PRN-` number in a savepoint; each line checked against what was received and not sent back, taken off the shelf through the ledger at the order line's cost (D185, copied), a `STOCK_ADJUSTMENT` audit entry each; the order credited with the sum and its payment badge refreshed -- credit counts only towards settling in full. Low-stock jobs follow the commit |
+
 ## Running it
 
 ```bash
@@ -810,6 +845,28 @@ the port):
   (D183).
 - An offer's edit writes back every column as it read them, `is_preferred` among them: an edit
   that read the offer before it was promoted demotes it again, and the SKU prefers nobody (D184).
+- A return to a supplier is credited, and leaves the shelf, at the order line's cost, not at the
+  cost on the delivery it came in on: goods received at 190.00 against an order at 200.00 go
+  back for 200.00 each (D185).
+- A draft purchase order can be received without ever being sent: it goes straight to RECEIVED
+  and `ordered_at` stays empty (D186).
+- A SKU's first delivery from one supplier, racing another supplier's becoming its preferred one,
+  is refused with a bare 409: `record_supplier_product` reads "nobody is preferred" and then
+  meets the unique index (D187).
+- A delivery takes no `Idempotency-Key`: a retried part delivery is received twice, up to what is
+  outstanding (D188).
+- A purchase order's cancel takes its reason as sent: `null` is a bare 409, a body that is not an
+  object a 500, and a number or a list is stored as Python prints it (D189).
+- A purchase order line's quantity past PostgreSQL's integer is a 500, as is one large enough for
+  the line to pass Decimal's 28 digits (D190).
+- A purchase order names any UUID as a SKU: one that does not exist fails at the commit, a bare
+  409 naming no line; an archived SKU and an inactive supplier are accepted without a word
+  (D191).
+- A return made with an `Idempotency-Key` another return holds answers 201 with that return,
+  whichever order it is on and whatever this order's status; a key past 80 characters is a 500
+  (D192).
+- A return to a supplier checks `on_hand`, not what is available: units reserved for customers'
+  orders can be boxed up and sent back, leaving `available` below zero (D193).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

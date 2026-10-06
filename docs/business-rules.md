@@ -1612,6 +1612,12 @@ box was sent back containing units that never existed.
 The endpoint honours `Idempotency-Key`, because a replay would take the stock off the shelf twice and
 credit the order twice (CLAUDE.md §7).
 
+> **DECISION REQUIRED** — may a return take units that are *reserved* for customers' orders? The
+> check is against `on_hand` alone: with four on the shelf and three of them reserved, three can go
+> back, leaving `available` at −2, which §1.4 says may not happen with overselling off (D193). The
+> units are physically there, which is why the code allows it; D115 settled the same question for the
+> counter the other way. Until decided, both APIs allow it.
+
 ### 7b.3 The money is a credit, not a refund
 
 A supplier is rarely paid back in cash; the value is set against what is owed.
@@ -1629,6 +1635,13 @@ sitting in their own warehouse.
 The credit is valued at **what the supplier charged** — the cost on the order line, not today's price
 and not the branch's blended average. The client never names it; sending a `unit_cost` in the request
 is ignored (CLAUDE.md §13).
+
+> **DECISION REQUIRED** — which cost is "what the supplier charged" when a delivery was received at a
+> cost other than the order's? Receiving lets the storekeeper enter the cost on the delivery note, and
+> that is the cost the stock came in at; the return reads the order line. Goods received at 190.00
+> against an order at 200.00 go back for 200.00 each (D185) — 10.00 a unit more than was owed for
+> them, and the shelf's average is unwound by the same figure. Until decided, both APIs credit the
+> order line's cost, as this section says.
 
 ### 7b.4 What the payment badge means
 
@@ -1671,6 +1684,11 @@ its line is allowed — a free sample or a replacement is a real delivery.
 
 **A delivery names each order line once.** Two entries for one line used to keep only the last
 quantity (D83); now the request is refused and the storekeeper enters the total.
+
+> **DECISION REQUIRED** — may a `DRAFT` order be received? Only `CANCELLED` and `CLOSED` are refused,
+> so a draft nobody sent takes a delivery and becomes `RECEIVED` with no `ordered_at` (D186). That
+> may be wanted — goods that arrive with their invoice, entered after the fact — or a slip. Until
+> decided, both APIs receive it.
 
 **Cancelling is for an order nothing has happened to.** An order can be cancelled only while it is
 `DRAFT` or `SENT`, has no receipt, and has **no money paid against it**. The last is D80: payables
