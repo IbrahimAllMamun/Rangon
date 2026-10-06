@@ -126,6 +126,8 @@ difference or failed race. Filters:
   run** under a filter unless it is `PARITY_ONLY=concurrency`, which runs the races alone.
 - `PARITY_VERBOSE=1` prints each case's Django response and effects. Use it to check that a case
   exercises what its name claims.
+- `PARITY_RACES=returns`, with `PARITY_ONLY=concurrency`, runs only the race groups whose name
+  contains the text (the names are in `run.ts`): one part's races in a minute, not all in ten.
 
 ```bash
 docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle up -d --build nest-throttled django-throttled
@@ -191,6 +193,8 @@ apps/api-nest/
                               accounts, the cash book and transfers
     finance/expenses.service.ts, party-ledger.service.ts
                               expenses with their receipts, and who owes whom
+    purchasing/suppliers.service.ts, supplier-products.service.ts
+                              who the shop buys from, and each supplier's price for each SKU
     common/model-lookups.ts   what a model DateField or DateTimeField makes of a query-string value
   parity/
     run.ts                    the runner and the read-only cases
@@ -198,6 +202,7 @@ apps/api-nest/
     concurrency.ts            the race checks; admin-, inventory-, content-, merchandising- and
                               pos-, returns- and staff-orders-concurrency.ts for staff writes
     restore.ts                snapshot-and-restore of whole tables for the admin write cases
+    races.ts                  what the phase 6 race files share: `behind`, the mid-flight helper
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
     fixture*.py               Django shell scripts that add what the demo seed lacks
@@ -336,7 +341,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D179**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D184**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -440,7 +445,7 @@ Every part of a phase updates, in the same branch:
 | 3 | done 2026-10-01 | merged to `main` |
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers) and 2 (expenses, their categories, the party ledger) done. Next: 3 suppliers and supplier products, then 4 purchase orders (receiving posts stock in at its cost). The owner has said to open the phase's PR when it is built and go on to phase 7 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | in progress on `phase/nest-6-back-office`; its ten parts are listed in `nest-port.md` ("Phase 6: the back office"). Parts 1 (accounts, the cash book, transfers), 2 (expenses, their categories, the party ledger) and 3 (suppliers and supplier products) done. Next: 4 purchase orders (receiving posts stock in at its cost), then 5 supplier payments. The owner has said to open the phase's PR when it is built and go on to phase 7 |
 | 7 | Reports, audit log, notifications, background jobs (a replacement for Celery); cutover | ADR-0014's `CeleryService.delay` is the single point to swap; cut over per path at the proxy |
 
 Before the next phase:

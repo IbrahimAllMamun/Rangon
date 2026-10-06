@@ -481,6 +481,53 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 3: suppliers and their price lists, 2026-10-06
+
+Asked for: the rest of phase 6 (parts 3 to 10). Ported first: `SupplierViewSet` and
+`SupplierProductViewSet` (list, read, create, edit, delete, and `set-preferred`), with
+`unique_supplier_code` and `set_preferred_supplier` behind them.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 6342/6342 (376 new), 69 by the documented differences
+concurrency ................................... 138/138 (6 new: an offer withdrawn while its promotion waits,
+                                                six promotions of one SKU's two offers, six suppliers of
+                                                one name, an offer promoted while an edit of it waits)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 851 passed
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_purchasing.py` is new: an INACTIVE supplier never ordered from, with a landline and two
+offers -- one under its own code, lead time and minimum, one withdrawn -- and a second supplier
+whose offer for the same SKU the service made the preferred one.
+
+The harness gains `PARITY_RACES`, which runs one group of race checks (with
+`PARITY_ONLY=concurrency`), and `parity/races.ts`, which holds what the race files of this phase
+share: the mid-flight helper, written out seven times before.
+
+The cases read suppliers and offers as every role and through every filter, search, ordering and
+page; add a supplier seventy ways -- names that make a code, that make none, whose code is taken;
+mobiles, landlines and a hotline; terms at each bound -- and edit and delete one; add an offer
+thirty-five ways, edit it twenty, move it to a supplier or a SKU that has one already, delete the
+preferred one, and promote an offer over an incumbent, onto itself, when withdrawn, and through
+filters that exclude it.
+
+With the port's `FOR UPDATE` removed from the offer in `set-preferred`, the mid-flight check
+failed: the request waited only at its own `UPDATE`, and promoted an offer withdrawn meanwhile.
+
+No port bug: the first run compared equal. The supplier list's order with ties is the plan's, so
+the offers' statement carries Django's joins in Django's order -- which depends on which filters
+and search terms a request names, since each puts its tables into the query first.
+
+Found in Django, and copied: D180 (an offer's cost below zero or minimum of nothing is a bare
+409), D181 (a supplier's code is unique by exact spelling and stored as typed), D182 (an inactive
+supplier's offer can be made preferred), D183 (suppliers and offers change with no audit entry),
+D184 (an offer's edit writes back the preference it read).
+
+One decision is the owner's: whether an inactive supplier may be a SKU's preferred one
+([business-rules §7a.3](business-rules.md#7a3-the-preferred-supplier)). Both APIs allow it until
+then.
+
 ### The NestJS API, phase 6 part 2: expenses and the party ledger, 2026-10-06
 
 Asked for: phase 6 of the port, continued. Ported: `ExpenseCategoryViewSet`, `ExpenseViewSet`
@@ -4057,6 +4104,11 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D177 | **`date_to` on the cash book leaves the day out.** `GET /accounts/<id>/transactions/` and `GET /account-transactions/` pass `date_to` straight to `occurred_at__lte`, where a bare date is its midnight: `date_to=2026-09-15` ends as that day begins. The cash position on the same screen reads the same parameter through `core.dates.parse_window`, which runs to the end of the day, so the two disagree about one day. *Found porting the two readings of one parameter.* | Low | Copied by the port. Read both through `parse_window`. `finance/api/views.py`, `finance/selectors.py` |
 | D178 | **A receipt is stored before its expense is known to be good, and its content is never looked at.** `record_expense` saves the upload as it creates the row, then posts the movement: an expense refused for want of funds (409) is rolled back and its file stays in `media/expenses/`, belonging to nothing. And `CreateExpenseSerializer` judges the file by the content type the client states and by its name: bytes that are no image are stored as `.png` when sent as `image/png`, and an upload with no stated type is judged by its extension alone. The route that serves receipts sends `nosniff`, so this is clutter and a weak check, not an exposure. *Found by the form cases.* | Low | Copied by the port. Store the file after the movement succeeds, and identify it as product images are identified. `finance/services.py`, `finance/api/serializers.py` |
 | D179 | **An expense cannot be voided once its account is closed.** `void_expense` puts the money back with `record_movement`, which refuses a closed account: voiding an expense paid from a drawer that has since been closed is a 400 ("... is closed; money cannot move through it."), and the mistaken expense stands. *Found by a case that closes the account first.* | Low | Copied by the port. Let a void's compensating movement into a closed account, or name the account that must be reopened. `finance/services.py` |
+| D180 | **An offer with a cost below zero, or a minimum order of nothing, is a bare 409.** `SupplierProductSerializer` takes `last_cost` as any decimal and `minimum_order_quantity` from 0, while the table's check constraints want a cost of at least 0.00 and a minimum of at least 1: `{"last_cost": "-1"}` and `{"minimum_order_quantity": 0}` reach PostgreSQL and come back as "The request conflicts with the current state of the data.", naming no field. *Found by the offer cases.* | Low | Copied by the port. Give both fields their `min_value`. `purchasing/api/serializers.py` |
+| D181 | **A supplier's code is unique by its exact spelling, and stored as typed.** A code derived from the name is upper-cased and hyphenated (`RAHMAN-SONS-PVT-LTD`); one typed by hand is kept as it is, so `pnm 01` is a code and `sup-001` is accepted beside `SUP-001`. And `unique_supplier_code` reads then inserts: two suppliers of one name created at once race for one code, and the loser is a bare 409. Measured: six at once, three made and three refused. *Found by the supplier cases and the race check.* | Low | Copied by the port. Normalise a typed code as the derived one is, compare without case, and retry the derivation on a unique violation. `purchasing/services.py`, `purchasing/api/serializers.py` |
+| D182 | **An inactive supplier's offer can be made the preferred one, and an offer recorded for an archived SKU.** `set_preferred_supplier` refuses an offer that is itself withdrawn (`is_active`), and never looks at `Supplier.status`: "Parity Idle Traders", INACTIVE, becomes the supplier the purchase order form suggests. `SupplierProductSerializer` takes any variant, an archived one included. *Found by the cases that promote the fixture's inactive supplier.* | Low | Copied by the port. Decide whether an inactive supplier may be preferred ([business-rules §7a.3](business-rules.md#7a3-the-preferred-supplier), `DECISION REQUIRED`); refuse or warn. `purchasing/services.py` |
+| D183 | **Suppliers and their price lists change with no audit entry.** Creating, editing and deleting a supplier or an offer writes nothing to the audit log -- a cost changed from 210.00 to 1.00 leaves no trace of who or when -- and only `set-preferred` records anything. Deleting the preferred offer, or the supplier that holds it, leaves the SKU preferring nobody, also unrecorded. CLAUDE.md §3.5 asks for who, what, when, before and after on anything important; a supplier's price is what a purchase order is pre-filled with. *Found by comparing the audit log after each write case: it was empty.* | Medium | Copied by the port. Audit the three writes on both models. `purchasing/api/views.py` |
+| D184 | **An offer's edit writes back the preference it read.** `SupplierProductViewSet.update` is a plain `serializer.save()`: every column goes back as the row was read, `is_preferred` among them though the serializer marks it read only. An edit that read an offer before `set-preferred` promoted it writes `false` over the promotion -- the incumbent already demoted -- and the SKU prefers nobody; the other way round it is the index's 409. Measured in both APIs by the mid-flight check: the harness promotes the offer while a `PATCH` of its notes waits at its `UPDATE`. *Found by reading the captured `UPDATE`.* | Low | Copied by the port. Save only the fields the serializer may write (`update_fields`), or take the offer's row lock in `update`. `purchasing/api/views.py` |
 
 ## Still API-only (no UI)
 

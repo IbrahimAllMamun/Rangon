@@ -19,7 +19,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 3 | Cart, coupons, shipping options, checkout, payment webhook -- the first stock and money writes | **Done** 2026-10-01, parity 536/536 and twelve race checks |
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
-| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger) 2026-10-06 |
+| 6 | Purchasing, finance, customers admin, promotions, shipping admin | In progress: part 1 (accounts, the cash book, transfers), part 2 (expenses, the party ledger), part 3 (suppliers and their price lists) 2026-10-06 |
 | 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
 
 Phase 1 endpoints, all compared by the parity harness:
@@ -166,6 +166,10 @@ across both APIs where both serve the path:
 | Two voids of one expense queued on its row (one per API, then both through each API) | one voids it and the other is told it is voided already; the money goes back once. With the port's `FOR UPDATE` removed both Nest voids go through and the money goes back twice |
 | 6 expenses of all a drawer holds at once; an expense whose drawer is emptied mid-flight (each API in turn) | one is recorded; a refused one leaves no document |
 | 6 clicks of one expense with one `Idempotency-Key`, across both APIs | six 201s, one expense, one movement |
+| An offer withdrawn while its promotion to preferred waits on the offer's row (each API in turn) | the promotion is refused and the SKU keeps the supplier it preferred; with the port's `FOR UPDATE` removed it waits only at its `UPDATE`, and promotes the withdrawn offer |
+| 6 promotions at once, three for each of a SKU's two offers, across both APIs | one preferred offer, every promotion audited. The unique index, not a lock, allows only one |
+| 6 suppliers of one name at once, across both APIs | each one made has a code of its own; a loser is the unique index's 409. No lock is involved |
+| An offer promoted while an edit of it waits at its `UPDATE` (each API in turn) | the edit writes back the preference it read, and the SKU prefers nobody (D184, copied); no lock is involved |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -541,6 +545,22 @@ the first outside uploads to read a form as well as JSON, since a receipt is att
 | `GET /api/v1/expenses/summary/` | `finance.view`; what was spent in the window at the branch asked for (or the user's own), voided expenses left out, and each category's total, count and share |
 | `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first |
 
+Then who the shop buys from (part 3): `purchasing/suppliers.service.ts` and
+`purchasing/supplier-products.service.ts`. Neither moves stock or money. A supplier is a plain
+`ModelViewSet`; an offer -- one supplier's price for one SKU -- is reference data too, and of a
+SKU's offers one is the preferred one, which the purchase order form suggests. That flag moves
+only through `set-preferred`.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/suppliers/`, `GET .../<id>/` | `purchases.view`; paginated, by name, each with the count of its orders sent and not yet received in full (`outstanding_orders`, an annotation: a supplier just made answers without it). Filter `status`, `SearchFilter` over name, code and phone, `ordering` by `name` or `created_at` |
+| `POST /api/v1/suppliers/`, `PUT`/`PATCH .../<id>/` | `purchases.create`. `SupplierSerializer`: a name; a code no other supplier has, or one made from the name as `unique_supplier_code` makes it -- the ASCII letters and digits, hyphenated, upper-cased, cut at 24, `SUPPLIER` when nothing is left, numbered `-2`, `-3` until free -- on a create only; a phone kept as typed unless it is a mobile, which is stored canonically (`ContactPhoneField`: the length is checked after that); an email; terms and a lead time of 0 to 32767 days; a status. An edit writes every column back from the row as read. Nothing is audited (D183, copied) |
+| `DELETE /api/v1/suppliers/<id>/` | `settings.manage`; refused once the supplier was ordered from or paid (`PROTECT`: the bare 409); otherwise its price list goes with it |
+| `GET /api/v1/supplier-products/`, `GET .../<id>/` | `purchases.view`; paginated, the preferred offers first, then the cheapest -- an order with many ties, so the statement carries Django's joins in the order its query holds them: each filter and then the search names its tables first, and `select_related` adds the rest. Filters `supplier`, `variant`, `product` (a `UUIDFilter`: stripped, read as `uuid.UUID` reads it, "Enter a valid UUID."), `is_preferred`, `is_active`; `SearchFilter` over the supplier's code for the item, the SKU, the product's name and the supplier's; `ordering` by `last_cost`, `last_purchased_at` or `created_at`. Each offer with its supplier's name, code and status, the SKU, its label, and the lead time that applies -- its own, else the supplier's |
+| `POST /api/v1/supplier-products/`, `PUT`/`PATCH .../<id>/` | `purchases.create`. A supplier and a SKU, each a `PrimaryKeyRelatedField`, the pair not already quoted (`UniqueTogetherValidator`, in the shop's words, as a non-field error; on an edit a missing half is read from the row and an unchanged pair is not checked); the supplier's own code, a cost, a lead time, a minimum order quantity, the active switch, notes. `is_preferred` is read only. A cost below zero and a minimum of nothing pass the serializer and are the table's check constraints' 409 (D180, copied). An edit writes every column back as read, the preference included (D184, copied) |
+| `DELETE /api/v1/supplier-products/<id>/` | `purchases.create`; the preferred offer too, which leaves the SKU preferring nobody |
+| `POST /api/v1/supplier-products/<id>/set-preferred/` | `purchases.create`; 200 with the offer. The body is never read. `set_preferred_supplier`: the offer locked by its supplier and SKU; a withdrawn offer refused; the incumbent locked and demoted, this one promoted, and an `UPDATE` audit entry naming both suppliers -- written even when the offer was preferred already. The supplier's own status is not looked at (D182, copied) |
+
 ## Running it
 
 ```bash
@@ -777,6 +797,19 @@ the port):
   looked at (D178).
 - An expense cannot be voided once its account is closed: the compensating movement is refused
   (D179).
+- An offer with a cost below zero, or a minimum order quantity of 0, passes the serializer and is
+  the database's check constraint: a bare 409 naming no field (D180).
+- A supplier's code is unique by its exact spelling, and one typed by hand is stored as typed:
+  `sup-001` sits beside `SUP-001`, and `pnm 01` is a code. Two suppliers of one name created at
+  once race for one derived code, and the loser is a bare 409 (D181).
+- An offer can be recorded for an archived SKU, and an INACTIVE supplier's offer can be made the
+  preferred one: `set_preferred_supplier` asks whether the offer is active, not the supplier
+  (D182).
+- Suppliers and offers are created, edited and deleted with no audit entry; only `set-preferred`
+  writes one. Deleting the preferred offer, or its supplier, leaves the SKU preferring nobody
+  (D183).
+- An offer's edit writes back every column as it read them, `is_preferred` among them: an edit
+  that read the offer before it was promoted demotes it again, and the SKU prefers nobody (D184).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

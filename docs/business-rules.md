@@ -1432,6 +1432,13 @@ refused for a supplier that does not supply the variant, and for an offer marked
 `is_preferred` is read-only on the serializer: writable, a PATCH would hit the index and surface as a
 500 on an ordinary business action.
 
+> **DECISION REQUIRED** — may a supplier marked INACTIVE be a variant's preferred one? Nothing says,
+> and the code allows it: `set_preferred_supplier` refuses a discontinued *offer* and never reads
+> `Supplier.status`, so an inactive supplier can be promoted, and stays preferred when it is made
+> inactive afterwards (D182). Until decided, both APIs allow it and the purchase order form goes on
+> suggesting that supplier. The alternatives: refuse the promotion, or drop the preference when a
+> supplier is made inactive.
+
 ### 7a.4 Minimum order quantity
 
 `minimum_order_quantity` is **advisory**. The purchase order form warns when a line is below it and
