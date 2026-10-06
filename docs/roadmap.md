@@ -481,6 +481,49 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 6 part 1: accounts, the cash book and transfers, 2026-10-06
+
+Asked for: phase 6 of the port. Ported: `AccountViewSet` (list, read, open, edit, an account's
+cash book, the cash position, a movement by hand, the integrity check), `AccountTransactionViewSet`
+and `AccountTransferViewSet`, with `finance.services`' `create_account`, `update_account`,
+`record_movement`, `transfer` and `verify_integrity` behind them. `CashBookService` grew from the
+two movements a sale needed into `record_movement` whole -- every type, `Idempotency-Key`s, the
+audit entry of a movement made by hand -- and everything that already posted money now posts
+through it. The phase's ten parts are listed in `nest-port.md`.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 5558/5558 (543 new), 61 by the documented differences
+concurrency ................................... 125/125 (12 new: six withdrawals of a whole drawer, a
+                                                withdrawal and a transfer whose drawer is emptied mid-flight,
+                                                keys replayed and queued, transfers crossing, two unique indexes)
+throttle-check ................................ not rerun: no scope or pipeline change
+nest unit tests ............................... 836 passed (14 new: `DateTimeField` lookups, signed amounts)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+`fixture_finance.py` (new, in the seed list) opens an OTHER account allowed to go overdrawn and
+moves money through it by hand, opens a second cash account that is not the default, and makes
+three transfers, one of them at PAR3; two of the movements and one transfer carry keys the cases
+replay.
+
+The cases read the accounts, an account's cash book, the cash position, the whole cash book and
+the transfers as every role, through every filter, search, ordering and some sixteen spellings of
+a date; open an account forty-five ways; edit one thirty ways, by PUT and by PATCH; make
+movements by hand -- each type, each sign, past what a drawer holds, into a closed account and
+another branch's, dated and keyed; check integrity with two accounts drifted; and transfer
+between accounts of one branch and of two, with keys of their own and keys already used.
+
+With the port's `FOR UPDATE` removed from the account, seven race checks failed: of six
+withdrawals of a whole drawer three were paid, and the ledger summed to minus twice the drawer;
+a withdrawal and a transfer went through against a drawer emptied mid-flight; transfers crossing
+each way answered 500s; and the three older checks that guard a sale's payment, a void and a
+return against the same lock failed with them.
+
+Found in Django, and copied: D173 (a deposit past the column is a 500), D174 (the integrity check
+is a 500 for a body that is not an object), D175 (an account cannot be opened closed), D176 (a
+default's kind changed into another default's is the generic 409), D177 (`date_to` on the cash
+book leaves the day out, where the cash position includes it).
+
 ### The NestJS API, phase 5 part 7: the label sheet -- phase 5 done, 2026-10-06
 
 Asked for: phase 5 of the port, to its end. Ported: `GET` and `POST /products/<id>/labels/`, the
@@ -3963,6 +4006,11 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D170 | **A cancel answers with the payment status from before its own refund.** `cancel_order` returns the order `transition` loaded; `refund_order` then loads and saves its own copy. Measured: cancelling an order paid 1602.00 answers `payment_status: PAID`, `refunded_total: 0.00` beside a `refunds` list holding the 1602.00 refund; the next read says REFUNDED and 1602.00. *Found comparing the answer with the row.* | Low | Copied by the port. Refresh the order before serialising it. `orders/services/lifecycle.py` |
 | D171 | **A refund asked for with another refund's `Idempotency-Key` answers with that refund.** D160 on the back office's route: `refund_order` looks the key up across every order. Measured: `POST /orders/<id>/refunds/` for 100.00 with the key of a refund on another order is a 201 whose body is the other order's 890.00 refund; nothing is refunded on the order asked about. *Found by a case that reuses a key.* | Medium | Copied by the port. Fixed with D160. `orders/services/payments.py` |
 | D172 | **A NUL in the order list's `search` is a 500.** `get_queryset` passes `search` to `icontains` unchecked, on every route of the viewset: `GET /orders/?search=a%00b` and `GET /orders/<id>/?search=a%00b` both fail in PostgreSQL. The same family as D144. *Found by the search cases.* | Low | Copied by the port. Refuse a NUL as the filter backends do. `orders/api/views.py` |
+| D173 | **A deposit past the balance column's size is a 500.** `RecordMovementSerializer` takes an amount of up to fourteen digits and `record_movement` adds it to a balance held in a `numeric(14, 2)`. Measured on the parity stack: a deposit of 999,999,999,999.99 into a drawer holding 70,010.00 is a 500 from PostgreSQL's overflow, where a 400 was meant. *Found by the amount cases.* | Low | Copied by the port. Refuse an amount that would overflow the balance. `finance/services.py` |
+| D174 | **The integrity check is a 500 for a body that is not an object.** `verify_integrity` reads `request.data.get("branch")`: `POST /accounts/verify-integrity/` with a JSON list or `null` raises `AttributeError`. The same family as D162 and D168. *Found by the body cases.* | Low | Copied by the port. Read the branch through a serializer. `finance/api/views.py` |
+| D175 | **An account cannot be opened closed.** `AccountSerializer` accepts `is_active` and `create` does not pass it to `create_account`: `{"is_active": false}` is a 201 for an account that is active. *Found comparing the request with the row.* | Low | Copied by the port. Pass it on, or make the field read-only on create. `finance/api/views.py` |
+| D176 | **Changing a default account's kind can answer the generic 409.** `update_account` demotes the kind's other default only when the request sets `is_default`; changing the kind of an account that already is the default, to a kind whose default is another account, breaks `finance_account_branch_kind_default_uniq` and answers "The request conflicts with the current state of the data." *Found by the edit cases.* | Low | Copied by the port. Demote, or refuse with the reason. `finance/services.py` |
+| D177 | **`date_to` on the cash book leaves the day out.** `GET /accounts/<id>/transactions/` and `GET /account-transactions/` pass `date_to` straight to `occurred_at__lte`, where a bare date is its midnight: `date_to=2026-09-15` ends as that day begins. The cash position on the same screen reads the same parameter through `core.dates.parse_window`, which runs to the end of the day, so the two disagree about one day. *Found porting the two readings of one parameter.* | Low | Copied by the port. Read both through `parse_window`. `finance/api/views.py`, `finance/selectors.py` |
 
 ## Still API-only (no UI)
 
