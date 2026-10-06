@@ -795,6 +795,53 @@ export function pkRelatedField(
   };
 }
 
+/**
+ * `PrimaryKeyRelatedField(many=True, queryset=...)` (a `ManyRelatedField`)
+ * over UUID keys: a JSON array (or an object, read by its keys), each item looked up as the single field looks
+ * one up -- except that nothing is null-checked first, so a null is looked up
+ * and not found. The first item that fails is the field's error. Answers the
+ * canonical ids, in the order sent.
+ */
+export function manyPkRelatedField(
+  exists: (id: string) => Promise<boolean>,
+  options: { required?: boolean } = {},
+): Field<string[] | null> {
+  return {
+    async run(data, partial) {
+      const settled = emptyValue<string[]>(data, partial, {
+        required: options.required ?? true,
+        allowNull: false,
+      });
+      if (settled.settled) return settled.value;
+      // Anything Python can iterate but a str: a JSON object is read by its keys.
+      const items: unknown[] | null = Array.isArray(data)
+        ? data
+        : isDict(data)
+          ? Object.keys(data)
+          : null;
+      if (items === null) {
+        throw Invalid.of(
+          `Expected a list of items but got type "${pythonTypeName(data)}".`,
+          'not_a_list',
+        );
+      }
+      const ids: string[] = [];
+      for (const item of items) {
+        if (typeof item === 'boolean')
+          throw Invalid.of('Incorrect type. Expected pk value, received bool.', 'incorrect_type');
+        const missing = () =>
+          Invalid.of(`Invalid pk "${pyStr(item)}" - object does not exist.`, 'does_not_exist');
+        if (item === null) throw missing();
+        const id = uuidLookup(item);
+        if (id === null) throw Invalid.of(`“${pyStr(item)}” is not a valid UUID.`);
+        if (!(await exists(id))) throw missing();
+        ids.push(id);
+      }
+      return ids;
+    },
+  };
+}
+
 /** Django's `get_available_image_extensions()`, in the order a worker builds it (Pillow's preinit first). */
 export const IMAGE_EXTENSIONS =
   'bmp, dib, gif, jfif, jpe, jpg, jpeg, pbm, pgm, ppm, pnm, pfm, png, apng, avif, avifs, blp, bufr, ' +
