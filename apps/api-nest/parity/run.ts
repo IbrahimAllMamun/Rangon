@@ -479,6 +479,50 @@ async function buildCases(): Promise<Case[]> {
 
   // --- Categories and brands ------------------------------------------------
   add('categories', '/api/v1/shop/categories/');
+  // An empty Content-Type: nothing to parse with no body, no parser for one with.
+  add('an empty Content-Type and no body', '/api/v1/auth/logout/', {
+    method: 'POST',
+    headers: { 'content-type': '' },
+  });
+  add('an empty Content-Type and a body', '/api/v1/auth/logout/', {
+    method: 'POST',
+    headers: { 'content-type': '' },
+    body: '{"refresh": "abc"}',
+  });
+
+  // --- A method the view does not serve: its checks run before the 405 ----------
+  // DRF authenticates, checks the view's permissions and throttles in
+  // `initial()`, and only then looks for the method's handler.
+  for (const [method, path] of [
+    ['POST', '/api/v1/auth/me/'],
+    ['GET', '/api/v1/auth/password/change/'],
+    ['PUT', '/api/v1/shop/account/orders/'],
+    ['PUT', '/api/v1/shop/account/addresses/'],
+    ['DELETE', '/api/v1/organization/'],
+    ['POST', '/api/v1/organization/tax/'],
+    // Public views: nothing to refuse before the method.
+    ['PUT', '/api/v1/shop/cart/'],
+    ['GET', '/api/v1/shop/checkout/'],
+    ['GET', '/api/v1/auth/login/'],
+    ['GET', '/api/v1/auth/logout/'],
+    ['GET', '/api/v1/shop/payments/paritypay/webhook/'],
+    ['POST', '/api/v1/shop/feed.xml'],
+  ] as const) {
+    add(`no such method: ${method} ${path}, nobody signed in`, path, { method });
+    // A view with no authentication classes never reads the token.
+    add(`no such method: ${method} ${path}, a bad token`, path, {
+      method,
+      headers: { authorization: 'Bearer abc' },
+    });
+    if (user) {
+      // Staff, where the view is a customer's: refused before the method is.
+      add(`no such method: ${method} ${path}, staff signed in`, path, {
+        method,
+        headers: { authorization: `Bearer ${token(user)}` },
+      });
+    }
+  }
+
   const roots = await json<{ slug: string; children: { slug: string }[] }[]>(
     '/api/v1/shop/categories/',
   );

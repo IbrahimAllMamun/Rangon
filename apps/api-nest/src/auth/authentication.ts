@@ -68,6 +68,28 @@ export const SkipAuthentication = () =>
  */
 export const CustomerOnly = () => SetMetadata(CUSTOMER_ONLY, true);
 
+/** What a view says about who may call it. */
+export interface AccessMeta {
+  /** `authentication_classes = []`: nobody is authenticated, so no token is refused. */
+  skipAuthentication: boolean;
+  /** `AllowAny`. */
+  allowAny: boolean;
+  /** `IsCustomer`, after `IsAuthenticated`. */
+  customerOnly: boolean;
+}
+
+/** A handler's access metadata, the handler's own before its controller's. */
+export function accessMeta(
+  reflector: Reflector,
+  targets: Parameters<Reflector['getAllAndOverride']>[1],
+): AccessMeta {
+  return {
+    skipAuthentication: Boolean(reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)),
+    allowAny: Boolean(reflector.getAllAndOverride<boolean>(ALLOW_ANY, targets)),
+    customerOnly: Boolean(reflector.getAllAndOverride<boolean>(CUSTOMER_ONLY, targets)),
+  };
+}
+
 /** Python `bytes.split()`: runs of ASCII whitespace, empty pieces dropped. */
 function splitHeader(value: string): string[] {
   return value.split(/[ \t\n\r\v\f]+/).filter(Boolean);

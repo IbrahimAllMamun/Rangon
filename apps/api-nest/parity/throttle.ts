@@ -22,6 +22,7 @@ function call(
   path: string,
   headers: Record<string, string> = {},
   body?: unknown,
+  method?: string,
 ): Promise<{ status: number; body: string }> {
   const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   return new Promise((resolve, reject) => {
@@ -30,7 +31,7 @@ function call(
         host: base.hostname,
         port: base.port,
         path,
-        method: payload ? 'POST' : 'GET',
+        method: method ?? (payload ? 'POST' : 'GET'),
         agent: false,
         headers: {
           host: 'localhost',
@@ -127,6 +128,25 @@ async function main(): Promise<void> {
         ...Array<string>(62).fill('/api/v1/shop/categories/'),
       ],
     },
+    // The throttles count a request before DRF looks for its handler: a
+    // method the view does not serve spends the budget like any other.
+    {
+      name: 'a method with no handler, 62 times',
+      count: 62,
+      method: 'PUT',
+      path: '/api/v1/shop/categories/',
+    },
+    // The view's own scope too: ten a minute, whatever the method.
+    { name: 'sign-in asked for with GET, 12 times', count: 12, path: '/api/v1/auth/login/' },
+    // Sign-out has no throttle, for any method.
+    { name: 'sign-out asked for with GET, 70 times', count: 70, path: '/api/v1/auth/logout/' },
+    // Permissions come before throttles: refused every time, never throttled.
+    {
+      name: 'a signed-in view with no such method, nobody signed in, 70 times',
+      count: 70,
+      method: 'DELETE',
+      path: '/api/v1/auth/me/',
+    },
     // Plain Django views are never throttled.
     { name: 'health, 70 requests', count: 70, path: '/api/health/' },
     // The `auth` scope, 10/min, refuses before the anon budget does.
@@ -209,6 +229,7 @@ async function main(): Promise<void> {
   ] as {
     name: string;
     count: number;
+    method?: string;
     path: string | string[];
     spoof?: boolean;
     auth?: boolean;
@@ -232,7 +253,7 @@ async function main(): Promise<void> {
         const path = Array.isArray(scenario.path)
           ? (scenario.path[i % scenario.path.length] as string)
           : scenario.path;
-        const response = await call(base, path, headers, scenario.body);
+        const response = await call(base, path, headers, scenario.body, scenario.method);
         statuses.push(response.status);
         if (response.status === 429 && !refusal) {
           const error = (JSON.parse(response.body) as { error: { code: string; message: string } })

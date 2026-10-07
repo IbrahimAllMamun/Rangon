@@ -1,10 +1,11 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, DiscoveryModule } from '@nestjs/core';
 
 import { AccountsModule } from './accounts/accounts.module';
 import { Authenticator, AuthGuard } from './auth/authentication';
 import { RolePermissions } from './auth/permissions';
-import { ThrottleGuard } from './auth/throttle';
+import { ThrottleGuard, Throttles } from './auth/throttle';
+import { ViewRegistry } from './auth/view-registry';
 import { EnvelopeFilter } from './common/envelope.filter';
 import { ENV, Env } from './config/env';
 import { Database } from './database/database.service';
@@ -32,6 +33,7 @@ export class CoreModule {
     return {
       module: CoreModule,
       providers: [
+      imports: [DiscoveryModule],
         { provide: ENV, useValue: env },
         { provide: RouteRegistry, useValue: routes },
         Database,
@@ -41,6 +43,8 @@ export class CoreModule {
         CeleryService,
         Revalidation,
       ],
+        Throttles,
+        ViewRegistry,
       exports: [
         ENV,
         RouteRegistry,
@@ -51,6 +55,8 @@ export class CoreModule {
         CeleryService,
         Revalidation,
       ],
+        Throttles,
+        ViewRegistry,
     };
   }
 }

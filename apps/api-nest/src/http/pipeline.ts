@@ -97,6 +97,16 @@ export function installPipeline(fastify: FastifyInstance, env: Env, routes: Rout
       return badRequest(reply);
     }
 
+    // An empty `Content-Type` on a request with no body: Django has nothing
+    // to parse and never looks at it, where Fastify would refuse the header.
+    if (
+      request.headers['content-type'] === '' &&
+      (request.headers['content-length'] ?? '0') === '0' &&
+      request.headers['transfer-encoding'] === undefined
+    ) {
+      delete request.headers['content-type'];
+    }
+
     // CommonMiddleware again: APPEND_SLASH, for any method -- it runs before
     // the resolver knows whether the view takes the method. Nest registers
     // paths without their trailing slash and Fastify is told to ignore it,
