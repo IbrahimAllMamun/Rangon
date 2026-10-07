@@ -89,7 +89,7 @@ export function ymdToOrd(year: number, month: number, day: number): number {
 }
 
 /** `ord_to_ymd`: day 1 is 0001-01-01. */
-function ordToYmd(ordinal: number): PyDate {
+export function ordToYmd(ordinal: number): PyDate {
   let n = ordinal - 1;
   const n400 = Math.floor(n / 146097);
   n -= n400 * 146097;

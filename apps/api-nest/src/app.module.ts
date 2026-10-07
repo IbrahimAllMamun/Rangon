@@ -22,6 +22,7 @@ import { PosModule } from './pos/pos.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
+import { ReportsModule } from './reports/reports.module';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
 import { ShippingModule } from './shipping/shipping.module';
 import { EngagementModule } from './engagement/engagement.module';
@@ -82,6 +83,7 @@ export class AppModule {
         ShippingModule,
         EngagementModule,
         NotificationsModule,
+        ReportsModule,
       ],
       controllers: [HealthController],
       providers: [

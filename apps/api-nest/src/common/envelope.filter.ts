@@ -15,7 +15,7 @@ import { Authenticator } from '../auth/authentication';
 import { RolePermissions, staffViewFor } from '../auth/permissions';
 import { Throttles } from '../auth/throttle';
 import { ViewRegistry } from '../auth/view-registry';
-import { negotiate } from '../http/negotiation';
+import { CSV_RENDERER, csvFallback, negotiate } from '../http/negotiation';
 import { allowedMethods, markShortCircuit, PLAIN_VIEWS, plainViewRefusal } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
 import { ENV, Env } from '../config/env';
@@ -83,6 +83,15 @@ export class EnvelopeFilter implements ExceptionFilter {
     if (request.id) body.request_id = request.id;
     // No `WWW-Authenticate` on a 401: DRF sets it only in its default
     // exception handler, which `core.handlers` replaces.
+    // A view whose CSV renderer was negotiated answers its errors through it
+    // too, and that renderer renders nothing: the body is the dict's one key.
+    if (request.acceptedRenderer === CSV_RENDERER) {
+      void reply
+        .status(status)
+        .header('content-type', 'text/csv; charset=utf-8')
+        .send(csvFallback({ error: body }));
+      return;
+    }
     void reply.status(status).header('content-type', 'application/json').send({ error: body });
   }
 

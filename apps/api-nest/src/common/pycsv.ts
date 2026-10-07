@@ -188,3 +188,31 @@ export function csvDictReader(text: string): {
   }
   return { fieldnames, rows };
 }
+
+/**
+ * `csv.writer(...).writerow(row)` in the excel dialect, `QUOTE_MINIMAL`
+ * (`_csv.c`'s `join_append_data`): a field is quoted when it holds the
+ * delimiter, the quote character or a character of the line terminator, its
+ * quotes doubled; and a row that is one empty field is written `""`, so it
+ * is not read back as no row at all.
+ */
+export function csvRow(fields: readonly string[]): string {
+  if (fields.length === 1 && fields[0] === '') return '""\r\n';
+  return `${fields
+    .map((field) => (/[",\r\n]/.test(field) ? `"${field.replaceAll('"', '""')}"` : field))
+    .join(',')}\r\n`;
+}
+
+/**
+ * `csv.DictWriter(out, fieldnames)`, `writeheader()` then `writerows(rows)`.
+ * Each cell is already the text Python's `str()` makes of the value, a
+ * `None` the empty string.
+ */
+export function csvDictWriter(
+  fieldnames: readonly string[],
+  rows: readonly Readonly<Record<string, string>>[],
+): string {
+  let out = csvRow(fieldnames);
+  for (const row of rows) out += csvRow(fieldnames.map((name) => row[name] ?? ''));
+  return out;
+}

@@ -54,6 +54,7 @@ import { posCases } from './pos-cases.ts';
 import { posQuoteCases } from './pos-quote-cases.ts';
 import { posSaleCases } from './pos-sale-cases.ts';
 import { posVoidCases } from './pos-void-cases.ts';
+import { reportsCases } from './reports-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
 import { expensesCases } from './expenses-cases.ts';
@@ -772,6 +773,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await teamCases()));
   cases.push(...(await auditCases()));
   cases.push(...(await notificationsCases()));
+  cases.push(...(await reportsCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }

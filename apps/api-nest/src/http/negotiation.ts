@@ -35,6 +35,23 @@ export const JSON_RENDERER: Renderer = { format: 'json', mediaType: 'application
  */
 export const BROWSABLE_RENDERER: Renderer = { format: 'api', mediaType: 'text/html' };
 
+/**
+ * `reports.api.views.CSVRenderer`: there so that `?format=csv` negotiates. It
+ * renders nothing -- the export is a plain `HttpResponse` -- so any DRF
+ * `Response` that negotiated it is written by Django as the iteration of its
+ * data: a dict's keys, run together (`csvFallback`).
+ */
+export const CSV_RENDERER: Renderer = { format: 'csv', mediaType: 'text/csv' };
+
+/**
+ * What a `Response(data)` becomes when the renderer hands `data` back
+ * unrendered and `HttpResponse.content` joins whatever iterating it yields:
+ * for a dict, its keys.
+ */
+export function csvFallback(data: Readonly<Record<string, unknown>>): string {
+  return Object.keys(data).join('');
+}
+
 /** `exceptions.NotAcceptable`, as `core.handlers` answers what it has no code for. */
 export class NotAcceptable extends BusinessError {
   static override code = 'SERVER_ERROR';
