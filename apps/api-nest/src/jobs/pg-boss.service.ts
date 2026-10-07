@@ -55,9 +55,9 @@ export class PgBossTransport implements OnApplicationBootstrap, OnModuleDestroy 
       application_name: 'rangon-api-nest-jobs',
       // Its own small pool: polling, maintenance and the schedule's clock.
       max: 4,
-      // Only a worker fires the schedule and supervises the queues: an
-      // API-only process queues, and reads nothing.
-      schedule: this.env.jobsWorker,
+      // Only a worker supervises the queues, and fires the schedule unless
+      // told not to: an API-only process queues, and reads nothing.
+      schedule: this.env.jobsSchedule,
       supervise: this.env.jobsWorker,
     });
     boss.on('error', (error: Error) => this.logger.error(`pg-boss: ${error.message}`));

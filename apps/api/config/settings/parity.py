@@ -18,6 +18,11 @@ REST_FRAMEWORK = {**REST_FRAMEWORK, "DEFAULT_THROTTLE_CLASSES": ()}
 # `apps/api-nest/parity/gateway/`, mounted by docker-compose.nest.yml only.
 INSTALLED_APPS = [*INSTALLED_APPS, "parity_gateway"]
 
+# The API's own URLs, and two views of the same directory: one runs a background
+# task on demand, so the harness can compare it with the Nest API's handler,
+# and one says what Celery has scheduled.
+ROOT_URLCONF = "parity_gateway.urls"
+
 # Both APIs write uploads into one media directory, as different users (the
 # dev image runs Django as root, the Nest image as `node`): directories
 # Django makes must take the other's files too. File modes are unchanged.

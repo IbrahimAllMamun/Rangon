@@ -379,16 +379,16 @@ export class CheckoutService {
       });
 
       const count = itemCount(priced);
-      afterCommit.push(() =>
-        this.notices.notifyStaff({
+      afterCommit.push(async () => {
+        await this.notices.notifyStaff({
           type: 'NEW_ONLINE_ORDER',
           title: `New online order ${number}`,
           body: `${count} item(s), ${money(priced.grandTotal)} ${this.env.RANGON_CURRENCY}`,
           permission: 'orders.view',
           branchId: cart.branch_id,
           link: `/admin/orders/${orderId}`,
-        }),
-      );
+        });
+      });
       const jobs: Job[] = await this.notices.notifyCustomer(
         tx,
         { id: orderId, number, customerUserId: customer?.user_id ?? null },

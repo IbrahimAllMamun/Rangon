@@ -34,13 +34,21 @@ x-django-env: &django-env
   # (checkout's email, SMS and low-stock jobs). `scripts/nest-parity.sh seed`
   # turns this back on, so seeding still runs its jobs inline.
   CELERY_TASK_ALWAYS_EAGER: "0"
-  EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+  # Mail goes to the sink, which keeps it for the harness to compare with what
+  # the Nest API's jobs send (apps/api-nest/parity/sink.ts).
+  EMAIL_HOST: sink
+  EMAIL_PORT: "1025"
+  # Off a live environment only these numbers are texted; everyone else is
+  # recorded as suppressed. The parity fixtures' customers, both spellings.
+  SMS_ALLOWLIST: "01711000001, 8801911000801"
   RANGON_ALLOW_OVERSELL: "0"
   # The product feed needs an origin to make links absolute.
   RANGON_PUBLIC_URL: https://shop.parity.test
   # Set, so a navigation or category change queues its revalidation job on
-  # both sides for the harness to compare. Nothing ever calls it: no worker.
-  WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
+  # both sides for the harness to compare. No worker calls it; a job the
+  # harness runs on demand reaches the sink.
+  WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
+  WEB_REVALIDATE_SECRET: parity-revalidate-secret
 
 services:
   db:
@@ -65,6 +73,21 @@ services:
       timeout: 3s
       retries: 10
 
+  # Where both APIs' background jobs send their mail and their storefront
+  # revalidations, kept for the harness (apps/api-nest/parity/sink.ts).
+  sink:
+    image: rangon-api-nest:parity
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+    command: ["node", "parity/sink.ts"]
+    # The image's own healthcheck asks for the API, which this is not.
+    healthcheck:
+      disable: true
+
   django:
     build:
       context: ./apps/api
@@ -79,6 +102,7 @@ services:
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
+      sink: {condition: service_started}
     # A list, not a folded `>` block: YAML keeps the newlines of more-indented
     # lines in a folded scalar, and the shell then ran gunicorn without its
     # worker flags -- one sync worker, which made every benchmark unfair.
@@ -114,7 +138,11 @@ services:
       # Django's broker: jobs this API queues are for Django's worker.
       CELERY_BROKER_URL: redis://redis:6379/1
       RANGON_PUBLIC_URL: https://shop.parity.test
-      WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
+      WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
+      WEB_REVALIDATE_SECRET: parity-revalidate-secret
+      EMAIL_HOST: sink
+      EMAIL_PORT: "1025"
+      SMS_ALLOWLIST: "01711000001, 8801911000801"
       MEDIA_ROOT: /media
       PORT: "3000"
     # The image's own app, plus the stand-in payment gateway the Django side
@@ -147,6 +175,7 @@ services:
       # Where both APIs queue Celery jobs; the harness reads and empties it.
       CELERY_BROKER_URL: redis://redis:6379/1
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      PARITY_SINK: http://sink:8025
       PARITY_ONLY: ${PARITY_ONLY:-}
     command: ["node", "parity/run.ts"]
     depends_on:
@@ -172,7 +201,11 @@ services:
       RANGON_JOBS_BACKEND: pgboss
       RANGON_JOBS_WORKER: "0"
       RANGON_PUBLIC_URL: https://shop.parity.test
-      WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
+      WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
+      WEB_REVALIDATE_SECRET: parity-revalidate-secret
+      EMAIL_HOST: sink
+      EMAIL_PORT: "1025"
+      SMS_ALLOWLIST: "01711000001, 8801911000801"
       MEDIA_ROOT: /media
       PORT: "3000"
     volumes:
@@ -185,6 +218,40 @@ services:
       django: {condition: service_started}
     ports:
       - "127.0.0.1:8630:3000"
+
+  # The worker alone (src/worker.ts): no listener, the queues only. Started by
+  # `run-jobs` once the comparison is over -- during it a queued job must stay
+  # queued, to be read. The schedule is off: the sweep would cancel the
+  # fixtures' unpaid orders every five minutes.
+  nest-worker:
+    profiles: [worker]
+    image: rangon-api-nest:parity
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.parity
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      RANGON_JOBS_BACKEND: pgboss
+      RANGON_JOBS_WORKER: "1"
+      RANGON_JOBS_SCHEDULE: ${PARITY_WORKER_SCHEDULE:-0}
+      RANGON_PUBLIC_URL: https://shop.parity.test
+      WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
+      WEB_REVALIDATE_SECRET: parity-revalidate-secret
+      EMAIL_HOST: sink
+      EMAIL_PORT: "1025"
+      SMS_ALLOWLIST: "01711000001, 8801911000801"
+      MEDIA_ROOT: /media
+    volumes:
+      - ./apps/api/media:/media
+    command: ["node", "dist/worker.js"]
+    # The image's own healthcheck asks for the API, which this is not.
+    healthcheck:
+      disable: true
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      sink: {condition: service_started}
 
   # The whole comparison again, with the Nest side queuing in pg-boss.
   parity-jobs:
@@ -202,6 +269,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      PARITY_SINK: http://sink:8025
       PARITY_ONLY: ${PARITY_ONLY:-}
     command: ["node", "parity/run.ts"]
     depends_on:
