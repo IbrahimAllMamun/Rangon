@@ -481,6 +481,65 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 7 part 2: notifications, and what DRF does before a view runs, 2026-10-07
+
+Asked for: phase 7, continued. Ported: `NotificationViewSet` and
+`notifications.services.mark_read`. And a second thing every view does that the port did not:
+DRF authenticates, checks the view's permissions and counts the request against its throttles
+before it looks for the method's handler.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 10771/10771 (399 new: 361 notifications, 36 a method no view serves,
+                                                2 an empty Content-Type), 125 by the documented differences
+concurrency ................................... 208/208 (3 new: six requests to mark everything read; a notice
+                                                read while such a request waits on its row, each API in turn)
+throttle-check ................................ 17/17 (4 new: a method with no handler spends the anonymous budget
+                                                and a view's own scope; sign-out and a refused caller spend nothing)
+nest unit tests ............................... 1101 passed (5 new: the view registry)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+**A method the view does not serve.** The notifications cases sent an anonymous `POST` to the
+list and got a 405 where Django answers 401. The port's answer for a path that exists under
+another method knew a staff view's requirement and nothing else, so on views ported in phases
+2 to 6 -- `auth/me/`, `auth/password/change/`, the customer's orders and addresses,
+`organization/` and its VAT -- an anonymous caller was told the method was wrong rather than
+that they were not signed in, and staff on a customer's view got a 405 for Django's 403. The
+other way round, sign-out, the webhook and the feeds, which have no authentication classes,
+refused a bad token Django never reads. And no 405 was throttled: 62 anonymous
+`PUT /shop/categories/` were 62 405s where Django's are 60 and two 429s. `auth/view-registry.ts`
+now collects what the view at each route pattern asks of any request, from the same decorators
+the guards read, and the exception filter runs DRF's `initial()` in its order before the 405.
+Its own commit, with 36 cases and three throttle scenarios.
+
+**Notifications.** `fixture_notifications.py` writes for two readers nothing else in the run
+notifies: seven notices for an accountant with no branch and three for a customer account,
+read and unread, two at one instant, and one addressed to nobody. The cases read every route
+as every role, and send each a method it does not serve; list with each spelling of `unread`,
+every ordering the serializer offers and those it does not (`is_read`, a property, is
+ignored), every page; and mark read fifty-seven ways -- nothing, one, two, one twice, one read
+already, someone else's, a key in each spelling `uuid.UUID` reads, and `ids` as each thing JSON
+can hold. Each is compared by the notices it changed: which, that they share one moment, and
+that nothing else about them moved.
+
+Marking read is one `UPDATE ... WHERE read_at IS NULL` in both APIs and takes no lock. The
+race checks show the statement is enough: six simultaneous requests count the five unread
+notices once between them; and a request whose `UPDATE` waits on a row that is read
+meanwhile looks at it again, leaves it, and counts four. To see that the second check can
+fail, the port was made to read the unread first and write them by key: it then stamped the
+held notice again and counted five. Put back before the run reported here.
+
+Found in Django, and copied: D229 (marking read reads `ids` by hand: a body that is not an
+object, or `ids` that is a number, is a 500; a string is read letter by letter) and D230 (a
+guest's order writes a notice with no user and no permission code, which no list holds: the
+demo seed leaves fourteen).
+
+One more thing the port did not do as Django does, fixed with the first: an empty
+`Content-Type` header on a request with no body was a 415 from Fastify, where Django has
+nothing to parse and answers the view.
+
+Not done, and next: part 3, the reports.
+
 ### The NestJS API, phase 7 part 1: the audit log, and content negotiation on every view, 2026-10-07
 
 Asked for: a start on phase 7. Ported: `AuditLogViewSet`, which part 10 of phase 6 left out --
@@ -4542,6 +4601,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D226 | **The VAT routes answer in UTC, and both organisation views refuse without a request id.** `OrganizationTaxView` builds its answer by hand and puts the raw `tax_settled_at` in it: DRF's encoder writes UTC with a `Z`, where `GET /organization/` -- a serializer -- answers the same instant in the shop's time. Both views check their permission in the method and return a hand-written 403 (and a bare `{"detail": ...}` 404): an error envelope with no `request_id`, unlike every refusal the permission classes make. *Found by the cases that read both.* | Low | Copied by the port. A serializer for the tax answer; `RolePermission` on the views. `accounts/api/views.py` |
 | D227 | **A response nobody can render is a 406 called `SERVER_ERROR`, and the product feeds refuse a client that asks for them by type.** DRF negotiates a response's format in `APIView.initial`, before it authenticates: an `Accept` no renderer satisfies raises `NotAcceptable`, which `_DRF_CODE_MAP` in `core.handlers` does not list, so it falls to the last branch and is answered 406 `{"code": "SERVER_ERROR", "message": "Unexpected error."}` -- a server's fault by name for a header the client sent. The two feed views are `APIView`s that return their own `HttpResponse`, with the default renderers: measured, `GET /shop/feed.xml` with `Accept: application/xml` is that 406, `feed.csv` with `Accept: text/csv` the same, and `feed.csv?format=csv` a 404, while `*/*` and no header are served. Meta's and Google's fetchers send `*/*`; a stricter one would be told the feed does not exist. *Found by the audit log's cases asking for `?format=csv`, which showed the port negotiated nothing.* | Low | Copied by the port, which now negotiates as DRF does. A `NOT_ACCEPTABLE` code in `core.handlers`; `renderer_classes` on the feed views that accept their own type. `core/handlers.py`, `catalog/api/feed_views.py` |
 | D228 | **A NUL in the audit log's search is a 500.** `AuditLogViewSet.get_queryset` passes `search` to three `icontains` lookups as typed; PostgreSQL refuses a NUL in a text parameter and the `DataError` is nobody's to catch: `GET /audit-logs/?search=%00` is a 500, on the list and on one entry. The viewset's django-filter fields refuse the same byte with a 400 ("Null characters are not allowed."), as DRF's own `SearchFilter` does. *Found by the search's cases.* | Low | Copied by the port. Refuse it as the filters do. `accounts/api/views.py` |
+| D229 | **Marking notices read reads `ids` by hand.** `NotificationViewSet.mark_read` passes `request.data.get("ids")` to `mark_read`, which hands it to `filter(pk__in=...)` when it is truthy; there is no serializer. Measured in both APIs: a body that is a list, a string, a number or `null` is a 500 (`.get` on it); `{"ids": 5}`, `{"ids": 1.5}` and `{"ids": true}` are 500s (`'int' object is not iterable`); `{"ids": "abc"}` is a 400 that says “a” is not a valid UUID -- the string is iterated -- and so is the id of a notice sent as a string rather than a list of one; `{"ids": {"<id>": 1}}` marks that notice, by the object's key; `{"ids": [5]}` looks for `UUID(int=5)`. *Found by the cases that send each shape.* | Low | Copied by the port. A serializer with `ListField(child=UUIDField())`. `notifications/api/views.py`, `notifications/services.py` |
+| D230 | **A guest's order writes notices nobody can read.** `notify_customer` creates its `Notification` with `user = order.customer.user`, which is `None` for a customer with no account -- every guest checkout. The model says a null user means "addressed to a permission group", but `permission_code` is left blank, and `NotificationViewSet` lists `user=request.user` and nothing else: the row is in nobody's list and nobody's unread count, is never marked read, and stays. The email and the SMS, which are what a guest receives, are queued separately and are unaffected. *Found reading `get_queryset` against the rows the demo seed leaves: fourteen `ORDER_CONFIRMED` notices with no user and no permission code.* | Low | Copied by the port, which has written the same row since phase 3. Write no row when there is no account. `notifications/services.py` |
 
 ## Still API-only (no UI)
 

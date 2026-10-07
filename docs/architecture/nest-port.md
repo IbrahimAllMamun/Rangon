@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: part 1 of 5 (the audit log; content negotiation on every view), parity 10372/10372 and 205 race checks |
+| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 and 2 of 5 (the audit log, notifications; and what DRF does before a view runs, on every view), parity 10771/10771 and 208 race checks |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -211,6 +211,8 @@ across both APIs where both serve the path:
 | 6 deactivations of one account at once, across both APIs | six 200s and six audit entries; nothing refuses a repeat |
 | 6 accounts under one email, and 6 branches under one code, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
 | 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
+| 6 requests to mark every notice read at once, across both APIs | six 200s; each notice is counted by exactly one of them, none is left unread. No lock is involved |
+| A notice read while a request to mark everything waits on its row (each API in turn) | the request's `UPDATE` waits, looks at the row again, leaves it as it was read and counts the others. No lock is involved: it is the one statement that holds this. With the port made to read the unread first and write them by key, it stamps the notice again and counts it |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -770,6 +772,31 @@ Outside production Django also has the browsable API's renderer (`text/html`, `?
 The port lists it for the same settings and answers what negotiates it in JSON: see "Deliberate
 differences".
 
+### A method the view does not serve
+
+`APIView.initial` also authenticates, checks the view's permissions and counts the request
+against its throttles before DRF looks for the method's handler. The port answered such a
+request from its exception filter, which knew a staff view's requirement and nothing else.
+Measured against Django, three things differed, on views ported in phases 2 to 6:
+
+- a view that asks for a signed-in user and is not a staff view (`auth/me/`,
+  `auth/password/change/`, the customer's orders and addresses, `organization/` and its VAT)
+  answered an anonymous `DELETE` with a 405, where Django's is a 401 -- and the customer's views
+  answered staff with a 405 for Django's 403;
+- a view with no authentication classes (sign-out, the payment webhook, the feeds) refused a bad
+  token on a method it does not serve, where Django never reads the token: a 401 for a 405;
+- no 405 spent anything from a rate limit: 62 anonymous `PUT /shop/categories/` were 62 405s,
+  where Django's are 60 and then two 429s.
+
+`auth/view-registry.ts` now collects, once, from every controller, what the view at each route
+pattern asks of any request -- whether it authenticates, who may call it, how it is throttled:
+the same metadata the guards read from the handler Fastify chose. The exception filter runs
+the checks in DRF's order -- format, authentication, permission, throttles -- and then answers
+405. The throttles are `Throttles` (`auth/throttle.ts`), which the guard and the filter share.
+
+And one smaller thing: an empty `Content-Type` header on a request with no body is nothing to
+parse, for Django; Fastify refused the header (415). It is dropped before Fastify reads it.
+
 ### The audit log (part 1)
 
 `accounts/audit-log.service.ts`. Read-only: the log is written by `core.audit.record`
@@ -786,6 +813,26 @@ nobody, two of them at one instant, with values that are a float, a 23-digit int
 a list and a bare string, and addresses in IPv4, IPv6 and IPv4 written as IPv6. It adds an
 accountant with no branch, `parity.auditor@rangon.test`: `audit.view` with nothing to be scoped
 to.
+
+### Notifications (part 2)
+
+`notifications/`: `NotificationViewSet` on a `DefaultRouter` of its own, and
+`notifications.services.mark_read`. `IsAuthenticated` alone -- staff and customers read their
+own. The rows are written by `notify_staff` and `notify_customer` (`checkout/notices.service.ts`,
+phase 3) and sent by the worker.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/notifications/` | the reader's own notices, newest first, paginated. `unread=true`, spelt exactly so, leaves the read ones out. The view names no `ordering_fields`, so `OrderingFilter` takes the serializer's fields that are columns -- `id`, `notification_type`, `level`, `title`, `body`, `link`, `data` (jsonb's own order), `read_at`, `created_at` -- and ignores `is_read`, a property of the model. An ordering replaces the view's, so ties fall to the plan: the statement is Django's, every column. A notice addressed to nobody (`user` null) is in nobody's list |
+| `GET /api/v1/notifications/<id>/` | the same queryset, `unread=true` included: a read notice asked for among the unread is a 404, as someone else's is. `data` is read from jsonb's own text |
+| `GET /api/v1/notifications/count/` | `{"unread": n}`; no filter applies |
+| `POST /api/v1/notifications/mark-read/` | 200 `{"updated": n}`. `request.data.get("ids")` handed to `pk__in` as it is: anything falsy -- absent, `null`, `[]`, `""`, `0`, `{}` -- marks every unread notice of the reader's; a list is read item by item as `UUIDField` reads a key (a string in any of `uuid.UUID`'s spellings, a whole number as `UUID(int=...)`, a null as nothing), the first that is no key a 400 naming it; a string is its characters and an object its keys; a number or `true` cannot be iterated, a 500, as a body that is not an object is (D229, copied). One `UPDATE ... WHERE read_at IS NULL`, every row stamped with one moment and `updated_at` left alone: a notice already read, someone else's, or one that is not there counts for nothing. A list of nothing but nulls sends no statement |
+
+`fixture_notifications.py` writes for two readers nothing else in the run ever notifies -- the
+accountant with no branch from `fixture_audit.py` (staff notices reach a branch's staff, owners
+and administrators) and a customer account with no customer record -- seven notices and three,
+read and unread, two at one instant, with data that is an object, a list and a bare string,
+and one notice addressed to nobody.
 
 ## Running it
 
@@ -1149,6 +1196,11 @@ the port):
   one by its own media type, or as `feed.csv?format=csv`, is refused (D227).
 - A NUL in the audit log's `search` reaches PostgreSQL: a 500, on the list and on an entry
   (D228).
+- Marking notices read hands the body's `ids` to the lookup as it came: a body that is not an
+  object, or `ids` that is a number or `true`, is a 500; a string is read letter by letter and
+  refused for its first; a whole number in the list is a key (D229).
+- A notice written for a customer with no account names nobody and no permission: no list
+  holds it (D230).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
