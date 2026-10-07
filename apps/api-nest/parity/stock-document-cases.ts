@@ -103,6 +103,20 @@ export async function stockDocumentCases(): Promise<Case[]> {
       Object.values(row).forEach(mask);
     }
   };
+  /**
+   * A document's lines in a stable order. A new count gets a line per stock
+   * row of its branch in the order PostgreSQL returns them, and its lines
+   * have no ordering of their own: the restore before each API's request
+   * moves those rows in the heap, so Django asked twice lists them two ways.
+   */
+  const byLine = (answer: unknown) => {
+    const items = (answer as { items?: { sku?: string; variant?: string }[] } | null)?.items;
+    if (Array.isArray(items)) {
+      items.sort((a, b) =>
+        `${a.sku ?? ''} ${a.variant ?? ''}`.localeCompare(`${b.sku ?? ''} ${b.variant ?? ''}`),
+      );
+    }
+  };
   const write = (
     name: string,
     method: string,
@@ -120,7 +134,10 @@ export async function stockDocumentCases(): Promise<Case[]> {
       reset: resetDocuments,
       effects: DOCUMENT_EFFECTS,
       jobs: true,
-      normalize: mask,
+      normalize: (answer) => {
+        mask(answer);
+        byLine(answer);
+      },
     });
 
   // --- Reading -----------------------------------------------------------------------------
