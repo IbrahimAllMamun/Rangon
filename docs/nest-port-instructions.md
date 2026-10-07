@@ -141,7 +141,7 @@ difference or failed race. Filters:
   contains the text (the names are in `run.ts`): one part's races in a minute, not all in ten.
 
 ```bash
-docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle up -d --build nest-throttled django-throttled
+docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle up -d --build --force-recreate nest-throttled django-throttled
 ```
 
 ```bash
@@ -174,6 +174,8 @@ apps/api-nest/
     auth/view-registry.ts     what the view at a route pattern asks of any request (who may call,
                               how it is throttled): for a method no handler takes
     notifications/            the notices a signed-in user reads and marks read
+    reports/                  the eleven reports and their CSV exports: `date-range.ts` is
+                              `DateRange`, `reports.service.ts` the statements and the arithmetic
     auth/                     JWT (SimpleJWT-compatible), authentication guard, throttles
     common/
       python.ts               Python's int(), Decimal(), str(), repr(), float repr, strip, split ...
@@ -385,7 +387,7 @@ apps/api-nest/
 ## 7. Defects
 
 - **A Django defect found while porting** gets the next D-number in the roadmap's known-defects
-  table. Record the measured behaviour, the files, and how it was found. The latest is **D230**. Read the
+  table. Record the measured behaviour, the files, and how it was found. The latest is **D232**. Read the
   latest number off the table on `main`, not off this line: parts 1 to 4 of phase 5 reused four
   numbers `main` had taken the day before, and all fourteen had to move.
 - **Copied** into the port: listed under "Django defects that are copied" in `nest-port.md`.
@@ -452,6 +454,10 @@ apps/api-nest/
 | Sixty-two organisation cases differed by one queued job and nothing else | `content.signals` has a `post_save` receiver on `Organization` that asks the storefront to revalidate `site`; nothing in the view or the service says so | grep `signals.py` for every model a part saves before porting it; and leave `jobs: true` on every write case, which is what found it |
 | `?format=csv` answered 200 where Django answered 404, on every view the port has | DRF settles the format in `APIView.initial`, before it authenticates; six phases of cases never sent a `format` or an `Accept` that JSON does not satisfy, so nothing had ported it | when a part's cases trip over something every view does, port it for every view, in its own commit, with cases of its own; and give each new part a case for what the framework does before the view runs |
 | Two audit entries of one instant came back the other way round under `ordering=created_at` | the port selected only the columns it reads; with nothing selected from the accounts PostgreSQL drops that `LEFT JOIN`, where Django's statement hashes the log against it and the tie falls differently | where a tie can reach the client, the select list is Django's too -- every column of every joined table (`EXPLAIN` both statements to see it) |
+| The demo seed could not test the VAT return: every order in it is zero-rated | the reports' arithmetic for inclusive prices, rates and credits ran on nothing | look at what the seed's data exercises before writing cases on it (one `GROUP BY` on the column the branch turns on); a fixture of rows with frozen figures -- no service called, no stock or money moved -- adds trade without disturbing a shelf or an account another suite counts |
+| Two party-ledger cases from phase 6 broke when a fixture added purchase orders | each gives every purchase order one date, `payables` orders by that date alone, and the restore and `UPDATE` before each API's request move the rows in the heap: Django asked twice answers in two orders. They had agreed by luck | a write case that arranges a tie compares the tied rows by a stable key and says so (`byNumber` in `expenses-cases.ts`); and the port's statement is Django's all the same, as it now is there |
+| The throttle check failed with "network ... not found" after a reset | `reset` takes the stack's network down, and the stopped throttled containers, which are in a profile `down` does not touch, still name it | remove the throttled pair before a reset (`--profile throttle rm -sf nest-throttled django-throttled`), or start it with `--force-recreate` |
+| A case's `<now>` normalisation also blanked a moment the request had named | it blanked anything that looked like a UTC instant | blank only the end the request left to the clock: read which from the query |
 | An anonymous `DELETE /auth/me/` answered 405 where Django answered 401; a bad token at `GET /auth/logout/` 401 for 405; and no 405 was ever throttled | DRF authenticates, checks permissions and throttles in `initial()`, before it looks for the method's handler; the port's answer for a missing method knew staff views only | a new view's cases include a method it does not serve -- anonymous, with a bad token, and as someone it refuses -- and the throttle check has a scenario for it |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
@@ -499,19 +505,16 @@ Every part of a phase updates, in the same branch:
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | done 2026-10-07 | merged to `main` (PR #88), ten parts (the list is in `nest-port.md`, "Phase 6: the back office") |
-| 7 | in progress on `phase/nest-7-reports-jobs-cutover`, five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 and 2, the audit log and notifications (and DRF's `initial()` on every view), done 2026-10-07 | next: reports, the background jobs (a replacement for Celery: ADR-0014's `CeleryService.delay` is the single point to swap), then the cutover per path at the proxy |
+| 7 | in progress on `phase/nest-7-reports-jobs-cutover`, five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 3, the audit log, notifications and the reports (and DRF's `initial()` on every view), done 2026-10-07 | next: the background jobs (a replacement for Celery: ADR-0014's `CeleryService.delay` is the single point to swap), then the cutover per path at the proxy |
 
 Before the next part:
 
-1. Part 3 is the reports. Their views declare `[JSONRenderer, CSVRenderer]`: declare them with
-   `declareRenderers`, and probe what `Accept: text/csv` without `?format=csv` answers before
-   porting it -- the CSV renderer renders nothing.
-2. Part 4 needs an ADR before any code: which queue replaces Celery (the plan says BullMQ), what
+1. Part 4 needs an ADR before any code: which queue replaces Celery (the plan says BullMQ), what
    runs the five scheduled jobs in `config/celery.py`, and how the email and SMS templates move.
-3. Part 5, the cutover, must account for the paths Django serves that are not in the port's
+2. Part 5, the cutover, must account for the paths Django serves that are not in the port's
    tables: the router's API root (`GET /api/v1/`, a 401 or a map of the routes), `/api/schema/`,
    `/api/docs/`, `/django-admin/` and `/media/`.
-4. The owner should still see D221 first, then D166, D149, D158, D164, D167, D204, D207 and
+3. The owner should still see D221 first, then D166, D149, D158, D164, D167, D204, D207 and
    D222, and the decisions listed in §2.
 
 ### Checklist for a part

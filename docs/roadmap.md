@@ -481,6 +481,69 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 7 part 3: the reports, 2026-10-07
+
+Asked for: part 3. Ported: the eleven views of `reports.api.views` over `reports.services` --
+the dashboard, sales, product performance, inventory valuation and movement, purchases,
+returns, profit, expenses, the business summary and the VAT return -- with `DateRange`, the
+branch rule and the CSV exports.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 12075/12075 (1304 new, all the reports), 125 by the documented differences
+concurrency ................................... 208/208 (none new: the reports only read)
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1260 passed (159 new: the windows, the CSV writer, values Django printed)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+Every figure is aggregated in the database, so the port sends the statements Django sends:
+each was captured, with a branch and without -- a filter on the branch moves its join to
+the front -- and written out from the same fragments Django composes them from. What
+Python does afterwards (`quantize`, a margin, a share of spending, a month's subtraction) is
+`Dec`. The first comparison of all eleven reports, as JSON and as CSV, differed in one thing:
+the sales report's bare Decimals, which DRF's encoder writes as floats (`8230.0`) and the port
+had written as `8230`.
+
+**The demo seed charges no VAT.** Every order in it is zero-rated and exclusive, so the VAT
+return's arithmetic -- inclusive prices, two rates, credits prorated by the units returned,
+input tax net of goods sent back -- ran on nothing. `fixture_reports.py` adds the trade that
+exercises it, dated January to March 2025: eight orders, five returns, five purchase orders
+with their deliveries and returns, four expenses. They are rows with frozen figures, written
+through the models: no service is called, so no stock moves and no money, and nothing another
+suite counts changes. Over that quarter the VAT return at Mirpur is 1129.67 of output tax on
+a taxable 9531.16, 339.14 credited, 555.00 of input tax, 235.53 payable -- and across both
+branches 1279.67, 489.14, 675.00 and 115.53 -- in four rate rows (two of them 15%, exclusive
+and inclusive, tied on the rate) and two months, and the two APIs agree on every figure.
+
+The cases read each report as thirteen readers, as JSON, as CSV and by `POST`; at each branch
+as six of them, with a branch that is closed, missing, or no id; through every preset and
+twenty-two custom windows -- half a window, a moment with an offset, the half-hour that is
+February in Dhaka and January in UTC, a reversed one, a date that is not one; the dashboard's
+days at 370 and 371 of them and at both ends of what a date can hold; the sales report by
+channel; and every way an answer meets the CSV renderer.
+
+**What CSV does (D231).** The views' CSV renderer renders nothing; it is there so that
+`?format=csv` negotiates. Everything else that negotiates it is written as the keys of the
+dict it was given: a reader who may not export is answered 403 with the body `error`;
+`Accept: text/csv` with no `format` is a 200 whose body is `results`; `?format=csv` asked for
+as JSON is a 406; and the dashboard's export is always empty. All copied, and all in the
+port's exception filter and one helper, since the refusals come from everywhere.
+
+Found on the way, in a phase 6 port, and fixed in its own commit: two party-ledger cases give
+every purchase order one date, and `payables` orders by that date alone. The restore and the
+`UPDATE` before each API's request move the rows in the heap, so Django asked twice answers
+in two orders; the two APIs had agreed by luck until this part's fixture added five purchase
+orders. The cases now compare a supplier's documents by number, and say why; and the port's
+two statements there, which were narrower than Django's (no branch join, computed columns),
+are now Django's own.
+
+Found in Django, and copied: D231 (above) and D232 (a NUL in the sales report's `channel`,
+and a dashboard window that ends on the last day a date can hold, are 500s).
+
+Not done, and next: part 4, the background jobs, which needs the owner's decision first --
+which queue replaces Celery, what runs the five scheduled jobs, and how the email and SMS
+templates move.
+
 ### The NestJS API, phase 7 part 2: notifications, and what DRF does before a view runs, 2026-10-07
 
 Asked for: phase 7, continued. Ported: `NotificationViewSet` and
@@ -4603,6 +4666,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D228 | **A NUL in the audit log's search is a 500.** `AuditLogViewSet.get_queryset` passes `search` to three `icontains` lookups as typed; PostgreSQL refuses a NUL in a text parameter and the `DataError` is nobody's to catch: `GET /audit-logs/?search=%00` is a 500, on the list and on one entry. The viewset's django-filter fields refuse the same byte with a 400 ("Null characters are not allowed."), as DRF's own `SearchFilter` does. *Found by the search's cases.* | Low | Copied by the port. Refuse it as the filters do. `accounts/api/views.py` |
 | D229 | **Marking notices read reads `ids` by hand.** `NotificationViewSet.mark_read` passes `request.data.get("ids")` to `mark_read`, which hands it to `filter(pk__in=...)` when it is truthy; there is no serializer. Measured in both APIs: a body that is a list, a string, a number or `null` is a 500 (`.get` on it); `{"ids": 5}`, `{"ids": 1.5}` and `{"ids": true}` are 500s (`'int' object is not iterable`); `{"ids": "abc"}` is a 400 that says “a” is not a valid UUID -- the string is iterated -- and so is the id of a notice sent as a string rather than a list of one; `{"ids": {"<id>": 1}}` marks that notice, by the object's key; `{"ids": [5]}` looks for `UUID(int=5)`. *Found by the cases that send each shape.* | Low | Copied by the port. A serializer with `ListField(child=UUIDField())`. `notifications/api/views.py`, `notifications/services.py` |
 | D230 | **A guest's order writes notices nobody can read.** `notify_customer` creates its `Notification` with `user = order.customer.user`, which is `None` for a customer with no account -- every guest checkout. The model says a null user means "addressed to a permission group", but `permission_code` is left blank, and `NotificationViewSet` lists `user=request.user` and nothing else: the row is in nobody's list and nobody's unread count, is never marked read, and stays. The email and the SMS, which are what a guest receives, are queued separately and are unaffected. *Found reading `get_queryset` against the rows the demo seed leaves: fourteen `ORDER_CONFIRMED` notices with no user and no permission code.* | Low | Copied by the port, which has written the same row since phase 3. Write no row when there is no account. `notifications/services.py` |
+| D231 | **The reports' CSV renderer renders nothing, and four things follow.** `reports.api.views.CSVRenderer.render` returns its data: it exists so that `?format=csv` negotiates, and the export itself is a hand-built `HttpResponse`. Every other answer that negotiated CSV is handed to `HttpResponse.content` as a dict, which joins whatever iterating it yields -- its keys. Measured in both APIs: (1) any refusal under `?format=csv` -- a bad date, an unknown branch, `RolePermission`'s 403, a 401, a 405 -- is the five letters `error` as `text/csv` with the refusal's status, so a reader who may not export is sent `error` and nothing says why; (2) `Accept: text/csv` with no `format` is a 200 whose body is `results`, or `rangekpissales_over_time...` for the dashboard; (3) `?format=csv` with `Accept: application/json` is a 406 (the format leaves only the CSV renderer); (4) `dashboard.csv` is always empty, because `BaseReportView.csv_rows` looks for `daily` and the dashboard's days are `sales_over_time` -- D19 again, on the one report it was not fixed for. And `SalesReportView` refuses an export with `{"detail": "Export not permitted."}`, not the envelope. *Found by the cases that ask each report for CSV as each reader.* | Medium | Copied by the port. A renderer that renders the envelope (or `renderer_classes` narrowed per request); `csv_rows` on `DashboardView`; the envelope on the sales view. `reports/api/views.py` |
+| D232 | **Three ways to a 500 on a report.** `SalesReportView` passes `channel` to the filter as typed: a NUL in it reaches PostgreSQL and the `DataError` is nobody's to catch. And `_fill_missing_days` walks the window's days with `day += timedelta(days=1)`: a dashboard window of 370 days or fewer whose last day is 9999-12-31 steps past `date.max` (`OverflowError`), as does one whose end, moved to the shop's time, is past what a date can hold (`date_to=9999-12-31T23:59:59-01:00`, or a first instant before year 1). *Found by the cases at the edges of the window.* | Low | Copied by the port. Refuse the NUL; bound the window. `reports/api/views.py`, `reports/services.py` |
 
 ## Still API-only (no UI)
 

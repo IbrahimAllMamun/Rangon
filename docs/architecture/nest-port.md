@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 and 2 of 5 (the audit log, notifications; and what DRF does before a view runs, on every view), parity 10771/10771 and 208 race checks |
+| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 to 3 of 5 (the audit log, notifications, the reports; and what DRF does before a view runs, on every view), parity 12075/12075 and 208 race checks |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -586,7 +586,7 @@ the first outside uploads to read a form as well as JSON, since a receipt is att
 | `GET /api/v1/expenses/<id>/attachment/` | `finance.view`, through the same queryset as reading the expense; the file, typed by its extension, `inline` under the expense's number, `private, no-store`, `nosniff`. No receipt, or a file that is gone, is a 404 |
 | `POST /api/v1/expenses/<id>/void/` | `finance.expense`; a reason is required and validated before the expense is looked for. The expense locked; one already voided is a 400; the money back as an `ADJUSTMENT` naming the expense; the row marked void. An expense whose account has since been closed cannot be voided (D179, copied). Audited as `EXPENSE_VOIDED` |
 | `GET /api/v1/expenses/summary/` | `finance.view`; what was spent in the window at the branch asked for (or the user's own), voided expenses left out, and each category's total, count and share |
-| `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first |
+| `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first. Both statements are Django's, every column of the order, its branch and its customer (or supplier): a party's documents of one date come back as the plan leaves them (since phase 7 part 3; until then the port sent a narrower statement of its own, and the two agreed by luck) |
 
 Then who the shop buys from (part 3): `purchasing/suppliers.service.ts` and
 `purchasing/supplier-products.service.ts`. Neither moves stock or money. A supplier is a plain
@@ -833,6 +833,59 @@ accountant with no branch from `fixture_audit.py` (staff notices reach a branch'
 and administrators) and a customer account with no customer record -- seven notices and three,
 read and unread, two at one instant, with data that is an object, a list and a bare string,
 and one notice addressed to nobody.
+
+### The reports (part 3)
+
+`reports/`: `reports.api.views` -- eleven `BaseReportView`s -- over `reports.services`, with
+`DateRange` (`reports/date-range.ts`). Read-only. Every figure is aggregated in the database,
+so each statement is Django's own, captured with and without a branch (a filter on the branch
+moves its join to the front): a sum of unrounded discount shares, a `ROUND(..., 2)`, the
+shop's calendar day or month of an instant (`AT TIME ZONE`), and the ten best sellers under
+`ORDER BY 3 DESC LIMIT 10` with their ties come out as PostgreSQL makes them. What Python then
+does to the numbers -- `quantize`, a margin, a share, a month's subtraction -- is `Dec`, in
+Python's context. A value keeps its Python type until it is written: a `Decimal` is a string
+in JSON (`_json_safe`) and its own text in a CSV cell; a datetime is `isoformat()` with a `Z`
+in one and `str()` in the other.
+
+| Endpoint | Notes |
+|---|---|
+| Every report | `reports.view` or `reports.financial`, a flat requirement: every method needs it. **The branch** (`_branch_for`): none named is every branch for an owner, an administrator or a superuser and the reader's own for anyone else -- which, for staff with no branch, is every branch too; one named must exist (404, `Unknown branch.`; a key that is none is the lookup's 400) and, for a reader bound to a branch, be theirs (403); a closed branch is reportable. **The window** (`DateRange.from_params`): `date_from` or `date_to` (`core.dates`: a day or a moment, refused when unreadable) with the missing end thirty days back or now, labelled `custom`; else `range`, one of `today`, `yesterday`, `7d`, `30d`, `90d`, `month`, `last_month`, `year` on the shop's calendar days, anything else the default `30d`, which says so. The branch is refused before the window, except on `sales/`, which reads the window first. The answer is the report's dict, or `{"results": [...]}` for a list |
+| `GET /api/v1/reports/dashboard/` | `reports.view`. The window's sold orders (eight statuses; cancelled and pending are not trade) as totals, units, cost and net sales; gross profit and margin after the window's completed returns (`_gross_profit`, the business summary's own); by channel, by day -- a zero row on every day that did not trade, up to 370 days, on the shop's calendar -- by payment method, the ten best sellers and categories; and three figures no window touches: stock value and units, online orders waiting, rows at or below their reorder point. A reader with `reports.financial` also gets `profit`: expenses, purchase shipping and net profit; without it the block is absent, not empty. A window that ends on the last day a date can hold is a 500 (D232, copied) |
+| `GET /api/v1/reports/sales/?channel=` | `reports.view`. The sold orders, newest first, optionally of one channel (any text; none that matches is an empty list). The rows go to DRF's encoder as they are: a Decimal there is a JSON number (`8230.0`), where every other report writes a string |
+| `GET /api/v1/reports/products/performance/` | `reports.view`. Per SKU: units, net revenue, cost, units returned, gross profit and margin, best revenue first |
+| `GET /api/v1/reports/inventory/valuation/` | `reports.financial`. Every stock row with its value at cost and at retail, by product name -- an order that ties on every product with more than one variant, so the five-table statement is Django's, joins in its order. No window: the date parameters are never read, so never refused |
+| `GET /api/v1/reports/inventory/movement/` | `reports.financial`. The ledger in the window by movement type: units, entries, value at the unit cost recorded (none is nothing) |
+| `GET /api/v1/reports/purchases/` | `reports.financial`. The purchase orders raised in the window, drafts and cancelled ones too, with what is outstanding after payments and credits |
+| `GET /api/v1/reports/returns/` | `reports.view`. The returns opened in the window with the units each asks for (none yet is 0) |
+| `GET /api/v1/reports/profit/` | `reports.financial`. Net revenue, cost and gross profit by the shop's day, and their totals and margin |
+| `GET /api/v1/reports/expenses/` | `reports.financial`. `finance.selectors.expense_totals`: spending by category, voids left out, each with its share |
+| `GET /api/v1/reports/business-summary/` | `reports.financial`. Revenue net of VAT, less refunds, less the cost of goods (what restocked returns gave back taken off), gross profit; less expenses and what purchase orders charged for shipping (counted when an order's first posted delivery arrives), net profit; and the volume behind it |
+| `GET /api/v1/reports/vat/` | `reports.financial`. Output VAT with its taxable and zero-rated bases, the credits of completed returns (each line's VAT and base prorated by the units that came back), input VAT on purchases that are purchases less what went back to suppliers, the net payable; then the output split by rate and treatment, and the whole subtraction month by month on the shop's calendar |
+| `?format=csv` on any of them | `reports.export`, checked after the report has run. A `text/csv` download named for the report, written as Python's `csv.DictWriter` writes it (`common/pycsv.ts`): the list itself; `daily` for `profit/`; `monthly` for `vat/`; the statement line by line for `business-summary/`; and for `dashboard/` nothing, as its days are under another key (D231, copied). No rows is an empty file |
+
+The views declare `[JSONRenderer, CSVRenderer]`, and the CSV renderer renders nothing: it is
+there so that `?format=csv` negotiates. So whatever else negotiates it is written by Django
+as the iteration of the dict it was given -- its keys, run together (D231, copied):
+
+- any refusal under `?format=csv` -- a bad date, an unknown branch, no permission, nobody signed
+  in, a method the view does not serve -- is the five letters `error`, as `text/csv`, with the
+  refusal's status. The sales view's own refusal to export is `detail`.
+- `Accept: text/csv` (or `text/*`) with no `format` is a 200 whose body is the report's keys:
+  `results`, or `rangekpissales_over_time...`.
+- `?format=csv` with `Accept: application/json` is a 406: the format leaves only the CSV
+  renderer, and the header refuses it. The web app's export links are plain navigations, whose
+  `Accept` ends in `*/*`.
+
+`fixture_reports.py` adds what the demo seed has none of -- VAT. Eight orders in January and
+February 2025, at 15% and 7.5%, exclusive and inclusive, zero-rated, with an order discount
+whose shares do not terminate, a free line (a subtotal of nothing), one in the half-hour that
+is February in Dhaka and January in UTC, one cancelled and one pending; five returns
+(completed in another month than the sale, restocked, written off, quarantined, only
+approved, asking for nothing); five purchase orders (two posted deliveries, one unposted, a
+draft, a cancelled one, goods sent back); and four expenses, two categories of one total.
+They are rows with frozen figures: no stock moves and no money, so the shelves and accounts
+every other suite counts are as they were. And a role that reads reports and may not export
+them, which no role the shop ships is.
 
 ## Running it
 
@@ -1201,6 +1254,12 @@ the port):
   refused for its first; a whole number in the list is a key (D229).
 - A notice written for a customer with no account names nobody and no permission: no list
   holds it (D230).
+- The reports' CSV renderer renders nothing, so every answer that negotiates it but is not the
+  export itself is its dict's keys run together: `error` for any refusal under `?format=csv`,
+  `results` for `Accept: text/csv`. The dashboard's export is always empty; the sales view
+  refuses an export with a bare `detail`; `?format=csv` asked for as JSON is a 406 (D231).
+- A NUL in the sales report's `channel` is a 500, and so is a dashboard window that ends on
+  the last day a date can hold, or past either end of what one can (D232).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
