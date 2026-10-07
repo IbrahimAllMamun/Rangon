@@ -29,6 +29,8 @@ import { posSaleConcurrencyChecks } from './pos-sale-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
+import { notificationsCases } from './notifications-cases.ts';
+import { notificationsConcurrencyChecks } from './notifications-concurrency.ts';
 import { orderCases } from './orders-cases.ts';
 import { productCases } from './product-cases.ts';
 import { variantCases } from './variant-cases.ts';
@@ -477,8 +479,6 @@ async function buildCases(): Promise<Case[]> {
     headers: { accept: 'image/png' },
   });
 
-  // --- Categories and brands ------------------------------------------------
-  add('categories', '/api/v1/shop/categories/');
   // An empty Content-Type: nothing to parse with no body, no parser for one with.
   add('an empty Content-Type and no body', '/api/v1/auth/logout/', {
     method: 'POST',
@@ -523,6 +523,8 @@ async function buildCases(): Promise<Case[]> {
     }
   }
 
+  // --- Categories and brands ------------------------------------------------
+  add('categories', '/api/v1/shop/categories/');
   const roots = await json<{ slug: string; children: { slug: string }[] }[]>(
     '/api/v1/shop/categories/',
   );
@@ -769,6 +771,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await reviewsCases()));
   cases.push(...(await teamCases()));
   cases.push(...(await auditCases()));
+  cases.push(...(await notificationsCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -927,6 +930,7 @@ async function main(): Promise<void> {
       ['shipping', () => shippingConcurrencyChecks({ DJANGO, NEST })],
       ['reviews', () => reviewsConcurrencyChecks({ DJANGO, NEST })],
       ['team', () => teamConcurrencyChecks({ DJANGO, NEST })],
+      ['notifications', () => notificationsConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

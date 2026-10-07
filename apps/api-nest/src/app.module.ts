@@ -17,6 +17,7 @@ import { ContentAdminModule } from './content/admin/content-admin.module';
 import { CustomersModule } from './customers/customers.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PosModule } from './pos/pos.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
@@ -32,8 +33,8 @@ export class CoreModule {
   static forRoot(env: Env, routes: RouteRegistry) {
     return {
       module: CoreModule,
-      providers: [
       imports: [DiscoveryModule],
+      providers: [
         { provide: ENV, useValue: env },
         { provide: RouteRegistry, useValue: routes },
         Database,
@@ -42,9 +43,9 @@ export class CoreModule {
         RolePermissions,
         CeleryService,
         Revalidation,
-      ],
         Throttles,
         ViewRegistry,
+      ],
       exports: [
         ENV,
         RouteRegistry,
@@ -54,9 +55,9 @@ export class CoreModule {
         RolePermissions,
         CeleryService,
         Revalidation,
-      ],
         Throttles,
         ViewRegistry,
+      ],
     };
   }
 }
@@ -80,6 +81,7 @@ export class AppModule {
         PromotionsModule,
         ShippingModule,
         EngagementModule,
+        NotificationsModule,
       ],
       controllers: [HealthController],
       providers: [
