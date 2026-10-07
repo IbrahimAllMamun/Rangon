@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 to 3 of 5, and the first half of part 4 (the audit log, notifications, the reports; what DRF does before a view runs, on every view; the pg-boss queue), parity 12075/12075 with either queue and 208 race checks (211 with pg-boss) |
+| 7 | Reports, audit log, notifications, background jobs (pg-boss for Celery, ADR-0016); cutover | **In progress**: parts 1 to 4 of 5 (the audit log, notifications, the reports; what DRF does before a view runs, on every view; the pg-boss queue; the ten jobs, their worker and schedule), parity 12138/12138 with either queue, 211 race checks (214 with pg-boss) and 5 checks of the worker. The cutover is left |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -213,6 +213,8 @@ across both APIs where both serve the path:
 | 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
 | 6 requests to mark every notice read at once, across both APIs | six 200s; each notice is counted by exactly one of them, none is left unread. No lock is involved |
 | With pg-boss (`run-jobs`, the Nest API alone): a checkout that commits; the same refused after its alert was written; a write-off into low stock | each job is a row of the transaction that decided it, and is gone when that transaction is: see "Background jobs" below |
+| The reservation sweep as Django's task and as the Nest handler at once, over every unpaid order past the window, every shelf they name given what their lines ask for and five over | each order is cancelled once and each line's stock given back once: every shelf is left with its five. Both sweeps count an order the other got to first (D234, copied) |
+| An order confirmed while the sweep waits on its row (each API in turn) | cancelled all the same, as paid for too late, and its stock given back: the sweep chose it before the lock and the status machine lets a confirmed order be cancelled (D233, copied) |
 | A notice read while a request to mark everything waits on its row (each API in turn) | the request's `UPDATE` waits, looks at the row again, leaves it as it was read and counts the others. No lock is involved: it is the one statement that holds this. With the port made to read the unread first and write them by key, it stamps the notice again and counts it |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
@@ -740,7 +742,7 @@ Phase 7 ports what is left and then moves the traffic. Its parts, in order:
 4. the background jobs: what Celery's worker and beat run today, on pg-boss, in PostgreSQL
    ([ADR-0016](decisions/0016-nest-jobs-on-pg-boss.md), the owner's decision of 2026-10-07; the
    plan had pencilled in BullMQ) -- the queue first (part 4a, below), then the ten jobs
-   themselves and the worker that runs them (part 4b);
+   themselves, the worker that runs them and the schedule (part 4b, below);
 5. the cutover, path by path at the proxy.
 
 ### Content negotiation
@@ -938,6 +940,82 @@ mode the two lists are compared sorted.) Three checks run only then, of the Nest
 | A checkout that commits | its low-stock alert, email and SMS carry the order's own transaction id, and nothing else is queued |
 | The same checkout refused after the alert was written (the coupon's last use taken while it waits on the coupon's row) | nothing is queued and nothing is held. With the port made to queue outside the transaction, the alert is left behind for an order that does not exist |
 | A write-off that takes a shelf to its reorder point | the alert carries the write-off's transaction id -- the audit entry's, as the ledger entry is written under a savepoint, which has an id of its own |
+
+### Background jobs: the ten jobs, the worker and the schedule (part 4b)
+
+`jobs/job-handlers.service.ts` is the ten Celery tasks, each answering the word its task
+returns. Nothing calls them yet outside a worker: with the default backend the port still
+queues for Celery, and Celery still does the work, until the cutover.
+
+| Job | Arguments | What it does, and answers |
+|---|---|---|
+| `content.tasks.revalidate_storefront` | the tags | `POST`s them to `WEB_REVALIDATE_URL` with `X-Revalidate-Secret`, five seconds allowed: `sent`. `skipped` with no URL or no tags. Anything but a success is retried, twice, thirty seconds apart |
+| `notifications.tasks.send_notification_email` | a notice's id | mails the notice to the member it names (`[Rangon] <title>`) and stamps `emailed_at`: `sent`. `skipped` for a notice that is not there, names nobody, or names someone with no address. A mail fault is retried three times, a minute apart |
+| `notifications.tasks.send_order_email` | an order's id, the notice type | mails the customer (`[Rangon Fashion] We have your order ...`, and one subject each for shipped, delivered and refunded; "Update on order ..." for any other type): `sent`, `missing`, `no-email`. Retried three times, two minutes apart |
+| `notifications.tasks.send_order_sms` | the same | the text for confirmed, shipped and refunded (`jobs/sms.ts`: one segment each), through `SmsService`, which writes the `SmsMessage` row: `sent`, `failed`, `suppressed` (a number off `SMS_ALLOWLIST` outside a live environment), `no-phone`, `no-template`, `missing`. A message the gateway refused is recorded and not sent again; a fault on the way is retried three times |
+| `inventory.tasks.notify_low_stock` | a stock row's id | a notice to the branch's stock readers when what is available is at or under the reorder point -- `OUT_OF_STOCK` at nothing: `notified`, else `skipped` |
+| `orders.tasks.release_expired_reservations` | -- | every online order still pending past `RANGON_RESERVATION_MINUTES`, not paid on delivery, goes through the status machine to `CANCELLED` ("PAYMENT_TIMEOUT: reservation expired"), each in its own transaction under the order's row lock, its stock given back: `released:<n>`. One that will not cancel is logged and the sweep goes on |
+| `orders.tasks.expire_abandoned_carts` | days (30) | switches off the carts nobody has touched in that long: `expired:<n>` |
+| `inventory.tasks.verify_inventory_integrity` | -- | the ledger against the cached stock (the inventory admin's own check): `clean`, or an `INTEGRITY_ALERT` notice of the first twenty positions and `drift:<n>`. It reports; it rewrites nothing |
+| `inventory.tasks.send_low_stock_digest` | -- | one notice to those who may raise a purchase order, of up to a hundred rows at or under their reorder point (thirty listed), and an email job for each notice written: `digest:<n>`, or `none` |
+| `catalog.tasks.check_expiring_stock` | days (60) | a notice of stocked items whose expiry date is within that many days: `expiring:<n>`, or `none`. The horizon is counted from the day in UTC, as `timezone.now().date()` is |
+
+`Mailer` (`jobs/mailer.service.ts`) is Django's SMTP settings on nodemailer (`EMAIL_HOST`,
+`EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_USE_TLS`, `EMAIL_TIMEOUT`,
+`DEFAULT_FROM_EMAIL`). `SmsService` is `notifications.sms`: the allowlist, the console
+provider, a provider registered by name (`SMS_PROVIDER`), and the row every message leaves.
+
+**The worker.** `JobWorker` registers a handler on each queue and, unless told not to, the
+schedule: the five lines of `config/celery.py`, on the shop's clock.
+
+| Setting | Meaning |
+|---|---|
+| `RANGON_JOBS_WORKER` | (part 4a) whether this process works the queue. `src/worker.ts` (`node dist/worker.js`) is the same application with no listener, for a worker of its own |
+| `RANGON_JOBS_SCHEDULE` | whether a worker also fires the schedule. On unless set to `0`: for a worker started while Celery's beat still runs, so that nothing fires twice |
+
+A fault the Celery task hands to `self.retry` is raised to pg-boss, which delivers the job
+again as often and as far apart as the queue says (`jobs/queues.ts`, never backed off). Any
+other failure is logged and the job closed, with the reason on its row
+(`pgboss.job.output`: `{"result": null, "error": "..."}`): Celery fails such a task once and
+does not run it again. A job that succeeds leaves its word there: `{"result": "sent"}`.
+
+**How a handler is compared with its task.** The parity stack has no worker, so a job is run
+on demand. Both APIs carry, in the parity stack and nowhere else, a route that runs one job
+now and answers what it came to (`gateway/parity_gateway/jobs.py` for Django, which calls
+`task.apply()` -- Celery's eager run, every retry at once; `parity/serve.ts` for Nest, which
+calls `JobWorker.apply`, the same). A case (`parity/jobs-cases.ts`) compares the word, the
+rows the job wrote (orders and their timelines, shelves and the ledger, notices, SMS rows,
+carts, the audit log), the jobs it queued in turn, and what it sent:
+
+- `parity/sink.ts` is a mail server and a stand-in for the web app, one container both APIs
+  send to. A message is kept as its sender, recipients, subject and text, decoded; a
+  revalidation as its body and secret. A case can make either refuse, to see the retries:
+  four attempts at a refused email from each side, three at a refused revalidation.
+- The schedule itself is a case: Django answers `beat_schedule`, `CELERY_TIMEZONE`,
+  `CELERY_TASK_TIME_LIMIT` and every registered task with the retries it asks for, read off
+  Celery; Nest answers `JOB_SCHEDULE`, `JOB_QUEUES` and its own settings.
+
+**The worker itself** is checked last, by `scripts/nest-parity.sh worker` (which `run-jobs`
+ends with): `nest-worker`, the image run as `node dist/worker.js`, on what `nest-jobs`
+queues. It cannot run during the comparison, where a queued job must stay queued to be read.
+
+| Check | Holds |
+|---|---|
+| A banner added through the API | the revalidation it queued is taken up, the web app is asked once, with the secret, and the job closed as `sent` |
+| An order's confirmation email, queued | sent once, to the customer; closed as `sent` |
+| The mail server refusing | the job is tried once and left in `retry`, due in two minutes with three retries in hand; brought forward with the server back, it is sent on its first retry |
+| An order's email for a key that is no key | failed once, closed with the reason on its row, not retried though its queue allows three |
+| Afterwards | four jobs queued, four closed; and no schedule from a worker started with `RANGON_JOBS_SCHEDULE=0` |
+
+The parity worker fires no schedule: the sweep would cancel the fixtures' unpaid orders every
+five minutes. With it on, seen once by hand on 2026-10-07: `pgboss.schedule` held the five
+lines, each with `Asia/Dhaka`, and the sweep fired at the next fifth minute and closed as
+`released:64`.
+
+**What is not the same, and why.** An email is compared as a reader sees it, not byte for
+byte: nodemailer and Django's `EmailMessage` fold headers and encode bodies differently. And
+Celery records a failed task as `FAILURE` in a result backend this project never reads; the
+worker closes the job and leaves the reason on its row.
 
 ## Running it
 
@@ -1312,6 +1390,11 @@ the port):
   refuses an export with a bare `detail`; `?format=csv` asked for as JSON is a 406 (D231).
 - A NUL in the sales report's `channel` is a 500, and so is a dashboard window that ends on
   the last day a date can hold, or past either end of what one can (D232).
+- The reservation sweep chooses its orders before it locks any: one confirmed -- paid for --
+  while the sweep waits on its row is cancelled as "PAYMENT_TIMEOUT" and its stock given back
+  (D233).
+- Two sweeps at once both count an order the other got to first: `released:<n>` can say more
+  than were released (D234).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

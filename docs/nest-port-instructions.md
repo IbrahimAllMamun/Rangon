@@ -162,7 +162,25 @@ scripts/nest-parity.sh run-jobs
 The whole comparison again with the Nest API queuing its jobs in pg-boss (`nest-jobs`, port
 8630, built and recreated by the command). It takes `PARITY_ONLY` and `PARITY_RACES` as `run`
 does; `PARITY_ONLY=concurrency PARITY_RACES=jobs` runs the three transaction checks alone.
-Run it after `run`, on the same database: a part that queues a job passes both.
+Run it after `run`, on the same database: a part that queues a job passes both. It ends with
+the worker check:
+
+```bash
+scripts/nest-parity.sh worker
+```
+
+The worker itself (`nest-worker`, the image run as `node dist/worker.js`, schedule off) on what
+`nest-jobs` queues: a job run, one retried, one closed (`parity/worker-check.ts`). It empties
+`pgboss.job` first -- the worker would run whatever the comparison left -- and removes the
+worker afterwards: it must not be up during a comparison, where a queued job stays queued to
+be read.
+
+```bash
+PARITY_ONLY="jobs: " PARITY_VERBOSE=1 scripts/nest-parity.sh run
+```
+
+The ten handlers beside their Celery tasks, each run on demand, with what each wrote and
+sent. `PARITY_ONLY=concurrency PARITY_RACES=sweep` runs the reservation sweep's races.
 
 ### Django-side checks
 
@@ -187,6 +205,14 @@ apps/api-nest/
     jobs/jobs.service.ts      `Jobs`: where background work is handed over, and the one place the
                               transport is chosen; `queues.ts` names each job and its retries
     jobs/pg-boss.service.ts   the pg-boss queue (ADR-0016); `celery.service.ts` is ADR-0014's writer
+    jobs/job-handlers.service.ts
+                              the ten jobs, each answering the word its Celery task returns;
+                              `RetryJob` is what a task hands to `self.retry`
+    jobs/job-worker.service.ts
+                              the handlers on the queues, and the schedule; `apply` is Celery's
+                              eager run, for the parity stack. `worker.ts` is the worker alone
+    jobs/mailer.service.ts, jobs/sms.ts, jobs/sms.service.ts
+                              SMTP as Django's settings have it; `notifications.sms`
     auth/view-registry.ts     what the view at a route pattern asks of any request (who may call,
                               how it is throttled): for a method no handler takes
     notifications/            the notices a signed-in user reads and marks read
@@ -261,7 +287,13 @@ apps/api-nest/
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
     fixture*.py               Django shell scripts that add what the demo seed lacks
-    serve.ts, gateway.ts, gateway/   the parity stack's Nest entry and stand-in payment gateway
+    serve.ts, gateway.ts, gateway/   the parity stack's Nest entry and stand-in payment gateway;
+                              on both sides, the routes that run a job on demand and say what is
+                              scheduled (`gateway/parity_gateway/jobs.py` is Django's)
+    sink.ts                   a mail server and the web app's revalidation route, for both APIs:
+                              keeps what a job sent, and refuses on request
+    jobs-cases.ts, sweep-concurrency.ts, worker-check.ts
+                              each job beside its Celery task; the sweep's races; the worker itself
   test/unit/                  unit tests; expected values printed by Django or DRF themselves
 ```
 
@@ -366,7 +398,9 @@ apps/api-nest/
    - A **write case** also needs:
      - `reset`, which puts every row back before each API's request;
      - `effects`, SQL whose rows are compared after each request;
-     - `jobs: true`, to compare the queued Celery jobs.
+     - `jobs: true`, to compare the queued Celery jobs;
+     - `sink: true`, to compare the mail and the revalidations sent (`{ mail: 'refuse' }` to
+       have the sink refuse, and see the retries).
    - Use `prepare` for per-case state changes. `setup` runs once, before the per-side reset,
      which would undo it.
    - `normalize` blanks values each API mints (new ids, timestamps compared by form).
@@ -481,6 +515,12 @@ apps/api-nest/
 | The throttle check failed with "network ... not found" after a reset | `reset` takes the stack's network down, and the stopped throttled containers, which are in a profile `down` does not touch, still name it | remove the throttled pair before a reset (`--profile throttle rm -sf nest-throttled django-throttled`), or start it with `--force-recreate` |
 | A case's `<now>` normalisation also blanked a moment the request had named | it blanked anything that looked like a UTC instant | blank only the end the request left to the clock: read which from the query |
 | An anonymous `DELETE /auth/me/` answered 405 where Django answered 401; a bad token at `GET /auth/logout/` 401 for 405; and no 405 was ever throttled | DRF authenticates, checks permissions and throttles in `initial()`, before it looks for the method's handler; the port's answer for a missing method knew staff views only | a new view's cases include a method it does not serve -- anonymous, with a bad token, and as someone it refuses -- and the throttle check has a scenario for it |
+| The sweep's audit entries differed: Django's carried an address and a request id, the port's none | the stand-in runs the Celery task inside a view, and `audit.record` reads the request's context; a worker has none | run the task in a context of its own (`contextvars.Context().run(task.apply, ...)`): what is compared is the job as a worker runs it |
+| The digest and the expiry notice listed tied rows in two orders | both order by a column that ties (`on_hand`; the expiry date) and cut the list at thirty | compare such a body with its lines sorted (`EFFECTS_TIED`), and add one arrangement with no tie -- every shelf its own count -- so the cut itself is compared |
+| A race check of the sweep "never waited" on Django though the order was locked | `pg_stat_activity.query` is cut at 1024 bytes, and Django's `SELECT ... FOR UPDATE` names every column first: the words `FOR UPDATE` are past the cut | match a lock wait by the table's name alone |
+| The first worker check expected a job waiting to be retried to show `retry_count = 1` | pg-boss counts a retry when the job is delivered again, not when it is owed: a job in `retry` after one failure still says 0 | read `pgboss.job` once by hand before asserting on its columns |
+| A new parity script that imported a helper ran the whole comparison | `run.ts` starts its run when loaded, and `concurrency.ts`, `checkout-cases.ts` and the rest import it | a script that is not part of the run stands alone, as `throttle.ts` and `worker-check.ts` do: its own requests, its own token |
+| The seed's unpaid orders made a weak race for the sweep: 2 ledger rows for 57 lines | a release takes what the line asks for or what the shelf holds, whichever is less, and the seed reserves next to nothing | before a race over seeded rows, count what it will actually move; arrange the shelves so a second release would show |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 
@@ -527,18 +567,17 @@ Every part of a phase updates, in the same branch:
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | done 2026-10-07 | merged to `main` (PR #88), ten parts (the list is in `nest-port.md`, "Phase 6: the back office") |
-| 7 | in progress on `phase/nest-7-reports-jobs-cutover` (PR #89 holds parts 1 to 3), five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 3 and 4a -- the audit log, notifications, the reports, DRF's `initial()` on every view, and the pg-boss queue -- done 2026-10-07 | next: part 4b, the ten jobs and the worker; then the cutover per path at the proxy |
+| 7 | in progress on `phase/nest-7-reports-jobs-cutover` (PR #89 holds parts 1 to 3), five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 4 -- the audit log, notifications, the reports, DRF's `initial()` on every view, the pg-boss queue, and the ten jobs with their worker and schedule -- done 2026-10-07 | next: part 5, the cutover per path at the proxy |
 
 Before the next part:
 
-1. Part 4b is the jobs themselves (`JobHandlers`), each answering the word its Celery twin
-   returns, and the worker and schedule (`JobWorker`, `src/worker.ts`). To compare a handler with
-   its task, both must be run on demand on the same state: a stand-in endpoint that exists only
-   in the parity stack (as the payment gateway does, §6.4.8), a mail sink both APIs send to
-   (Django's parity settings use the in-memory backend today), and somewhere for the storefront
-   revalidation to land. `send_order_sms` needs `notifications/sms.py` ported: segments, the
-   allowlist, the templates, the console provider. `release_expired_reservations` goes through
-   the status machine phase 5 ported; race it against a payment captured mid-flight.
+1. Part 5 switches the jobs over, and that has an order. While Django serves any path it
+   queues for Celery, so Celery's worker stays until the last path has moved. The schedule
+   must fire in exactly one place: start the Nest worker with `RANGON_JOBS_SCHEDULE=0` while
+   beat runs, and stop beat in the same step that turns the schedule on -- two sweeps at once
+   are harmless to stock but both count (D234), and two digests are two emails. Set
+   `RANGON_JOBS_BACKEND=pgboss` on the API only once a worker is up to take what it queues;
+   the database role needs `CREATE` on the database for the `pgboss` schema.
 2. Part 5, the cutover, must account for the paths Django serves that are not in the port's
    tables: the router's API root (`GET /api/v1/`, a 401 or a map of the routes), `/api/schema/`,
    `/api/docs/`, `/django-admin/` and `/media/`.

@@ -77,6 +77,8 @@ chose pg-boss knowing this. The exception is bounded:
   (the default with the pg-boss backend). The schedule is the five lines of `config/celery.py`,
   in the shop's time zone as `CELERY_TIMEZONE` has them. `src/worker.ts` is the same
   application with no HTTP listener, for a separate worker container.
+  `RANGON_JOBS_SCHEDULE=0` starts a worker that fires no schedule (added in part 4b): for one
+  that runs beside Celery's beat before the cutover, and for the parity stack's.
 
 **What is transactional.** A job decided inside a transaction is queued in it: checkout's
 confirmation email and SMS, and the low-stock alert of any stock movement (`StockService.run`).
@@ -88,7 +90,8 @@ stand. They can move inside once Django no longer serves those paths.
 **Retries are Celery's.** The three senders retry three times, a minute or two apart, and the
 revalidation twice, thirty seconds apart, and only for what their tasks retry: a mail or gateway
 fault. Any other failure is logged and the job closed, as Celery fails a task it was not told
-to retry; the other six jobs never retry. Nothing is retried with backoff that Celery retries
+to retry, with the reason left on its row (`pgboss.job.output`: `{"result": null, "error":
+"..."}`); the other six jobs never retry. Nothing is retried with backoff that Celery retries
 at a fixed interval.
 
 ## Consequences
