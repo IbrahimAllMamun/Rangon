@@ -14,6 +14,7 @@ import { Redis } from 'ioredis';
 import pg from 'pg';
 
 import { accountCases } from './accounts-cases.ts';
+import { auditCases } from './audit-cases.ts';
 import { cartCases } from './cart-cases.ts';
 import { attributeCases } from './attribute-cases.ts';
 import { catalogAdminCases } from './catalog-admin-cases.ts';
@@ -28,6 +29,8 @@ import { posSaleConcurrencyChecks } from './pos-sale-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
+import { notificationsCases } from './notifications-cases.ts';
+import { notificationsConcurrencyChecks } from './notifications-concurrency.ts';
 import { orderCases } from './orders-cases.ts';
 import { productCases } from './product-cases.ts';
 import { variantCases } from './variant-cases.ts';
@@ -51,6 +54,7 @@ import { posCases } from './pos-cases.ts';
 import { posQuoteCases } from './pos-quote-cases.ts';
 import { posSaleCases } from './pos-sale-cases.ts';
 import { posVoidCases } from './pos-void-cases.ts';
+import { reportsCases } from './reports-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
 import { expensesCases } from './expenses-cases.ts';
@@ -367,6 +371,159 @@ async function buildCases(): Promise<Case[]> {
     headers: { authorization: 'bearer abc' },
   });
 
+  // --- Content negotiation: settled before a DRF view authenticates -------------
+  const brands = '/api/v1/shop/brands/';
+  for (const format of ['json', '', 'xml', 'JSON', 'csv', '%20json', 'json%20', 'j%00']) {
+    add(`negotiation: format=${format}`, `${brands}?format=${format}`);
+  }
+  add('negotiation: format twice, the last one known', `${brands}?format=xml&format=json`);
+  add('negotiation: format twice, the last one not', `${brands}?format=json&format=xml`);
+  add('negotiation: an unknown format and a bad token', `${brands}?format=xml`, {
+    headers: { authorization: 'Bearer abc' },
+  });
+  add('negotiation: an unknown format and a method with no handler', `${brands}?format=xml`, {
+    method: 'POST',
+  });
+  add(
+    'negotiation: an unknown format on a staff view, nobody signed in',
+    '/api/v1/brands/?format=xml',
+  );
+  add(
+    'negotiation: an unknown format on a staff view, no such method',
+    '/api/v1/brands/?format=xml',
+    {
+      method: 'PUT',
+    },
+  );
+  add('negotiation: an unknown format at sign-out', '/api/v1/auth/logout/?format=xml', {
+    method: 'POST',
+  });
+  add('negotiation: an unknown format at sign-in', '/api/v1/auth/login/?format=xml', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{',
+  });
+  add(
+    'negotiation: an unknown format at a webhook',
+    '/api/v1/shop/payments/paritypay/webhook/?format=xml',
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+  );
+  add('negotiation: the feed is no csv renderer', '/api/v1/shop/feed.csv?format=csv', {
+    flushCache: true,
+  });
+  add('negotiation: the feed as json', '/api/v1/shop/feed.csv?format=json', { flushCache: true });
+  add('negotiation: a plain view takes any format', '/api/health/?format=xml');
+  add('negotiation: no slash, an unknown format', '/api/v1/shop/brands?format=xml');
+  add('negotiation: no such path, an unknown format', '/api/v1/nope/?format=xml');
+  // The converter refuses the path in Django before any view negotiates.
+  add(
+    'negotiation: a path no converter takes, and an unknown format',
+    '/api/v1/shop/products/not%20a%20slug/?format=xml',
+  );
+  for (const accept of [
+    'application/json',
+    'APPLICATION/JSON',
+    '*/*',
+    'application/*',
+    '*/json',
+    'application/json;q=0',
+    'application/json; indent=4',
+    'application/json; charset=utf-8',
+    'image/png, application/json',
+    'image/png, */*;q=0.1',
+    'image/png',
+    'application/xml',
+    'application/xml, text/csv',
+    'json',
+    'application',
+    '',
+    ',',
+  ]) {
+    add(`negotiation: Accept ${JSON.stringify(accept)}`, `${brands}?page_size=1`, {
+      headers: { accept },
+    });
+  }
+  add('negotiation: nothing acceptable and a bad token', brands, {
+    headers: { accept: 'image/png', authorization: 'Bearer abc' },
+  });
+  add('negotiation: nothing acceptable and a method with no handler', brands, {
+    method: 'POST',
+    headers: { accept: 'image/png' },
+  });
+  add('negotiation: nothing acceptable, a known format', `${brands}?format=json`, {
+    headers: { accept: 'image/png' },
+  });
+  add('negotiation: nothing acceptable, an unknown format', `${brands}?format=xml`, {
+    headers: { accept: 'image/png' },
+  });
+  add('negotiation: nothing acceptable on a staff view', '/api/v1/brands/', {
+    headers: { accept: 'image/png' },
+  });
+  add('negotiation: nothing acceptable at sign-out', '/api/v1/auth/logout/', {
+    method: 'POST',
+    headers: { accept: 'image/png' },
+  });
+  // The feed is a DRF view with JSON's renderer alone: asked for XML by name, it refuses.
+  add('negotiation: the XML feed asked for as XML', '/api/v1/shop/feed.xml', {
+    flushCache: true,
+    headers: { accept: 'application/xml' },
+  });
+  add('negotiation: the CSV feed asked for as CSV', '/api/v1/shop/feed.csv', {
+    flushCache: true,
+    headers: { accept: 'text/csv' },
+  });
+  add('negotiation: the XML feed asked for as anything', '/api/v1/shop/feed.xml', {
+    flushCache: true,
+    headers: { accept: 'application/xml, */*;q=0.5' },
+  });
+  add('negotiation: a plain view accepts anything', '/api/health/', {
+    headers: { accept: 'image/png' },
+  });
+
+  // An empty Content-Type: nothing to parse with no body, no parser for one with.
+  add('an empty Content-Type and no body', '/api/v1/auth/logout/', {
+    method: 'POST',
+    headers: { 'content-type': '' },
+  });
+  add('an empty Content-Type and a body', '/api/v1/auth/logout/', {
+    method: 'POST',
+    headers: { 'content-type': '' },
+    body: '{"refresh": "abc"}',
+  });
+
+  // --- A method the view does not serve: its checks run before the 405 ----------
+  // DRF authenticates, checks the view's permissions and throttles in
+  // `initial()`, and only then looks for the method's handler.
+  for (const [method, path] of [
+    ['POST', '/api/v1/auth/me/'],
+    ['GET', '/api/v1/auth/password/change/'],
+    ['PUT', '/api/v1/shop/account/orders/'],
+    ['PUT', '/api/v1/shop/account/addresses/'],
+    ['DELETE', '/api/v1/organization/'],
+    ['POST', '/api/v1/organization/tax/'],
+    // Public views: nothing to refuse before the method.
+    ['PUT', '/api/v1/shop/cart/'],
+    ['GET', '/api/v1/shop/checkout/'],
+    ['GET', '/api/v1/auth/login/'],
+    ['GET', '/api/v1/auth/logout/'],
+    ['GET', '/api/v1/shop/payments/paritypay/webhook/'],
+    ['POST', '/api/v1/shop/feed.xml'],
+  ] as const) {
+    add(`no such method: ${method} ${path}, nobody signed in`, path, { method });
+    // A view with no authentication classes never reads the token.
+    add(`no such method: ${method} ${path}, a bad token`, path, {
+      method,
+      headers: { authorization: 'Bearer abc' },
+    });
+    if (user) {
+      // Staff, where the view is a customer's: refused before the method is.
+      add(`no such method: ${method} ${path}, staff signed in`, path, {
+        method,
+        headers: { authorization: `Bearer ${token(user)}` },
+      });
+    }
+  }
+
   // --- Categories and brands ------------------------------------------------
   add('categories', '/api/v1/shop/categories/');
   const roots = await json<{ slug: string; children: { slug: string }[] }[]>(
@@ -614,6 +771,9 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await shippingCases()));
   cases.push(...(await reviewsCases()));
   cases.push(...(await teamCases()));
+  cases.push(...(await auditCases()));
+  cases.push(...(await notificationsCases()));
+  cases.push(...(await reportsCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -772,6 +932,7 @@ async function main(): Promise<void> {
       ['shipping', () => shippingConcurrencyChecks({ DJANGO, NEST })],
       ['reviews', () => reviewsConcurrencyChecks({ DJANGO, NEST })],
       ['team', () => teamConcurrencyChecks({ DJANGO, NEST })],
+      ['notifications', () => notificationsConcurrencyChecks({ DJANGO, NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

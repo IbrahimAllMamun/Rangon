@@ -1,10 +1,11 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, DiscoveryModule } from '@nestjs/core';
 
 import { AccountsModule } from './accounts/accounts.module';
 import { Authenticator, AuthGuard } from './auth/authentication';
 import { RolePermissions } from './auth/permissions';
-import { ThrottleGuard } from './auth/throttle';
+import { ThrottleGuard, Throttles } from './auth/throttle';
+import { ViewRegistry } from './auth/view-registry';
 import { EnvelopeFilter } from './common/envelope.filter';
 import { ENV, Env } from './config/env';
 import { Database } from './database/database.service';
@@ -16,10 +17,12 @@ import { ContentAdminModule } from './content/admin/content-admin.module';
 import { CustomersModule } from './customers/customers.module';
 import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PosModule } from './pos/pos.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
+import { ReportsModule } from './reports/reports.module';
 import { CatalogAdminModule } from './catalog/admin/catalog-admin.module';
 import { ShippingModule } from './shipping/shipping.module';
 import { EngagementModule } from './engagement/engagement.module';
@@ -31,6 +34,7 @@ export class CoreModule {
   static forRoot(env: Env, routes: RouteRegistry) {
     return {
       module: CoreModule,
+      imports: [DiscoveryModule],
       providers: [
         { provide: ENV, useValue: env },
         { provide: RouteRegistry, useValue: routes },
@@ -40,6 +44,8 @@ export class CoreModule {
         RolePermissions,
         CeleryService,
         Revalidation,
+        Throttles,
+        ViewRegistry,
       ],
       exports: [
         ENV,
@@ -50,6 +56,8 @@ export class CoreModule {
         RolePermissions,
         CeleryService,
         Revalidation,
+        Throttles,
+        ViewRegistry,
       ],
     };
   }
@@ -74,6 +82,8 @@ export class AppModule {
         PromotionsModule,
         ShippingModule,
         EngagementModule,
+        NotificationsModule,
+        ReportsModule,
       ],
       controllers: [HealthController],
       providers: [

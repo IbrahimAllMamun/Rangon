@@ -14,6 +14,8 @@ import { AuthenticationRequired, PermissionDenied } from '../common/errors';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { negotiate } from '../http/negotiation';
+import { PLAIN_VIEWS } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
 import { passwordFingerprint, TokenError, verifyAccessToken } from './jwt';
 import {
@@ -65,6 +67,28 @@ export const SkipAuthentication = () =>
  * account (`accounts.permissions.IsCustomer`); anyone else signed in is 403.
  */
 export const CustomerOnly = () => SetMetadata(CUSTOMER_ONLY, true);
+
+/** What a view says about who may call it. */
+export interface AccessMeta {
+  /** `authentication_classes = []`: nobody is authenticated, so no token is refused. */
+  skipAuthentication: boolean;
+  /** `AllowAny`. */
+  allowAny: boolean;
+  /** `IsCustomer`, after `IsAuthenticated`. */
+  customerOnly: boolean;
+}
+
+/** A handler's access metadata, the handler's own before its controller's. */
+export function accessMeta(
+  reflector: Reflector,
+  targets: Parameters<Reflector['getAllAndOverride']>[1],
+): AccessMeta {
+  return {
+    skipAuthentication: Boolean(reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)),
+    allowAny: Boolean(reflector.getAllAndOverride<boolean>(ALLOW_ANY, targets)),
+    customerOnly: Boolean(reflector.getAllAndOverride<boolean>(CUSTOMER_ONLY, targets)),
+  };
+}
 
 /** Python `bytes.split()`: runs of ASCII whitespace, empty pieces dropped. */
 function splitHeader(value: string): string[] {
@@ -154,6 +178,7 @@ export class AuthGuard implements CanActivate {
     private readonly authenticator: Authenticator,
     private readonly permissions: RolePermissions,
     private readonly routes: RouteRegistry,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -170,6 +195,9 @@ export class AuthGuard implements CanActivate {
       throw new NotFoundException();
 
     request.user = null;
+    // `APIView.initial()` settles the response's format before it authenticates.
+    const pattern = request.routeOptions.url ?? '';
+    if (!PLAIN_VIEWS.has(pattern)) negotiate(request, pattern, this.env);
     if (this.reflector.getAllAndOverride<boolean>(SKIP_AUTHENTICATION, targets)) return true;
 
     request.user = await this.authenticator.authenticate(request);

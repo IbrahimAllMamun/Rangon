@@ -107,12 +107,38 @@ interface Bucket {
   rate: string;
 }
 
+/** What a view says about its throttles: `throttle_scope`, `throttle_classes`, or none at all. */
+export interface ThrottleMeta {
+  /** A plain Django view: no throttle class ever sees it. */
+  skip: boolean;
+  /** `throttle_classes = [ScopedRateThrottle]`: the scope's bucket alone. */
+  onlyScoped: boolean;
+  scope: string | undefined;
+}
+
+/** A handler's throttle metadata, the handler's own before its controller's. */
+export function throttleMeta(
+  reflector: Reflector,
+  targets: Parameters<Reflector['getAllAndOverride']>[1],
+): ThrottleMeta {
+  return {
+    skip: Boolean(reflector.getAllAndOverride<boolean>(SKIP, targets)),
+    onlyScoped: Boolean(reflector.getAllAndOverride<boolean>(ONLY_SCOPED, targets)),
+    scope: reflector.getAllAndOverride<string>(SCOPE, targets),
+  };
+}
+
+/**
+ * `APIView.check_throttles`: every bucket the view names, counted and
+ * checked. Called by the guard for a request a handler will take, and by the
+ * exception filter for one whose method the view does not serve -- DRF
+ * throttles before it looks for the handler, so a 405 spends a request too.
+ */
 @Injectable()
-export class ThrottleGuard implements CanActivate {
+export class Throttles {
   private readonly rates: Record<string, string>;
 
   constructor(
-    private readonly reflector: Reflector,
     private readonly redis: RedisService,
     @Inject(ENV) private readonly env: Env,
   ) {
@@ -126,15 +152,12 @@ export class ThrottleGuard implements CanActivate {
     };
   }
 
-  async canActivate(context: ExecutionContext): Promise<boolean> {
-    const targets = [context.getHandler(), context.getClass()];
-    if (this.reflector.getAllAndOverride<boolean>(SKIP, targets)) return true;
-    const onlyScoped = this.reflector.getAllAndOverride<boolean>(ONLY_SCOPED, targets);
+  async check(request: FastifyRequest, meta: ThrottleMeta): Promise<void> {
+    if (meta.skip) return;
+    const { onlyScoped, scope } = meta;
     // config.settings.parity empties DEFAULT_THROTTLE_CLASSES. A view that
     // names its own throttle classes keeps them there too.
-    if (this.env.throttlingDisabled && !onlyScoped) return true;
-    const request = context.switchToHttp().getRequest<FastifyRequest>();
-    const scope = this.reflector.getAllAndOverride<string>(SCOPE, targets);
+    if (this.env.throttlingDisabled && !onlyScoped) return;
     const ident = clientIp(request, this.env.DJANGO_TRUSTED_PROXY_HOPS);
     const user = request.user;
 
@@ -173,7 +196,7 @@ export class ThrottleGuard implements CanActivate {
         waits.push(available <= 0 ? null : remaining / available);
       }
     }
-    if (!waits.length) return true;
+    if (!waits.length) return;
 
     const known = waits.filter((wait): wait is number => wait !== null);
     if (!known.length) throw new RateLimited('Request was throttled.');
@@ -181,5 +204,21 @@ export class ThrottleGuard implements CanActivate {
     throw new RateLimited(
       `Request was throttled. Expected available in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`,
     );
+  }
+}
+
+@Injectable()
+export class ThrottleGuard implements CanActivate {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly throttles: Throttles,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    await this.throttles.check(
+      context.switchToHttp().getRequest<FastifyRequest>(),
+      throttleMeta(this.reflector, [context.getHandler(), context.getClass()]),
+    );
+    return true;
   }
 }

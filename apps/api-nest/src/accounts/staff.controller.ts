@@ -21,6 +21,7 @@ import { absoluteUri } from '../common/http';
 import { Params, QueryDict } from '../common/query-dict';
 import { ENV, Env } from '../config/env';
 import { requestData } from '../http/request-body';
+import { AuditLogService } from './audit-log.service';
 import { ManualResponse } from './auth.service';
 import { BranchesService } from './branches.service';
 import { OrganizationAdminService } from './organization-admin.service';
@@ -278,5 +279,26 @@ export class PermissionsController {
   @Action('list')
   list(@Params() query: QueryDict) {
     return this.roles.permissions(query);
+  }
+}
+
+/** `AuditLogViewSet`: read-only, `audit.view` for every action. */
+@StaffView('audit-logs', ['audit.view'])
+export class AuditLogsController {
+  constructor(
+    private readonly auditLog: AuditLogService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('audit-logs/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.auditLog.list(request.user as RequestUser, query, absoluteUri(request, this.env));
+  }
+
+  @Get('audit-logs/:pk/')
+  @Action('retrieve')
+  retrieve(@Param('pk') pk: string, @Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.auditLog.retrieve(request.user as RequestUser, lookupParam(pk), query);
   }
 }

@@ -3,11 +3,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { RequestUser } from '../auth/authentication';
 import { canCrossBranch, RolePermissions } from '../auth/permissions';
 import { money, quantize, ZERO } from '../checkout/pricing';
-import { localIso } from '../common/datetime';
+import { localIso, parsePgTimestamptz, zoneOffsetSeconds } from '../common/datetime';
 import { Dec } from '../common/decimal';
 import type { QueryDict } from '../common/query-dict';
 import { ENV, Env } from '../config/env';
 import { Database } from '../database/database.service';
+import { columns, Params as SqlParams } from '../database/sql';
 
 /**
  * `PartyLedgerView` and `finance.selectors.party_ledger`: who owes the
@@ -15,6 +16,149 @@ import { Database } from '../database/database.service';
  * purchase orders each time they are asked for; neither a customer nor a
  * supplier carries a balance.
  */
+
+const O = '"orders_order"';
+const B = '"accounts_branch"';
+const C = '"customers_customer"';
+const P = '"purchasing_purchaseorder"';
+const S = '"purchasing_supplier"';
+
+/** Each model's columns, in its fields' order: what `select_related` selects. */
+const ORDER_COLUMNS = [
+  'id',
+  'created_at',
+  'updated_at',
+  'number',
+  'channel',
+  'status',
+  'payment_status',
+  'branch_id',
+  'customer_id',
+  'created_by_id',
+  'register',
+  'subtotal',
+  'coupon_discount',
+  'manual_discount',
+  'discount_total',
+  'tax_total',
+  'tax_rate',
+  'tax_mode',
+  'shipping_total',
+  'grand_total',
+  'paid_total',
+  'refunded_total',
+  'currency',
+  'coupon_id',
+  'shipping_method_id',
+  'shipping_address',
+  'billing_address',
+  'customer_note',
+  'internal_note',
+  'idempotency_key',
+  'guest_token',
+  'placed_at',
+  'confirmed_at',
+  'packed_at',
+  'shipped_at',
+  'delivered_at',
+  'cancelled_at',
+  'cancel_reason',
+  'stock_committed',
+] as const;
+const BRANCH_COLUMNS = [
+  'id',
+  'created_at',
+  'updated_at',
+  'organization_id',
+  'name',
+  'code',
+  'address',
+  'phone',
+  'email',
+  'is_default',
+  'fulfils_online_orders',
+  'register_count',
+  'status',
+] as const;
+const CUSTOMER_COLUMNS = [
+  'id',
+  'created_at',
+  'updated_at',
+  'user_id',
+  'name',
+  'phone',
+  'email',
+  'customer_type',
+  'is_walk_in',
+  'is_active',
+  'date_of_birth',
+  'notes',
+  'tags',
+  'total_orders',
+  'total_spent',
+  'loyalty_points',
+  'last_order_at',
+  'created_by_id',
+] as const;
+const PURCHASE_COLUMNS = [
+  'id',
+  'created_at',
+  'updated_at',
+  'number',
+  'supplier_id',
+  'branch_id',
+  'status',
+  'payment_status',
+  'invoice_number',
+  'ordered_at',
+  'expected_at',
+  'completed_at',
+  'subtotal',
+  'discount_total',
+  'tax_total',
+  'shipping_total',
+  'grand_total',
+  'paid_total',
+  'credited_total',
+  'currency',
+  'notes',
+  'created_by_id',
+] as const;
+const SUPPLIER_COLUMNS = [
+  'id',
+  'created_at',
+  'updated_at',
+  'name',
+  'code',
+  'contact_person',
+  'phone',
+  'email',
+  'address',
+  'tax_id',
+  'payment_terms_days',
+  'lead_time_days',
+  'status',
+  'notes',
+] as const;
+
+/** One table's columns out of a row read by position. */
+function named<T extends readonly string[]>(
+  names: T,
+  row: unknown[],
+  offset: number,
+): Record<T[number], unknown> {
+  return Object.fromEntries(names.map((name, index) => [name, row[offset + index]])) as Record<
+    T[number],
+    unknown
+  >;
+}
+
+/** `moment + timedelta(days=n)` on a `timestamptz` as PostgreSQL printed it. */
+function addDays(moment: string, days: number): string {
+  const { epochSeconds, microseconds } = parsePgTimestamptz(moment);
+  const shifted = new Date((epochSeconds + days * 86_400) * 1000).toISOString();
+  return `${shifted.slice(0, 10)} ${shifted.slice(11, 19)}.${String(microseconds).padStart(6, '0')}+00`;
+}
 
 const BUCKETS = ['current', 'd31_60', 'd61_90', 'over_90'] as const;
 type Bucket = (typeof BUCKETS)[number];
@@ -121,34 +265,45 @@ export class PartyLedgerService {
     const tz = this.env.DJANGO_TIME_ZONE;
     const iso = (value: string | null) => localIso(value, tz);
     // Ageing counts calendar days in the shop's own zone, not elapsed time.
-    const days = (since: string) =>
-      `((clock_timestamp() AT TIME ZONE '${tz}')::date - (${since} AT TIME ZONE '${tz}')::date)`;
-    const scope = branchId ? [branchId] : [];
+    const localDay = (epochSeconds: number) =>
+      Math.floor((epochSeconds + zoneOffsetSeconds(epochSeconds, tz)) / 86_400);
+    const today = localDay(Math.floor(Date.now() / 1000));
+    const days = (since: string) => today - localDay(parsePgTimestamptz(since).epochSeconds);
+    const sql = new SqlParams();
+    const atBranch = (table: string) =>
+      branchId ? ` AND ${table}."branch_id" = ${sql.add(branchId, 'uuid')}` : '';
 
+    // Both statements are Django's, every column of every table `select_related`
+    // joins: documents of one date come back as the plan leaves them, and the
+    // plan is the statement's.
     // `receivables`: real trade with a balance -- not a basket, a cancellation or a refund.
-    const orders = await this.db.query<{
-      id: string;
-      number: string;
-      placed_at: string;
-      days: number;
-      channel: string;
-      status: string;
-      grand_total: string;
-      paid_total: string;
-      customer_id: string;
-      customer_name: string;
-      customer_phone: string | null;
-    }>(
-      `SELECT o."id", o."number", o."placed_at", ${days('o."placed_at"')} AS "days", o."channel",
-              o."status", o."grand_total", o."paid_total", c."id" AS "customer_id",
-              c."name" AS "customer_name", c."phone" AS "customer_phone"
-         FROM "orders_order" o INNER JOIN "customers_customer" c ON (o."customer_id" = c."id")
-        WHERE (o."grand_total" > o."paid_total"
-               AND NOT (o."status" IN ('PENDING', 'CANCELLED', 'REFUNDED'))
-               ${branchId ? 'AND o."branch_id" = $1' : ''})
-        ORDER BY o."placed_at" ASC`,
-      scope,
+    const orderRows = await this.db.arrays(
+      `SELECT ${columns(O, ORDER_COLUMNS)}, ${columns(B, BRANCH_COLUMNS)}, ${columns(C, CUSTOMER_COLUMNS)}
+         FROM ${O} INNER JOIN ${B} ON (${O}."branch_id" = ${B}."id")
+         INNER JOIN ${C} ON (${O}."customer_id" = ${C}."id")
+        WHERE (${O}."grand_total" > (${O}."paid_total")
+               AND NOT (${O}."status" IN ('PENDING', 'CANCELLED', 'REFUNDED'))${atBranch(O)})
+        ORDER BY ${O}."placed_at" ASC`,
+      sql.values,
     );
+    const customerAt = ORDER_COLUMNS.length + BRANCH_COLUMNS.length;
+    const orders = orderRows.map((row) => {
+      const order = named(ORDER_COLUMNS, row, 0);
+      const customer = named(CUSTOMER_COLUMNS, row, customerAt);
+      return {
+        id: order.id as string,
+        number: order.number as string,
+        placed_at: order.placed_at as string,
+        days: days(order.placed_at as string),
+        channel: order.channel as string,
+        status: order.status as string,
+        grand_total: order.grand_total as string,
+        paid_total: order.paid_total as string,
+        customer_id: customer.id as string,
+        customer_name: customer.name as string,
+        customer_phone: customer.phone as string | null,
+      };
+    });
     const receivable = this.side(
       orders.flatMap((order) => {
         const outstanding = quantize(new Dec(order.grand_total).minus(order.paid_total));
@@ -178,34 +333,43 @@ export class PartyLedgerService {
     );
 
     // `payables`: committed purchases not yet settled by money or by credit, aged from the due date.
-    const raised = `COALESCE(p."completed_at", p."ordered_at", p."created_at")`;
-    const due = `(${raised} + s."payment_terms_days" * interval '1 day')`;
-    const purchases = await this.db.query<{
-      id: string;
-      number: string;
-      raised: string;
-      due: string;
-      days: number;
-      status: string;
-      invoice_number: string;
-      grand_total: string;
-      paid_total: string;
-      credited_total: string;
-      supplier_id: string;
-      supplier_name: string;
-      supplier_phone: string;
-    }>(
-      `SELECT p."id", p."number", ${raised} AS "raised", ${due} AS "due", ${days(due)} AS "days",
-              p."status", p."invoice_number", p."grand_total", p."paid_total", p."credited_total",
-              s."id" AS "supplier_id", s."name" AS "supplier_name", s."phone" AS "supplier_phone"
-         FROM "purchasing_purchaseorder" p
-         INNER JOIN "purchasing_supplier" s ON (p."supplier_id" = s."id")
-        WHERE (p."grand_total" > (p."paid_total" + p."credited_total")
-               AND NOT (p."status" IN ('DRAFT', 'CANCELLED'))
-               ${branchId ? 'AND p."branch_id" = $1' : ''})
-        ORDER BY p."ordered_at" ASC`,
-      scope,
+    const supplierJoin = `INNER JOIN ${S} ON (${P}."supplier_id" = ${S}."id")`;
+    const branchJoin = `INNER JOIN ${B} ON (${P}."branch_id" = ${B}."id")`;
+    const purchaseSql = new SqlParams();
+    const purchaseRows = await this.db.arrays(
+      // A filter on the branch names its join first, as Django's query holds them.
+      `SELECT ${columns(P, PURCHASE_COLUMNS)}, ${columns(S, SUPPLIER_COLUMNS)}, ${columns(B, BRANCH_COLUMNS)}
+         FROM ${P} ${branchId ? `${branchJoin} ${supplierJoin}` : `${supplierJoin} ${branchJoin}`}
+        WHERE (${P}."grand_total" > (${P}."paid_total" + ${P}."credited_total")
+               AND NOT (${P}."status" IN ('DRAFT', 'CANCELLED'))` +
+        (branchId ? ` AND ${P}."branch_id" = ${purchaseSql.add(branchId, 'uuid')}` : '') +
+        `) ORDER BY ${P}."ordered_at" ASC`,
+      purchaseSql.values,
     );
+    const purchases = purchaseRows.map((row) => {
+      const purchase = named(PURCHASE_COLUMNS, row, 0);
+      const supplier = named(SUPPLIER_COLUMNS, row, PURCHASE_COLUMNS.length);
+      // `completed_at or ordered_at or created_at`, then the supplier's terms.
+      const raised = (purchase.completed_at ??
+        purchase.ordered_at ??
+        purchase.created_at) as string;
+      const due = addDays(raised, Number(supplier.payment_terms_days ?? 0));
+      return {
+        id: purchase.id as string,
+        number: purchase.number as string,
+        raised,
+        due,
+        days: days(due),
+        status: purchase.status as string,
+        invoice_number: purchase.invoice_number as string,
+        grand_total: purchase.grand_total as string,
+        paid_total: purchase.paid_total as string,
+        credited_total: purchase.credited_total as string,
+        supplier_id: supplier.id as string,
+        supplier_name: supplier.name as string,
+        supplier_phone: supplier.phone as string,
+      };
+    });
     const payable = this.side(
       purchases.flatMap((purchase) => {
         const outstanding = quantize(

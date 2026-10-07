@@ -481,6 +481,191 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 7 part 3: the reports, 2026-10-07
+
+Asked for: part 3. Ported: the eleven views of `reports.api.views` over `reports.services` --
+the dashboard, sales, product performance, inventory valuation and movement, purchases,
+returns, profit, expenses, the business summary and the VAT return -- with `DateRange`, the
+branch rule and the CSV exports.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 12075/12075 (1304 new, all the reports), 125 by the documented differences
+concurrency ................................... 208/208 (none new: the reports only read)
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1260 passed (159 new: the windows, the CSV writer, values Django printed)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+Every figure is aggregated in the database, so the port sends the statements Django sends:
+each was captured, with a branch and without -- a filter on the branch moves its join to
+the front -- and written out from the same fragments Django composes them from. What
+Python does afterwards (`quantize`, a margin, a share of spending, a month's subtraction) is
+`Dec`. The first comparison of all eleven reports, as JSON and as CSV, differed in one thing:
+the sales report's bare Decimals, which DRF's encoder writes as floats (`8230.0`) and the port
+had written as `8230`.
+
+**The demo seed charges no VAT.** Every order in it is zero-rated and exclusive, so the VAT
+return's arithmetic -- inclusive prices, two rates, credits prorated by the units returned,
+input tax net of goods sent back -- ran on nothing. `fixture_reports.py` adds the trade that
+exercises it, dated January to March 2025: eight orders, five returns, five purchase orders
+with their deliveries and returns, four expenses. They are rows with frozen figures, written
+through the models: no service is called, so no stock moves and no money, and nothing another
+suite counts changes. Over that quarter the VAT return at Mirpur is 1129.67 of output tax on
+a taxable 9531.16, 339.14 credited, 555.00 of input tax, 235.53 payable -- and across both
+branches 1279.67, 489.14, 675.00 and 115.53 -- in four rate rows (two of them 15%, exclusive
+and inclusive, tied on the rate) and two months, and the two APIs agree on every figure.
+
+The cases read each report as thirteen readers, as JSON, as CSV and by `POST`; at each branch
+as six of them, with a branch that is closed, missing, or no id; through every preset and
+twenty-two custom windows -- half a window, a moment with an offset, the half-hour that is
+February in Dhaka and January in UTC, a reversed one, a date that is not one; the dashboard's
+days at 370 and 371 of them and at both ends of what a date can hold; the sales report by
+channel; and every way an answer meets the CSV renderer.
+
+**What CSV does (D231).** The views' CSV renderer renders nothing; it is there so that
+`?format=csv` negotiates. Everything else that negotiates it is written as the keys of the
+dict it was given: a reader who may not export is answered 403 with the body `error`;
+`Accept: text/csv` with no `format` is a 200 whose body is `results`; `?format=csv` asked for
+as JSON is a 406; and the dashboard's export is always empty. All copied, and all in the
+port's exception filter and one helper, since the refusals come from everywhere.
+
+Found on the way, in a phase 6 port, and fixed in its own commit: two party-ledger cases give
+every purchase order one date, and `payables` orders by that date alone. The restore and the
+`UPDATE` before each API's request move the rows in the heap, so Django asked twice answers
+in two orders; the two APIs had agreed by luck until this part's fixture added five purchase
+orders. The cases now compare a supplier's documents by number, and say why; and the port's
+two statements there, which were narrower than Django's (no branch join, computed columns),
+are now Django's own.
+
+Found in Django, and copied: D231 (above) and D232 (a NUL in the sales report's `channel`,
+and a dashboard window that ends on the last day a date can hold, are 500s).
+
+Not done, and next: part 4, the background jobs, which needs the owner's decision first --
+which queue replaces Celery, what runs the five scheduled jobs, and how the email and SMS
+templates move.
+
+### The NestJS API, phase 7 part 2: notifications, and what DRF does before a view runs, 2026-10-07
+
+Asked for: phase 7, continued. Ported: `NotificationViewSet` and
+`notifications.services.mark_read`. And a second thing every view does that the port did not:
+DRF authenticates, checks the view's permissions and counts the request against its throttles
+before it looks for the method's handler.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 10771/10771 (399 new: 361 notifications, 36 a method no view serves,
+                                                2 an empty Content-Type), 125 by the documented differences
+concurrency ................................... 208/208 (3 new: six requests to mark everything read; a notice
+                                                read while such a request waits on its row, each API in turn)
+throttle-check ................................ 17/17 (4 new: a method with no handler spends the anonymous budget
+                                                and a view's own scope; sign-out and a refused caller spend nothing)
+nest unit tests ............................... 1101 passed (5 new: the view registry)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+**A method the view does not serve.** The notifications cases sent an anonymous `POST` to the
+list and got a 405 where Django answers 401. The port's answer for a path that exists under
+another method knew a staff view's requirement and nothing else, so on views ported in phases
+2 to 6 -- `auth/me/`, `auth/password/change/`, the customer's orders and addresses,
+`organization/` and its VAT -- an anonymous caller was told the method was wrong rather than
+that they were not signed in, and staff on a customer's view got a 405 for Django's 403. The
+other way round, sign-out, the webhook and the feeds, which have no authentication classes,
+refused a bad token Django never reads. And no 405 was throttled: 62 anonymous
+`PUT /shop/categories/` were 62 405s where Django's are 60 and two 429s. `auth/view-registry.ts`
+now collects what the view at each route pattern asks of any request, from the same decorators
+the guards read, and the exception filter runs DRF's `initial()` in its order before the 405.
+Its own commit, with 36 cases and three throttle scenarios.
+
+**Notifications.** `fixture_notifications.py` writes for two readers nothing else in the run
+notifies: seven notices for an accountant with no branch and three for a customer account,
+read and unread, two at one instant, and one addressed to nobody. The cases read every route
+as every role, and send each a method it does not serve; list with each spelling of `unread`,
+every ordering the serializer offers and those it does not (`is_read`, a property, is
+ignored), every page; and mark read fifty-seven ways -- nothing, one, two, one twice, one read
+already, someone else's, a key in each spelling `uuid.UUID` reads, and `ids` as each thing JSON
+can hold. Each is compared by the notices it changed: which, that they share one moment, and
+that nothing else about them moved.
+
+Marking read is one `UPDATE ... WHERE read_at IS NULL` in both APIs and takes no lock. The
+race checks show the statement is enough: six simultaneous requests count the five unread
+notices once between them; and a request whose `UPDATE` waits on a row that is read
+meanwhile looks at it again, leaves it, and counts four. To see that the second check can
+fail, the port was made to read the unread first and write them by key: it then stamped the
+held notice again and counted five. Put back before the run reported here.
+
+Found in Django, and copied: D229 (marking read reads `ids` by hand: a body that is not an
+object, or `ids` that is a number, is a 500; a string is read letter by letter) and D230 (a
+guest's order writes a notice with no user and no permission code, which no list holds: the
+demo seed leaves fourteen).
+
+One more thing the port did not do as Django does, fixed with the first: an empty
+`Content-Type` header on a request with no body was a 415 from Fastify, where Django has
+nothing to parse and answers the view.
+
+Not done, and next: part 3, the reports.
+
+### The NestJS API, phase 7 part 1: the audit log, and content negotiation on every view, 2026-10-07
+
+Asked for: a start on phase 7. Ported: `AuditLogViewSet`, which part 10 of phase 6 left out --
+and, because its cases asked for `?format=csv`, DRF's content negotiation, which no phase had
+ported for any view. Phase 7's five parts are listed in
+[nest-port.md](architecture/nest-port.md) ("Phase 7"): the audit log, notifications, reports,
+the background jobs, the cutover.
+
+```text
+parity (scripts/nest-parity.sh run) ........... 10372/10372 (358 new: 308 the audit log, 50 negotiation),
+                                                115 by the documented differences
+concurrency ................................... 205/205 (none new: the audit log only reads)
+throttle-check ................................ 13/13 (1 new: a request refused in negotiation spends nothing)
+nest unit tests ............................... 1096 passed (128 new: negotiation, with values DRF printed)
+tsc / eslint / prettier / build; ruff ......... clean
+```
+
+**Content negotiation.** DRF settles a response's format in `APIView.initial`, before it
+authenticates: `?format=` naming a format no renderer of the view has is a 404, and an
+`Accept` no renderer satisfies a 406. Six phases of cases had sent neither, and the port
+answered both as if nothing had been asked: `GET /shop/brands/?format=xml` was a 200 where
+Django's is a 404, an anonymous `GET /audit-logs/?format=xml` a 401 for a 404, a
+`POST /auth/logout/?format=xml` a 204 that signed out where Django refuses. It is
+`http/negotiation.ts` now, on every DRF view and for a method the view does not serve; the two
+health checks, plain Django views, negotiate nothing. The media types are read as
+`rest_framework.utils.mediatypes` reads them, and the port was compared with
+`DefaultContentNegotiation.select_renderer` itself on 1,504 combinations of renderers, formats
+and headers before the 127 kept as unit tests. The cases ask a public view, a staff view,
+sign-in, sign-out, the webhook and both feeds, with a bad token, with a method that has no
+handler, with seventeen `Accept` headers and eight formats. This is its own commit: a bug in
+the port, not part of the audit log.
+
+**The audit log.** `fixture_audit.py` dates six entries in March 2025, where a date window
+finds them and nothing the run itself writes (the harness deletes its own audit entries by
+time): at two branches and at none, by an owner, a manager, an account since deleted and
+nobody, two at one instant, with a float, a 23-digit integer, Bengali, a list and a bare
+string for values. The cases read the log as every role and as an accountant with no branch;
+through each branch's filter as a reader who may and may not cross branches; through
+twenty-five windows (a day at either end, an exact moment with and without an offset, the last
+microsecond of a day, an ISO week, a date that is not one); twenty-five searches (`%`, `_`
+and a backslash as themselves, Bengali, a NUL); every filter with keys that exist, do not, and
+are not keys; every ordering and page; and each entry by its key in four spellings.
+
+An entry's values are read from jsonb's own text and parsed as Python parses them, so `1.0`
+is still a float and `12345678901234567890123` still exact. One thing the first run caught:
+under `ordering=created_at` the two entries of one instant came back the other way round. The
+port selected only the columns it reads, and with nothing selected from the accounts
+PostgreSQL drops that join, where Django's statement hashes the log against it. The statement
+is now Django's, column for column.
+
+Found in Django, and copied: D227 (a 406 is answered as `SERVER_ERROR`, "Unexpected error.";
+the product feeds, DRF views with JSON's renderer alone, refuse `Accept: application/xml` and
+`text/csv` and `feed.csv?format=csv`) and D228 (a NUL in the audit log's search is a 500).
+
+Three differences are declared, in `known-differences.ts` where the harness can meet them and
+in nest-port.md: the browsable API (settings other than production's) is answered in JSON;
+`Accept: application/json; indent=4` is not indented; and a path no converter takes, asked for
+in a format nobody renders, is the JSON 404 rather than the resolver's HTML one.
+
+Not done, and next: part 2, notifications. The paths Django serves that are in none of the
+port's tables -- the router's API root at `/api/v1/`, `/api/schema/`, `/api/docs/`,
+`/django-admin/`, `/media/` -- are part 5's to settle.
+
 ### The NestJS API, phase 6 part 10: staff accounts and the organisation, 2026-10-07
 
 Asked for: the rest of phase 6, its last part. Ported: `BranchViewSet`, `UserViewSet` with
@@ -4477,6 +4662,12 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D224 | **Branches: a bare 409, two defaults or none, and no audit.** `accounts_branch_org_code_uniq` is over `(organization, code)` and the serializer has no `organization` field, so DRF builds no validator: a code taken -- or a create with no active organisation -- is the index's bare 409. `is_default` is a plain boolean: a second default branch is accepted, and the default one can be switched off or un-defaulted, leaving `default_branch()` to pick by age. A branch is made, edited and deleted with no audit entry, and deleting one silently removes its parked sales. *Found by the branch cases.* | Low | Copied by the port. A `validate_code`; a partial unique index on `is_default`; `audit.record`. `accounts/api/serializers.py`, `accounts/models.py` |
 | D225 | **The organisation can switch itself off, and its edit undoes a VAT settlement.** `status` is writable on `PATCH /organization/`. Set to INACTIVE, `get_organization()` finds nothing: the organisation reads 404, every new branch is a 409, and the next `PATCH` runs `serializer.save()` on a serializer with no instance -- it *creates* a second organisation, with a blank slug, no branches and the default VAT, which becomes the one the shop runs under; a third attempt meets the slug's unique index. The owner-only check on reserved stock is skipped on that path. Separately, the edit is a plain `save()`: every column is written back as read, so -- measured in both APIs -- a VAT settlement committed while an edit of the name is in flight is undone, mode, rate and stamp. *Found by the organisation cases and a mid-flight check.* | Medium | Copied by the port. Make `status` read-only; refuse the PATCH when there is no organisation; `update_fields`. `accounts/api/views.py`, `accounts/api/serializers.py` |
 | D226 | **The VAT routes answer in UTC, and both organisation views refuse without a request id.** `OrganizationTaxView` builds its answer by hand and puts the raw `tax_settled_at` in it: DRF's encoder writes UTC with a `Z`, where `GET /organization/` -- a serializer -- answers the same instant in the shop's time. Both views check their permission in the method and return a hand-written 403 (and a bare `{"detail": ...}` 404): an error envelope with no `request_id`, unlike every refusal the permission classes make. *Found by the cases that read both.* | Low | Copied by the port. A serializer for the tax answer; `RolePermission` on the views. `accounts/api/views.py` |
+| D227 | **A response nobody can render is a 406 called `SERVER_ERROR`, and the product feeds refuse a client that asks for them by type.** DRF negotiates a response's format in `APIView.initial`, before it authenticates: an `Accept` no renderer satisfies raises `NotAcceptable`, which `_DRF_CODE_MAP` in `core.handlers` does not list, so it falls to the last branch and is answered 406 `{"code": "SERVER_ERROR", "message": "Unexpected error."}` -- a server's fault by name for a header the client sent. The two feed views are `APIView`s that return their own `HttpResponse`, with the default renderers: measured, `GET /shop/feed.xml` with `Accept: application/xml` is that 406, `feed.csv` with `Accept: text/csv` the same, and `feed.csv?format=csv` a 404, while `*/*` and no header are served. Meta's and Google's fetchers send `*/*`; a stricter one would be told the feed does not exist. *Found by the audit log's cases asking for `?format=csv`, which showed the port negotiated nothing.* | Low | Copied by the port, which now negotiates as DRF does. A `NOT_ACCEPTABLE` code in `core.handlers`; `renderer_classes` on the feed views that accept their own type. `core/handlers.py`, `catalog/api/feed_views.py` |
+| D228 | **A NUL in the audit log's search is a 500.** `AuditLogViewSet.get_queryset` passes `search` to three `icontains` lookups as typed; PostgreSQL refuses a NUL in a text parameter and the `DataError` is nobody's to catch: `GET /audit-logs/?search=%00` is a 500, on the list and on one entry. The viewset's django-filter fields refuse the same byte with a 400 ("Null characters are not allowed."), as DRF's own `SearchFilter` does. *Found by the search's cases.* | Low | Copied by the port. Refuse it as the filters do. `accounts/api/views.py` |
+| D229 | **Marking notices read reads `ids` by hand.** `NotificationViewSet.mark_read` passes `request.data.get("ids")` to `mark_read`, which hands it to `filter(pk__in=...)` when it is truthy; there is no serializer. Measured in both APIs: a body that is a list, a string, a number or `null` is a 500 (`.get` on it); `{"ids": 5}`, `{"ids": 1.5}` and `{"ids": true}` are 500s (`'int' object is not iterable`); `{"ids": "abc"}` is a 400 that says “a” is not a valid UUID -- the string is iterated -- and so is the id of a notice sent as a string rather than a list of one; `{"ids": {"<id>": 1}}` marks that notice, by the object's key; `{"ids": [5]}` looks for `UUID(int=5)`. *Found by the cases that send each shape.* | Low | Copied by the port. A serializer with `ListField(child=UUIDField())`. `notifications/api/views.py`, `notifications/services.py` |
+| D230 | **A guest's order writes notices nobody can read.** `notify_customer` creates its `Notification` with `user = order.customer.user`, which is `None` for a customer with no account -- every guest checkout. The model says a null user means "addressed to a permission group", but `permission_code` is left blank, and `NotificationViewSet` lists `user=request.user` and nothing else: the row is in nobody's list and nobody's unread count, is never marked read, and stays. The email and the SMS, which are what a guest receives, are queued separately and are unaffected. *Found reading `get_queryset` against the rows the demo seed leaves: fourteen `ORDER_CONFIRMED` notices with no user and no permission code.* | Low | Copied by the port, which has written the same row since phase 3. Write no row when there is no account. `notifications/services.py` |
+| D231 | **The reports' CSV renderer renders nothing, and four things follow.** `reports.api.views.CSVRenderer.render` returns its data: it exists so that `?format=csv` negotiates, and the export itself is a hand-built `HttpResponse`. Every other answer that negotiated CSV is handed to `HttpResponse.content` as a dict, which joins whatever iterating it yields -- its keys. Measured in both APIs: (1) any refusal under `?format=csv` -- a bad date, an unknown branch, `RolePermission`'s 403, a 401, a 405 -- is the five letters `error` as `text/csv` with the refusal's status, so a reader who may not export is sent `error` and nothing says why; (2) `Accept: text/csv` with no `format` is a 200 whose body is `results`, or `rangekpissales_over_time...` for the dashboard; (3) `?format=csv` with `Accept: application/json` is a 406 (the format leaves only the CSV renderer); (4) `dashboard.csv` is always empty, because `BaseReportView.csv_rows` looks for `daily` and the dashboard's days are `sales_over_time` -- D19 again, on the one report it was not fixed for. And `SalesReportView` refuses an export with `{"detail": "Export not permitted."}`, not the envelope. *Found by the cases that ask each report for CSV as each reader.* | Medium | Copied by the port. A renderer that renders the envelope (or `renderer_classes` narrowed per request); `csv_rows` on `DashboardView`; the envelope on the sales view. `reports/api/views.py` |
+| D232 | **Three ways to a 500 on a report.** `SalesReportView` passes `channel` to the filter as typed: a NUL in it reaches PostgreSQL and the `DataError` is nobody's to catch. And `_fill_missing_days` walks the window's days with `day += timedelta(days=1)`: a dashboard window of 370 days or fewer whose last day is 9999-12-31 steps past `date.max` (`OverflowError`), as does one whose end, moved to the shop's time, is past what a date can hold (`date_to=9999-12-31T23:59:59-01:00`, or a first instant before year 1). *Found by the cases at the edges of the window.* | Low | Copied by the port. Refuse the NUL; bound the window. `reports/api/views.py`, `reports/services.py` |
 
 ## Still API-only (no UI)
 

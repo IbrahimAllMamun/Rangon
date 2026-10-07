@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { AuditLogService } from './audit-log.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { BranchesService } from './branches.service';
@@ -8,6 +9,7 @@ import { OrganizationAdminService } from './organization-admin.service';
 import { OrganizationService } from './organization.service';
 import { RolesService } from './roles.service';
 import {
+  AuditLogsController,
   BranchesController,
   OrganizationController,
   PermissionsController,
@@ -25,6 +27,7 @@ import { TokensService } from './tokens.service';
     UsersController,
     RolesController,
     PermissionsController,
+    AuditLogsController,
   ],
   providers: [
     OrganizationService,
@@ -35,6 +38,7 @@ import { TokensService } from './tokens.service';
     StaffUsersService,
     RolesService,
     OrganizationAdminService,
+    AuditLogService,
   ],
   exports: [OrganizationService, AuthService],
 })

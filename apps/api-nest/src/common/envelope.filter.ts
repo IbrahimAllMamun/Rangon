@@ -13,6 +13,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { Authenticator } from '../auth/authentication';
 import { RolePermissions, staffViewFor } from '../auth/permissions';
+import { Throttles } from '../auth/throttle';
+import { ViewRegistry } from '../auth/view-registry';
+import { CSV_RENDERER, csvFallback, negotiate } from '../http/negotiation';
 import { allowedMethods, markShortCircuit, PLAIN_VIEWS, plainViewRefusal } from '../http/pipeline';
 import { RouteRegistry } from '../http/routes';
 import { ENV, Env } from '../config/env';
@@ -47,6 +50,8 @@ export class EnvelopeFilter implements ExceptionFilter {
     private readonly routes: RouteRegistry,
     private readonly authenticator: Authenticator,
     private readonly permissions: RolePermissions,
+    private readonly views: ViewRegistry,
+    private readonly throttles: Throttles,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -78,6 +83,15 @@ export class EnvelopeFilter implements ExceptionFilter {
     if (request.id) body.request_id = request.id;
     // No `WWW-Authenticate` on a 401: DRF sets it only in its default
     // exception handler, which `core.handlers` replaces.
+    // A view whose CSV renderer was negotiated answers its errors through it
+    // too, and that renderer renders nothing: the body is the dict's one key.
+    if (request.acceptedRenderer === CSV_RENDERER) {
+      void reply
+        .status(status)
+        .header('content-type', 'text/csv; charset=utf-8')
+        .send(csvFallback({ error: body }));
+      return;
+    }
     void reply.status(status).header('content-type', 'application/json').send({ error: body });
   }
 
@@ -86,9 +100,10 @@ export class EnvelopeFilter implements ExceptionFilter {
     const question = url.indexOf('?');
     const path = question === -1 ? url : url.slice(0, question);
 
-    // The path exists for some other method: DRF still runs the view's
-    // authentication and permission checks first, and puts `Allow` on
-    // whatever it answers. A staff view's `RolePermission` sees no action
+    // The path exists for some other method: DRF still settles the format,
+    // runs the view's authentication and permission checks and counts the
+    // request against its throttles first, and puts `Allow` on whatever it
+    // answers. A staff view's `RolePermission` sees no action
     // here, so it reads the method's name, and a signed-in owner reaches
     // the 405 where a manager is refused with a 403.
     const pattern = this.routes.match(path)[0]?.pattern;
@@ -101,13 +116,28 @@ export class EnvelopeFilter implements ExceptionFilter {
       const allow = allowedMethods(fastify, pattern, this.allowCache);
       if (allow) reply.header('allow', allow);
       try {
-        const user = await this.authenticator.authenticate(request);
+        negotiate(request, pattern, this.env);
+        const meta = this.views.at(pattern);
+        const user = meta.access?.skipAuthentication
+          ? null
+          : await this.authenticator.authenticate(request);
         const view = staffViewFor(pattern);
         if (view) {
           if (!user)
             throw new AuthenticationRequired('Authentication credentials were not provided.');
           if (!(await this.permissions.allows(user, view.required, null, request.method)))
             throw new PermissionDenied();
+        } else if (meta.access && !meta.access.allowAny) {
+          // `IsAuthenticated`, and `IsCustomer` where the view asks for it.
+          if (!user)
+            throw new AuthenticationRequired('Authentication credentials were not provided.');
+          if (meta.access.customerOnly && user.roleCode !== 'CUSTOMER')
+            throw new PermissionDenied();
+        }
+        // The throttles count a request before DRF looks for its handler.
+        if (meta.throttle) {
+          request.user = user;
+          await this.throttles.check(request, meta.throttle);
         }
       } catch (error) {
         this.send(request, reply, error);

@@ -56,6 +56,19 @@ const typeParsers = {
 } as unknown as typeof types;
 
 /**
+ * The same, with `json` and `jsonb` left as text too: `pg` would parse them
+ * into JavaScript numbers, where `1.0` is `1` and an integer past 2^53 is
+ * rounded. A caller reads the text with `parsePythonJson`.
+ */
+const jsonTextParsers = {
+  getTypeParser(oid: number, format?: 'text' | 'binary') {
+    if (oid === types.builtins.JSON || oid === types.builtins.JSONB)
+      return (value: string) => value;
+    return typeParsers.getTypeParser(oid, format);
+  },
+} as unknown as typeof types;
+
+/**
  * The one connection pool, shared by Drizzle and by hand-written SQL.
  *
  * Hand-written SQL is used where a query has to match the Django API's own
@@ -90,8 +103,17 @@ export class Database implements OnModuleDestroy, Queryable {
    * Rows as arrays, for a statement whose columns repeat a name (`id` from
    * three joined tables). Read them positionally with `pick`.
    */
-  async arrays(text: string, values: unknown[] = []): Promise<unknown[][]> {
-    const result = await this.pool.query<unknown[]>({ text, values, rowMode: 'array' });
+  async arrays(
+    text: string,
+    values: unknown[] = [],
+    options: { jsonAsText?: boolean } = {},
+  ): Promise<unknown[][]> {
+    const result = await this.pool.query<unknown[]>({
+      text,
+      values,
+      rowMode: 'array',
+      ...(options.jsonAsText ? { types: jsonTextParsers } : {}),
+    });
     return result.rows;
   }
 

@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | |
+| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 to 3 of 5 (the audit log, notifications, the reports; and what DRF does before a view runs, on every view), parity 12075/12075 and 208 race checks |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -211,6 +211,8 @@ across both APIs where both serve the path:
 | 6 deactivations of one account at once, across both APIs | six 200s and six audit entries; nothing refuses a repeat |
 | 6 accounts under one email, and 6 branches under one code, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
 | 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
+| 6 requests to mark every notice read at once, across both APIs | six 200s; each notice is counted by exactly one of them, none is left unread. No lock is involved |
+| A notice read while a request to mark everything waits on its row (each API in turn) | the request's `UPDATE` waits, looks at the row again, leaves it as it was read and counts the others. No lock is involved: it is the one statement that holds this. With the port made to read the unread first and write them by key, it stamps the notice again and counts it |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
 already failed, so the timeline shows the failure twice. Copied, as harmless.
@@ -584,7 +586,7 @@ the first outside uploads to read a form as well as JSON, since a receipt is att
 | `GET /api/v1/expenses/<id>/attachment/` | `finance.view`, through the same queryset as reading the expense; the file, typed by its extension, `inline` under the expense's number, `private, no-store`, `nosniff`. No receipt, or a file that is gone, is a 404 |
 | `POST /api/v1/expenses/<id>/void/` | `finance.expense`; a reason is required and validated before the expense is looked for. The expense locked; one already voided is a 400; the money back as an `ADJUSTMENT` naming the expense; the row marked void. An expense whose account has since been closed cannot be voided (D179, copied). Audited as `EXPENSE_VOIDED` |
 | `GET /api/v1/expenses/summary/` | `finance.view`; what was spent in the window at the branch asked for (or the user's own), voided expenses left out, and each category's total, count and share |
-| `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first |
+| `GET /api/v1/party-ledger/` | `reports.financial`; who owes the business and whom it owes, derived each time: orders that are real trade with a balance, by customer, aged from the day placed; purchase orders committed and not settled by money or credit, by supplier, aged from the due date. Days are calendar days in Dhaka. Each side with its total, its ageing in four buckets and its parties, the largest debt first. Both statements are Django's, every column of the order, its branch and its customer (or supplier): a party's documents of one date come back as the plan leaves them (since phase 7 part 3; until then the port sent a narrower statement of its own, and the two agreed by luck) |
 
 Then who the shop buys from (part 3): `purchasing/suppliers.service.ts` and
 `purchasing/supplier-products.service.ts`. Neither moves stock or money. A supplier is a plain
@@ -726,6 +728,165 @@ registration and a user's own password were phase 2.
 | `GET /api/v1/organization/tax/` | `settings.view`, checked in the view. The mode, the rate, who settled it and when -- a hand-built answer whose time is DRF's encoding of a raw datetime: UTC, with `Z` -- and how many orders exist |
 | `PATCH /api/v1/organization/tax/` | `settings.manage`. A mode, a rate between 0 and 1 to four places, `confirm`, a reason. `update_tax_settings`: a change while orders exist is a 409 `TAX_CHANGE_NEEDS_CONFIRMATION` unless confirmed; settling, changed or not, stamps who and when and is audited; a change asks the storefront to drop its priced pages (`products`, `home`, `categories`), and the save itself `site` |
 
+## Phase 7: reports, the log, notices, jobs and the cutover
+
+Phase 7 ports what is left and then moves the traffic. Its parts, in order:
+
+1. the audit log (`audit-logs`), which part 10 of phase 6 left out -- and, found on the way,
+   content negotiation on every view (below);
+2. notifications (`notifications/`: the list, a notice, the unread count, marking read);
+3. reports (`reports/`: the eleven views over `reports.services`, with their CSV exports);
+4. the background jobs: what Celery's worker and beat run today, on BullMQ
+   ([ADR-0014](decisions/0014-nest-enqueues-celery-jobs.md) names `CeleryService.delay` as the
+   one place to swap);
+5. the cutover, path by path at the proxy.
+
+### Content negotiation
+
+DRF settles the format of a response in `APIView.initial`, before it authenticates, checks a
+permission, throttles or looks for the method's handler. Six phases of cases never sent a
+`format` or an `Accept` a JSON renderer would refuse, so the port had none of it; the audit
+log's cases asked for `?format=csv` and found a 404 where the port answered 200. It is
+`http/negotiation.ts` now, called by the authentication guard and by the answer for a path
+that has no handler for the method, on every DRF view -- the feeds, sign-out and the payment
+webhook among them, the two health checks (plain Django views) not:
+
+- `?format=` naming a format no renderer of the view has is a 404, the envelope's, whoever asks
+  and whatever the method: an anonymous `PUT /brands/?format=xml` is a 404, not a 401. A blank
+  one is no format; of two, the last counts; `JSON` is not `json`.
+- An `Accept` no renderer satisfies is a 406. `core.handlers` has no code for DRF's
+  `NotAcceptable`, so it is answered as `SERVER_ERROR`, "Unexpected error." (D227, copied).
+  The header is read as `rest_framework.utils.mediatypes` reads it -- Django's
+  `parse_header_parameters`, a `*` on either side matching anything, the most specific type the
+  client named tried first, `q` ignored (`application/json;q=0` is accepted) -- and compared with
+  DRF's own answers on 1,504 combinations of renderers, formats and headers. A request with no
+  `Accept` takes anything; one with an empty `Accept` takes nothing.
+- A format is looked at before the header: `?format=xml` with nothing acceptable is the 404.
+- A refusal here spends nothing from a rate limit (a scenario in `parity/throttle.ts`).
+
+The product feeds are DRF views with JSON's renderer alone, so a client that asks for one by its
+own type -- `Accept: application/xml` for `feed.xml`, `text/csv` for `feed.csv`, or
+`feed.csv?format=csv` -- is refused, where `*/*` or no header is served (D227, copied).
+
+Outside production Django also has the browsable API's renderer (`text/html`, `?format=api`).
+The port lists it for the same settings and answers what negotiates it in JSON: see "Deliberate
+differences".
+
+### A method the view does not serve
+
+`APIView.initial` also authenticates, checks the view's permissions and counts the request
+against its throttles before DRF looks for the method's handler. The port answered such a
+request from its exception filter, which knew a staff view's requirement and nothing else.
+Measured against Django, three things differed, on views ported in phases 2 to 6:
+
+- a view that asks for a signed-in user and is not a staff view (`auth/me/`,
+  `auth/password/change/`, the customer's orders and addresses, `organization/` and its VAT)
+  answered an anonymous `DELETE` with a 405, where Django's is a 401 -- and the customer's views
+  answered staff with a 405 for Django's 403;
+- a view with no authentication classes (sign-out, the payment webhook, the feeds) refused a bad
+  token on a method it does not serve, where Django never reads the token: a 401 for a 405;
+- no 405 spent anything from a rate limit: 62 anonymous `PUT /shop/categories/` were 62 405s,
+  where Django's are 60 and then two 429s.
+
+`auth/view-registry.ts` now collects, once, from every controller, what the view at each route
+pattern asks of any request -- whether it authenticates, who may call it, how it is throttled:
+the same metadata the guards read from the handler Fastify chose. The exception filter runs
+the checks in DRF's order -- format, authentication, permission, throttles -- and then answers
+405. The throttles are `Throttles` (`auth/throttle.ts`), which the guard and the filter share.
+
+And one smaller thing: an empty `Content-Type` header on a request with no body is nothing to
+parse, for Django; Fastify refused the header (415). It is dropped before Fastify reads it.
+
+### The audit log (part 1)
+
+`accounts/audit-log.service.ts`. Read-only: the log is written by `core.audit.record`
+(`common/audit.ts`, ported in phase 2) and never changed.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/audit-logs/` | `audit.view`, a flat requirement: every method needs it, so a `POST` is a 403 for a manager and a 405 for an accountant. Paginated, newest first with the key breaking ties. A reader bound to a branch sees that branch's entries and those that name no branch -- the catalogue, settings, staff accounts, sign-ins (D85's rule); an owner, an administrator, a superuser or staff with no branch sees them all. `date_from` and `date_to` are `core.dates`' window on the moment written, read before anything else: one that is not a date is a 400 whatever the filters say. `search` is trimmed and looked for, in any case, in what was touched, why and by whom (`entity_label`, `reason`, `actor_label`), `%`, `_` and a backslash as themselves; a NUL in it reaches PostgreSQL and is a 500 (D228, copied). django-filter on `action` (one of the choices), `entity_type` and `entity_id` (trimmed, exact), `actor` and `branch` (keys that must exist). `ordering=created_at` replaces the order whole, so two entries of one instant come back as the plan leaves them: the statement is therefore Django's, every column of the log, the account and the branch -- with the account's columns PostgreSQL hashes the log against the accounts, without them it drops the join, and the tie falls the other way. A filter on the actor makes that join an inner one, written last, as Django writes it |
+| `GET /api/v1/audit-logs/<id>/` | the same queryset, so the window, the search and the filters apply -- and refuse -- here too; an ordering does nothing. Each entry: who (`actor`, and `actor_email`, the label kept when the account is gone), `action` and its label (an action the choices do not name is shown as it is), the branch and its code, the record's type, key and label, `old_values` and `new_values` as stored -- read from jsonb's own text, so `1.0` stays a float and an integer past 2^53 stays exact -- the reason, the address as `inet` prints it, the request id, and the moment in the shop's time |
+
+`fixture_audit.py` dates six entries in March 2025, where a window finds them and nothing the
+run writes: at two branches and at none, by an owner, a manager, an account since deleted and
+nobody, two of them at one instant, with values that are a float, a 23-digit integer, Bengali,
+a list and a bare string, and addresses in IPv4, IPv6 and IPv4 written as IPv6. It adds an
+accountant with no branch, `parity.auditor@rangon.test`: `audit.view` with nothing to be scoped
+to.
+
+### Notifications (part 2)
+
+`notifications/`: `NotificationViewSet` on a `DefaultRouter` of its own, and
+`notifications.services.mark_read`. `IsAuthenticated` alone -- staff and customers read their
+own. The rows are written by `notify_staff` and `notify_customer` (`checkout/notices.service.ts`,
+phase 3) and sent by the worker.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/v1/notifications/` | the reader's own notices, newest first, paginated. `unread=true`, spelt exactly so, leaves the read ones out. The view names no `ordering_fields`, so `OrderingFilter` takes the serializer's fields that are columns -- `id`, `notification_type`, `level`, `title`, `body`, `link`, `data` (jsonb's own order), `read_at`, `created_at` -- and ignores `is_read`, a property of the model. An ordering replaces the view's, so ties fall to the plan: the statement is Django's, every column. A notice addressed to nobody (`user` null) is in nobody's list |
+| `GET /api/v1/notifications/<id>/` | the same queryset, `unread=true` included: a read notice asked for among the unread is a 404, as someone else's is. `data` is read from jsonb's own text |
+| `GET /api/v1/notifications/count/` | `{"unread": n}`; no filter applies |
+| `POST /api/v1/notifications/mark-read/` | 200 `{"updated": n}`. `request.data.get("ids")` handed to `pk__in` as it is: anything falsy -- absent, `null`, `[]`, `""`, `0`, `{}` -- marks every unread notice of the reader's; a list is read item by item as `UUIDField` reads a key (a string in any of `uuid.UUID`'s spellings, a whole number as `UUID(int=...)`, a null as nothing), the first that is no key a 400 naming it; a string is its characters and an object its keys; a number or `true` cannot be iterated, a 500, as a body that is not an object is (D229, copied). One `UPDATE ... WHERE read_at IS NULL`, every row stamped with one moment and `updated_at` left alone: a notice already read, someone else's, or one that is not there counts for nothing. A list of nothing but nulls sends no statement |
+
+`fixture_notifications.py` writes for two readers nothing else in the run ever notifies -- the
+accountant with no branch from `fixture_audit.py` (staff notices reach a branch's staff, owners
+and administrators) and a customer account with no customer record -- seven notices and three,
+read and unread, two at one instant, with data that is an object, a list and a bare string,
+and one notice addressed to nobody.
+
+### The reports (part 3)
+
+`reports/`: `reports.api.views` -- eleven `BaseReportView`s -- over `reports.services`, with
+`DateRange` (`reports/date-range.ts`). Read-only. Every figure is aggregated in the database,
+so each statement is Django's own, captured with and without a branch (a filter on the branch
+moves its join to the front): a sum of unrounded discount shares, a `ROUND(..., 2)`, the
+shop's calendar day or month of an instant (`AT TIME ZONE`), and the ten best sellers under
+`ORDER BY 3 DESC LIMIT 10` with their ties come out as PostgreSQL makes them. What Python then
+does to the numbers -- `quantize`, a margin, a share, a month's subtraction -- is `Dec`, in
+Python's context. A value keeps its Python type until it is written: a `Decimal` is a string
+in JSON (`_json_safe`) and its own text in a CSV cell; a datetime is `isoformat()` with a `Z`
+in one and `str()` in the other.
+
+| Endpoint | Notes |
+|---|---|
+| Every report | `reports.view` or `reports.financial`, a flat requirement: every method needs it. **The branch** (`_branch_for`): none named is every branch for an owner, an administrator or a superuser and the reader's own for anyone else -- which, for staff with no branch, is every branch too; one named must exist (404, `Unknown branch.`; a key that is none is the lookup's 400) and, for a reader bound to a branch, be theirs (403); a closed branch is reportable. **The window** (`DateRange.from_params`): `date_from` or `date_to` (`core.dates`: a day or a moment, refused when unreadable) with the missing end thirty days back or now, labelled `custom`; else `range`, one of `today`, `yesterday`, `7d`, `30d`, `90d`, `month`, `last_month`, `year` on the shop's calendar days, anything else the default `30d`, which says so. The branch is refused before the window, except on `sales/`, which reads the window first. The answer is the report's dict, or `{"results": [...]}` for a list |
+| `GET /api/v1/reports/dashboard/` | `reports.view`. The window's sold orders (eight statuses; cancelled and pending are not trade) as totals, units, cost and net sales; gross profit and margin after the window's completed returns (`_gross_profit`, the business summary's own); by channel, by day -- a zero row on every day that did not trade, up to 370 days, on the shop's calendar -- by payment method, the ten best sellers and categories; and three figures no window touches: stock value and units, online orders waiting, rows at or below their reorder point. A reader with `reports.financial` also gets `profit`: expenses, purchase shipping and net profit; without it the block is absent, not empty. A window that ends on the last day a date can hold is a 500 (D232, copied) |
+| `GET /api/v1/reports/sales/?channel=` | `reports.view`. The sold orders, newest first, optionally of one channel (any text; none that matches is an empty list). The rows go to DRF's encoder as they are: a Decimal there is a JSON number (`8230.0`), where every other report writes a string |
+| `GET /api/v1/reports/products/performance/` | `reports.view`. Per SKU: units, net revenue, cost, units returned, gross profit and margin, best revenue first |
+| `GET /api/v1/reports/inventory/valuation/` | `reports.financial`. Every stock row with its value at cost and at retail, by product name -- an order that ties on every product with more than one variant, so the five-table statement is Django's, joins in its order. No window: the date parameters are never read, so never refused |
+| `GET /api/v1/reports/inventory/movement/` | `reports.financial`. The ledger in the window by movement type: units, entries, value at the unit cost recorded (none is nothing) |
+| `GET /api/v1/reports/purchases/` | `reports.financial`. The purchase orders raised in the window, drafts and cancelled ones too, with what is outstanding after payments and credits |
+| `GET /api/v1/reports/returns/` | `reports.view`. The returns opened in the window with the units each asks for (none yet is 0) |
+| `GET /api/v1/reports/profit/` | `reports.financial`. Net revenue, cost and gross profit by the shop's day, and their totals and margin |
+| `GET /api/v1/reports/expenses/` | `reports.financial`. `finance.selectors.expense_totals`: spending by category, voids left out, each with its share |
+| `GET /api/v1/reports/business-summary/` | `reports.financial`. Revenue net of VAT, less refunds, less the cost of goods (what restocked returns gave back taken off), gross profit; less expenses and what purchase orders charged for shipping (counted when an order's first posted delivery arrives), net profit; and the volume behind it |
+| `GET /api/v1/reports/vat/` | `reports.financial`. Output VAT with its taxable and zero-rated bases, the credits of completed returns (each line's VAT and base prorated by the units that came back), input VAT on purchases that are purchases less what went back to suppliers, the net payable; then the output split by rate and treatment, and the whole subtraction month by month on the shop's calendar |
+| `?format=csv` on any of them | `reports.export`, checked after the report has run. A `text/csv` download named for the report, written as Python's `csv.DictWriter` writes it (`common/pycsv.ts`): the list itself; `daily` for `profit/`; `monthly` for `vat/`; the statement line by line for `business-summary/`; and for `dashboard/` nothing, as its days are under another key (D231, copied). No rows is an empty file |
+
+The views declare `[JSONRenderer, CSVRenderer]`, and the CSV renderer renders nothing: it is
+there so that `?format=csv` negotiates. So whatever else negotiates it is written by Django
+as the iteration of the dict it was given -- its keys, run together (D231, copied):
+
+- any refusal under `?format=csv` -- a bad date, an unknown branch, no permission, nobody signed
+  in, a method the view does not serve -- is the five letters `error`, as `text/csv`, with the
+  refusal's status. The sales view's own refusal to export is `detail`.
+- `Accept: text/csv` (or `text/*`) with no `format` is a 200 whose body is the report's keys:
+  `results`, or `rangekpissales_over_time...`.
+- `?format=csv` with `Accept: application/json` is a 406: the format leaves only the CSV
+  renderer, and the header refuses it. The web app's export links are plain navigations, whose
+  `Accept` ends in `*/*`.
+
+`fixture_reports.py` adds what the demo seed has none of -- VAT. Eight orders in January and
+February 2025, at 15% and 7.5%, exclusive and inclusive, zero-rated, with an order discount
+whose shares do not terminate, a free line (a subtotal of nothing), one in the half-hour that
+is February in Dhaka and January in UTC, one cancelled and one pending; five returns
+(completed in another month than the sale, restocked, written off, quarantined, only
+approved, asking for nothing); five purchase orders (two posted deliveries, one unposted, a
+draft, a cancelled one, goods sent back); and four expenses, two categories of one total.
+They are rows with frozen figures: no stock moves and no money, so the shelves and accounts
+every other suite counts are as they were. And a role that reads reports and may not export
+them, which no role the shop ships is.
+
 ## Running it
 
 ```bash
@@ -816,6 +977,9 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
+| The browsable API: `?format=api`, or an `Accept` of `text/html` (or `text/*`), under any settings but production's | DRF's HTML page | the JSON answer | The port has no HTML pages. Under production's settings Django has no such renderer either and both refuse: 404 and 406 |
+| `Accept: application/json; indent=4` | the JSON indented, as `JSONRenderer` honours the parameter | compact | The same document; the harness compares parsed bodies and sees no difference |
+| A path Django resolves to no view (a converter refuses a segment: `/shop/products/not a slug/`) with a `format` no renderer has, or an `Accept` none satisfies | the resolver's HTML 404, before any view negotiates | the JSON 404 (or 406): the port checks a segment in its handler, after the negotiation | A request wrong twice over; a 404 either way for a format |
 | A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
 **Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
@@ -1079,6 +1243,23 @@ the port):
 - The VAT routes answer `tax_settled_at` in UTC with a `Z` where every serializer answers the
   shop's time, and both organisation views refuse with an envelope that has no `request_id`
   (D226).
+- A response no renderer of the view can give the client -- an `Accept` of `image/png`, or of
+  `application/xml` for the XML feed -- is a 406 that `core.handlers` has no code for:
+  `SERVER_ERROR`, "Unexpected error.". The product feeds negotiate as JSON views, so asking for
+  one by its own media type, or as `feed.csv?format=csv`, is refused (D227).
+- A NUL in the audit log's `search` reaches PostgreSQL: a 500, on the list and on an entry
+  (D228).
+- Marking notices read hands the body's `ids` to the lookup as it came: a body that is not an
+  object, or `ids` that is a number or `true`, is a 500; a string is read letter by letter and
+  refused for its first; a whole number in the list is a key (D229).
+- A notice written for a customer with no account names nobody and no permission: no list
+  holds it (D230).
+- The reports' CSV renderer renders nothing, so every answer that negotiates it but is not the
+  export itself is its dict's keys run together: `error` for any refusal under `?format=csv`,
+  `results` for `Accept: text/csv`. The dashboard's export is always empty; the sales view
+  refuses an export with a bare `detail`; `?format=csv` asked for as JSON is a 406 (D231).
+- A NUL in the sales report's `channel` is a 500, and so is a dashboard window that ends on
+  the last day a date can hold, or past either end of what one can (D232).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

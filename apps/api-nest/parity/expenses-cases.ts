@@ -430,6 +430,26 @@ export async function expensesCases(): Promise<Case[]> {
       reset: resetLedger,
       prepare: after(...statements),
     });
+  /**
+   * A supplier's documents in a stable order, for a state that gives every
+   * purchase order one date: `payables` orders by `ordered_at` alone, so they
+   * come back as the heap holds them -- and the restore and the `UPDATE` that
+   * arrange the state before each API's request move the rows in it. Django
+   * asked twice answers in two orders; the statement is its own either way.
+   */
+  const byNumber = (body: unknown) => {
+    const parties = (body as { payable?: { parties?: { documents?: { number: string }[] }[] } })
+      ?.payable?.parties;
+    for (const party of parties ?? []) {
+      party.documents?.sort((a, b) => a.number.localeCompare(b.number));
+    }
+  };
+  const ledgerTie = (name: string, ...statements: string[]) =>
+    read(`the party ledger, ${name}`, LEDGER, 'owner', {
+      reset: resetLedger,
+      prepare: after(...statements),
+      normalize: byNumber,
+    });
   ledgerState(
     'an order placed 45 days ago',
     `UPDATE orders_order SET placed_at = ${ago(45)} WHERE number = 'RGN-PARITY-S01'`,
@@ -458,7 +478,7 @@ export async function expensesCases(): Promise<Case[]> {
     'a supplier on sixty-day terms',
     `UPDATE purchasing_supplier SET payment_terms_days = 60`,
   );
-  ledgerState(
+  ledgerTie(
     'every purchase order raised 100 days ago',
     `UPDATE purchasing_purchaseorder SET ordered_at = ${ago(100)}, completed_at = NULL`,
   );
@@ -466,7 +486,7 @@ export async function expensesCases(): Promise<Case[]> {
     'a purchase order settled by credit',
     `UPDATE purchasing_purchaseorder SET credited_total = grand_total - paid_total`,
   );
-  ledgerState(
+  ledgerTie(
     'every purchase order with no order date',
     `UPDATE purchasing_purchaseorder SET ordered_at = NULL, completed_at = NULL`,
   );
