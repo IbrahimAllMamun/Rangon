@@ -16,7 +16,7 @@ import { pyRepr, pyStrip } from '../common/python';
 import { nextNumber } from '../common/sequence';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
-import { CeleryService } from '../jobs/celery.service';
+import { Jobs } from '../jobs/jobs.service';
 
 /**
  * `inventory.services`: the only code that moves stock (CLAUDE.md section
@@ -167,15 +167,24 @@ export function averageAfterReturn(
 export class StockService {
   constructor(
     private readonly db: Database,
-    private readonly celery: CeleryService,
+    private readonly jobs: Jobs,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  /** Run `work` in one transaction, then queue what it scheduled, in order. */
+  /**
+   * Run `work` in one transaction and queue what it scheduled, in order: in
+   * that transaction where the queue is a table, else once it has committed
+   * (`transaction.on_commit`).
+   */
   async run<T>(work: (tx: Queryable, after: AfterCommit) => Promise<T>): Promise<T> {
     const after = new AfterCommit();
-    const result = await this.db.transaction((tx) => work(tx, after));
-    for (const [task, args] of after.jobs) await this.celery.delay(task, args);
+    const afterCommit: (() => Promise<void>)[] = [];
+    const result = await this.db.transaction(async (tx) => {
+      const done = await work(tx, after);
+      for (const [task, args] of after.jobs) await this.jobs.delayIn(tx, afterCommit, task, args);
+      return done;
+    });
+    for (const queue of afterCommit) await queue();
     return result;
   }
 

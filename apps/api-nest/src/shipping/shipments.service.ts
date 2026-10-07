@@ -35,7 +35,7 @@ import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
 import { Params as SqlParams } from '../database/sql';
 import { AfterCommit, StockService } from '../inventory/stock.service';
-import { CeleryService } from '../jobs/celery.service';
+import { Jobs } from '../jobs/jobs.service';
 import { type Moved, OrderLifecycle } from '../orders/order-lifecycle.service';
 import { OrderWritesService } from '../orders/order-writes.service';
 import { trackingUrl } from './tracking-url';
@@ -168,7 +168,7 @@ export class ShipmentsService {
     private readonly orders: OrderWritesService,
     private readonly stock: StockService,
     private readonly notices: NoticesService,
-    private readonly celery: CeleryService,
+    private readonly jobs: Jobs,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -483,7 +483,7 @@ export class ShipmentsService {
       moved.notice[0],
       moved.notice[1],
     );
-    for (const job of jobs) await this.celery.delay(job.task, job.args);
+    for (const job of jobs) await this.jobs.delay(job.task, job.args);
   }
 
   /**

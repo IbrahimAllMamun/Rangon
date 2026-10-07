@@ -4,6 +4,7 @@
 #   scripts/nest-parity.sh up       build and start both APIs on one database
 #   scripts/nest-parity.sh seed     demo data plus the parity fixture
 #   scripts/nest-parity.sh run      compare every case; non-zero on a difference
+#   scripts/nest-parity.sh run-jobs the same, with the Nest API queuing its jobs in pg-boss (ADR-0016)
 #   scripts/nest-parity.sh reset    DESTRUCTIVE to the parity database only: drop it, then up + seed
 #   scripts/nest-parity.sh down     stop, keeping the database
 #
@@ -59,6 +60,13 @@ case "${1:-}" in
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" -e PARITY_RACES="${PARITY_RACES:-}" parity
+    ;;
+  run-jobs)
+    # The throttled pair's trick, for the same reason: a container left from
+    # before a reset still names the network that reset removed.
+    "${compose[@]}" --profile jobs up -d --build --force-recreate nest-jobs
+    wait_for http://127.0.0.1:8630/api/health/
+    "${compose[@]}" --profile jobs run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" -e PARITY_RACES="${PARITY_RACES:-}" parity-jobs
     ;;
   reset)
     "${compose[@]}" down -v --remove-orphans

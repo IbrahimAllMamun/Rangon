@@ -22,6 +22,7 @@ import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
 import { adminConcurrencyChecks } from './admin-concurrency.ts';
 import { inventoryConcurrencyChecks } from './inventory-concurrency.ts';
+import { jobsConcurrencyChecks } from './jobs-concurrency.ts';
 import { contentConcurrencyChecks } from './content-concurrency.ts';
 import { merchandisingConcurrencyChecks } from './merchandising-concurrency.ts';
 import { posConcurrencyChecks } from './pos-concurrency.ts';
@@ -126,17 +127,43 @@ const broker = new Redis(process.env.CELERY_BROKER_URL ?? 'redis://redis:6379/1'
   lazyConnect: true,
 });
 
-/** The jobs queued since the queue was emptied, oldest first, their ids made readable. */
-async function queuedJobs(db: pg.Client): Promise<unknown[]> {
+/**
+ * `PARITY_NEST_JOBS=pgboss`: the Nest side queues its jobs in PostgreSQL
+ * (ADR-0016), so they are read from `pgboss.job`. A transaction's jobs share
+ * one timestamp there, so in this mode both sides' jobs are compared sorted.
+ */
+const NEST_JOBS_IN_PGBOSS = process.env.PARITY_NEST_JOBS === 'pgboss';
+
+async function emptyJobs(db: pg.Client): Promise<void> {
+  await broker.del('celery');
+  if (NEST_JOBS_IN_PGBOSS) await db.query(`DELETE FROM pgboss.job`);
+}
+
+/** What one side queued, as Celery's `(task, args, kwargs)`. */
+async function rawJobs(db: pg.Client, side: Side): Promise<[string, unknown[], unknown][]> {
+  if (NEST_JOBS_IN_PGBOSS && side === 'nest') {
+    const rows = await db.query<{ name: string; data: { args: unknown[] } }>(
+      `SELECT name, data FROM pgboss.job WHERE state = 'created' ORDER BY created_on, id`,
+    );
+    await db.query(`DELETE FROM pgboss.job`);
+    return rows.rows.map((row) => [row.name, row.data.args, {}]);
+  }
   const raw = await broker.lrange('celery', 0, -1);
   await broker.del('celery');
-  const jobs: unknown[] = [];
-  for (const entry of raw.reverse()) {
+  return raw.reverse().map((entry) => {
     const message = JSON.parse(entry) as { headers: { task: string }; body: string };
     const [args, kwargs] = JSON.parse(Buffer.from(message.body, 'base64').toString('utf8')) as [
       unknown[],
       unknown,
     ];
+    return [message.headers.task, args, kwargs];
+  });
+}
+
+/** The jobs queued since the queue was emptied, oldest first, their ids made readable. */
+async function queuedJobs(db: pg.Client, side: Side): Promise<unknown[]> {
+  const jobs: unknown[] = [];
+  for (const [task, args, kwargs] of await rawJobs(db, side)) {
     const readable: unknown[] = [];
     for (const arg of args) {
       const order = await db.query<{ number: string }>(
@@ -155,7 +182,13 @@ async function queuedJobs(db: pg.Client): Promise<unknown[]> {
             : arg,
       );
     }
-    jobs.push({ task: message.headers.task, args: readable, kwargs });
+    jobs.push({ task, args: readable, kwargs });
+  }
+  if (NEST_JOBS_IN_PGBOSS) {
+    return jobs
+      .map((job) => JSON.stringify(job))
+      .sort()
+      .map((job) => JSON.parse(job) as unknown);
   }
   return jobs;
 }
@@ -792,14 +825,14 @@ async function run(
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
   const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
-  if (testCase.jobs) await broker.del('celery');
+  if (testCase.jobs) await emptyJobs(db);
   const response = normalizeBody(await send(base, sent), testCase);
   const effects: unknown[][] = [];
   for (const query of testCase.effects ?? []) {
     const parameters = query.includes('$1') ? [since] : [];
     effects.push((await db.query(query, parameters)).rows);
   }
-  if (testCase.jobs) effects.push(await queuedJobs(db));
+  if (testCase.jobs) effects.push(await queuedJobs(db, side));
   if (writes) await undoWrites(db, since as string);
   return { response, effects };
 }
@@ -933,6 +966,8 @@ async function main(): Promise<void> {
       ['reviews', () => reviewsConcurrencyChecks({ DJANGO, NEST })],
       ['team', () => teamConcurrencyChecks({ DJANGO, NEST })],
       ['notifications', () => notificationsConcurrencyChecks({ DJANGO, NEST })],
+      // Only when the Nest side queues in pg-boss (`run-jobs`): nothing otherwise.
+      ['jobs', () => jobsConcurrencyChecks({ NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

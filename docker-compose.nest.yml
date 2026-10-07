@@ -17,6 +17,7 @@
 # Ports are bound to 127.0.0.1 and chosen clear of every other stack here:
 #   8610  Django (gunicorn, current source mounted)
 #   8620  NestJS
+#   8630  NestJS queuing its jobs in pg-boss (profile `jobs`, ADR-0016)
 
 name: rangon-nest
 
@@ -151,6 +152,61 @@ services:
     depends_on:
       django: {condition: service_healthy}
       nest: {condition: service_healthy}
+
+  # The Nest API as it will run after the cutover: its jobs queued in
+  # PostgreSQL by pg-boss, in the transaction that decides them (ADR-0016).
+  # No worker here, as Django has none: what each API queued stays put for the
+  # harness to read -- Celery's messages on one side, pg-boss's rows on the other.
+  nest-jobs:
+    profiles: [jobs]
+    image: rangon-api-nest:parity
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.parity
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      RANGON_JOBS_BACKEND: pgboss
+      RANGON_JOBS_WORKER: "0"
+      RANGON_PUBLIC_URL: https://shop.parity.test
+      WEB_REVALIDATE_URL: http://revalidate.parity.invalid/api/revalidate
+      MEDIA_ROOT: /media
+      PORT: "3000"
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+      - ./apps/api/media:/media
+    command: ["node", "parity/serve.ts"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      django: {condition: service_started}
+    ports:
+      - "127.0.0.1:8630:3000"
+
+  # The whole comparison again, with the Nest side queuing in pg-boss.
+  parity-jobs:
+    image: rangon-api-nest:parity
+    profiles: [jobs]
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+    environment:
+      DJANGO_BASE: http://django:8000
+      NEST_BASE: http://nest-jobs:3000
+      # Where the Nest side's jobs are read from: `pgboss.job`, not the broker.
+      PARITY_NEST_JOBS: pgboss
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      PARITY_ONLY: ${PARITY_ONLY:-}
+    command: ["node", "parity/run.ts"]
+    depends_on:
+      django: {condition: service_healthy}
+      nest-jobs: {condition: service_healthy}
 
   # Both APIs with their rate limits on (dev settings), for parity/throttle.ts.
   django-throttled:

@@ -79,6 +79,12 @@ const schema = z.object({
   PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
   // Django's Celery broker: jobs this API queues are run by Django's worker.
   CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
+  // Where this API queues its background jobs (ADR-0016): `celery`, for
+  // Django's worker, until the cutover; `pgboss`, in PostgreSQL, after it.
+  RANGON_JOBS_BACKEND: z.enum(['celery', 'pgboss']).default('celery'),
+  // Whether this process works the queue and fires the schedule. Unset, it
+  // does when the backend is pg-boss; `0` leaves that to a separate worker.
+  RANGON_JOBS_WORKER: z.string().optional(),
   // The storefront's cache-revalidation endpoint (`content.tasks`): when set,
   // a navigation, category or content change queues a job asking it to drop
   // the cached pages. Unset, nothing is queued.
@@ -108,6 +114,8 @@ export interface Env extends Parsed {
   trustForwardedProto: boolean;
   sslRedirect: boolean;
   referrerPolicy: string;
+  /** This process runs the job handlers and the schedule (`RANGON_JOBS_WORKER`). */
+  jobsWorker: boolean;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -140,9 +148,20 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error('USE_S3=1 is not supported by the NestJS API yet.');
   }
 
+  const workerSetting = (env.RANGON_JOBS_WORKER ?? '').trim().toLowerCase();
+  const jobsWorker =
+    workerSetting === ''
+      ? env.RANGON_JOBS_BACKEND === 'pgboss'
+      : ['1', 'true', 'yes', 'on'].includes(workerSetting);
+  if (jobsWorker && env.RANGON_JOBS_BACKEND !== 'pgboss') {
+    // Celery's own worker runs what is queued for Celery; two would run it twice.
+    throw new Error('RANGON_JOBS_WORKER needs RANGON_JOBS_BACKEND=pgboss.');
+  }
+
   return {
     ...env,
     production,
+    jobsWorker,
     throttlingDisabled: env.DJANGO_SETTINGS_MODULE.endsWith('.parity'),
     jwtSigningKey: env.JWT_SIGNING_KEY || env.DJANGO_SECRET_KEY,
     // dev.py: ALLOWED_HOSTS = ["*"] and CORS_ALLOW_ALL_ORIGINS = True.
