@@ -481,6 +481,64 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 7 part 4a: the job queue, on pg-boss, 2026-10-07
+
+Asked for: part 4, the background jobs. The owner was asked three things first and decided
+them ([ADR-0016](architecture/decisions/0016-nest-jobs-on-pg-boss.md)): the queue is
+**pg-boss, in PostgreSQL** -- not BullMQ, which the plan had; jobs run **in the API process,
+separable by a setting**; and **Celery is switched off at the cutover**, not before. This is
+the first half: the queue and the hand-over to it. The ten jobs themselves, and the worker
+that runs them, are part 4b.
+
+```text
+parity, jobs queued for Celery (run) .......... 12075/12075 (none new), 125 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12075/12075, the same 125
+concurrency ................................... 208/208 with Celery; 211/211 with pg-boss (3 new, of the Nest API alone)
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1269 passed (9 new: the queues against what Celery reports; the
+                                                settings; the hand-over, with Celery and with pg-boss)
+tsc / eslint / prettier / build ............... clean
+```
+
+**Nothing is switched on.** `RANGON_JOBS_BACKEND` is `celery` unless set, and with it the port
+queues exactly as it did: the ordinary run is unchanged. Set to `pgboss`, a job is a row in
+PostgreSQL, and one decided inside a transaction is written in that transaction -- a
+checkout's email and SMS, and the low-stock alert of any stock movement. That is what pg-boss
+was chosen for: an order that commits has its email queued, one that rolls back has queued
+nothing, and there is no moment between the two for a broker to be down in (D116).
+
+**How it is proven.** `scripts/nest-parity.sh run-jobs` runs the whole comparison a second
+time against a Nest API that queues in pg-boss. Every case that compares the jobs each API
+queued then compares Celery's messages with pg-boss's rows, by task and arguments. And three
+checks, of the Nest API alone, show the transaction: a checkout that commits has its three
+jobs under the order's own transaction id; the same checkout, refused after its low-stock
+alert was written (the harness takes the coupon's last use while the checkout waits on the
+coupon's row), leaves nothing queued and nothing held; a write-off into low stock has its
+alert under the write-off's id. With the port made to queue outside the transaction all three
+fail, and the refused checkout leaves an alert for an order that does not exist.
+
+One thing those checks taught: the ledger entry and the shelf are written under a savepoint,
+and a subtransaction has a transaction id of its own, so "the same `xmin`" has to be asked of
+a row written at the top level -- the audit entry.
+
+**pg-boss owns a schema.** `pgboss`, created the first time a process starts with that
+backend. It is the one exception to "Django owns the schema", the owner's, and bounded in the
+ADR: nothing of Django's is in it and nothing of pg-boss's is outside it. CLAUDE.md says so
+now. Two dependencies were added at exact versions, `pg-boss` 12.37.0 and `nodemailer`
+10.0.16 (for part 4b's mail); the ADR says why each.
+
+**Running everything twice found two more orders left to the heap**, neither to do with jobs
+-- the second run is the first on a database a full run has already churned. A new stock
+count lists its lines as PostgreSQL returns the branch's stock rows, which the restore before
+each API's request moves: the case now compares a document's lines by SKU. And the site-pages
+list selected only the page's columns, so PostgreSQL dropped the join to the editor's account
+and pages that tie under `ordering=-is_published` came back another way than Django's
+statement gives -- the audit log's lesson again, in a phase 4 port. Its statement is Django's
+now.
+
+Not done, and next: part 4b -- the ten handlers, each compared with its Celery task on
+demand; the mail and SMS senders; the worker and the schedule.
+
 ### The NestJS API, phase 7 part 3: the reports, 2026-10-07
 
 Asked for: part 3. Ported: the eleven views of `reports.api.views` over `reports.services` --

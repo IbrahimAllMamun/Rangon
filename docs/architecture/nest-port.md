@@ -20,7 +20,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 to 3 of 5 (the audit log, notifications, the reports; and what DRF does before a view runs, on every view), parity 12075/12075 and 208 race checks |
+| 7 | Reports, audit log, notifications, background jobs (BullMQ for Celery); cutover | **In progress**: parts 1 to 3 of 5, and the first half of part 4 (the audit log, notifications, the reports; what DRF does before a view runs, on every view; the pg-boss queue), parity 12075/12075 with either queue and 208 race checks (211 with pg-boss) |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -212,6 +212,7 @@ across both APIs where both serve the path:
 | 6 accounts under one email, and 6 branches under one code, at once, across both APIs | one is made; the rest are told it is taken (400) or meet the unique index (409). No lock is involved |
 | 6 settlements of the VAT at once, three each way, across both APIs | six 200s and six audit entries; the mode left is one of the two |
 | 6 requests to mark every notice read at once, across both APIs | six 200s; each notice is counted by exactly one of them, none is left unread. No lock is involved |
+| With pg-boss (`run-jobs`, the Nest API alone): a checkout that commits; the same refused after its alert was written; a write-off into low stock | each job is a row of the transaction that decided it, and is gone when that transaction is: see "Background jobs" below |
 | A notice read while a request to mark everything waits on its row (each API in turn) | the request's `UPDATE` waits, looks at the row again, leaves it as it was read and counts the others. No lock is involved: it is the one statement that holds this. With the port made to read the unread first and write them by key, it stamps the notice again and counts it |
 
 Two failure events for one payment can both act: `fail_payment` does not refuse a payment
@@ -398,7 +399,7 @@ on 150,000 generated fragments and 520,000 generated links before it was committ
 
 | Endpoint | Notes |
 |---|---|
-| `GET /api/v1/site-pages/`, `GET /api/v1/site-pages/<slug>/` | `settings.view`; unpaginated, the standard pages first, then by title. `OrderingFilter` takes every serializer field the table holds (`path` is a property and `updated_by_name` a method, so both are ignored), on the detail too. `PUT` is a 403, or a 405 for an owner or superuser |
+| `GET /api/v1/site-pages/`, `GET /api/v1/site-pages/<slug>/` | `settings.view`; unpaginated, the standard pages first, then by title. `OrderingFilter` takes every serializer field the table holds (`path` is a property and `updated_by_name` a method, so both are ignored), on the detail too. `PUT` is a 403, or a 405 for an owner or superuser. The statement is Django's, the editor's account joined and selected whole: pages that tie in the order asked for come back as the plan leaves them (since phase 7 part 4a) |
 | `POST /api/v1/site-pages/` | `content.site_manage`. `SitePageCreateSerializer`'s errors come in DRF's field order (the parent's fields first, then `slug` and `title`). The address is Django's `slugify` of the slug, else the title, cut at 64; nothing ASCII in it is a 400 (D134, copied), a standard page's address too. The titles' whitespace is collapsed, the body sanitised and refused past 100,000 characters once clean. The insert is its own transaction; a taken address is the unique index's violation, a 409 naming the slug. Audited after the commit, with the `site`, `pages` and `page:<slug>` revalidation job queued between them |
 | `PATCH /api/v1/site-pages/<slug>/` | `content.site_manage`. The body is validated before the page is looked up, the fields cleaned before the lock. The page is locked by slug, every field compared, and only a change saves (every column) and is audited; the revalidation job follows the commit |
 | `DELETE /api/v1/site-pages/<slug>/` | `content.site_manage`; a standard page is a 400. Locked, audited, then deleted with the navigation items that link to it and those nested under them (`CASCADE`): the page first, then the items. Each item queues the navigation revalidation job as it goes; the page's own job follows the commit |
@@ -736,9 +737,10 @@ Phase 7 ports what is left and then moves the traffic. Its parts, in order:
    content negotiation on every view (below);
 2. notifications (`notifications/`: the list, a notice, the unread count, marking read);
 3. reports (`reports/`: the eleven views over `reports.services`, with their CSV exports);
-4. the background jobs: what Celery's worker and beat run today, on BullMQ
-   ([ADR-0014](decisions/0014-nest-enqueues-celery-jobs.md) names `CeleryService.delay` as the
-   one place to swap);
+4. the background jobs: what Celery's worker and beat run today, on pg-boss, in PostgreSQL
+   ([ADR-0016](decisions/0016-nest-jobs-on-pg-boss.md), the owner's decision of 2026-10-07; the
+   plan had pencilled in BullMQ) -- the queue first (part 4a, below), then the ten jobs
+   themselves and the worker that runs them (part 4b);
 5. the cutover, path by path at the proxy.
 
 ### Content negotiation
@@ -886,6 +888,56 @@ draft, a cancelled one, goods sent back); and four expenses, two categories of o
 They are rows with frozen figures: no stock moves and no money, so the shelves and accounts
 every other suite counts are as they were. And a role that reads reports and may not export
 them, which no role the shop ships is.
+
+### Background jobs: the queue (part 4a)
+
+`jobs/`. [ADR-0016](decisions/0016-nest-jobs-on-pg-boss.md) has the decisions and why: the
+queue is pg-boss, in PostgreSQL; jobs will run in the API process unless a setting splits
+them off; Celery stays on until the cutover. This part is the queue and the hand-over to it.
+Nothing is switched on: `RANGON_JOBS_BACKEND` is `celery` unless set, and with it the port
+behaves as it did.
+
+| Piece | What it is |
+|---|---|
+| `Jobs` (`jobs/jobs.service.ts`) | what every caller uses. `delayIn(tx, afterCommit, task, args)` for a job decided inside a transaction, `delay(task, args)` for one that is not |
+| `CeleryService` | ADR-0014's writer, unchanged: Celery's own message, once the caller has committed |
+| `PgBossTransport` (`jobs/pg-boss.service.ts`) | the `PgBoss` instance, started only with the pg-boss backend: it creates or migrates the `pgboss` schema, and a queue per job named for the Celery task it replaces, with that task's retries (`jobs/queues.ts`, checked against what Celery itself reports) |
+
+| Setting | Meaning |
+|---|---|
+| `RANGON_JOBS_BACKEND` | `celery` (default): queue for Django's worker. `pgboss`: queue in PostgreSQL |
+| `RANGON_JOBS_WORKER` | whether this process works the queue and fires the schedule. Unset, it does with the pg-boss backend; `0` leaves that to a separate worker. Refused with the Celery backend: Celery's own worker runs what is queued for Celery |
+
+**What is transactional.** With pg-boss a job decided inside a transaction is a row of that
+transaction: a checkout's confirmation email and SMS, and the low-stock alert of any stock
+movement (`StockService.run`, and checkout's own reservation). It commits with the order or
+the ledger entry, or is rolled back with it; a failure to write it fails the request. A job
+Django itself decides after its commit is queued where Django queues it -- the notice and
+messages of a status change, a storefront revalidation -- best effort, as before.
+
+**pg-boss owns one schema.** `pgboss`, created the first time a process starts with that
+backend; the database role needs `CREATE` on the database. Everything Django knows stays in
+`public`, which is all `npm run db:pull` reads. This is the one exception to "Django owns the
+schema", bounded in the ADR.
+
+It is proven by running the whole comparison a second time with the Nest API queuing in
+pg-boss:
+
+```bash
+scripts/nest-parity.sh run-jobs
+```
+
+`nest-jobs` (port 8630, profile `jobs`) is the same image with `RANGON_JOBS_BACKEND=pgboss` and
+no worker, so what it queues stays in `pgboss.job` as Celery's messages stay on the broker.
+Every case that compares the jobs each API queued then compares Celery's messages with
+pg-boss's rows, by task and arguments. (A transaction's rows share one timestamp, so in this
+mode the two lists are compared sorted.) Three checks run only then, of the Nest API alone:
+
+| Check | Holds |
+|---|---|
+| A checkout that commits | its low-stock alert, email and SMS carry the order's own transaction id, and nothing else is queued |
+| The same checkout refused after the alert was written (the coupon's last use taken while it waits on the coupon's row) | nothing is queued and nothing is held. With the port made to queue outside the transaction, the alert is left behind for an order that does not exist |
+| A write-off that takes a shelf to its reorder point | the alert carries the write-off's transaction id -- the audit entry's, as the ledger entry is written under a savepoint, which has an id of its own |
 
 ## Running it
 

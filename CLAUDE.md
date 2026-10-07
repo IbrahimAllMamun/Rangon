@@ -40,7 +40,8 @@ description or an ADR.
 **A NestJS port of the API is in progress** in `apps/api-nest/` (NestJS 11, Fastify, Drizzle), beside
 Django on the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md),
 [plan](docs/architecture/nest-port.md)). Django still owns the schema and every business rule: never run
-Drizzle migrations, and change a rule in Django first. A ported endpoint must pass the parity harness
+Drizzle migrations, and change a rule in Django first. The one exception is the `pgboss` schema, which
+the Nest API's job queue creates and owns ([ADR-0016](docs/architecture/decisions/0016-nest-jobs-on-pg-boss.md)). A ported endpoint must pass the parity harness
 (`scripts/nest-parity.sh run`) against Django before it changes; a write path is ported only with its
 row locks and concurrency tests. How to continue it -- the commands, the method, the lessons and what is next:
 [docs/nest-port-instructions.md](docs/nest-port-instructions.md).
