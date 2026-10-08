@@ -204,7 +204,7 @@ list unless `DEBUG`**. Development worked; every production build 404ed while th
 reported `201`. WhiteNoise is not an alternative: it indexes its files once at startup, so an image
 uploaded a minute ago would not exist until the next deploy.
 
-The route is now mounted whenever `USE_S3` is off, and Nginx (`local-prod/default.conf`,
+The route is now mounted whenever `USE_S3` is off, and Nginx (`local-prod/default.conf.template`,
 `templates/default.conf.template`) sends `/media/` to the API instead of letting it fall through to Next.
 
 `next.config.ts` also rewrites `/media/:path*` to the API. That is not redundant: given a relative
@@ -215,6 +215,15 @@ where there is no Nginx at all.
 
 Serving user uploads through gunicorn is slower than handing the path to Nginx. That is the price of
 `USE_S3=0`; object storage is the production answer, and `USE_S3=1` removes the route entirely.
+
+**Since 2026-10-08 the NestJS API answers `/media/` in production**
+([ADR-0017](decisions/0017-nest-api-serves-production.md)), from the same volume, by the same
+rules: `apps/api-nest/src/media/media.ts` is `core.media.serve_media` over Django's
+`static.serve`, compared with it case by case -- the private prefix, the refusal to leave the
+root, `If-Modified-Since`, the type Python's table gives each extension. (That table has no
+`.webp`: either API serves one as `application/octet-stream`, D235. Browsers and the Next image
+optimizer read the bytes, not the header, so the photographs show.) It does not start with
+`USE_S3=1`: uploads to object storage are not ported, and a shop on a bucket runs Django.
 
 ### The files have to survive a rebuild
 

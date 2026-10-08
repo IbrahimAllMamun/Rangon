@@ -238,10 +238,12 @@ Rebase or merge `main` in first; CI only then has anything to say.
 
 `docker-compose.prodlocal.yml` sets `build: !reset null` on `api`, `worker`,
 `beat` and `web`, so **`prodlocal up -d --build` builds nothing** — it looks for
-`rangon-api:prod` and `rangon-web:prod` and fails if they are missing. Build them
-by hand first (unlike §8's shared `:latest`, these tags collide with nothing):
+`rangon-api-nest:prod`, `rangon-api:prod` and `rangon-web:prod` and fails if they
+are missing. Build them by hand first (unlike §8's shared `:latest`, these tags
+collide with nothing):
 
 ```bash
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api           # ~4 min cold
 docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web \
   --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 \
@@ -252,12 +254,22 @@ Then:
 
 ```bash
 alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
-prodlocal up -d
-prodlocal exec api python manage.py migrate
-prodlocal exec -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
+prodlocal run --rm api python manage.py migrate
+prodlocal run --rm -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
+  -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= \
   api python manage.py seed_demo --reset
+prodlocal up -d
+prodlocal restart nginx
 ./scripts/smoke-test.sh http://localhost:4100
 ```
+
+**Since 2026-10-08 this stack is served by the NestJS API (`api-nest`), not
+Django** (ADR-0017). `up` starts no `api`, `worker` or `beat`; Django's commands
+are `run --rm api ...`, and `exec api` fails with "service is not running".
+`--profile django up -d api worker` brings the Django admin up;
+`-f docker-compose.django.yml` laid last puts the whole stack back on Django.
+`http://localhost:4100/api/v1/` says which is answering: 404 is the NestJS API,
+401 is Django. Details: docs/operations/local-production.md §9a.
 
 `seed_demo` refuses to run under `config.settings.prod` without that opt-in, and
 refuses `rangon12345` even with it. **Check `Get-Service Cloudflared` before
@@ -267,16 +279,16 @@ tunnel is up they are public the moment Docker starts.
 Its database is a **separate volume** (`rangon-prod_postgres_data`) from the dev
 stack's, so it always starts empty and always needs migrate + seed.
 
-### Recreating `api` or `web` means restarting `nginx`
+### Recreating `api-nest` or `web` means restarting `nginx`
 
-`local-prod/default.conf` declares its upstreams as `server api:8000` /
+`local-prod/default.conf.template` declares its upstreams as `server api-nest:3000` /
 `server web:3000`. Nginx resolves those names **once, at startup**, and caches
 the IP for the life of the process. A recreated container gets a new address, so
-every `/api/` request answers **502** while `docker exec … getent hosts api`
+every `/api/` request answers **502** while `docker exec … getent hosts api-nest`
 inside the very same nginx container prints the correct new IP:
 
 ```bash
-docker compose -p rangon-prod … up -d --force-recreate api
+docker compose -p rangon-prod … up -d --force-recreate api-nest
 docker compose -p rangon-prod … restart nginx     # or /api/ stays 502
 ```
 

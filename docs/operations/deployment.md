@@ -14,17 +14,49 @@
 **Staging must never point at the production database.** Separate databases, separate buckets,
 separate credentials, separate Redis (or at least separate DB numbers).
 
+## Which API serves
+
+Since 2026-10-08 the NestJS API (`api-nest`) serves production, and Django starts on demand
+([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). It answers every
+request the Django API answered, serves uploaded files, works the background jobs and fires the
+schedule ([ADR-0016](../architecture/decisions/0016-nest-jobs-on-pg-boss.md)). Django still owns
+the schema: every migration is Django's.
+
+| What you want | How |
+|---|---|
+| The shop, as it normally runs | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` -- `db`, `redis`, `api-nest`, `web`, `nginx` |
+| A migration, `collectstatic`, any management command | `... run --rm api python manage.py <command>`. `run` starts a container of a service `up` leaves alone, and removes it afterwards |
+| The Django admin, `/api/docs/`, `/api/schema/` | `... --profile django up -d api worker`, and `... --profile django stop api worker` when done. Until then nginx answers those three paths 503 and says so |
+| Django for everything again | add `-f docker-compose.django.yml`, then `up -d` and restart nginx: see [Back to Django](#back-to-django) |
+
+Three things the NestJS API does not do, each a reason to run Django instead for now:
+
+- **`USE_S3=1`.** It refuses to start: uploads to object storage are not ported. Every
+  documented deployment keeps uploads on a volume (`USE_S3=0`).
+- **Sentry.** `SENTRY_DSN` is read by Django only. The NestJS API logs to its container's
+  output: `docker compose ... logs api-nest`.
+- **`GET /api/v1/` and `GET /api/v1/pos/`**, the router's index pages, are a 404. Nothing calls
+  them.
+
+A management command that queues a background job (`seed_demo` does: saving a category asks
+the storefront to revalidate) queues it for Celery, and no Celery worker is running. Start one
+for the command (`--profile django up -d worker`), or run the command with
+`-e CELERY_TASK_ALWAYS_EAGER=1` so the job runs inline.
+
 ## Images
 
 Multi-stage builds, non-root user, pinned base images, no secrets baked in.
 
 ```text
-api:  python:3.12-slim (builder: wheels) → slim runtime, gunicorn, appuser
-web:  node:22-alpine (deps → build) → node:22-alpine runtime, Next.js standalone, nextjs user
+api-nest:  node:22-bookworm-slim (deps → build) → slim runtime, compiled JavaScript, appuser
+api:       python:3.12-slim (builder: wheels) → slim runtime, gunicorn, appuser
+web:       node:22-alpine (deps → build) → node:22-alpine runtime, Next.js standalone, nextjs user
 ```
 
-Tags are immutable and derived from the commit: `ghcr.io/<org>/rangon-api:<git-sha>`,
-`…/rangon-web:<git-sha>`. `latest` may exist for convenience but is **never** what production
+Both API images run as uid 1001: uploads are on one volume, written by either.
+
+Tags are immutable and derived from the commit: `ghcr.io/<org>/rangon-api-nest:<git-sha>`,
+`…/rangon-api:<git-sha>`, `…/rangon-web:<git-sha>`. `latest` may exist for convenience but is **never** what production
 references.
 
 ## Pipeline
@@ -48,19 +80,24 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 # 2. back up the database FIRST (see backups.md)
 ./scripts/backup-db.sh pre-deploy-$TAG
 
-# 3. run migrations as a one-off job — NOT in every replica at startup
+# 3. run migrations as a one-off job — NOT in every replica at startup.
+#    Django's, whichever API serves: `run` starts the `api` service for this
+#    one command though `up` does not start it.
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   run --rm api python manage.py migrate --noinput
 
-# 3b. refresh the static assets Nginx serves from the api_static volume.
+# 3b. refresh the static assets Nginx serves from the api_static volume --
+#     the Django admin's, for when it is started.
 #     The image collects them at build time, but a named volume is seeded from
 #     the image only the first time it is created — so without this step every
 #     later release serves the FIRST release's Django-admin and DRF assets.
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   run --rm api python manage.py collectstatic --noinput
 
-# 4. roll out the application
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps api worker beat web
+# 4. roll out the application, then have nginx look its upstreams up again:
+#    it resolves them once, at start, and a recreated container has a new address
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps api-nest web
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart nginx
 
 # 5. verify
 curl -fsS https://<host>/api/health/ && curl -fsS https://<host>/api/ready/
@@ -69,6 +106,28 @@ curl -fsS https://<host>/api/health/ && curl -fsS https://<host>/api/ready/
 
 Application containers do **not** run `migrate` on start (`RUN_MIGRATIONS_ON_START` is only enabled in
 development). Two replicas migrating simultaneously is how schemas get corrupted.
+
+The NestJS API creates one thing in the database itself: the `pgboss` schema, its job queue's, the
+first time it starts. The database role needs `CREATE` on the database for that (the role the
+compose file creates owns the database, so it has it). Nothing of Django's is in that schema, and
+`pg_dump` of the database carries it with everything else.
+
+### The first release that cuts over
+
+A deployment that has been running Django moves to the NestJS API with the release that contains
+[ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md), in this order:
+
+1. Back up, migrate and `collectstatic` as above.
+2. Stop taking traffic for the minute this takes (`stop nginx`), so nothing new is queued.
+3. Let Celery finish what it holds, then stop Django:
+   `exec redis redis-cli -n 1 llen celery` answers `0` when the queue is empty (the broker is
+   database 1 unless `CELERY_BROKER_URL` says otherwise). Then `stop beat worker api`.
+4. `up -d` with the new files: `api-nest` starts, creates the `pgboss` schema, and begins firing
+   the schedule beat fired. The old `api`, `worker` and `beat` containers are no longer part of
+   what `up` manages; `rm` them.
+5. Smoke test, and place one order: its confirmation email is the proof the jobs run.
+
+Uploads need nothing: both images run as uid 1001, and the volume is the same.
 
 ## Zero-downtime schema changes (expand/contract)
 
@@ -85,11 +144,52 @@ becomes impossible.
 | What broke | Action |
 |---|---|
 | Application bug | redeploy the previous immutable tag: `TAG=<previous-sha> docker compose … up -d` |
+| The NestJS API itself, in a way the previous tag does not cure | [back to Django](#back-to-django): the same data, the other API |
 | Config/secret | revert the secret-manager version, restart the affected service |
 | Migration, backward-compatible | roll back the app only; the schema stays ahead — safe by design |
 | Migration, destructive | restore from the pre-deploy backup ([disaster-recovery.md](disaster-recovery.md)) — this is why step 2 exists |
 
 Rollback target time: application ≤ 10 minutes, database restore ≤ 60 minutes.
+
+### Back to Django
+
+One more file, laid last, serves the whole stack from Django again:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.django.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.django.yml restart nginx
+```
+
+It starts `api`, `worker` and `beat`, points the web app and nginx at `api`, and tells
+`api-nest` to stop firing the schedule, which beat now fires. Nothing is lost by it: both APIs
+write the same tables, and a token, a cart or a session from one is good on the other. Rate-limit
+budgets and the cached product feeds start afresh, as each API keeps its own.
+
+`api-nest` stays up, taking no requests, because the jobs it queued before the switch are rows
+only it works. When this answers `0` it can be stopped:
+
+```bash
+docker compose ... exec db psql -U rangon -d rangon -Atc \
+  "SELECT count(*) FROM pgboss.job WHERE state IN ('created', 'retry', 'active')"
+```
+
+Forward again, **stop Django first**. Without the file `up` no longer manages `api`, `worker`
+and `beat`, and it leaves them running -- beat among them, beside an `api-nest` that has just
+begun firing the schedule again:
+
+```bash
+# 1. nothing left for Celery (the broker is database 1 unless CELERY_BROKER_URL says otherwise)
+docker compose ... exec redis redis-cli -n 1 llen celery        # 0
+# 2. stop Django, with the file still named
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.django.yml stop beat worker api
+# 3. the stack without the file, and nginx's upstreams looked up again
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart nginx
+```
+
+**Never run beat and a scheduling `api-nest` together**: every scheduled job fires twice. The
+file exists so that going back cannot be done by changing one setting and forgetting another;
+going forward has this one order to keep.
 
 ## Health checks
 
@@ -97,13 +197,22 @@ Rollback target time: application ≤ 10 minutes, database restore ≤ 60 minute
   restart loop.
 - `/api/ready/` — readiness; checks PostgreSQL and Redis, returns `503` when not ready so the load
   balancer stops sending traffic. Neither endpoint returns versions, settings or error detail.
-- Compose/orchestrator healthchecks are defined for `db`, `redis`, `api` and `web`.
+- Compose/orchestrator healthchecks are defined for `db`, `redis`, `api-nest`, `api` and `web`.
+- Both APIs answer both paths alike. The NestJS API's own healthcheck asks for
+  `http://localhost:3000/api/health/`, so `localhost` must be in `DJANGO_ALLOWED_HOSTS`, as it must
+  for Django's.
 
 ## Scaling order
 
 The prod overlay starts at one of everything, sized for one shop on one host:
 
-| Service | Processes | Concurrency | Memory (measured 2026-09-30) |
+| Service | Processes | Concurrency | Memory |
+|---|---|---|---|
+| `api-nest` | 1 Node process: the API, the job worker and the schedule | one event loop; 10 database connections, 4 more for the queue | ~90 MB after warm-up, ~110 MB at the higher of two readings (measured 2026-10-08) |
+
+And what Django costs when it is started (measured 2026-09-30):
+
+| Service | Processes | Concurrency | Memory |
 |---|---|---|---|
 | `api` | gunicorn master + 2 workers | 4 threads each, 8 requests | ~235 MB per replica |
 | `worker` | 1 Celery process, `--pool=threads` | 4 tasks | ~100 MB per replica |
@@ -114,10 +223,14 @@ log, 2026-09-30.
 
 Raise these in order when a measurement says so, not before:
 
-1. `api` replicas (stateless behind the proxy)
-2. `worker` replicas
-3. PostgreSQL vertical + read replica for reports
-4. CDN in front of media and static assets
+1. `api-nest` replicas (stateless behind the proxy; pg-boss gives each job, and each scheduled
+   run, to one of them). If it is the jobs that crowd the requests rather than the reverse, split
+   them instead: `RANGON_JOBS_WORKER=0` on `api-nest` and a second service of the same image
+   started as `node dist/worker.js` (ADR-0016)
+2. PostgreSQL vertical + read replica for reports
+3. CDN in front of media and static assets
+
+What follows is Celery's, and applies when Django is the one serving.
 
 `beat` must stay at exactly **one** replica or scheduled jobs run twice. For the same reason it is not
 folded into the worker with `celery worker -B`: that forks a separate beat process anyway (so it
@@ -132,17 +245,20 @@ one.
 ## Reverse proxy
 
 Nginx terminates TLS, redirects HTTP→HTTPS, sets security headers (HSTS, `X-Content-Type-Options`,
-`Referrer-Policy`, CSP), gzip/brotli, request size limits, and routes `/api/*` → api, everything else →
-web. If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service
+`Referrer-Policy`, CSP), gzip/brotli, request size limits, and routes `/api/*` and `/media/*` → the
+API that serves (`RANGON_API_UPSTREAM`, set by the compose files), `/django-admin/`, `/api/docs/` and
+`/api/schema/` → Django when it is running, everything else → web. Most API traffic does not pass
+through it at all: the web app calls the API over the private network (`API_INTERNAL_URL`), which
+is why the compose files set the two together. If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service
 and record that decision here rather than running two proxies.
 
 **Whatever the topology, `DJANGO_TRUSTED_PROXY_HOPS` must equal the number of proxies in front of
-Django.** Every rate limit, and the audit trail's `ip_address`, count that many `X-Forwarded-For`
+the API** (both read the one setting). Every rate limit, and the audit trail's `ip_address`, count that many `X-Forwarded-For`
 entries from the right; anything further left is written by the caller. One managed load balancer
 instead of this Nginx is still 1. A CDN or tunnel in front of a proxy is 2. Set it too high, or
 leave it at the default 0 behind a proxy, and the limits stop doing their job in one direction or
 the other — [security.md](security.md#deploying-behind-a-proxy) has the table and the two rules, and
-[D88](../roadmap.md#known-defects) is what happens without them. Django must also be unreachable
+[D88](../roadmap.md#known-defects) is what happens without them. The API must also be unreachable
 around the proxy, or a direct request carries no trusted entry at all.
 
 A worked example of exactly that: [webuzo-deployment.md](webuzo-deployment.md), where the panel's own

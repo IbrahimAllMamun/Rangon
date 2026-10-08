@@ -37,14 +37,19 @@ ledger, customer database, order table and payment table. There is exactly one i
 Do not swap a working technology for a newer one. Do not add a dependency without stating why in the PR
 description or an ADR.
 
-**A NestJS port of the API is in progress** in `apps/api-nest/` (NestJS 11, Fastify, Drizzle), beside
-Django on the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md),
-[plan](docs/architecture/nest-port.md)). Django still owns the schema and every business rule: never run
-Drizzle migrations, and change a rule in Django first. The one exception is the `pgboss` schema, which
-the Nest API's job queue creates and owns ([ADR-0016](docs/architecture/decisions/0016-nest-jobs-on-pg-boss.md)). A ported endpoint must pass the parity harness
-(`scripts/nest-parity.sh run`) against Django before it changes; a write path is ported only with its
-row locks and concurrency tests. How to continue it -- the commands, the method, the lessons and what is next:
-[docs/nest-port-instructions.md](docs/nest-port-instructions.md).
+**Production is served by a NestJS port of the API**, in `apps/api-nest/` (NestJS 11, Fastify, Drizzle),
+over the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md),
+[plan](docs/architecture/nest-port.md)). Since [ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)
+the production compose files run it -- the API, the background jobs and their schedule -- and start Django
+only on demand: for migrations, the Django admin and the API docs, and to go back
+(`docker-compose.django.yml`). **Django still owns the schema and every business rule**, and the development
+stack and the commands in this file are Django's: never run Drizzle migrations, and change a rule in Django
+first, with its tests, then port it. The one exception is the `pgboss` schema, which the Nest API's job queue
+creates and owns ([ADR-0016](docs/architecture/decisions/0016-nest-jobs-on-pg-boss.md)). A ported endpoint
+must pass the parity harness (`scripts/nest-parity.sh run`) against Django before it changes; a write path
+is ported only with its row locks and concurrency tests. A change made to one API and not the other is a
+production defect now, not a drift in a side project. How to work on it -- the commands, the method, the
+lessons: [docs/nest-port-instructions.md](docs/nest-port-instructions.md).
 
 ## 3. Architecture rules (non-negotiable)
 

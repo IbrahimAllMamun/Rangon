@@ -20,8 +20,15 @@
 ## 1. What this gives you, and what it does not
 
 `docker-compose.prodlocal.yml` runs the same images CI produces, with `config.settings.prod`, behind
-nginx as a single origin on **4100** — the storefront, `/admin`, `/pos`, Django's `/api/v1/` and
+nginx as a single origin on **4100** — the storefront, `/admin`, `/pos`, the API's `/api/v1/` and
 Next's `/api/proxy/` all arrive on one hostname, exactly as they would deployed.
+
+**The API is the NestJS one** (`api-nest`), as in production since 2026-10-08
+([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). It serves every
+request, sends the emails and fires the scheduled jobs. Django is not running day to day: it
+migrates and seeds through one-off containers (step 5), and is started when you want the Django
+admin or the API docs, or want the whole stack on Django again
+([§ 9a](#9a-django-on-demand-and-back-to-django)).
 
 Three deliberate differences from a real deployment:
 
@@ -35,7 +42,7 @@ it cannot collide with the development stack or share a Postgres data directory 
 on one data directory is how a database is lost.
 
 That separation has a consequence worth stating plainly: **its database always starts empty**, so
-step 5 and step 6 are not optional the first time.
+step 5 is not optional the first time.
 
 ---
 
@@ -47,9 +54,9 @@ Sections 3–8 are one script:
 ./scripts/rebuild-local-prod.sh
 ```
 
-It tears the stack down with `compose down -v`, builds both images, brings it up, waits for the API
-to report healthy, migrates, reseeds, restarts nginx and then smoke-tests the result — so it fails
-loudly rather than exiting `0` on a stack that is not serving.
+It tears the stack down with `compose down -v`, builds the three images, migrates and reseeds,
+brings the stack up, waits for the API to report healthy, restarts nginx and then smoke-tests the
+result — so it fails loudly rather than exiting `0` on a stack that is not serving.
 
 **It is destructive and unconditionally so.** `down -v` removes this project's volumes, which takes
 the database with them, so the reseed is not a step you can skip — it is how the stack gets a
@@ -92,12 +99,20 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 
 ---
 
-## 4. Build the two images by hand
+## 4. Build the three images by hand
 
 **This is the step that is skipped, and the failure is confusing.** `docker-compose.prodlocal.yml`
-sets `build: !reset null` on `api`, `worker`, `beat` and `web`, so `up -d --build` builds
-**nothing** — it looks for `rangon-api:prod` and `rangon-web:prod` and fails if they are missing.
-Unlike the `:latest` tags the two web Dockerfiles fight over, these collide with nothing.
+sets `build: !reset null` on every application service, so `up -d --build` builds **nothing** — it
+looks for `rangon-api-nest:prod`, `rangon-api:prod` and `rangon-web:prod` and fails if they are
+missing. Unlike the `:latest` tags the two web Dockerfiles fight over, these collide with nothing.
+
+The API that serves:
+
+```bash
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
+```
+
+Django, which migrates, seeds, and is there to go back to:
 
 ```bash
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
@@ -128,21 +143,17 @@ docker inspect rangon-web:prod --format '{{range .Config.Env}}{{println .}}{{end
 
 ---
 
-## 5. Start the stack
+## 5. Migrate and seed
+
+Before anything is started. The database is a separate volume from the development stack's, so it
+starts empty every time it is recreated; and the API works the job queue and fires the schedule
+from the moment it is up, so it should find its tables there.
+
+Django does both, in a container that exists for the one command (`run --rm`; it starts the
+database it depends on and waits for it):
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
-```
-
----
-
-## 6. Migrate and seed
-
-The database is a separate volume from the development stack's, so it starts empty every time it is
-recreated.
-
-```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
 ```
 
 This stack runs `config.settings.prod`, where `seed_demo` is **refused** unless you opt in for the one
@@ -150,10 +161,15 @@ command and bring a password of your own. The README's `rangon12345` is refused 
 been published through a tunnel before, and that password is public:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec \
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm \
   -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' \
+  -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= \
   api python manage.py seed_demo --reset
 ```
+
+The last two variables are for this stack as it now runs: the seed saves categories and navigation
+items, each of which queues a storefront revalidation *for Celery*, and no Celery worker is
+running. They make those jobs run inline, with nowhere to send them — nothing is cached yet.
 
 The password must pass Django's validators (10+ characters, not common, not all digits). Re-running
 the seed with a new password also replaces the README one on any account an older seed left with it.
@@ -162,23 +178,35 @@ the seed with a new password also replaces the README one on any account an olde
 
 ---
 
+## 6. Start the stack
+
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
+```
+
+Six containers: `db`, `redis`, `api-nest`, `web`, `nginx`, `mailpit`. No `api`, `worker` or `beat`:
+that is Django, and it is not part of what `up` starts.
+
+---
+
 ## 7. Restart nginx — not optional
 
-`infrastructure/docker/nginx/local-prod/default.conf` declares its upstreams as `server api:8000` and
-`server web:3000`. **Nginx resolves those names once, at startup, and caches the address for the life
+`infrastructure/docker/nginx/local-prod/default.conf.template` declares its upstreams as
+`server api-nest:3000` and `server web:3000`. **Nginx resolves those names once, at startup, and caches the address for the life
 of the process.** Any container created or recreated after nginx therefore has an address nginx does
 not know.
 
 The symptom is misleading: `/api/` answers **502** while the storefront still renders, so it reads as
-an API fault rather than a proxy one — and `docker exec … getent hosts api` inside the very same
+an API fault rather than a proxy one — and `docker exec … getent hosts api-nest` inside the very same
 nginx container prints the correct new address.
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml restart nginx
 ```
 
-**Repeat this every time you recreate `api` or `web` later**, including after the
-`--force-recreate api worker beat` in the Cloudflare runbook.
+**Repeat this every time you recreate `api-nest` or `web` later**, including after the
+`--force-recreate` in the Cloudflare runbook. (The three Django-only paths are the exception:
+nginx looks Django up on each request, so starting and stopping it needs no restart.)
 
 ---
 
@@ -206,7 +234,8 @@ curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4100/
 | URL | What |
 | --- | --- |
 | `http://localhost:4100` | The app — one origin, exactly like the deployed topology |
-| `http://localhost:8100` | Django directly, for poking the API without going through nginx |
+| `http://localhost:8100` | The API directly, for poking it without going through nginx |
+| `http://localhost:8101` | Django directly, when it is started ([§ 9a](#9a-django-on-demand-and-back-to-django)) |
 | `http://localhost:${MAILPIT_PORT:-8125}` | Mailpit — where order confirmation emails land |
 
 Seeded logins are printed by `seed_demo`; all use the `DJANGO_DEMO_SEED_PASSWORD` you gave it.
@@ -221,9 +250,65 @@ Seeded logins are printed by `seed_demo`; all use the `DJANGO_DEMO_SEED_PASSWORD
 
 ---
 
+## 9a. Django on demand, and back to Django
+
+Every command below starts with the same words; `C` stands for them:
+
+```bash
+C="docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml"
+```
+
+**The Django admin and the API docs.** `http://localhost:4100/django-admin/`, `/api/docs/` and
+`/api/schema/` answer 503, with a line saying why, until Django is started:
+
+```bash
+$C --profile django up -d api worker
+```
+
+```bash
+$C --profile django stop api worker
+```
+
+The worker comes with it because whatever the admin queues goes to Celery. Nginx needs no restart
+for this.
+
+**A management command.** `$C run --rm api python manage.py <command>`. If the command queues
+background jobs, either start the worker first or add `-e CELERY_TASK_ALWAYS_EAGER=1`.
+
+**The whole stack on Django again.** One more file, laid last:
+
+```bash
+$C -f docker-compose.django.yml up -d
+```
+
+```bash
+$C -f docker-compose.django.yml restart nginx
+```
+
+`http://localhost:4100/api/v1/` tells you which API is answering: Django says 401 there, the NestJS
+API 404. Orders, accounts, uploads and sign-ins carry over in both directions — it is one database
+and one media volume. To come back, **stop Django before leaving the file out**, or beat and the
+NestJS API will both fire the scheduled jobs:
+
+```bash
+$C -f docker-compose.django.yml stop beat worker api
+```
+
+```bash
+$C up -d
+```
+
+```bash
+$C restart nginx
+```
+
+[deployment.md](deployment.md#back-to-django) has the reasons.
+
+---
+
 ## 10. Three things that look broken and are not
 
-**`worker` and `beat` report `unhealthy`.** They run Celery from the *api* image, so they inherit its
+**`worker` and `beat` report `unhealthy`**, when Django is running. They run Celery from the *api* image, so they inherit its
 `HEALTHCHECK`, which curls `localhost:8000`. Nothing listens on 8000 in a Celery container and nothing
 ever will. Ignore it. Do not "fix" it by weakening the api healthcheck.
 

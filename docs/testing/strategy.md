@@ -70,6 +70,19 @@ Purchase draft PO → send → receive partially → inventory increased
 
 Each asserts both the API outcome **and** ledger integrity via `verify_integrity()`.
 
+## The browser suite runs against both APIs
+
+Since the cutover ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)) the
+E2E job in CI is a matrix of two: the web app on the NestJS API, which is what production runs,
+and on Django, which is what it goes back to. In both, Django migrates and seeds. A flow that
+passes on one and fails on the other is a difference the parity harness missed, or a difference
+in speed the suite was leaning on -- the first run on the NestJS API found one of those: eleven
+sign-ins inside a minute against a limit of ten.
+
+`scripts/e2e-local.sh nest` (or `django`) is that job in containers, for a machine with Docker and
+nothing else: a fresh database each time, the storefront's production build, Playwright in its own
+image. 50 of 50 on each, 2026-10-08.
+
 ## Commands
 
 ```bash
@@ -78,6 +91,8 @@ docker compose exec api pytest -m "not slow"        # skips concurrency/perf
 docker compose exec api pytest --cov=. --cov-report=term-missing
 docker compose exec web npm run test                # Vitest (17 tests, ~25 s)
 docker compose exec web npm run test:e2e            # Playwright — DOES NOT WORK, see above
+scripts/e2e-local.sh nest                           # Playwright, as CI runs it, on the NestJS API
+scripts/e2e-local.sh django                         # the same, on the Django API
 docker compose -f docker-compose.test.yml run --rm api-test    # what CI runs
 ```
 

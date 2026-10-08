@@ -9,7 +9,19 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-10-05**.
+Last updated: **2026-10-08**.
+
+**Production runs the NestJS API.** The port that began as a question about memory
+([ADR-0013](architecture/decisions/0013-nestjs-api-alongside-django.md)) answers every request
+the Django API answered, serves uploads, and runs the background jobs and their schedule in the
+same process. The production compose files start it, and no longer start Django's API, worker or
+beat; Django still owns the schema, migrates it, and is one compose file away from serving
+everything again. A rule still changes in Django first. Three limits of the default are stated
+rather than hidden: no S3 storage, no Sentry, and an unmeasured Redis outage. **The shop already
+running on the owner's machine is still on Django** until its next upgrade, which has one extra
+step. Decisions in [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md); how to
+run it in [deployment.md](operations/deployment.md#which-api-serves); evidence in
+[§ The cutover](#the-nestjs-api-phase-7-part-5-the-cutover-2026-10-08).
 
 **The homepage leads with products a merchandiser chose, and the register takes a scan wherever
 focus is.** A carousel of products now sits straight under the hero, in place of "Shop by category"
@@ -445,7 +457,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: four N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15, and **POS grid search 81→5** on 2026-09-09) plus a per-keystroke POS request storm. **All ten documented budgets are now asserted** — that table had said "enforced in tests" while two of ten were, which is how the counter's own search sat at nine queries a row. Product detail's budget was raised from an unmeasured 10 to 18 deliberately. Remaining: no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. **Re-measured 2026-09-21: the suite is 42 specs and a production build passes 40**, with both failures [D40](#known-defects) — the expenses spec it was found on and the stock-count spec, which nobody had connected to it. D41 was fixed 2026-09-09 and D40 was worked around the same day, after which a production build ran **42/42**. **The CI job moved onto a production build on 2026-09-21**: it builds the app and serves it from the standalone `server.js` the image itself runs, so the suite now drives the artefact that ships rather than `next dev` |
-| 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack, **served by the NestJS API since 2026-10-08** with Django started on demand ([ADR-0017](architecture/decisions/0017-nest-api-serves-production.md));**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 31  | Backup/recovery                       | ✅      | —       | Scripts + runbook written, and **the restore has now been rehearsed for real** — 2026-08-22, against a production database that was actually destroyed. See the verification log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 32  | Production launch                     | ⬜      | ⬜       | Blocked on`docs/operations/go-live-checklist.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 33  | Dynamic navigation                    | ✅      | ✅       | Category-driven navbar with a one-table override,`/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5                                                                                                                                                                                                                                                 |
@@ -480,6 +492,93 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### The NestJS API, phase 7 part 5: the cutover, 2026-10-08
+
+Asked for: part 5. The owner decided four things first
+([ADR-0017](architecture/decisions/0017-nest-api-serves-production.md)): **one switch for every
+path**, not path by path; **Django starts only on demand**; **the NestJS API is the default in the
+production compose files**; and **a rule still changes in Django first**. So from this part the
+production stack runs `api-nest` -- the API, the background jobs and the schedule in one process --
+and Django's `api`, `worker` and `beat` are not started. One more compose file,
+`docker-compose.django.yml`, puts the whole stack back on Django.
+
+```text
+parity, jobs queued for Celery (run) .......... 12240/12240 (102 new: 96 media, 6 of Django's own pages), 131 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12240/12240, the same 131
+concurrency ................................... 211/211 with Celery; 214/214 with pg-boss (none new)
+worker check .................................. 5/5
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1469 passed (153 new: the media route's paths, types, dates and names against what
+                                                Django and Python print)
+tsc / eslint / prettier / build ............... clean
+ruff (the parity gateway, fixture_media.py) ... clean
+browser suite, web app on the NestJS API ...... 50/50 (first run 49/50: see below)
+browser suite, web app on Django .............. 50/50
+local production stack, rebuilt from nothing .. smoke test 7/7; the flows below
+```
+
+**Was everything ported?** Checked mechanically rather than from the plan: Django's resolver and
+the Nest API's route table, dumped and compared. Every path and method of Django's router is among
+the port's 326 routes. Beyond them Django serves five things that are not the API: `/media/`, the
+router's two index pages, the OpenAPI schema with its Swagger page, and the Django admin. The first
+was ported in this part, because with `USE_S3=0` nothing else has the files; the rest are declared
+differences, and nginx sends the admin and the docs to Django whenever it is running.
+
+**`/media/`.** `core.media.serve_media`, compared in 96 cases: every kind of file the type table
+tells apart, the private prefix by six spellings, the ways out of the root, `If-Modified-Since` in
+the three HTTP date forms, and the methods a function view answers that a DRF view would not.
+`common/mimetypes.ts` is Python's own table, printed in the production Django image.
+
+**The switch, tried both ways** on a local production stack built from nothing with the new files:
+
+- *As it now starts.* Six containers, none of them Django's. Django migrated and seeded in one-off
+  containers before anything else was up. Through nginx: sign in as the owner; upload a product
+  photograph and fetch it back byte for byte; place a guest order and receive its confirmation
+  email -- queued in the order's transaction, sent by the same process. The reservation sweep ran
+  at each fifth minute, once.
+- *Django on demand.* `/django-admin/`, `/api/docs/` and `/api/schema/` answer 503 with a line
+  saying how to start it; `--profile django up -d api worker` and they answer, with no nginx
+  restart in either direction.
+- *Back to Django.* With the extra file: `/api/v1/` answers Django's 401 where the NestJS API
+  answers 404; the same owner signs in; the next order takes the next number; its email goes out
+  through Celery; `api-nest` logs that the schedule is left to another process.
+- *Forward again.* `up` without the file starts `api-nest` scheduling again **and leaves beat
+  running**. That is how the documented order came to be "stop Django first": found by doing it.
+
+**The web app on the NestJS API, in a browser.** The parity harness compares the API; nothing had
+driven the shop through it. The Playwright suite now runs against both, in CI and here.
+The first run on the NestJS API was 49 of 50, and the failure was the suite's: eleven tests sign in,
+one after another and from one address; the API allows ten sign-ins a minute from an address; and
+against Django the suite had been slow enough for the first to leave the window before the
+eleventh. The faster API fitted all eleven inside a minute, and the last was refused, correctly.
+The limit was not loosened. The suite now signs each account in once through the form and keeps
+its session: 50 of 50 on both. `scripts/e2e-local.sh` runs it here as CI does.
+
+**What it costs, measured** on the local production stack after warm-up traffic and three orders:
+`api-nest` used 88 MiB (112 MiB at the higher of two readings), doing what Django's `api` (about 235 MB), `worker` (100 MB) and `beat`
+(98 MB) did together on 2026-09-30.
+
+**CI** builds and scans the NestJS image, runs the comparison a second time with the jobs in
+pg-boss and then the worker check, and runs the browser suite once per API. None of that has run
+on GitHub yet: it runs with the pull request.
+
+**The shop that is already running.** The local production stack on the owner's Windows machine
+holds a real shop and still runs Django. Its next upgrade crosses this change, and an ordinary
+upgrade would leave beat running beside the new API. [upgrading-local-production.md](operations/upgrading-local-production.md)
+has a step for that one deploy, **6-once**, and the two commands that undo it. The step was
+rehearsed here on Linux (a stack started from `main`'s compose files with an order and an upload in it, then the step: the order sequence, the upload, the sign-in and the ledger checks all carried over, and the two commands took it back); it has not been run in PowerShell or on real data.
+
+Found in Django, and copied: D235 (a `.webp` upload is served as `application/octet-stream`) and
+D236 (a media name too long for the filesystem is a 500).
+
+**Known limits of the default**, each in the ADR and in `deployment.md`: `USE_S3=1` is not
+supported by the NestJS API, which refuses to start with it; errors are not reported to Sentry;
+and what a Redis outage does to the NestJS API has not been measured.
+
+Not done: nothing is left of the port's seven phases. What follows it is the owner's to choose --
+porting S3 storage and Sentry, and, once the NestJS API has run for a while, whether Django stays
+the place a rule changes first.
 
 ### The NestJS API, phase 7 part 4b: the ten jobs, the worker and the schedule, 2026-10-07
 
@@ -4796,6 +4895,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D232 | **Three ways to a 500 on a report.** `SalesReportView` passes `channel` to the filter as typed: a NUL in it reaches PostgreSQL and the `DataError` is nobody's to catch. And `_fill_missing_days` walks the window's days with `day += timedelta(days=1)`: a dashboard window of 370 days or fewer whose last day is 9999-12-31 steps past `date.max` (`OverflowError`), as does one whose end, moved to the shop's time, is past what a date can hold (`date_to=9999-12-31T23:59:59-01:00`, or a first instant before year 1). *Found by the cases at the edges of the window.* | Low | Copied by the port. Refuse the NUL; bound the window. `reports/api/views.py`, `reports/services.py` |
 | D233 | **The reservation sweep can cancel an order that was paid for while it ran.** `orders.tasks.release_expired_reservations` reads the unpaid online orders past the window, then hands each to `transition(order, CANCELLED)`, which locks the row and reads the status again -- but only to see whether the move is allowed, and a confirmed order may be cancelled. An order whose payment is captured between the sweep's query and its lock on that order is cancelled as "PAYMENT_TIMEOUT: reservation expired", its stock released, with the payment taken and nothing refunding it. The window is the time the sweep spends on the orders ahead of it. Measured in both APIs: an order confirmed while the sweep waits on its row is left `CANCELLED`. *Found by racing the sweep against a confirmation.* | Medium | Copied by the port. Under the lock, skip an order that is no longer pending (or pass the expected status to `transition`). `orders/tasks.py` |
 | D234 | **Two sweeps at once count the same order twice.** `transition` returns an order already in the status asked for, and the sweep adds one for every call that returns: a sweep that waited on an order another sweep cancelled counts it too. Measured: 56 orders, `released:53` from one sweep and `released:56` from the other; each order was cancelled once and each line released once, so only the count is wrong. It needs the schedule to fire in two places, or a sweep slower than five minutes. *Found by running Django's task and the Nest handler together.* | Low | Copied by the port. Count only an order the call moved. `orders/tasks.py` |
+| D235 | **An uploaded WebP photograph is served as `application/octet-stream`.** `/media/` takes a file's type from Python's `mimetypes`, and Python 3.12's table has no `.webp` (it arrives in 3.13); the image has no `/etc/mime.types` to add one. The upload validator accepts WebP as one of the four formats a browser displays, so the format the storefront is most likely to be given is the one served without its type. Browsers and the Next image optimizer read the bytes, so the pictures show; a CDN or a strict client that trusts the header would not treat them as images. `.avif`, `.jpg` and `.png` are typed. *Found by serving one of each kind of file from both APIs.* | Low | Copied by the port, whose table is Python's own. `mimetypes.add_type("image/webp", ".webp")` at start-up, in both. `core/media.py` |
+| D236 | **A media path with a name too long for the filesystem is a 500.** `django.views.static.serve` asks `Path.is_dir()`, which swallows "no such file" and its relatives but not `ENAMETOOLONG`; a `/media/` URL with a 300-character segment raises `OSError` and nothing catches it. Anyone can ask for one. *Found by the cases at the edges of a media path.* | Low | Copied by the port. Treat any `OSError` there as not found. `core/media.py` |
 
 ## Still API-only (no UI)
 

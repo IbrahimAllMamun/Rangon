@@ -70,7 +70,13 @@ RANGON_PUBLIC_URL=https://your-domain   # the tracking link in the message
 ### 3. Write the provider class
 
 About forty lines: build the request, post it, map the response to `SmsResult`. `orders/payments/providers/manual.py`
-is the shape to copy. Register it in `notifications/registry.py`. Nothing else changes anywhere.
+is the shape to copy. Register it in `notifications/registry.py`.
+
+**Then write it a second time, for the API that sends in production.** Since 2026-10-08 the
+NestJS API runs the background jobs ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)),
+so a provider Django alone knows would never be called: `SmsService.register` in
+`apps/api-nest/src/jobs/sms.service.ts` takes the same three things -- a code, a `send`, and
+`SmsProviderNotConfigured` for missing credentials. Django's stays, for when Django serves.
 
 ## Three things that will cost you money if ignored
 

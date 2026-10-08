@@ -110,12 +110,19 @@ DJANGO_CSRF_TRUSTED_ORIGINS=https://oddly-chosen-words-here.trycloudflare.com
 DJANGO_CORS_ALLOWED_ORIGINS=https://oddly-chosen-words-here.trycloudflare.com
 ```
 
-Then recreate the API containers — `restart` reuses the old container and silently keeps the old
-environment:
+Then recreate the API container — `restart` reuses the old container and silently keeps the old
+environment — and restart nginx, which still holds the old container's address:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --force-recreate api worker beat
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --force-recreate api-nest
 ```
+
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml restart nginx
+```
+
+(The API is `api-nest` since 2026-10-08. If this stack is serving from Django -- it was started
+with `-f docker-compose.django.yml` -- recreate `api worker beat` instead, with that file named.)
 
 Know what you are getting:
 
@@ -317,7 +324,7 @@ through (§8), so `request.is_secure()` is true and secure cookies are set.
 
 ## 8. What nginx already handles
 
-`infrastructure/docker/nginx/local-prod/default.conf` was written against a live tunnel. Three parts of
+`infrastructure/docker/nginx/local-prod/default.conf.template` was written against a live tunnel. Three parts of
 it exist because of Cloudflare — leave them alone.
 
 **Scheme, without the redirect loop.** Cloudflare forwards HTTP, so `$scheme` is `http`. Blindly
@@ -395,7 +402,7 @@ Tunnel-side health:
 |---|---|---|
 | Cloudflare error page or 502, tunnel shows connected | Origin down, or not on 4100 | Bring the prodlocal stack up; `curl.exe http://localhost:4100/` must return 200 |
 | **Error 1033** | No `cloudflared` connected at all | `Get-Service cloudflared`; run `cloudflared tunnel run rangon` in the foreground and read the log |
-| **400, "Invalid HTTP_HOST header"** | Hostname missing from `DJANGO_ALLOWED_HOSTS` | Add it, then `up -d --force-recreate api` — `restart` keeps the old env |
+| **400, "Invalid HTTP_HOST header"** | Hostname missing from `DJANGO_ALLOWED_HOSTS` | Add it, then `up -d --force-recreate api-nest` and restart nginx — `restart` alone keeps the old env |
 | Endless HTTPS redirect, site appears dead | `X-Forwarded-Proto` overwritten with `$scheme` | The `$client_proto` map in §8; check `proxy_set_header` is restated in full |
 | Pages render, cart/login/POS all 404 | `/api/proxy/` and `/api/auth/` sent to Django | §8, third block (D17) |
 | Login succeeds then immediately logs out | Origin thinks the request is insecure, so secure cookies are dropped | Cloudflare SSL mode **Full**; confirm nginx forwards `X-Forwarded-Proto` |

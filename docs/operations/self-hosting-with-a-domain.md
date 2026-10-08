@@ -215,7 +215,7 @@ Cloudflare terminates TLS and forwards **HTTP** to your machine. `prod.py` sets
 `$scheme` (which is `http`), Django decides every request is insecure and redirects to HTTPS forever.
 The site looks completely down.
 
-`local-prod/default.conf` solves it with a map that prefers the upstream proxy's value:
+`local-prod/default.conf.template` solves it with a map that prefers the upstream proxy's value:
 
 ```nginx
 map $http_x_forwarded_proto $client_proto {
@@ -236,7 +236,7 @@ admin actions. Fixed in both nginx configs (D17); do not undo it.
 ### 5.3 A completely blank page
 
 `script-src 'self'` blocks the inline scripts the Next.js App Router streams its payload through, so
-React never hydrates. **This is still unfixed (D16).** `local-prod/default.conf` uses `'unsafe-inline'`
+React never hydrates. **This is still unfixed (D16).** `local-prod/default.conf.template` uses `'unsafe-inline'`
 as a stopgap, which works but discards what the directive is for. Before real customers, fix it properly
 with a per-request nonce from Next middleware.
 
@@ -246,12 +246,12 @@ with a per-request nonce from Next middleware.
 2026-08-19, and until 2026-09-19 **`seed_demo --reset` put them straight back**. Since then production
 settings refuse the seed unless `DJANGO_ALLOW_DEMO_SEED=1` is set for that one command, and refuse the
 README password even then — the accounts get your `DJANGO_DEMO_SEED_PASSWORD`
-([local-production.md §6](local-production.md#6-migrate-and-seed)). A database seeded before that
+([local-production.md §5](local-production.md#5-migrate-and-seed)). A database seeded before that
 date still holds the public password until it is reseeded with one of your own or rotated. To rotate:
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local \
-  -f docker-compose.yml -f docker-compose.prodlocal.yml exec -T api python -c "
+  -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T api python -c "
 import django, os, secrets, string; os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings.prod'); django.setup()
 from accounts.models import User
 a = string.ascii_letters + string.digits
