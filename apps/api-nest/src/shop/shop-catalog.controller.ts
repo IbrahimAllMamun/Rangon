@@ -115,7 +115,7 @@ export class ShopCatalogController {
         name: brand.name,
         slug: brand.slug,
         description: brand.description,
-        logo: mediaUrl(brand.logo, this.env.MEDIA_URL),
+        logo: mediaUrl(brand.logo, this.env.mediaBase),
         is_featured: brand.is_featured,
         product_count: counts.get(brand.id) ?? 0,
       }));
@@ -145,7 +145,7 @@ export class ShopCatalogController {
       name: brand.name,
       slug: brand.slug,
       description: brand.description,
-      logo: mediaUrl(brand.logo, this.env.MEDIA_URL),
+      logo: mediaUrl(brand.logo, this.env.mediaBase),
       product_count: count?.count ?? 0,
     };
   }
@@ -166,7 +166,7 @@ export class ShopCatalogController {
       name: root.name,
       slug: root.slug,
       path: root.slug,
-      image: mediaUrl(root.image, this.env.MEDIA_URL),
+      image: mediaUrl(root.image, this.env.mediaBase),
       children: (children.get(root.id) ?? []).map((child) => ({
         name: child.name,
         slug: child.slug,
@@ -213,7 +213,7 @@ export class ShopCatalogController {
       slug: category.slug,
       path,
       description: category.description,
-      image: mediaUrl(category.image, this.env.MEDIA_URL),
+      image: mediaUrl(category.image, this.env.mediaBase),
       breadcrumbs: ancestors.map((ancestor, index) => ({
         name: ancestor.name,
         slug: ancestor.slug,

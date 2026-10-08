@@ -1,0 +1,59 @@
+# What `docker build ... apps/api` does not send to the builder.
+#
+# This file is the one that applies: every image of this project is built with
+# its own directory as the context (`docker build -f apps/api/Dockerfile
+# apps/api`, and the same in the compose files and CI), and Docker reads the
+# ignore file at the root of the context. The `.dockerignore` at the top of
+# the repository is never consulted for it.
+#
+# It matters because the production image does `COPY . .`: whatever is in this
+# directory on the machine that builds is in the image. CI builds from a clean
+# checkout; a workstation does not. Before this file, an image built on one
+# carried its `media/` -- every uploaded photograph and receipt it happened to
+# hold -- and a new `api_media` volume, which Docker fills from the image the
+# first time, started out with them (D240 in docs/roadmap.md).
+
+# --- written at run time, never part of the application ---------------------
+# The Dockerfile makes these three, empty and owned by the app's user; a volume
+# mounted over one takes that ownership.
+media/
+staticfiles/
+logs/
+
+# --- secrets ----------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+
+# --- caches and build litter -------------------------------------------------
+**/__pycache__/
+**/*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+.venv/
+venv/
+*.sqlite3
+
+# --- the test suite -----------------------------------------------------------
+# Not in the production image: nothing at run time imports it. The test and
+# development images do not copy the source at all -- it is mounted
+# (docker-compose.test.yml, docker-compose.dev.yml) -- so they still have it.
+tests/
+conftest.py
+
+# --- how the image is built ---------------------------------------------------
+Dockerfile
+Dockerfile.dev
+.dockerignore
+
+# --- editors / os --------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

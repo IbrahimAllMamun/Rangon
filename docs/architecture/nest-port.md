@@ -1,14 +1,17 @@
 # The NestJS API port
 
-The NestJS API (`apps/api-nest/`) is being built beside the Django API (`apps/api/`) on the same
+The NestJS API (`apps/api-nest/`) was built beside the Django API (`apps/api/`) on the same
 PostgreSQL database, module by module, each module proven to answer exactly as Django does before
-anything is routed to it. Why and how it was decided: [ADR-0013](decisions/0013-nestjs-api-alongside-django.md).
+anything was routed to it. Why and how it was decided: [ADR-0013](decisions/0013-nestjs-api-alongside-django.md).
 
-How to continue the port -- the rules, commands, method and lessons -- is in
+How to work on it -- the rules, commands, method and lessons -- is in
 [nest-port-instructions.md](../nest-port-instructions.md).
 
-**Django remains the source of truth.** It owns the schema and every migration, and every path the
-storefront, admin and POS use today is still served by it. Nothing routes to the Nest API yet.
+**Since 2026-10-08 it serves production** ([ADR-0017](decisions/0017-nest-api-serves-production.md)):
+every path the storefront, admin and POS use, uploaded files, the background jobs and their
+schedule. **Django remains the source of truth for the schema and the rules.** It owns every
+migration; a rule changes there first, with its tests, and is then ported; and one compose file
+puts the whole stack back on it. The development stack is Django's.
 
 ## Status
 
@@ -20,7 +23,7 @@ storefront, admin and POS use today is still served by it. Nothing routes to the
 | 4 | Catalogue, inventory and content admin (ledger, transfers, counts, image uploads) | **Done** 2026-10-01, parity 2739/2739 and 58 race checks |
 | 5 | POS: sales, held sales, registers, discounts; returns and refunds; the staff order screens; the label sheet | **Done** 2026-10-06, parity 5015/5015 and 113 race checks |
 | 6 | Purchasing, finance, customers admin, promotions, shipping admin; review moderation; staff accounts and the organisation | **Done** 2026-10-07, in ten parts: parity 10014/10014 and 205 race checks |
-| 7 | Reports, audit log, notifications, background jobs (pg-boss for Celery, ADR-0016); cutover | **In progress**: parts 1 to 4 of 5 (the audit log, notifications, the reports; what DRF does before a view runs, on every view; the pg-boss queue; the ten jobs, their worker and schedule), parity 12138/12138 with either queue, 211 race checks (214 with pg-boss) and 5 checks of the worker. The cutover is left |
+| 7 | Reports, audit log, notifications, background jobs (pg-boss for Celery, ADR-0016); cutover (ADR-0017) | **Done** 2026-10-08, in five parts: the audit log, notifications, the reports; what DRF does before a view runs, on every view; the pg-boss queue; the ten jobs, their worker and schedule; `/media/` and the cutover. Parity 12240/12240 with either queue, 211 race checks (214 with pg-boss), 5 checks of the worker, and the browser suite 50/50 on the Nest API. **The Nest API serves production** |
 
 Phase 1 endpoints, all compared by the parity harness:
 
@@ -743,7 +746,9 @@ Phase 7 ports what is left and then moves the traffic. Its parts, in order:
    ([ADR-0016](decisions/0016-nest-jobs-on-pg-boss.md), the owner's decision of 2026-10-07; the
    plan had pencilled in BullMQ) -- the queue first (part 4a, below), then the ten jobs
    themselves, the worker that runs them and the schedule (part 4b, below);
-5. the cutover, path by path at the proxy.
+5. the cutover: the NestJS API serves production, and Django starts on demand
+   ([ADR-0017](decisions/0017-nest-api-serves-production.md), the owner's decisions of
+   2026-10-08; one switch for every path, not path by path) -- below.
 
 ### Content negotiation
 
@@ -897,7 +902,7 @@ them, which no role the shop ships is.
 queue is pg-boss, in PostgreSQL; jobs will run in the API process unless a setting splits
 them off; Celery stays on until the cutover. This part is the queue and the hand-over to it.
 Nothing is switched on: `RANGON_JOBS_BACKEND` is `celery` unless set, and with it the port
-behaves as it did.
+behaves as it did. (Part 5 switched it on in production; the setting's own default is unchanged.)
 
 | Piece | What it is |
 |---|---|
@@ -945,7 +950,8 @@ mode the two lists are compared sorted.) Three checks run only then, of the Nest
 
 `jobs/job-handlers.service.ts` is the ten Celery tasks, each answering the word its task
 returns. Nothing calls them yet outside a worker: with the default backend the port still
-queues for Celery, and Celery still does the work, until the cutover.
+queues for Celery, and Celery still does the work, until the cutover. (That was part 5, below:
+the production compose files set `RANGON_JOBS_BACKEND=pgboss`, and the Nest API is the worker.)
 
 | Job | Arguments | What it does, and answers |
 |---|---|---|
@@ -1016,6 +1022,127 @@ lines, each with `Asia/Dhaka`, and the sweep fired at the next fifth minute and 
 byte: nodemailer and Django's `EmailMessage` fold headers and encode bodies differently. And
 Celery records a failed task as `FAILURE` in a result backend this project never reads; the
 worker closes the job and leaves the reason on its row.
+
+### The cutover (part 5)
+
+[ADR-0017](decisions/0017-nest-api-serves-production.md) has the four decisions and the design.
+In one paragraph: the production compose files (`docker-compose.prod.yml`,
+`docker-compose.prodlocal.yml`) run `api-nest`, point the web app's server-side calls and
+nginx's `/api/` and `/media/` at it, and give Django's `api`, `worker` and `beat` a profile
+`up` does not start. `docker-compose.django.yml`, laid last, turns all of that back at once.
+The development stack is unchanged: it is Django's, where a rule still changes first.
+
+**Is everything ported?** Compared mechanically on 2026-10-08, from Django's resolver and the
+Nest API's own route table: every path and method Django's router has is in the port's 326
+routes. What Django has beyond them is not the API:
+
+| Django serves | The Nest API | |
+|---|---|---|
+| `/media/<path>` (with `USE_S3=0`) | serves it, since this part | below |
+| `/api/v1/`, `/api/v1/pos/`: the router's index pages | 404 | declared; nothing calls them |
+| `/api/schema/`, `/api/docs/` | 404 | declared; nginx sends them to Django, on demand |
+| `/django-admin/` | 404 | declared; the same |
+
+**`/media/`** (`media/media.ts`). `core.media.serve_media` over `django.views.static.serve`: a
+plain function view, so a Fastify route of its own rather than a controller -- nothing is
+negotiated, nobody is authenticated, nothing is throttled.
+
+| Asked for | Answered |
+|---|---|
+| a file under `MEDIA_ROOT` | 200, its bytes, `Content-Length`, `Last-Modified` in whole seconds, `Content-Disposition: inline` with the name (`filename*=utf-8''...` when it is not ASCII), and the type Python's `mimetypes` gives the extension in the Django image -- `common/mimetypes.ts` is that table, printed there: 152 extensions, no `.webp` (so `application/octet-stream`, D235), `Content-Encoding` for `.gz`, `.br`, `.xz`, `.bz2` and `.Z` |
+| anything under `expenses/`, by any spelling that reaches it (`./`, `a/../`, `//`, `%2F`) | 404: receipts are staff's, through `GET /expenses/<id>/attachment/` (D91). `Expenses/` and `expensesx/` are other folders |
+| a path that leaves the root (`../`, `%2e%2e/`) | 400, Django's page (`SuspiciousFileOperation`) |
+| a folder, the root, a name that is not there, a path through a file, a NUL, bytes that are not UTF-8 | 404, Django's page. A file with a slash after it is the file |
+| a name too long for the filesystem | 500 (D236, copied) |
+| `If-Modified-Since` at or after the file's second, in any of the three HTTP date forms | 304, no body. Anything unreadable as a date -- no `GMT`, a month that is not one, 31 February -- is ignored |
+| `/media` | 301 to `/media/`, for any method |
+| `POST`, `PUT`, `PATCH`, `DELETE` | 403, Django's CSRF page: it is a function view, with no `require_GET`, and the middleware meets an unsafe method first. `OPTIONS` is the file |
+| `?format=xml`, an `Accept` nothing satisfies, a bad token | the file: none of them is read |
+
+A URL whose percent-escapes are not UTF-8 (`%ff`) never reaches a Fastify route -- the router
+refuses it with its own 400 -- so `rewriteUrl` hands the router a spelling it can read and
+keeps the one that came for the view, which finds no such file, as Django does.
+
+**One uid.** The image runs as `appuser`, 1001, Django's uid: uploads are one volume, written by
+either API.
+
+**How it was proven**, beyond the comparison:
+
+| Proof | What it showed |
+|---|---|
+| 96 media cases, 6 for Django's own pages | each answer the same, or declared |
+| The local production stack, rebuilt from nothing with the new files (`scripts/rebuild-local-prod.sh`) | Django migrates and seeds in one-off containers; six containers start, none of them Django's; the smoke test passes; a sign-in, a product photograph uploaded and fetched back through nginx byte for byte, and a guest order whose confirmation email arrives -- the job queued in the order's transaction, run by the same process |
+| The schedule, there | `pgboss.schedule` holds the five lines under `Asia/Dhaka`; the sweep ran at each fifth minute, once |
+| Django on demand | `/django-admin/`, `/api/docs/`, `/api/schema/` answer 503 with a line saying how to start it; with `--profile django up -d api worker` they answer, and nginx needs no restart either way |
+| Back to Django, and forward | with `docker-compose.django.yml`: `/api/v1/` answers Django's 401, the same owner signs in, the next order takes the next number in the sequence, its email goes out through Celery, and `api-nest` logs that the schedule is left to another process. Without the file again, `up` alone leaves beat running beside `api-nest` -- so the documented order stops Django first |
+| The browser suite against the web app on the Nest API (`scripts/e2e-local.sh nest`; CI runs it on both) | 50 of 50, as on Django. The first run was 49: eleven tests sign in from one address, the limit is ten a minute, and the faster API fitted all eleven inside the minute -- the eleventh was refused, correctly. The suite now keeps one session per account |
+
+**What it costs.** `api-nest` on the local production stack, by `docker stats`: 88 MiB after warm-up traffic (300 storefront requests and an order), 112 MiB at the higher of two readings. It is the API, the job worker and the schedule. Django's three processes measured about 235, 100 and 98 MB on 2026-09-30.
+
+### Errors to Sentry (after the cutover)
+
+[ADR-0019](decisions/0019-nest-errors-to-sentry.md). `observability/error-reports.service.ts` is
+`ErrorReports`, and the whole of what this API tells Sentry. It is on under production settings
+with `SENTRY_DSN` set -- where `config/settings/prod.py` would switch Django's on -- and is
+called from three places, each of which already logged the error:
+
+| Where | What is reported | With |
+|---|---|---|
+| `EnvelopeFilter`, the two branches that log at error level | an exception nothing expected (the 500), and a database constraint that fired past the service layer (the 409) | method, path, route, status, request id |
+| `JobWorker` | a job's failure that will not be tried again: one its task does not retry, at once; one it does, on the attempt that spends the last retry | the task's name, the attempt |
+| Node's `uncaughtExceptionMonitor` | an exception about to end the process | where it came from |
+
+Nothing else is collected, so nothing else can leak: no body, query string, header, cookie or
+user. The client is `@sentry/core` with a `fetch` for its transport; nothing is instrumented and
+no request this API makes carries a header it did not have before.
+
+This is the one part of the API with no Django to compare with. Django's own Sentry set-up has
+never run -- its SDK is not installed (D241) -- so the parity harness has nothing to say, and
+the proof is the unit tests: a stand-in for Sentry's endpoint that keeps what it is sent.
+
+### Uploads in S3 (after the cutover)
+
+`USE_S3=1` puts uploads in a bucket instead of on the API's disk, and it was the first limit
+ADR-0017 named: the port refused to start with it. It works now, without an SDK
+([ADR-0018](decisions/0018-nest-s3-without-an-sdk.md)).
+
+| Piece | What it is |
+|---|---|
+| `common/storage.ts` | `MediaStorage`: `FieldFile.save` and `.open`. The naming is one algorithm (`upload_to` through the shop's clock, the valid file name, an underscore and seven random characters when a name is taken, the stem cut to fit the column) over two places to keep the bytes: `DiskStorage` (`FileSystemStorage`: written exclusively, `0o644`) and `S3MediaStorage` (`S3Storage` with `file_overwrite=False`: a HEAD to see whether a name is taken, then one PUT). `mediaStorage(env)` picks, as Django's `STORAGES` does |
+| `common/s3.ts` | the key (`clean_name`, then `safe_join` under the bucket's top), the URL (`S3Storage.url` unsigned), and `S3Client`: HEAD, PUT and GET of one object, signed with Signature Version 4 |
+| `mediaUrl(name, env.mediaBase)` | every image in every payload. `mediaBase` is `MEDIA_URL` on disk and the bucket's settings with `USE_S3`, where the URL is absolute and passed through unchanged (the product feed already left an absolute URL alone) |
+
+**What an object is stored with** is `S3Storage._get_write_parameters`: the upload's own type
+-- for an image, the one found in its bytes; for a receipt, the one the client claimed -- else
+the type its extension has in Python's table, else `application/octet-stream`; and a
+`Content-Encoding` when the name says how it is packed.
+
+**A file's URL**, with these options: `<S3_ENDPOINT>/<bucket>/<key>` for any endpoint that is
+set; for AWS itself `https://<bucket>.s3.amazonaws.com/<key>` where the bucket's name can be a
+host name, whatever the region, and `https://s3.<region>.amazonaws.com/<bucket>/<key>` where it
+cannot (a dot in it). The key is percent-encoded as botocore encodes it: everything but
+letters, digits, `-._~` and the slashes.
+
+**`/media/` is not mounted**, as in Django: the files are not on the API's disk to serve.
+
+It is proven by running the whole comparison with both APIs' uploads in one S3 server:
+
+```bash
+PARITY_S3=1 scripts/nest-parity.sh reset
+PARITY_S3=1 scripts/nest-parity.sh run
+```
+
+`s3` (profile `s3`) is the Versity gateway over a directory: it checks every request's
+signature, which a mock would not, and keeps each object's type. The fixtures are seeded
+through the bucket by Django; every case then runs as usual, and so does every URL in every
+payload. For a write, `parity/bucket.ts` adds one more effect: the objects behind the file
+names that were not in the rows before the request -- each as its name, its size, a digest of
+its bytes, and the type and encoding stored with it, read back through the Nest API's own
+client. On 2026-10-08: 12243 of 12243 cases and 211 race checks, with 23 writes that store an object -- product photographs as PNG, JPEG, WebP and AVIF, navigation and banner images, and receipts with every way a type is arrived at -- each object the same on both sides.
+
+The unit tests hold the reference values: `S3Storage.url` across 13 endpoints, 4 regions and 7
+bucket names; 27 names with every character a key can make awkward; and botocore's own
+signature for 7 requests at a fixed moment.
 
 ## Running it
 
@@ -1104,12 +1231,18 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | Two concurrent refreshes of one token | both succeed, each minting a pair | the second is refused (401) | `get_or_create` lets both pass; the port blacklists with `ON CONFLICT DO NOTHING` and refuses the loser. A fix for Django too |
 | `bcrypt_sha256$` password hashes | verified | read as a wrong password, and logged | No version of this project wrote one: Argon2 was first in PASSWORD_HASHERS from the first migration |
 | `OPTIONS` without CORS headers | DRF's view metadata | 405 | Nothing calls it |
-| `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
+| `USE_S3=1` without `S3_BUCKET`, `S3_ACCESS_KEY` or `S3_SECRET_KEY` | starts, and fails at the first upload; boto also finds credentials in an instance role or `~/.aws` | refuses to start, naming what is missing | [ADR-0018](decisions/0018-nest-s3-without-an-sdk.md): the two settings or nothing |
+| `USE_S3=1` with `S3_REGION` not the bucket's | boto follows S3's redirect to the right region | S3 refuses the signature | The same ADR. Set the region |
+| `USE_S3=1` under the development settings | uploads go to disk all the same, and `/media/` is not served (D237) | uploads go to the bucket | Not a defect worth copying: the API does what the setting says. The parity settings give Django the bucket too, so the suite compares the two |
+| An upload over 8 MB with `USE_S3=1` | boto sends it in parts | one PUT | The same object; only its ETag differs, and nothing reads it |
+| An unhandled error, with `SENTRY_DSN` set under production settings | nothing: `sentry_sdk` is not installed, and the failed import is swallowed (D241) | reported to Sentry | [ADR-0019](decisions/0019-nest-errors-to-sentry.md). The settings say what Django meant to do; the port does it, for errors only |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
 | The browsable API: `?format=api`, or an `Accept` of `text/html` (or `text/*`), under any settings but production's | DRF's HTML page | the JSON answer | The port has no HTML pages. Under production's settings Django has no such renderer either and both refuse: 404 and 406 |
 | `Accept: application/json; indent=4` | the JSON indented, as `JSONRenderer` honours the parameter | compact | The same document; the harness compares parsed bodies and sees no difference |
 | A path Django resolves to no view (a converter refuses a segment: `/shop/products/not a slug/`) with a `format` no renderer has, or an `Accept` none satisfies | the resolver's HTML 404, before any view negotiates | the JSON 404 (or 406): the port checks a segment in its handler, after the negotiation | A request wrong twice over; a 404 either way for a format |
+| `GET /api/v1/`, `GET /api/v1/pos/` (the router's index), `/api/schema/`, `/api/docs/`, `/django-admin/` | Django's pages | 404 | [ADR-0017](decisions/0017-nest-api-serves-production.md): none is the API, and nothing in the web app calls them. Nginx sends the last three to Django, started on demand |
+| `HEAD /media/<path>` | under gunicorn, the headers and then the body all the same -- the 404 page, for a file that is not there | the headers alone | What HTTP asks for. Nginx strips the body in front of either; the harness cannot send the case, as no HTTP client reads Django's answer |
 | A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
 **Before cutting over an upload path:** both processes write `MEDIA_ROOT`, and the production
@@ -1395,6 +1528,11 @@ the port):
   (D233).
 - Two sweeps at once both count an order the other got to first: `released:<n>` can say more
   than were released (D234).
+- An uploaded `.webp` is served as `application/octet-stream`: Python 3.12's type table has no
+  such extension, and the image has no `/etc/mime.types` to add it (D235).
+- A media name longer than the filesystem allows is a 500, not a 404 (D236).
+- With `USE_S3=1` a file's URL is built from `S3_ENDPOINT`; `S3_PUBLIC_ENDPOINT` is read by
+  nothing. Against a private endpoint every image URL names a host no browser can reach (D238).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with

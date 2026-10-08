@@ -8,6 +8,11 @@
 #                                   then `worker`
 #   scripts/nest-parity.sh worker   the Nest worker on what the API queues: run, retried, closed
 #   scripts/nest-parity.sh reset    DESTRUCTIVE to the parity database only: drop it, then up + seed
+#
+# PARITY_S3=1 before any of them runs the stack with its uploads in a bucket
+# (USE_S3=1 on both APIs, an S3 server beside them). Give it to `reset` and to
+# every command after it: a database seeded one way holds files the other
+# cannot find.
 #   scripts/nest-parity.sh down     stop, keeping the database
 #
 # Always the `rangon-nest` compose project: `.env` sets COMPOSE_PROJECT_NAME=rangon,
@@ -23,9 +28,24 @@ wait_for() {
 
 case "${1:-}" in
   up)
+    # PARITY_S3=1: uploads in a bucket, as with USE_S3=1 (docker-compose.nest.yml
+    # reads the same variable). The S3 server first, then its bucket, made with
+    # the credentials and the client Django itself uses.
+    if [ "${PARITY_S3:-0}" = 1 ]; then "${compose[@]}" --profile s3 up -d s3; fi
     "${compose[@]}" up -d --build django nest
     wait_for http://127.0.0.1:8610/api/health/
     wait_for http://127.0.0.1:8620/api/health/
+    if [ "${PARITY_S3:-0}" = 1 ]; then
+      "${compose[@]}" exec -T django python manage.py shell -c '
+from botocore.exceptions import ClientError
+from django.core.files.storage import default_storage as storage
+try:
+    storage.connection.meta.client.create_bucket(Bucket=storage.bucket_name)
+except ClientError as error:
+    if error.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+        raise
+print("bucket", storage.bucket_name, "ready")'
+    fi
     ;;
   seed)
     # The media directory is shared with the Nest API, which runs as another user.
@@ -60,6 +80,7 @@ case "${1:-}" in
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_notifications.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_reports.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_jobs.py
+    "${compose[@]}" exec -T django python manage.py shell < apps/api-nest/parity/fixture_media.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" -e PARITY_RACES="${PARITY_RACES:-}" parity
@@ -87,7 +108,7 @@ case "${1:-}" in
   reset)
     # Every profile: a container left from one of them still names the network
     # this removes, and the next `up` of it fails.
-    "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle down -v --remove-orphans
+    "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle --profile s3 down -v --remove-orphans
     bash "$0" up
     bash "$0" seed
     ;;
@@ -95,6 +116,6 @@ case "${1:-}" in
     "${compose[@]}" down
     ;;
   *)
-    sed -n '2,13p' "$0"; exit 2
+    sed -n '2,18p' "$0"; exit 2
     ;;
 esac

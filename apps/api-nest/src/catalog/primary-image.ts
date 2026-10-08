@@ -1,4 +1,4 @@
-import { mediaUrl } from '../common/media';
+import { type MediaBase, mediaUrl } from '../common/media';
 import type { Queryable } from '../database/database.service';
 
 const IMAGE_COLUMNS = [
@@ -26,7 +26,7 @@ const IMAGE_COLUMNS = [
 export async function primaryImageUrl(
   q: Queryable,
   productId: string,
-  mediaBase: string,
+  mediaBase: MediaBase,
 ): Promise<string> {
   const rows = await q.query<{ image: string; is_primary: boolean }>(
     `SELECT ${IMAGE_COLUMNS} FROM "catalog_productimage"

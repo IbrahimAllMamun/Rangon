@@ -9,7 +9,21 @@ Legend: ✅ done and verified · 🟡 partial (gap stated) · ⬜ not started ·
 [§ Verification log](#verification-log). Anything not in that log is written but unproven — see
 [§ Still unproven](#still-unproven) and say so rather than implying otherwise.
 
-Last updated: **2026-10-05**.
+Last updated: **2026-10-08**.
+
+**Production runs the NestJS API.** The port that began as a question about memory
+([ADR-0013](architecture/decisions/0013-nestjs-api-alongside-django.md)) answers every request
+the Django API answered, serves uploads, and runs the background jobs and their schedule in the
+same process. The production compose files start it, and no longer start Django's API, worker or
+beat; Django still owns the schema, migrates it, and is one compose file away from serving
+everything again. A rule still changes in Django first. Uploads can be on a volume or in S3
+(`USE_S3=1`, on either API), and errors are reported to Sentry when a DSN is set. One limit
+of the default is stated rather than hidden: what a Redis outage does to it has not been
+measured. **The shop already
+running on the owner's machine is still on Django** until its next upgrade, which has one extra
+step. Decisions in [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md); how to
+run it in [deployment.md](operations/deployment.md#which-api-serves); evidence in
+[§ The cutover](#the-nestjs-api-phase-7-part-5-the-cutover-2026-10-08).
 
 **The homepage leads with products a merchandiser chose, and the register takes a scan wherever
 focus is.** A carousel of products now sits straight under the hero, in place of "Shop by category"
@@ -445,7 +459,7 @@ gateway, two defects that keep E2E off a production build, and a deployment.
 | 27  | Security                                | Controls implemented, audits and image scans automated **and passing clean as of 2026-09-12**; still **no independent penetration test** |
 | 28  | Performance                           | 🟡      | 🟡       | Every list endpoint swept: four N+1s fixed (home 511→29, listing 363→13, purchase orders 156→15, and **POS grid search 81→5** on 2026-09-09) plus a per-keystroke POS request storm. **All ten documented budgets are now asserted** — that table had said "enforced in tests" while two of ten were, which is how the counter's own search sat at nine queries a row. Product detail's budget was raised from an unmeasured 10 to 18 deliberately. Remaining: no load test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 29  | E2E testing                           | ✅      | ✅       | Playwright drives the four critical flows. **20/20 green** against `next dev`, reseeded, 2026-08-31 — and **now a CI job**. **Re-measured 2026-09-21: the suite is 42 specs and a production build passes 40**, with both failures [D40](#known-defects) — the expenses spec it was found on and the stock-count spec, which nobody had connected to it. D41 was fixed 2026-09-09 and D40 was worked around the same day, after which a production build ran **42/42**. **The CI job moved onto a production build on 2026-09-21**: it builds the app and serves it from the standalone `server.js` the image itself runs, so the suite now drives the artefact that ships rather than `next dev` |
-| 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack;**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 30  | Deployment                            | 🟡      | 🟡       | Compose prod stack, **served by the NestJS API since 2026-10-08** with Django started on demand ([ADR-0017](architecture/decisions/0017-nest-api-serves-production.md));**CI now runs and is green at `HEAD`**, including the production build and image scans. Still **no live environment**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 31  | Backup/recovery                       | ✅      | —       | Scripts + runbook written, and **the restore has now been rehearsed for real** — 2026-08-22, against a production database that was actually destroyed. See the verification log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 32  | Production launch                     | ⬜      | ⬜       | Blocked on`docs/operations/go-live-checklist.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 33  | Dynamic navigation                    | ✅      | ✅       | Category-driven navbar with a one-table override,`/category/[...slug]` URLs (with a 308 redirect from the old `/shop?category=`), announcement bar, search suggest, admin editors for navigation overrides and banners. Phases N0–N6 done — [architecture/navigation.md](architecture/navigation.md#7-phases); decisions in [ADR-0009](architecture/decisions/0009-category-driven-navigation.md) and [ADR-0010](architecture/decisions/0010-radix-navigation-menu.md). Category reorder + icon (a category-scoped admin screen) not built — see navigation.md §7 N5                                                                                                                                                                                                                                                 |
@@ -480,6 +494,238 @@ is still open and tracked in
 [planning/dostishop-feature-review.md](planning/dostishop-feature-review.md).
 
 ## Verification log
+
+### The NestJS API reports its errors to Sentry, 2026-10-08
+
+Asked for: "Report NestJS API errors to Sentry" -- the second limit the cutover left. With
+`SENTRY_DSN` set, under production settings, the API now reports a request that ended in a 500
+(or in a 409 for a constraint that escaped the service layer), a background job that failed for
+good, and an exception that ends the process
+([ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md)).
+
+```text
+nest unit tests ............................... 1745 passed (18 new: what is sent and what is not, against a stand-in for Sentry's endpoint;
+                                                which answers and which job failures are reported)
+tsc / eslint / prettier / build ............... clean
+npm audit --omit=dev .......................... 0 vulnerabilities
+parity, uploads on disk (run) ................. final run in progress when this was committed; updated when it ends
+parity, Nest queuing in pg-boss (run-jobs) .... final run in progress when this was committed; updated when it ends
+concurrency / worker check / throttle-check ... final run in progress when this was committed; updated when it ends
+parity, uploads in S3 (PARITY_S3=1 run) ....... final run in progress when this was committed; updated when it ends
+browser suite, web app on the NestJS API ...... final run in progress when this was committed; updated when it ends
+```
+
+**"As Django does" had nothing behind it.** Django's production settings initialise
+`sentry_sdk` -- inside a `try` that swallows the `ImportError`, for a package that is in no
+requirements file. Django has never reported an error to Sentry, DSN or no DSN (D241). So this
+honours Django's *settings* (production only, `send_default_pii=False`, `RANGON_ENV`,
+`RANGON_RELEASE`), not a behaviour.
+
+**One dependency, and why that one.** `@sentry/core` 11.5.0, not `@sentry/node`: the full SDK is
+built on OpenTelemetry and instruments the process it is started in -- `http`, the database
+driver, the framework, outgoing requests -- and this API's behaviour was proven request by
+request. `@sentry/core` is the client, the event format and the transport every Sentry SDK is
+built from, and patches nothing. Errors only; no tracing, which Django's settings ask for at a
+tenth of requests and which would be a decision of its own.
+
+**What leaves with an event is chosen, not gathered**: the exception and its causes, the
+method, path and route, the status, the request id, a job's name and attempt. A test sends a
+request carrying a phone number in its query, a token in a header, a cookie, a password in its
+body and a signed-in user, and looks for each of them in the bytes that left: none is there.
+
+**Reporting is never a second error.** A Sentry that answers 500, or is not there at all, or an
+error that is not an `Error`, changes nothing about the response or the job.
+
+**Through the built image, once.** The image was started under production settings with a DSN
+pointing at a listener, the owner signed in, and one request was made that is a known 500 (a NUL
+in the audit log's search, D228) carrying a phone number in its query and a cookie. One envelope
+arrived: the PostgreSQL error with seven stack frames, `GET /api/v1/audit-logs` as its
+transaction, the status, the release, and the same request id the client was given in the error
+it received. The phone number, the cookie, the token and the owner's address were not in it. A
+404 made the same way sent nothing.
+
+Not proven: **no event has been sent to a real Sentry project.** The tests run a stand-in that
+keeps the envelopes it receives. The deployment guide says to send one on purpose after the
+first deploy. And an exception that ends the process is reported on a best effort: nothing
+holds the process open for it.
+
+### Each image's build context has its own ignore file, 2026-10-08
+
+Asked for: "Add a .dockerignore for the Django image build". Done, and for the web image too,
+because the cause was one cause: every image here is built from its own directory, Docker reads
+the ignore file at the root of the build context, and the only one that existed sat at the top
+of the repository, where no build looks ([D240](#known-defects)).
+
+```text
+Django production image, built on this workstation     before            after
+  build context sent to the builder ................... ~60 MB            1.44 MB
+  /app in the image ................................... 64 MB             13 MB
+  files under /app/media .............................. 1,564            0
+  the test suite, the type-checker and lint caches .... in the image      not in it
+  image size .......................................... 589 MB            532 MB
+manage.py check, wsgi import, 37 management commands .. ok
+development image (Dockerfile.dev) .................... builds; context 115 bytes
+test image, one module run through it ................. 41 passed (the suite is mounted, not copied)
+web image ............................................. builds; context 836 MB before, about 4 MB after. Browser suite on it: with the final run
+```
+
+What that media folder did: Docker fills a new named volume from the image the first time it is
+mounted, so a stack started from a workstation-built image began with that workstation's
+uploads in `api_media` -- which is how this was noticed, while rebuilding the local production
+stack for the cutover. The ignore file excludes `media/`, `staticfiles/` and `logs/` (the
+Dockerfile makes all three, empty and owned by the app's user), secrets by name, caches, and the
+test suite, which nothing imports at run time.
+
+The web image had the same fault, larger: after its own `npm ci`, `COPY . .` laid the
+workstation's `node_modules` (750 MB) and stale `.next` over the clean install. CI never saw
+either problem -- a fresh checkout has no `media/`, no `node_modules` -- so the image CI scanned
+and the image a workstation built were not the same image.
+
+Not done: an `api_media` volume that already exists is not cleaned. One first created from a
+workstation-built image may hold files no row refers to; they are harmless, and removing them is
+a job for whoever knows which they are.
+
+### The NestJS API: uploads in S3, 2026-10-08
+
+Asked for: "Port S3 media storage to the NestJS API" -- the first of the three limits the
+cutover left. `USE_S3=1` now works on the NestJS API as it does on Django: an upload goes to the
+bucket, a file's URL is the bucket's, a receipt is read back through the endpoint that checks who
+is asking, and `/media/` is not served. No dependency was added
+([ADR-0018](architecture/decisions/0018-nest-s3-without-an-sdk.md)): the three requests the
+storage makes are signed in `common/s3.ts`.
+
+```text
+parity, uploads on disk (run) ................. 12243/12243 (3 new), 131 by the documented differences; 211/211 race checks
+parity, uploads in S3 (PARITY_S3=1 run) ....... 12243/12243, the same 131; 23 writes store an object, each compared
+concurrency, uploads in S3 .................... 211/211
+nest unit tests ............................... 1727 passed (258 new: URLs, keys and signatures against what django-storages and botocore
+                                                print; the client against a server that answers as S3 does)
+tsc / eslint / prettier / build ............... clean
+```
+
+**How it is proven.** The parity stack has an S3 server now (the Versity gateway, which checks
+every signature), and `PARITY_S3=1` runs both APIs against it with `USE_S3=1`. Django seeds the
+fixtures through the bucket; then the whole suite runs, so every payload that shows an image is
+compared with its bucket URL in it. For every write the harness also compares what each API
+*stored*: the object's name, its size, a digest of its bytes, and the type and encoding kept with
+it. Twenty-three writes store one: product photographs as PNG, JPEG, WebP and AVIF, navigation and
+banner images, and receipts. Three receipt cases were added for the ways a type is arrived at
+when the client gives none -- and the third found the port wrong: its last fallback was
+`binary/octet-stream`, S3's own default, where django-storages sets `application/octet-stream`.
+No earlier case had reached that line.
+
+**What had to be exact** was not the signing but the URL: `S3Storage.url` with
+`querystring_auth=False` is what boto's unsigned client presigns, and its rule for which host to
+name is boto's own. The unit tests hold what django-storages printed for 13 endpoints, 4 regions
+and 7 bucket names (every row for a name S3 would accept matches; for names it would not, all
+but one two-letter name do, and that one is pinned rather than copied), 27 awkward keys, and
+botocore's own signature for 7 requests.
+
+**Not the same as boto, and said where an operator will read it**: credentials are the two
+settings or nothing (no instance role); `S3_REGION` must be the bucket's, where boto would find
+it; an upload is one PUT, where boto splits one over 8 MB. And one thing no test here can say:
+**it has run against an S3-compatible server, never against AWS.**
+
+Found on the way:
+
+- **D237.** The development settings put storage back on disk whatever `USE_S3` says, while
+  `/media/` stays unmounted for it: every upload is lost to view. Not copied.
+- **D238.** `S3_PUBLIC_ENDPOINT` is read by nothing; against a private endpoint every image URL
+  names a host no browser can reach. Copied, because the URL is Django's.
+- **D239.** The development stack's S3 server is `minio/minio:latest`, an image that no longer
+  exists: the stack cannot be pulled on a fresh machine.
+- The compose files never passed `S3_REGION` to either API, so it was `us-east-1` whatever
+  `.env` said. They pass it now.
+
+CI runs the S3 comparison in a job of its own. It has not run on GitHub yet.
+
+### The NestJS API, phase 7 part 5: the cutover, 2026-10-08
+
+Asked for: part 5. The owner decided four things first
+([ADR-0017](architecture/decisions/0017-nest-api-serves-production.md)): **one switch for every
+path**, not path by path; **Django starts only on demand**; **the NestJS API is the default in the
+production compose files**; and **a rule still changes in Django first**. So from this part the
+production stack runs `api-nest` -- the API, the background jobs and the schedule in one process --
+and Django's `api`, `worker` and `beat` are not started. One more compose file,
+`docker-compose.django.yml`, puts the whole stack back on Django.
+
+```text
+parity, jobs queued for Celery (run) .......... 12240/12240 (102 new: 96 media, 6 of Django's own pages), 131 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12240/12240, the same 131
+concurrency ................................... 211/211 with Celery; 214/214 with pg-boss (none new)
+worker check .................................. 5/5
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1469 passed (153 new: the media route's paths, types, dates and names against what
+                                                Django and Python print)
+tsc / eslint / prettier / build ............... clean
+ruff (the parity gateway, fixture_media.py) ... clean
+browser suite, web app on the NestJS API ...... 50/50 (first run 49/50: see below)
+browser suite, web app on Django .............. 50/50
+local production stack, rebuilt from nothing .. smoke test 7/7; the flows below
+```
+
+**Was everything ported?** Checked mechanically rather than from the plan: Django's resolver and
+the Nest API's route table, dumped and compared. Every path and method of Django's router is among
+the port's 326 routes. Beyond them Django serves five things that are not the API: `/media/`, the
+router's two index pages, the OpenAPI schema with its Swagger page, and the Django admin. The first
+was ported in this part, because with `USE_S3=0` nothing else has the files; the rest are declared
+differences, and nginx sends the admin and the docs to Django whenever it is running.
+
+**`/media/`.** `core.media.serve_media`, compared in 96 cases: every kind of file the type table
+tells apart, the private prefix by six spellings, the ways out of the root, `If-Modified-Since` in
+the three HTTP date forms, and the methods a function view answers that a DRF view would not.
+`common/mimetypes.ts` is Python's own table, printed in the production Django image.
+
+**The switch, tried both ways** on a local production stack built from nothing with the new files:
+
+- *As it now starts.* Six containers, none of them Django's. Django migrated and seeded in one-off
+  containers before anything else was up. Through nginx: sign in as the owner; upload a product
+  photograph and fetch it back byte for byte; place a guest order and receive its confirmation
+  email -- queued in the order's transaction, sent by the same process. The reservation sweep ran
+  at each fifth minute, once.
+- *Django on demand.* `/django-admin/`, `/api/docs/` and `/api/schema/` answer 503 with a line
+  saying how to start it; `--profile django up -d api worker` and they answer, with no nginx
+  restart in either direction.
+- *Back to Django.* With the extra file: `/api/v1/` answers Django's 401 where the NestJS API
+  answers 404; the same owner signs in; the next order takes the next number; its email goes out
+  through Celery; `api-nest` logs that the schedule is left to another process.
+- *Forward again.* `up` without the file starts `api-nest` scheduling again **and leaves beat
+  running**. That is how the documented order came to be "stop Django first": found by doing it.
+
+**The web app on the NestJS API, in a browser.** The parity harness compares the API; nothing had
+driven the shop through it. The Playwright suite now runs against both, in CI and here.
+The first run on the NestJS API was 49 of 50, and the failure was the suite's: eleven tests sign in,
+one after another and from one address; the API allows ten sign-ins a minute from an address; and
+against Django the suite had been slow enough for the first to leave the window before the
+eleventh. The faster API fitted all eleven inside a minute, and the last was refused, correctly.
+The limit was not loosened. The suite now signs each account in once through the form and keeps
+its session: 50 of 50 on both. `scripts/e2e-local.sh` runs it here as CI does.
+
+**What it costs, measured** on the local production stack after warm-up traffic and three orders:
+`api-nest` used 88 MiB (112 MiB at the higher of two readings), doing what Django's `api` (about 235 MB), `worker` (100 MB) and `beat`
+(98 MB) did together on 2026-09-30.
+
+**CI** builds and scans the NestJS image, runs the comparison a second time with the jobs in
+pg-boss and then the worker check, and runs the browser suite once per API. None of that has run
+on GitHub yet: it runs with the pull request.
+
+**The shop that is already running.** The local production stack on the owner's Windows machine
+holds a real shop and still runs Django. Its next upgrade crosses this change, and an ordinary
+upgrade would leave beat running beside the new API. [upgrading-local-production.md](operations/upgrading-local-production.md)
+has a step for that one deploy, **6-once**, and the two commands that undo it. The step was
+rehearsed here on Linux (a stack started from `main`'s compose files with an order and an upload in it, then the step: the order sequence, the upload, the sign-in and the ledger checks all carried over, and the two commands took it back); it has not been run in PowerShell or on real data.
+
+Found in Django, and copied: D235 (a `.webp` upload is served as `application/octet-stream`) and
+D236 (a media name too long for the filesystem is a 500).
+
+**Known limits of the default**, each in the ADR and in `deployment.md`: `USE_S3=1` is not
+supported by the NestJS API, which refuses to start with it (*done later the same day: see the
+entry above*); errors are not reported to Sentry; and what a Redis outage does to the NestJS API
+has not been measured.
+
+Not done: nothing is left of the port's seven phases. What follows it is the owner's to choose --
+Sentry, and, once the NestJS API has run for a while, whether Django stays
+the place a rule changes first.
 
 ### The NestJS API, phase 7 part 4b: the ten jobs, the worker and the schedule, 2026-10-07
 
@@ -4796,6 +5042,13 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D232 | **Three ways to a 500 on a report.** `SalesReportView` passes `channel` to the filter as typed: a NUL in it reaches PostgreSQL and the `DataError` is nobody's to catch. And `_fill_missing_days` walks the window's days with `day += timedelta(days=1)`: a dashboard window of 370 days or fewer whose last day is 9999-12-31 steps past `date.max` (`OverflowError`), as does one whose end, moved to the shop's time, is past what a date can hold (`date_to=9999-12-31T23:59:59-01:00`, or a first instant before year 1). *Found by the cases at the edges of the window.* | Low | Copied by the port. Refuse the NUL; bound the window. `reports/api/views.py`, `reports/services.py` |
 | D233 | **The reservation sweep can cancel an order that was paid for while it ran.** `orders.tasks.release_expired_reservations` reads the unpaid online orders past the window, then hands each to `transition(order, CANCELLED)`, which locks the row and reads the status again -- but only to see whether the move is allowed, and a confirmed order may be cancelled. An order whose payment is captured between the sweep's query and its lock on that order is cancelled as "PAYMENT_TIMEOUT: reservation expired", its stock released, with the payment taken and nothing refunding it. The window is the time the sweep spends on the orders ahead of it. Measured in both APIs: an order confirmed while the sweep waits on its row is left `CANCELLED`. *Found by racing the sweep against a confirmation.* | Medium | Copied by the port. Under the lock, skip an order that is no longer pending (or pass the expected status to `transition`). `orders/tasks.py` |
 | D234 | **Two sweeps at once count the same order twice.** `transition` returns an order already in the status asked for, and the sweep adds one for every call that returns: a sweep that waited on an order another sweep cancelled counts it too. Measured: 56 orders, `released:53` from one sweep and `released:56` from the other; each order was cancelled once and each line released once, so only the count is wrong. It needs the schedule to fire in two places, or a sweep slower than five minutes. *Found by running Django's task and the Nest handler together.* | Low | Copied by the port. Count only an order the call moved. `orders/tasks.py` |
+| D235 | **An uploaded WebP photograph is served as `application/octet-stream`.** `/media/` takes a file's type from Python's `mimetypes`, and Python 3.12's table has no `.webp` (it arrives in 3.13); the image has no `/etc/mime.types` to add one. The upload validator accepts WebP as one of the four formats a browser displays, so the format the storefront is most likely to be given is the one served without its type. Browsers and the Next image optimizer read the bytes, so the pictures show; a CDN or a strict client that trusts the header would not treat them as images. `.avif`, `.jpg` and `.png` are typed. *Found by serving one of each kind of file from both APIs.* | Low | Copied by the port, whose table is Python's own. `mimetypes.add_type("image/webp", ".webp")` at start-up, in both. `core/media.py` |
+| D236 | **A media path with a name too long for the filesystem is a 500.** `django.views.static.serve` asks `Path.is_dir()`, which swallows "no such file" and its relatives but not `ENAMETOOLONG`; a `/media/` URL with a 300-character segment raises `OSError` and nothing catches it. Anyone can ask for one. *Found by the cases at the edges of a media path.* | Low | Copied by the port. Treat any `OSError` there as not found. `core/media.py` |
+| D237 | **Under the development settings `USE_S3=1` loses every upload.** `config/settings/dev.py` sets `STORAGES` back to `FileSystemStorage` after `base` chose the bucket, so uploads go to the container's disk; but `settings.USE_S3` is still true, so `config.urls` does not mount `/media/`. An upload answers 201, its URL is `/media/...`, and that URL is a 404. `.env.example` documents `USE_S3` for the development stack, which ships an S3 server for it. Production settings are not affected: they do not override `STORAGES`. *Found by printing which storage Django had actually resolved before comparing the two APIs with a bucket.* | Low | Not copied: under development settings the NestJS API uses the bucket. `config.settings.parity` puts `base`'s storage back for the S3 run. In `dev.py`, override the `staticfiles` entry only. `config/settings/dev.py` |
+| D238 | **`S3_PUBLIC_ENDPOINT` is read by nothing.** The compose file passes it, `.env.example` sets it (`http://localhost:9000` beside `S3_ENDPOINT=http://minio:9000`), and no line of either API reads it: with `USE_S3=1` a file's URL is built from `S3_ENDPOINT`, the address the *API* reaches the bucket at. Where that is private -- a container name -- every image URL in every payload names a host no browser can resolve, and the storefront shows no pictures. It works only when one address serves both, as AWS or a public endpoint does. *Found by reading what `S3Storage.url` returns for the documented settings.* | Medium | Copied by the port: its URL is Django's. Pass `S3_PUBLIC_ENDPOINT` to the storage as `custom_domain` (django-storages builds the URL from it), then port that. `config/settings/base.py` |
+| D239 | **The development stack names an image that no longer exists.** `docker-compose.dev.yml` runs `minio/minio:latest`, and MinIO's images are gone from Docker Hub and Quay: `docker compose ... up` on a machine without a cached copy fails to pull, and the whole development stack with it, though nothing needs the bucket unless `USE_S3=1`. *Found by trying to start the same image for the parity stack on 2026-10-08.* | Medium | The parity stack uses `versity/versitygw`, pinned. The development stack is the owner's call: the same gateway behind a profile, or no S3 server unless asked for. `docker-compose.dev.yml` |
+| ~~D240~~ | ~~**An image built on a workstation carried the workstation's files.**~~ **Fixed 2026-10-08.** Every image is built with its own directory as the context, and Docker reads `.dockerignore` from the root of the context: the one at the top of the repository, written as if the root were the context, was never read by any build. So the Django image's `COPY . .` took everything in `apps/api` -- on the machine where it was noticed, 1,564 uploaded files under `media/` (receipts among them), 44 MB of type-checker cache and the test suite -- and because Docker fills a new named volume from the image the first time, **a fresh `api_media` volume began life holding those uploads**. The web image's builder did the same after its own `npm ci`: the workstation's `node_modules` (750 MB, installed for the workstation's system) and its stale `.next` were laid over the clean install. CI never saw either, because a fresh checkout has none of it; so the images CI scanned were not the images a workstation built. *Found while rebuilding the local production stack for the cutover: a 430 MB build context, and receipts in a new stack's media volume.* | Medium | `apps/api/.dockerignore` and `apps/web/.dockerignore` now decide what each image is built from; `apps/api-nest` already had one. The Django image's app directory went from 64 MB to 13 MB and its `media/` is empty; its test suite is no longer in the production image. **An existing `api_media` volume is not cleaned by this**: one first created from a workstation-built image may hold files no row refers to. `.dockerignore` |
+| D241 | **Django reports nothing to Sentry, with `SENTRY_DSN` set or not.** `config/settings/prod.py` initialises `sentry_sdk` inside a `try` and passes on `ImportError`; `sentry-sdk` is in no requirements file, so the import always fails and the block is always skipped, without a word in the log. The compose file passes `SENTRY_DSN`, `.env.example` documents it, and the go-live checklist has "Error tracking (Sentry DSN) receiving events" as an item: an operator who sets the DSN has every reason to believe errors are being reported, and none are. Confirmed in the production image (`pip show sentry-sdk`: not found). The settings also read `RANGON_ENV` and `RANGON_RELEASE`, which no compose file passed. *Found when the NestJS API was to report "as Django does".* | Medium | The NestJS API, which serves production, reports since 2026-10-08 (ADR-0019), and the compose files pass both names now. Django still does not: add `sentry-sdk` to `requirements/base.txt`, and log when a DSN is set and the SDK is missing rather than passing. Until then, running on Django is running without error reporting. `config/settings/prod.py`, `requirements/base.txt` |
 
 ## Still API-only (no UI)
 

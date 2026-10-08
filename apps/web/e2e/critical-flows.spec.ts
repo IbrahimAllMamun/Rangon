@@ -11,7 +11,34 @@ import { expect, test } from "@playwright/test";
 const CASHIER = { email: "cashier@rangon.test", password: "rangon12345" };
 const MANAGER = { email: "manager@rangon.test", password: "rangon12345" };
 
-async function signIn(page: import("@playwright/test").Page, user: typeof CASHIER) {
+/**
+ * One sign-in through the form per account, and its session kept for the rest
+ * of the run.
+ *
+ * Eleven tests sign in, one after another and all from one address, and the
+ * API allows ten sign-ins a minute from an address (`auth: 10/min`). Against
+ * Django the suite was slow enough that the first had left the window by the
+ * eleventh. Against the NestJS API the eleven fit inside a minute, and the
+ * last test was refused -- correctly -- and timed out on `/login`
+ * (2026-10-08). The limit is a security control and is not loosened for this;
+ * the suite stops spending it instead. The form is still driven for each
+ * account, and by the sign-in specs themselves.
+ */
+const sessions = new Map<
+  string,
+  Awaited<ReturnType<import("@playwright/test").BrowserContext["cookies"]>>
+>();
+
+async function signIn(
+  page: import("@playwright/test").Page,
+  user: typeof CASHIER,
+) {
+  const session = sessions.get(user.email);
+  if (session) {
+    // The tokens are httpOnly cookies on the app's own origin (ADR-0005).
+    await page.context().addCookies(session);
+    return;
+  }
   await page.goto("/login");
   // Scoped to the form on purpose. `/login` sits inside the storefront route
   // group, so it wears the storefront header -- which used to carry a second
@@ -28,12 +55,15 @@ async function signIn(page: import("@playwright/test").Page, user: typeof CASHIE
   await form.getByLabel(/^Password/).fill(user.password);
   await form.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  sessions.set(user.email, await page.context().cookies());
 }
 
 test.describe("Storefront", () => {
   test("browse, filter and open a product", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: /elevate your everyday/i })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /elevate your everyday/i }),
+    ).toBeVisible();
 
     await page.getByRole("link", { name: "Shop now" }).click();
     await expect(page).toHaveURL(/\/shop/);
@@ -41,7 +71,9 @@ test.describe("Storefront", () => {
     const firstProduct = page.locator("article a").first();
     await firstProduct.click();
     await expect(page).toHaveURL(/\/product\//);
-    await expect(page.getByRole("button", { name: /add to cart/i })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /add to cart/i }),
+    ).toBeVisible();
   });
 
   test("customer can complete a cash-on-delivery order", async ({ page }) => {
@@ -49,7 +81,9 @@ test.describe("Storefront", () => {
     await page.locator("article a").first().click();
 
     await page.getByRole("button", { name: /add to cart/i }).click();
-    await expect(page.getByRole("dialog", { name: /your cart/i })).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: /your cart/i }),
+    ).toBeVisible();
 
     await page.getByRole("link", { name: "Checkout" }).click();
     await expect(page).toHaveURL(/\/checkout/);
@@ -75,10 +109,14 @@ test.describe("Storefront", () => {
     await page.getByRole("button", { name: /place order/i }).click();
 
     await expect(page).toHaveURL(/\/order\//, { timeout: 15000 });
-    await expect(page.getByRole("heading", { name: /thank you/i })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /thank you/i }),
+    ).toBeVisible();
   });
 
-  test("the homepage leads with the carousel, and its buttons scroll it", async ({ page }) => {
+  test("the homepage leads with the carousel, and its buttons scroll it", async ({
+    page,
+  }) => {
     await page.goto("/");
 
     // seed_demo puts eight products in it; "Shop by category" is gone.
@@ -86,14 +124,20 @@ test.describe("Storefront", () => {
     // Its own items only: each card holds a list of colour swatches.
     const track = carousel.getByRole("list").first();
     await expect(track.locator(":scope > li")).toHaveCount(8);
-    await expect(page.getByRole("heading", { name: "Shop by category" })).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Shop by category" }),
+    ).toHaveCount(0);
 
-    const previous = carousel.getByRole("button", { name: "Previous products" });
+    const previous = carousel.getByRole("button", {
+      name: "Previous products",
+    });
     const next = carousel.getByRole("button", { name: "Next products" });
     await expect(previous).toHaveAttribute("aria-disabled", "true");
 
     await next.click();
-    await expect.poll(() => track.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+    await expect
+      .poll(() => track.evaluate((node) => node.scrollLeft))
+      .toBeGreaterThan(0);
     await expect(previous).not.toHaveAttribute("aria-disabled", "true");
     // Pressed, it keeps focus: nothing about scrolling drops the reader.
     await expect(next).toBeFocused();
@@ -104,13 +148,20 @@ test.describe("Storefront", () => {
     { tag: "@desktop-only" },
     async ({ page }) => {
       await page.goto("/");
-      await page.getByRole("banner").getByRole("link", { name: "Track order" }).click();
+      await page
+        .getByRole("banner")
+        .getByRole("link", { name: "Track order" })
+        .click();
       await expect(page).toHaveURL(/\/track$/);
-      await expect(page.getByRole("heading", { name: /track your order/i })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: /track your order/i }),
+      ).toBeVisible();
     },
   );
 
-  test("checkout refuses an incomplete address and says why", async ({ page }) => {
+  test("checkout refuses an incomplete address and says why", async ({
+    page,
+  }) => {
     await page.goto("/shop");
     await page.locator("article a").first().click();
     await page.getByRole("button", { name: /add to cart/i }).click();
@@ -118,21 +169,32 @@ test.describe("Storefront", () => {
 
     await page.getByRole("button", { name: /place order/i }).click();
 
-    const summary = page.getByRole("alert").filter({ hasText: "There is a problem" });
+    const summary = page
+      .getByRole("alert")
+      .filter({ hasText: "There is a problem" });
     await expect(summary).toBeVisible();
-    await expect(summary.getByRole("link", { name: /full name is required/i })).toBeVisible();
+    await expect(
+      summary.getByRole("link", { name: /full name is required/i }),
+    ).toBeVisible();
   });
 });
 
 test.describe("POS", { tag: "@desktop-only" }, () => {
-  test("cashier sells an item by SKU and gets a receipt", async ({ page, request }) => {
+  test("cashier sells an item by SKU and gets a receipt", async ({
+    page,
+    request,
+  }) => {
     await signIn(page, CASHIER);
     await page.goto("/pos");
 
     // Take a SKU that is genuinely in stock from the public catalogue.
-    const response = await request.get("/api/proxy/shop/products/?in_stock=true&page_size=1");
+    const response = await request.get(
+      "/api/proxy/shop/products/?in_stock=true&page_size=1",
+    );
     const body = await response.json();
-    const sku = body.results[0].variants.find((v: { in_stock: boolean }) => v.in_stock).sku;
+    const sku = body.results[0].variants.find(
+      (v: { in_stock: boolean }) => v.in_stock,
+    ).sku;
 
     const scan = page.getByLabel(/scan barcode or type sku/i);
     await expect(scan).toBeFocused();
@@ -148,19 +210,28 @@ test.describe("POS", { tag: "@desktop-only" }, () => {
     await dialog.getByRole("button", { name: "Add payment" }).click();
     await dialog.getByRole("button", { name: "Complete sale" }).click();
 
-    await expect(page.getByRole("heading", { name: /sale complete/i })).toBeVisible({
+    await expect(
+      page.getByRole("heading", { name: /sale complete/i }),
+    ).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.getByRole("button", { name: /print receipt/i })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /print receipt/i }),
+    ).toBeVisible();
   });
 
-  test("a scan lands in the scan field wherever focus has wandered", async ({ page, request }) => {
+  test("a scan lands in the scan field wherever focus has wandered", async ({
+    page,
+    request,
+  }) => {
     await signIn(page, CASHIER);
     await page.goto("/pos");
 
     // Two different products, so a scan and a press of "+" cannot be mistaken
     // for each other: the scan adds a line, the press adds to the first one.
-    const response = await request.get("/api/proxy/shop/products/?in_stock=true&page_size=2");
+    const response = await request.get(
+      "/api/proxy/shop/products/?in_stock=true&page_size=2",
+    );
     const body = await response.json();
     const [first, second] = body.results.map(
       (product: { variants: { sku: string; in_stock: boolean }[] }) =>
@@ -174,7 +245,10 @@ test.describe("POS", { tag: "@desktop-only" }, () => {
 
     // A mouse click on "+" leaves focus on it; a scanner then types and presses
     // Enter. That Enter used to press "+" again and the scan went nowhere.
-    await page.getByRole("button", { name: /^Increase / }).first().click();
+    await page
+      .getByRole("button", { name: /^Increase / })
+      .first()
+      .click();
     const quantities = page.getByRole("spinbutton", { name: /^Quantity of / });
     await expect(quantities.first()).toHaveValue("2");
     await page.keyboard.type(second, { delay: 10 });
@@ -198,9 +272,13 @@ test.describe("POS", { tag: "@desktop-only" }, () => {
     await signIn(page, CASHIER);
     await page.goto("/pos");
 
-    const response = await request.get("/api/proxy/shop/products/?in_stock=true&page_size=1");
+    const response = await request.get(
+      "/api/proxy/shop/products/?in_stock=true&page_size=1",
+    );
     const body = await response.json();
-    const sku = body.results[0].variants.find((v: { in_stock: boolean }) => v.in_stock).sku;
+    const sku = body.results[0].variants.find(
+      (v: { in_stock: boolean }) => v.in_stock,
+    ).sku;
 
     await page.getByLabel(/scan barcode or type sku/i).fill(sku);
     await page.getByLabel(/scan barcode or type sku/i).press("Enter");
@@ -212,14 +290,20 @@ test.describe("POS", { tag: "@desktop-only" }, () => {
 });
 
 test.describe("Admin", { tag: "@desktop-only" }, () => {
-  test("manager sees the dashboard with server-aggregated KPIs", async ({ page }) => {
+  test("manager sees the dashboard with server-aggregated KPIs", async ({
+    page,
+  }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin");
 
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Dashboard" }),
+    ).toBeVisible();
     // "Revenue" is both a KPI tile label and a column header in the table
     // alternative to the chart, so match the tile rather than either loosely.
-    await expect(page.getByText("Revenue", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText("Revenue", { exact: true }).first(),
+    ).toBeVisible();
     await expect(page.getByText("Gross profit").first()).toBeVisible();
   });
 
@@ -227,20 +311,31 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     await signIn(page, MANAGER);
     await page.goto("/admin/inventory");
 
-    await expect(page.getByRole("heading", { name: "Inventory" })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Available" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Inventory" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("columnheader", { name: "Available" }),
+    ).toBeVisible();
   });
 
-  test("recording an expense moves the account it was paid from", async ({ page }) => {
+  test("recording an expense moves the account it was paid from", async ({
+    page,
+  }) => {
     // The invariant phase 36 exists to protect: the document and the cash-book
     // movement are written together, so the balance can never disagree with
     // what the shop recorded spending.
     await signIn(page, MANAGER);
     await page.goto("/admin/expenses");
-    await expect(page.getByRole("heading", { name: "Expenses", level: 1 })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Expenses", level: 1 }),
+    ).toBeVisible();
 
-    const drawer = page.locator("#ex-account option", { hasText: /Cash Drawer/ });
-    const balanceOf = async () => Number((await drawer.innerText()).replace(/[^0-9.]/g, ""));
+    const drawer = page.locator("#ex-account option", {
+      hasText: /Cash Drawer/,
+    });
+    const balanceOf = async () =>
+      Number((await drawer.innerText()).replace(/[^0-9.]/g, ""));
     const before = await balanceOf();
 
     const note = `E2E courier run ${Date.now()}`;
@@ -258,14 +353,20 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
 
     // Voiding asks why, then puts the money back without deleting anything.
     await row.getByRole("button", { name: /Void expense/ }).click();
-    await page.locator('input[id^="void-"]').fill("Recorded in error by the E2E run");
+    await page
+      .locator('input[id^="void-"]')
+      .fill("Recorded in error by the E2E run");
     await page.getByRole("button", { name: "Void it" }).click();
 
-    await expect(page.locator("tr", { hasText: note }).getByText("Voided")).toBeVisible();
+    await expect(
+      page.locator("tr", { hasText: note }).getByText("Voided"),
+    ).toBeVisible();
     await expect.poll(balanceOf).toBeCloseTo(before, 2);
   });
 
-  test("an expense larger than the account holds is refused by the server", async ({ page }) => {
+  test("an expense larger than the account holds is refused by the server", async ({
+    page,
+  }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin/expenses");
 
@@ -275,21 +376,29 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     const summary = page.locator('[aria-labelledby="error-summary-title"]');
     await expect(summary).toContainText(/which is less than/i);
     // The form never claims success beside a refusal.
-    await expect(page.getByRole("status").filter({ hasText: "Recorded" })).toHaveCount(0);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Recorded" }),
+    ).toHaveCount(0);
   });
 
-  test("writing stock off reduces it and demands a reason", async ({ page }) => {
+  test("writing stock off reduces it and demands a reason", async ({
+    page,
+  }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin/inventory");
 
-    const sku = (await page.locator("tbody tr").first().locator("td").nth(1).innerText()).trim();
+    const sku = (
+      await page.locator("tbody tr").first().locator("td").nth(1).innerText()
+    ).trim();
 
     // The reason is mandatory: an unexplained write-off is indistinguishable
     // from theft by whoever recorded it.
     await page.getByRole("button", { name: "Write stock off" }).click();
     await page.locator("#wo-quantity").fill("1");
     await page.getByRole("button", { name: "Write off" }).click();
-    await expect(page.locator('[aria-labelledby="error-summary-title"]')).toBeVisible();
+    await expect(
+      page.locator('[aria-labelledby="error-summary-title"]'),
+    ).toBeVisible();
 
     await page.locator("#wo-search input").fill(sku);
     await page.locator("#wo-search").getByText(sku).first().click();
@@ -302,14 +411,18 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     ).toBeVisible();
   });
 
-  test("a stock count records a variance and only moves stock when applied", async ({ page }) => {
+  test("a stock count records a variance and only moves stock when applied", async ({
+    page,
+  }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin/inventory/counts");
     await page.getByRole("button", { name: /Start a count of/ }).click();
     await page.waitForURL(/\/counts\/[0-9a-f-]{36}/);
 
     const row = page.locator("tbody tr").first();
-    const expected = Number((await row.locator("td").nth(1).innerText()).trim());
+    const expected = Number(
+      (await row.locator("td").nth(1).innerText()).trim(),
+    );
     await row.locator('input[id^="count-"]').fill(String(expected - 1));
 
     // The variance is computed from the ledger's snapshot, which is why
@@ -319,16 +432,24 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
     await page.getByRole("button", { name: "Save progress" }).click();
     await expect(page.getByText(/Saved 1 line/)).toBeVisible();
     // Saving is not applying — a count takes hours and more than one person.
-    await expect(page.getByRole("button", { name: "Apply to stock" })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Apply to stock" }),
+    ).toBeEnabled();
 
     await page.getByRole("button", { name: "Apply to stock" }).click();
     // The header states the outcome; the status word alone appears in several
     // places on this page, so assert the sentence rather than the badge.
-    await expect(page.getByText(/adjustments are in the ledger/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Apply to stock" })).toHaveCount(0);
+    await expect(
+      page.getByText(/adjustments are in the ledger/i),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Apply to stock" }),
+    ).toHaveCount(0);
   });
 
-  test("a return is approved, received with a decision, and refunded", async ({ page }) => {
+  test("a return is approved, received with a decision, and refunded", async ({
+    page,
+  }) => {
     await signIn(page, MANAGER);
     await page.goto("/admin/returns");
 
@@ -338,7 +459,9 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
 
     // Rejecting is destructive and terminal, so it will not proceed unsaid.
     await page.getByRole("button", { name: "Reject" }).click();
-    await expect(page.locator('[aria-labelledby="error-summary-title"]')).toContainText(/say why/i);
+    await expect(
+      page.locator('[aria-labelledby="error-summary-title"]'),
+    ).toContainText(/say why/i);
 
     await page.locator("#rt-comment").fill("Within the window, tags intact");
     await page.getByRole("button", { name: "Approve" }).click();
@@ -346,7 +469,10 @@ test.describe("Admin", { tag: "@desktop-only" }, () => {
 
     // The decision belongs here — this is the first moment anyone has the
     // goods in hand (business-rules §2.1).
-    await page.locator('select[id^="rt-decision-"]').first().selectOption("DAMAGED");
+    await page
+      .locator('select[id^="rt-decision-"]')
+      .first()
+      .selectOption("DAMAGED");
     await page.getByRole("button", { name: "Receive goods" }).click();
     await expect(page.getByText("Issue the refund")).toBeVisible();
 
@@ -367,10 +493,14 @@ test.describe("Accessibility basics", () => {
   test("keyboard can reach the cart from the homepage", async ({ page }) => {
     await page.goto("/");
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: /skip to content/i })).toBeFocused();
+    await expect(
+      page.getByRole("link", { name: /skip to content/i }),
+    ).toBeFocused();
   });
 
-  test("the password toggle reveals without losing the caret", async ({ page }) => {
+  test("the password toggle reveals without losing the caret", async ({
+    page,
+  }) => {
     // Three faults a browser found and jsdom could not. The toggle used to
     // take focus on click, so the next keystroke went nowhere; it was out of
     // the tab order, so a keyboard-only user could not reach it at all; and
@@ -419,7 +549,10 @@ test.describe("Accessibility basics", () => {
     await page.goto("/shop");
     await page.locator("article a").first().click();
 
-    const jsonLd = await page.locator('script[type="application/ld+json"]').first().textContent();
+    const jsonLd = await page
+      .locator('script[type="application/ld+json"]')
+      .first()
+      .textContent();
     expect(jsonLd).toContain("schema.org");
     expect(jsonLd).toContain("Product");
   });
@@ -443,10 +576,14 @@ test.describe("Accessibility basics", () => {
     // D4 is "the shop's name appears exactly once", and a count of 1 says
     // both that it is there and that it is not doubled.
     await expect
-      .poll(async () => (await page.title()).split("Rangon Fashion").length - 1, {
-        message: 'the product page title should name "Rangon Fashion" exactly once (D4)',
-        timeout: 15000,
-      })
+      .poll(
+        async () => (await page.title()).split("Rangon Fashion").length - 1,
+        {
+          message:
+            'the product page title should name "Rangon Fashion" exactly once (D4)',
+          timeout: 15000,
+        },
+      )
       .toBe(1);
   });
 });

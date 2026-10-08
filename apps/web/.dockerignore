@@ -1,0 +1,44 @@
+# What `docker build ... apps/web` does not send to the builder.
+#
+# This file is the one that applies: the image is built with this directory as
+# its context, and Docker reads the ignore file at the root of the context.
+# The `.dockerignore` at the top of the repository is never consulted for it.
+#
+# The builder stage installs its own dependencies (`npm ci`) and then does
+# `COPY . .`. Without this file that second step laid the workstation's own
+# `node_modules` -- 750 MB, installed for whatever system the workstation is --
+# over the clean install, and its stale `.next` beside it. CI never saw it: a
+# fresh checkout has neither. An image built on a workstation is now built
+# from what CI builds from (D240 in docs/roadmap.md).
+
+# --- installed and built inside the image, never taken from the host --------
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# --- secrets ----------------------------------------------------------------
+# NEXT_PUBLIC_* values reach the build as build arguments, not as files.
+.env
+.env.*
+
+# --- output of running things here -------------------------------------------
+build-output.log
+npm-debug.log*
+yarn-error.log*
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+coverage/
+
+# --- how the image is built ---------------------------------------------------
+Dockerfile
+Dockerfile.dev
+.dockerignore
+
+# --- editors / os --------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

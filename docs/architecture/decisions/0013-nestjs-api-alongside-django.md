@@ -62,7 +62,9 @@ creates, and proven equal to Django by comparing live responses rather than by r
   one API in production, and a client never sees two budgets for the same endpoint.
 - **Nothing routes to the Nest API yet.** It runs beside Django in the parity stack only. Cutover is
   per path, at the proxy, once that path's module is ported and green; see the port document for the
-  order.
+  order. *(As decided on 2026-09-30. On 2026-10-08, with every path ported, the owner chose one
+  switch for all of them instead, and the Nest API now serves production:
+  [ADR-0017](0017-nest-api-serves-production.md).)*
 - **Measured on 2026-09-30** (same machine, same database, one API at a time, 8 concurrent clients,
   Django as production runs it -- 2 gunicorn workers x 4 threads): the Nest API served the storefront
   endpoints at **4-8x the requests per second** with p95 latency 3-9x lower, in **114 MB** against

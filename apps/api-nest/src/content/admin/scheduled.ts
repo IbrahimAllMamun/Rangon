@@ -73,5 +73,5 @@ export async function storedImage(
 ): Promise<string> {
   if (value === undefined) return current;
   if (value === null) return '';
-  return storage.save(uploadTo, value.name, value.bytes);
+  return storage.save(uploadTo, value.name, value.bytes, value.contentType);
 }

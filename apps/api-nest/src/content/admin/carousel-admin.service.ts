@@ -156,7 +156,7 @@ export class CarouselAdminService {
           image:
             primary && primary.image
               ? {
-                  url: mediaUrl(primary.image, this.env.MEDIA_URL),
+                  url: mediaUrl(primary.image, this.env.mediaBase),
                   alt: this.payloads.alt(primary, row.name, colours),
                 }
               : null,

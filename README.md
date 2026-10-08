@@ -215,21 +215,28 @@ Tests in a throwaway containerised environment (what CI runs):
 docker compose -f docker-compose.test.yml run --rm api-test
 ```
 
-## The NestJS API (in progress)
+## The NestJS API
 
 `apps/api-nest/` is a NestJS port of the API, built beside Django on the same database and proven
-equal to it endpoint by endpoint (ADR-0013). Nothing routes to it yet. Phase 1, the storefront's
-read endpoints, is done. See [docs/architecture/nest-port.md](docs/architecture/nest-port.md):
+equal to it endpoint by endpoint (ADR-0013). **It is what production runs** since 2026-10-08
+([ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)): every request, the
+background jobs and their schedule. Django still owns the schema and every business rule -- a rule
+changes there first, then in the port -- and the development stack above is Django's. See
+[docs/architecture/nest-port.md](docs/architecture/nest-port.md) and
+[docs/nest-port-instructions.md](docs/nest-port-instructions.md):
 
 ```bash
-scripts/nest-parity.sh reset   # both APIs on one fresh database, seeded
-scripts/nest-parity.sh run     # every request to both; fails on any difference
+scripts/nest-parity.sh reset      # both APIs on one fresh database, seeded
+scripts/nest-parity.sh run        # every request to both; fails on any difference
+scripts/nest-parity.sh run-jobs   # the same, with the jobs queued as production queues them
 ```
 
 ## Run the production build locally
 
-`docker-compose.prodlocal.yml` runs the **production** images on your own machine — gunicorn, the
-production Next build, Celery and one Nginx origin — over plain HTTP. Use it to see what the app
+`docker-compose.prodlocal.yml` runs the **production** images on your own machine — the NestJS API,
+the production Next build and one Nginx origin — over plain HTTP. (Django is there too, started on
+demand: for migrations, for the Django admin, and to serve everything again with one more file.
+[local-production.md §9a](docs/operations/local-production.md#9a-django-on-demand-and-back-to-django).) Use it to see what the app
 actually feels like, to reproduce something that only happens in a production build (a CSP failure, a
 server/client boundary error), or to rehearse a deploy. It is *not* a deployment; for that see
 [docs/operations/](docs/operations/deployment.md).
@@ -246,7 +253,7 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,api,web,nginx   # must not be empty, mu
 POSTGRES_PASSWORD=<any local password>
 ```
 
-**1a. Or run the lot**, which is steps 2-6 below plus a smoke test that makes it fail loudly
+**1a. Or run the lot**, which is steps 2-5 below plus a smoke test that makes it fail loudly
 instead of exiting `0` on a stack that is not serving:
 
 ```bash
@@ -260,9 +267,14 @@ silently targets the dev stack instead:
 alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
 ```
 
-**3. Build the two images by hand.** `prodlocal` sets `build: !reset null` on `api`, `worker`, `beat`
-and `web`, so **`prodlocal up -d --build` builds nothing** and fails on a missing tag. Build them
-first — these tags collide with nothing:
+**3. Build the three images by hand.** `prodlocal` sets `build: !reset null` on every application
+service, so **`prodlocal up -d --build` builds nothing** and fails on a missing tag. Build them
+first — these tags collide with nothing. The API that serves, then Django (which migrates and
+seeds):
+
+```bash
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
+```
 
 ```bash
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
@@ -276,24 +288,22 @@ afterwards; omit them and the image silently keeps the Dockerfile defaults (`loc
 docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=http://localhost:4100
 ```
 
-**Then start:**
+**4. Migrate and seed, then start.** Its database is empty and separate from the dev one. Django
+does both from a one-off container (`run --rm`), before the stack is up:
 
 ```bash
+prodlocal run --rm api python manage.py migrate
+prodlocal run --rm -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
+  -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= \
+  api python manage.py seed_demo --reset
 prodlocal up -d
 ```
 
-**4. Migrate and seed** (its database is empty and separate from the dev one):
-
-```bash
-prodlocal exec api python manage.py migrate
-prodlocal exec -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
-  api python manage.py seed_demo --reset
-```
-
 Production settings refuse `seed_demo` without that opt-in, and refuse the demo password below even
-with it — see [local-production.md §6](docs/operations/local-production.md#6-migrate-and-seed).
+with it — see [local-production.md §5](docs/operations/local-production.md#5-migrate-and-seed),
+which also says what the last two variables are for.
 
-**5. Restart Nginx**, which resolves `api` and `web` once at startup and caches the addresses. Any
+**5. Restart Nginx**, which resolves `api-nest` and `web` once at startup and caches the addresses. Any
 container recreated after it gets an address Nginx does not know, and `/api/` answers 502 while the
 storefront still renders — so it reads as an API fault rather than a proxy one. Repeat this after
 every `--force-recreate`:
@@ -305,7 +315,7 @@ prodlocal restart nginx
 |                               |                                                               |
 | ----------------------------- | ------------------------------------------------------------- |
 | Storefront / admin / POS      | [http://localhost:4100](http://localhost:4100)                 |
-| API (direct, bypassing Nginx) | [http://localhost:8100/api/v1/](http://localhost:8100/api/v1/) |
+| API (direct, bypassing Nginx) | [http://localhost:8100/api/health/](http://localhost:8100/api/health/) |
 | Mailpit                       | [http://localhost:8125](http://localhost:8125)                 |
 
 Everything goes through Nginx on **4100** as a single origin, which is what the deployed topology
@@ -318,7 +328,7 @@ looks like and what `smoke-test.sh` assumes:
 **Logs and stop**, leaving the dev stack untouched:
 
 ```bash
-prodlocal logs -f api
+prodlocal logs -f api-nest
 prodlocal down            # add -v to drop this stack's database too
 ```
 

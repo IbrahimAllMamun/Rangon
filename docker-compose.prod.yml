@@ -6,6 +6,17 @@
 #   * db/redis publish no ports and stay on the private network
 #   * nothing runs as root where the base image allows otherwise
 #   * migrations are a separate `run --rm api ... migrate` step, not a start hook
+#
+# Which API serves (ADR-0017): the NestJS one, `api-nest`. It answers every
+# request, works the background jobs and fires the schedule. Django -- `api`,
+# `worker`, `beat` -- is not started by `up`:
+#
+#   * migrations, collectstatic and management commands: `run --rm api ...`,
+#     which works on a service whose profile is off;
+#   * the Django admin and the API docs: `--profile django up -d api worker`;
+#   * back to Django for everything: add `-f docker-compose.django.yml`.
+#
+# docs/operations/deployment.md has each as a procedure.
 
 services:
   db:
@@ -28,7 +39,38 @@ services:
     volumes:
       - ${REDIS_DATA_PATH:-/var/lib/rangon/redis}:/data
 
+  api-nest:
+    profiles: !reset []
+    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api-nest:${TAG:?set TAG to the git sha}
+    build: !reset null
+    environment:
+      # One settings module name drives both APIs' profiles: `prod` is HTTPS
+      # redirects, strict hosts and no debug output (src/config/env.ts).
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_DEBUG: "0"
+      # As for Django below: one proxy in front, the nginx of this file.
+      DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
+      # The image's own tag, unless told otherwise: an error reported to Sentry
+      # names the release it came from (ADR-0019).
+      RANGON_RELEASE: ${RANGON_RELEASE:-${TAG}}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # One replica is one Node process: the API, the job worker and the
+    # schedule (ADR-0016). A second replica is safe -- pg-boss hands a job, and
+    # a scheduled run, to one worker -- and is what to raise first.
+    deploy:
+      replicas: 1
+      resources:
+        limits: {memory: 1G}
+
+  # Django, on demand (see the header). `worker` shares the profile: anything
+  # the Django admin queues goes to Celery, and without a worker would wait in
+  # Redis until one next started.
   api:
+    profiles: [django]
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
@@ -65,6 +107,7 @@ services:
         limits: {memory: 1G}
 
   worker:
+    profiles: [django]
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
@@ -76,7 +119,10 @@ services:
     deploy:
       replicas: 1
 
+  # Only ever through docker-compose.django.yml. The schedule fires in one
+  # place: here, or in `api-nest`. Both at once is every job twice.
   beat:
+    profiles: [django-schedule]
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
@@ -89,6 +135,12 @@ services:
   web:
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-web:${TAG:?set TAG to the git sha}
     build: !reset null
+    environment:
+      # Server-side calls go straight to the API on the private network, not
+      # through nginx: this is half of "which API serves". The other half is
+      # nginx's RANGON_API_UPSTREAM below.
+      API_INTERNAL_URL: http://api-nest:3000/api/v1
+    depends_on: !override [api-nest]
     read_only: true
     tmpfs:
       - /tmp
@@ -99,8 +151,11 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    depends_on: [api, web]
+    depends_on: !override [api-nest, web]
     environment:
+      # Where `/api/` and `/media/` go. `/django-admin/`, `/api/docs/` and
+      # `/api/schema/` always go to Django, and say so when it is not running.
+      RANGON_API_UPSTREAM: api-nest:3000
       # Substituted into default.conf.template. No default: a blank server_name
       # would match nothing and the certificate path would not exist, which is
       # a worse failure than refusing to start.

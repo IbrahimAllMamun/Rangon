@@ -552,7 +552,7 @@ export class CartService {
         variant_label: await this.variantLabel(row.variant_id, row.variant_name),
         quantity: row.quantity,
         unit_price: row.price,
-        image: await primaryImageUrl(this.db, row.product_id, this.env.MEDIA_URL),
+        image: await primaryImageUrl(this.db, row.product_id, this.env.mediaBase),
         available: view.availability.get(row.variant_id)?.available ?? 0,
       });
     }

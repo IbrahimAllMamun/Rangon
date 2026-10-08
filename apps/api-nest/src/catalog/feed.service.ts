@@ -239,9 +239,9 @@ export class FeedService {
           price: this.money(onSale ? (compareAt as string) : variant.price),
           sale_price: onSale ? this.money(variant.price) : '',
           link,
-          image_link: absolute(hero ? mediaUrl(hero.image, this.env.MEDIA_URL) : '', origin),
+          image_link: absolute(hero ? mediaUrl(hero.image, this.env.mediaBase) : '', origin),
           additional_image_link: rest
-            .map((image) => absolute(mediaUrl(image.image, this.env.MEDIA_URL), origin))
+            .map((image) => absolute(mediaUrl(image.image, this.env.mediaBase), origin))
             .join(','),
           brand: product.brand_name ?? shopName,
           product_type: productType,

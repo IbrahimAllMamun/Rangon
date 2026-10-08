@@ -135,10 +135,17 @@ different project.
 
 ---
 
-## 3. Build the two images
+## 3. Build the three images
 
 The local production compose file builds nothing itself (`build: !reset null`), so `up` fails on a
-missing image unless both exist ([local-production.md §4](local-production.md#4-build-the-two-images-by-hand)).
+missing image unless all three exist ([local-production.md §4](local-production.md#4-build-the-three-images-by-hand)).
+The API the shop runs on is the NestJS one; Django's image sets the database up in steps 5 to 7,
+and is what the stack can go back to
+([local-production.md §9a](local-production.md#9a-django-on-demand-and-back-to-django)).
+
+```bash
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
+```
 
 ```bash
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
@@ -159,30 +166,24 @@ docker inspect rangon-web:prod --format '{{range .Config.Env}}{{println .}}{{end
 
 ---
 
-## 4. Start the stack
+## 4. Start the database and the cache
 
-Database, cache and API first, waiting until each reports healthy:
-
-```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --wait db redis api
-```
-
-Then everything else:
+Those two only, waiting until each reports healthy. The rest of the stack starts in step 8, once
+the database has its tables, its shop and its owner:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --wait db redis
 ```
 
-Do not add `--wait` to that second command. `web`, `worker` and `beat` report `unhealthy`
-permanently ([local-production.md §10](local-production.md#10-three-things-that-look-broken-and-are-not)),
-so it would wait forever.
+Steps 5 to 7 are Django's commands. Django is not one of the containers this stack keeps running,
+so each is `run --rm api ...`: a container made for the one command, and removed after it.
 
 ---
 
 ## 5. Migrate
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
 ```
 
 Migrating also creates the seven roles and every permission code, through a `post_migrate` hook
@@ -190,7 +191,7 @@ Migrating also creates the seven roles and every permission code, through a `pos
 only if the role already exists. To see what a blank database holds now:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py shell -c "from accounts.models import Role, Permission, Organization, Branch; print('roles', Role.objects.count(), 'permissions', Permission.objects.count(), 'organizations', Organization.objects.count(), 'branches', Branch.objects.count())"
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py shell -c "from accounts.models import Role, Permission, Organization, Branch; print('roles', Role.objects.count(), 'permissions', Permission.objects.count(), 'organizations', Organization.objects.count(), 'branches', Branch.objects.count())"
 ```
 
 Expect `roles 7`, a permission count (43 today; it follows `accounts/permissions.py`), and **0
@@ -214,14 +215,14 @@ exactly these three rows and nothing else:
 Set the three names on the command. In **Git Bash**:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts/bootstrap-store.py
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts/bootstrap-store.py
 ```
 
 In **PowerShell**, go through `cmd`. PowerShell's own pipe prefixes a byte-order mark, and Python
 stops at line 1 with `SyntaxError: invalid non-printable character U+FEFF`:
 
 ```powershell
-cmd /c 'docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts\bootstrap-store.py'
+cmd /c 'docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts\bootstrap-store.py'
 ```
 
 It prints:
@@ -247,13 +248,13 @@ Cash drawers: 1
 From **PowerShell** or Windows Terminal, because it asks questions:
 
 ```powershell
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py createsuperuser
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py createsuperuser
 ```
 
 From Git Bash, prefix it with `winpty`, or it stops with `the input device is not a TTY`:
 
 ```bash
-winpty docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py createsuperuser
+winpty docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py createsuperuser
 ```
 
 It asks for an email address and a password, twice. The password must be at least 10 characters,
@@ -269,11 +270,19 @@ account that can do everything.
 
 ---
 
-## 8. Restart nginx
+## 8. Start the shop, and restart nginx
 
-nginx looks up the `api` and `web` containers once, when it starts, and keeps those addresses. Any
-container started after it has an address nginx does not know, and `/api/` answers 502 while pages
-still render ([local-production.md §7](local-production.md#7-restart-nginx--not-optional)).
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
+```
+
+Do not add `--wait`: `web` reports `unhealthy` permanently
+([local-production.md §10](local-production.md#10-three-things-that-look-broken-and-are-not)),
+so it would wait forever.
+
+nginx looks up the `api-nest` and `web` containers once, when it starts, and keeps those addresses.
+Any container started after it has an address nginx does not know, and `/api/` answers 502 while
+pages still render ([local-production.md §7](local-production.md#7-restart-nginx--not-optional)).
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml restart nginx
@@ -290,11 +299,11 @@ bash scripts/smoke-test.sh http://localhost:4100
 The two ledgers should agree with themselves from the first minute:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py verify_accounts
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py verify_accounts
 ```
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py verify_inventory
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py verify_inventory
 ```
 
 Expect `Accounts are consistent with the cash book.` and `Inventory is consistent with the
@@ -327,6 +336,10 @@ What a new shop needs before it can sell, in the order it needs it.
 The database outlives every rebuild, as long as nothing runs `down -v`. After pulling new code:
 
 ```bash
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
+```
+
+```bash
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
 ```
 
@@ -335,11 +348,11 @@ docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT
 ```
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --force-recreate api worker beat web
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
 ```
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml exec api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --force-recreate api-nest web
 ```
 
 ```bash
@@ -360,5 +373,6 @@ Use the same build arguments every time. Back the database up on a schedule: [ba
 | Sign-in shows "An unexpected error occurred" | Usually Redis is not running: the login throttle needs it, and answers 500 without it ([.claude/environment.md](../../.claude/environment.md), "The stack runs without Docker"). `docker ps` should list `rangon-prod-redis-1`. |
 | Sign-in refused with `403 CROSS_ORIGIN_REFUSED` | The web image was built for a different `NEXT_PUBLIC_SITE_URL` than the address in the browser (step 3). |
 | `/api/...` answers 502 while pages render | nginx kept an old address. Step 8. |
+| `/django-admin/` answers 503 with a line of text | Django is not running, by design. Start it when you want the Django admin: [local-production.md §9a](local-production.md#9a-django-on-demand-and-back-to-django). |
 | The API cannot reach the database after changing `POSTGRES_PASSWORD` | Postgres kept the password it was created with (step 1). Put the old one back, or start from step 2. |
 | A command dies with exit 137, or finishes suspiciously fast and silent | Out of memory. Stop the other stacks and run it again ([local-production.md §2](local-production.md#2-before-you-start)). |

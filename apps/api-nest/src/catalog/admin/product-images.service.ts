@@ -18,7 +18,7 @@ import { NotFound, ValidationError } from '../../common/errors';
 import { applyFilters, modelFilter, orderingPlan, type OrderingTerm } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import type { QueryDict } from '../../common/query-dict';
-import { MediaStorage } from '../../common/storage';
+import { type MediaStorage, mediaStorage } from '../../common/storage';
 import { parseUuid } from '../../common/uuid';
 import { ENV, Env } from '../../config/env';
 import { Database } from '../../database/database.service';
@@ -151,7 +151,7 @@ export class ProductImagesService {
     private readonly payloads: CataloguePayloads,
     @Inject(ENV) env: Env,
   ) {
-    this.storage = new MediaStorage(env.MEDIA_ROOT, env.DJANGO_TIME_ZONE);
+    this.storage = mediaStorage(env);
   }
 
   /**
@@ -302,7 +302,12 @@ export class ProductImagesService {
    */
   async create(data: ImageData): Promise<ImageWithProduct> {
     const file = data.image as UploadedFile;
-    const name = await this.storage.save('products/%Y/%m/', file.name, file.bytes);
+    const name = await this.storage.save(
+      'products/%Y/%m/',
+      file.name,
+      file.bytes,
+      file.contentType,
+    );
     const row: ImageRow = {
       id: randomUUID(),
       product_id: data.product as string,
@@ -343,7 +348,14 @@ export class ProductImagesService {
     const row: ImageRow = { ...instance, ...rest };
     if (product !== undefined) row.product_id = product;
     if (attribute_value !== undefined) row.attribute_value_id = attribute_value;
-    if (image) row.image = await this.storage.save('products/%Y/%m/', image.name, image.bytes);
+    if (image) {
+      row.image = await this.storage.save(
+        'products/%Y/%m/',
+        image.name,
+        image.bytes,
+        image.contentType,
+      );
+    }
     await this.db.query(
       `UPDATE ${I} SET "updated_at" = clock_timestamp(), "product_id" = $2, "attribute_value_id" = $3,
          "image" = $4, "alt_text" = $5, "position" = $6, "is_primary" = $7

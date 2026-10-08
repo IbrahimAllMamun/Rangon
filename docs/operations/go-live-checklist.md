@@ -50,11 +50,11 @@ consciously waived in writing.
 - [ ] Secrets in a secret manager; no `.env` on the production host
 - [ ] Database on durable storage, private network, least-privilege user
 - [ ] Nightly backups running **and a restore rehearsed** (`docs/operations/backups.md` table has a row)
-- [ ] Media in object storage with versioning
-- [ ] Error tracking (Sentry DSN) receiving events
+- [ ] Media in object storage with versioning (`USE_S3=1`; either API since 2026-10-08, [ADR-0018](../architecture/decisions/0018-nest-s3-without-an-sdk.md)). `S3_ENDPOINT` must be an address the browser can reach too, `S3_REGION` the bucket's own, and the bucket's public-read policy must not cover `expenses/*` ([deployment.md](deployment.md#which-api-serves))
+- [ ] Error tracking (Sentry DSN) receiving events: set `SENTRY_DSN`, deploy, and **see one event arrive** -- the NestJS API reports since 2026-10-08 ([ADR-0019](../architecture/decisions/0019-nest-errors-to-sentry.md)), and has not yet been pointed at a real Sentry project. Django reports nothing either way ([D241](../roadmap.md#known-defects))
 - [ ] Structured logs shipped somewhere searchable; request ids present
 - [ ] Health and readiness endpoints wired to the load balancer
-- [ ] Celery worker and **exactly one** beat replica running; scheduled jobs observed to fire
+- [ ] Background jobs running, and the schedule fired in **exactly one** place: `api-nest` itself, or -- when Django serves -- the Celery worker and one beat replica, never both. Scheduled jobs observed to fire (`SELECT name, state, completed_on FROM pgboss.job ORDER BY created_on DESC LIMIT 5`)
 - [ ] Images built by CI, scanned, deployed by immutable tag
 - [ ] Rollback rehearsed once on staging
 - [ ] Full test suite green, including concurrency tests
@@ -72,4 +72,4 @@ consciously waived in writing.
 ## Day-one watchlist
 
 Sales per channel, failed payments, `INSUFFICIENT_STOCK` errors, 5xx rate, checkout completion rate,
-Celery queue depth, inventory drift report, POS lookup latency.
+job queue depth (`pgboss.job` rows in `created` or `retry`; Celery's queue when Django serves), inventory drift report, POS lookup latency.

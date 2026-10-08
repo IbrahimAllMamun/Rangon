@@ -166,12 +166,42 @@ jobs:
       - name: Compare every case
         run: bash scripts/nest-parity.sh run
 
+      # What production runs since the cutover (ADR-0017): the NestJS API
+      # queuing its jobs in PostgreSQL. Every case again, against that; then the
+      # worker itself on what the API queues (ADR-0016).
+      - name: Compare every case again, with the jobs in pg-boss; then the worker
+        run: bash scripts/nest-parity.sh run-jobs
+
       - name: Compare the rate limits (both APIs throttled)
         run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run --rm throttle-check
 
       - name: Logs on failure
         if: failure()
-        run: docker compose -p rangon-nest -f docker-compose.nest.yml logs --tail 200 django nest
+        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs --profile worker logs --tail 200 django nest nest-jobs nest-worker
+
+  # The comparison a third time, with both APIs' uploads in an S3 server
+  # instead of on disk (`USE_S3=1`, ADR-0018): every case, and for every write
+  # the object each API stored -- its name, bytes, type and encoding. A job of
+  # its own, beside the one above: it needs its own database, seeded through
+  # the bucket, and nothing waits for it.
+  api-nest-parity-s3:
+    name: NestJS API parity with Django, uploads in S3
+    runs-on: ubuntu-latest
+    needs: [api-nest]
+    env:
+      PARITY_S3: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start both APIs and the S3 server, migrate, seed, apply the parity fixtures
+        run: bash scripts/nest-parity.sh reset
+
+      - name: Compare every case, and every stored object
+        run: bash scripts/nest-parity.sh run
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile s3 logs --tail 200 django nest s3
 
   # ------------------------------------------------------------------- e2e --
   # The four critical flows, driven in a real browser against a real API and a
@@ -191,9 +221,22 @@ jobs:
   # leaves it pristine, the storefront starts after that, and the suite runs
   # once. `E2E_SEED_CMD` would reseed *underneath* the running server, which is
   # a different and worse problem -- see the note on "Run the suite".
+  #
+  # Twice since the cutover (ADR-0017): against the NestJS API, which is what
+  # production runs, and against Django, which is what it goes back to. The
+  # Django leg keeps the name this job always had. In both, Django migrates
+  # and seeds -- it owns the schema.
   e2e:
-    name: E2E (Playwright, four critical flows)
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: django
+            name: E2E (Playwright, four critical flows)
+          - api: nest
+            name: E2E on the NestJS API (Playwright, four critical flows)
 
     services:
       postgres:
@@ -263,7 +306,8 @@ jobs:
           python manage.py migrate --noinput
           python manage.py seed_demo --reset
 
-      - name: Start the API
+      - name: Start the API (Django)
+        if: matrix.api == 'django'
         working-directory: apps/api
         run: |
           nohup python manage.py runserver 8000 --noreload > /tmp/api.log 2>&1 &
@@ -272,6 +316,32 @@ jobs:
             # 401 is the right answer for an unauthenticated API root.
             if [ "$code" = "401" ] || [ "$code" = "200" ]; then
               echo "API ready ($code)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API never became ready"
+          cat /tmp/api.log
+          exit 1
+
+      # The NestJS API as production starts it: the built `dist/main.js`, its
+      # jobs in PostgreSQL, worked and scheduled by the same process. It
+      # reads uploads from where Django's seed wrote them.
+      - name: Start the API (NestJS)
+        if: matrix.api == 'nest'
+        working-directory: apps/api-nest
+        env:
+          PORT: "8000"
+          RANGON_JOBS_BACKEND: pgboss
+          MEDIA_ROOT: ${{ github.workspace }}/apps/api/media
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          nohup node dist/main.js > /tmp/api.log 2>&1 &
+          for _ in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/ready/ || true)
+            if [ "$code" = "200" ]; then
+              echo "API ready"
               exit 0
             fi
             sleep 2
@@ -367,7 +437,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.api }}
           path: apps/web/playwright-report
           retention-days: 7
 
@@ -434,7 +504,7 @@ jobs:
   images:
     name: Build & scan images
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend, frontend, api-nest]
     permissions:
       contents: read
       packages: write
@@ -466,6 +536,25 @@ jobs:
             NEXT_PUBLIC_SITE_URL=https://example.com
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+
+      # What production serves since the cutover (ADR-0017).
+      - name: Build NestJS API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/api-nest
+          file: ./apps/api-nest/Dockerfile
+          tags: rangon-api-nest:${{ github.sha }}
+          load: true
+          cache-from: type=gha,scope=api-nest
+          cache-to: type=gha,mode=max,scope=api-nest
+
+      - name: Scan NestJS API image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: rangon-api-nest:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
       - name: Scan API image
         uses: aquasecurity/trivy-action@v0.36.0

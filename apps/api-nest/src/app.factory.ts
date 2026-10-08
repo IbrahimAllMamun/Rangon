@@ -8,6 +8,7 @@ import { Env, loadEnv } from './config/env';
 import { genRequestId, installPipeline } from './http/pipeline';
 import { installBigIntJson, installBodyCapture } from './http/request-body';
 import { RouteRegistry } from './http/routes';
+import { installMedia, rewriteMediaUrl } from './media/media';
 
 /**
  * The application, built and not yet listening. `main.ts` listens; the parity
@@ -21,6 +22,7 @@ export async function createApp(): Promise<{ app: NestFastifyApplication; env: E
 
   const adapter = new FastifyAdapter({
     genReqId: genRequestId,
+    rewriteUrl: rewriteMediaUrl,
     // Django sets no limit a client meets: DRF's parsers read the stream
     // past DATA_UPLOAD_MAX_MEMORY_SIZE, and an upload is refused by the
     // serializer, by name ("smaller than 10 MB"). The proxy in front caps
@@ -37,6 +39,9 @@ export async function createApp(): Promise<{ app: NestFastifyApplication; env: E
   routes.attach(fastify);
   installPipeline(fastify, env, routes);
   installBodyCapture(fastify);
+  // Uploaded files, as `config.urls` mounts them beside the API (media/media.ts) --
+  // not with `USE_S3`: nothing is mounted when the files are in a bucket.
+  if (!env.USE_S3) installMedia(fastify, env);
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forRoot(env, routes),

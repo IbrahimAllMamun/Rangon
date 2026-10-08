@@ -62,7 +62,7 @@ export class ShopContentController {
       brands: brands.map((brand) => ({
         name: brand.name,
         slug: brand.slug,
-        logo: mediaUrl(brand.logo, this.env.MEDIA_URL),
+        logo: mediaUrl(brand.logo, this.env.mediaBase),
       })),
     };
   }

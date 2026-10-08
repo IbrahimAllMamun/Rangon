@@ -402,7 +402,7 @@ export class CataloguePayloads {
       product: image.product_id,
       attribute_value: image.attribute_value_id,
       color: this.colour(image.attribute_value_id, colours),
-      url: mediaUrl(image.image, this.env.MEDIA_URL),
+      url: mediaUrl(image.image, this.env.mediaBase),
       alt_text: image.alt_text,
       alt: this.alt(image, productName, colours),
       position: image.position,
@@ -429,7 +429,7 @@ export class CataloguePayloads {
       primary_image:
         primary && primary.image
           ? {
-              url: mediaUrl(primary.image, this.env.MEDIA_URL),
+              url: mediaUrl(primary.image, this.env.mediaBase),
               alt: this.alt(primary, product.name, parts.colours),
             }
           : null,

@@ -1,6 +1,6 @@
 # ADR-0016 — The NestJS API runs its background jobs on pg-boss, in PostgreSQL
 
-**Status:** Accepted · 2026-10-07 · built in phase 7 part 4 of the port, switched on at the cutover
+**Status:** Accepted · 2026-10-07 · built in phase 7 part 4 of the port, switched on at the cutover of 2026-10-08 ([ADR-0017](0017-nest-api-serves-production.md))
 
 ## Context
 

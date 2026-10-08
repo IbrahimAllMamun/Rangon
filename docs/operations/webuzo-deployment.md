@@ -10,6 +10,16 @@
 >
 > General release procedure, rollback and expand/contract migrations live in
 > [deployment.md](deployment.md). This file covers only what is **specific to Webuzo**.
+>
+> **This plan still runs Django.** Since 2026-10-08 the production overlay
+> (`docker-compose.prod.yml`) runs the NestJS API and starts Django on demand
+> ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). The overlay this page
+> has you write is laid over the base file alone, where nothing has changed: `api`, `worker` and
+> `beat` start as they always did, and the vhost sends `/api/` to Django. That works, and is the
+> stack the rollback file gives everyone else. To run the NestJS API here instead, the overlay
+> needs what `docker-compose.prod.yml` now carries for `api-nest`, `web` and the three Django
+> services, and the vhost needs `/api/` and `/media/` sent to `api-nest`'s port -- not written or
+> tried.
 
 ---
 

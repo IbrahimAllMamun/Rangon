@@ -405,7 +405,7 @@ export class CustomerOrdersService {
       );
       const productId = variant?.product_id ?? '';
       if (!images.has(productId))
-        images.set(productId, await primaryImageUrl(this.db, productId, this.env.MEDIA_URL));
+        images.set(productId, await primaryImageUrl(this.db, productId, this.env.mediaBase));
       out.push({
         id: item.id,
         variant: item.variant_id,

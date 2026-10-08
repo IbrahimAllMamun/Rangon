@@ -165,7 +165,7 @@ export class DiscoveryService {
         url: `/product/${product.slug}`,
         brand: product.brand,
         price: product.priceFrom,
-        image: mediaUrl(firstImage.get(product.id) ?? '', this.env.MEDIA_URL),
+        image: mediaUrl(firstImage.get(product.id) ?? '', this.env.mediaBase),
       })),
       categories: categoryPayload,
       popular: await popular(),

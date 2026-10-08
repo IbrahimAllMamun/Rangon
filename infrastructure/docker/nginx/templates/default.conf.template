@@ -21,15 +21,22 @@
 #
 # `docker compose config` does not validate this file. To check a change:
 #   docker run --rm -e RANGON_DOMAIN=example.test \
-#     -e NGINX_ENVSUBST_FILTER=RANGON_ \
+#     -e RANGON_API_UPSTREAM=api-nest:3000 -e NGINX_ENVSUBST_FILTER=RANGON_ \
+#     --add-host api-nest:127.0.0.1 --add-host web:127.0.0.1 \
 #     -v "$PWD/infrastructure/docker/nginx/templates:/etc/nginx/templates:ro" \
 #     -v "$PWD/infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
 #     nginx:1.27-alpine nginx -t
 # (it fails on the missing certificate, which is expected off the server; a
-# syntax error reports differently and earlier.)
+# syntax error reports differently and earlier. The two `--add-host` flags are
+# not decoration: without them nginx stops at the first upstream it cannot
+# resolve, line 36 or so, and has checked nothing below it.)
 # ---------------------------------------------------------------------------
 
-upstream rangon_api { server api:8000; keepalive 32; }
+# Which API serves: `api-nest:3000` (the NestJS API, the default since
+# ADR-0017) or `api:8000` (Django, with docker-compose.django.yml). Set by the
+# compose file, never by hand, because the web app's own server-side calls
+# have to move with it.
+upstream rangon_api { server ${RANGON_API_UPSTREAM}; keepalive 32; }
 upstream rangon_web { server web:3000; keepalive 32; }
 
 # ---------------------------------------------------------------------------
@@ -94,7 +101,29 @@ server {
         proxy_pass http://rangon_web;
     }
 
-    # --- Django API ---------------------------------------------------------
+    # --- Django, on demand -------------------------------------------------
+    # The Django admin, the OpenAPI schema and its Swagger page are Django's
+    # alone: the NestJS API has none of them. Django is not started with the
+    # stack (`--profile django up -d api worker` starts it), so these resolve
+    # its name per request -- a `proxy_pass` to a variable -- where an
+    # `upstream` block would stop nginx from starting at all while the
+    # container is down. Docker's embedded DNS is at 127.0.0.11.
+    location @django_off {
+        default_type text/plain;
+        return 503 "Django is not running. The admin and the API docs are served on demand:\n  docker compose ... --profile django up -d api worker\n";
+    }
+
+    location ~ ^/(django-admin|api/schema|api/docs)/ {
+        # Restrict to the office network before go-live.
+        # allow 203.0.113.0/24; deny all;
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $rangon_django http://api:8000;
+        proxy_pass $rangon_django;
+        proxy_connect_timeout 3s;
+        error_page 502 504 = @django_off;
+    }
+
+    # --- The API ------------------------------------------------------------
     location /api/ {
         limit_req zone=general burst=60 nodelay;
         proxy_pass http://rangon_api;
@@ -106,24 +135,19 @@ server {
         proxy_pass http://rangon_api;
     }
 
-    location /django-admin/ {
-        # Restrict to the office network before go-live.
-        # allow 203.0.113.0/24; deny all;
-        proxy_pass http://rangon_api;
-    }
-
     # Receipts are staff-only: they are served by
     # GET /api/v1/expenses/{id}/attachment/, which checks who is asking.
-    # Django refuses this prefix on /media/ as well (core.media.PRIVATE_PREFIXES,
-    # D91); this is the second lock, and it keeps holding if /media/ is ever
+    # Both APIs refuse this prefix on /media/ as well (core.media.PRIVATE_PREFIXES
+    # and media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
     # switched to an `alias` for speed. Longest-prefix `^~` wins over /media/.
     location ^~ /media/expenses/ {
         return 404;
     }
 
-    # Uploaded product photography. Django owns these bytes (USE_S3=0 keeps them
-    # on the API's disk); the app returns them as origin-relative paths, so they
-    # must be routed here rather than falling through to Next.
+    # Uploaded product photography. The API owns these bytes (USE_S3=0 keeps them
+    # on its disk, a volume both APIs mount); the app returns them as
+    # origin-relative paths, so they must be routed here rather than falling
+    # through to Next.
     location /media/ {
         proxy_pass http://rangon_api;
         expires 7d;

@@ -1,3 +1,11 @@
+# Read only by a build whose context is the repository's root -- and no build
+# of this project is one. Each image is built from its own directory
+# (`apps/api`, `apps/api-nest`, `apps/web`), and Docker takes the ignore file
+# from the root of the context: `apps/api/.dockerignore` and its two siblings
+# are the files that decide what an image is built from. This one stood alone
+# until 2026-10-08 and protected nothing (D240 in docs/roadmap.md). It is kept
+# for the day something is built from here.
+
 .git
 .github
 .gitignore

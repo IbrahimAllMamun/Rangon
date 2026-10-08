@@ -186,7 +186,7 @@ export class ContentService {
       subtitle: banner.subtitle,
       cta_label: banner.cta_label,
       url: banner.url,
-      image: mediaUrl(banner.image, this.env.MEDIA_URL) || null,
+      image: mediaUrl(banner.image, this.env.mediaBase) || null,
       dismissible: banner.dismissible,
     };
   }
@@ -208,7 +208,7 @@ export class ContentService {
       badge: item.badge || null,
       layout: item.layout,
       description: item.description,
-      image: mediaUrl(item.image, this.env.MEDIA_URL) || null,
+      image: mediaUrl(item.image, this.env.mediaBase) || null,
       children: item.children.map((child) => this.serialiseNode(child)),
     };
   }

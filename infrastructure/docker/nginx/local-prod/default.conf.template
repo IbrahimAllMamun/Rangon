@@ -19,18 +19,25 @@ map $http_x_forwarded_proto $client_proto {
 # Local production routing — one origin, exactly like the deployed topology,
 # minus TLS.
 #
-# This mirrors conf.d/rangon.conf but is a separate file on purpose:
-#   * no `${RANGON_DOMAIN}` — nginx does not expand environment variables in
-#     config files, which is why the shipped config cannot start as written
-#     (docs/roadmap.md, D15)
+# This mirrors templates/default.conf.template but is a separate file on purpose:
+#   * no domain and no certificate paths
 #   * no TLS block and no HSTS, because this listens on plain HTTP on localhost.
 #     HSTS on localhost would poison every other localhost project in your
 #     browser, which is a genuinely annoying thing to undo.
 #
 # The http{} level — gzip, rate-limit zones, proxy headers, JSON access log —
 # comes from the real ../nginx.conf, which is mounted alongside this.
+#
+# A template, rendered at container start (the image runs `envsubst` over
+# /etc/nginx/templates/*.template into conf.d/), for one variable:
+# RANGON_API_UPSTREAM, which API serves. `NGINX_ENVSUBST_FILTER=RANGON_` in the
+# compose file keeps every `$nginx_variable` below as it is written. It was a
+# plain conf.d file until the cutover (ADR-0017) gave it something to vary.
 
-upstream rangon_api { server api:8000; keepalive 32; }
+# Which API serves: `api-nest:3000` (the NestJS API, the default) or
+# `api:8000` (Django, with docker-compose.django.yml). Set by the compose
+# file, never by hand: the web app's own server-side calls move with it.
+upstream rangon_api { server ${RANGON_API_UPSTREAM}; keepalive 32; }
 upstream rangon_web { server web:3000; keepalive 32; }
 
 server {
@@ -105,35 +112,45 @@ server {
         proxy_pass http://rangon_api;
     }
 
-    location /django-admin/ {
+    # --- Django, on demand -------------------------------------------------
+    # The Django admin, its static files, the OpenAPI schema and its Swagger
+    # page are Django's alone, and Django is not started with the stack
+    # (`--profile django up -d api worker` starts it). A `proxy_pass` to a
+    # variable resolves the name per request, through Docker's DNS, where an
+    # `upstream` block would stop nginx from starting while the container is
+    # down.
+    location @django_off {
+        default_type text/plain;
+        return 503 "Django is not running. The admin and the API docs are served on demand:\n  docker compose ... --profile django up -d api worker\n";
+    }
+
+    location ~ ^/(django-admin|static|api/schema|api/docs)/ {
         # Reachable from this laptop and the LAN, never from the public tunnel.
         # The Django admin is the last thing that should face the world.
         if ($via_public_tunnel) { return 403; }
-        proxy_pass http://rangon_api;
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $rangon_django http://api:8000;
+        proxy_pass $rangon_django;
+        proxy_connect_timeout 3s;
+        error_page 502 504 = @django_off;
     }
 
     # Receipts are staff-only: they are served by
     # GET /api/v1/expenses/{id}/attachment/, which checks who is asking.
-    # Django refuses this prefix on /media/ as well (core.media.PRIVATE_PREFIXES,
-    # D91); this is the second lock, and it keeps holding if /media/ is ever
+    # Both APIs refuse this prefix on /media/ as well (core.media.PRIVATE_PREFIXES
+    # and media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
     # switched to an `alias` for speed. Longest-prefix `^~` wins over /media/.
     location ^~ /media/expenses/ {
         return 404;
     }
 
-    # Uploaded product photography. Django owns these bytes (USE_S3=0 keeps them
-    # on the API's disk); the app returns them as origin-relative paths, so they
-    # must be routed here rather than falling through to Next.
+    # Uploaded product photography. The API owns these bytes (USE_S3=0 keeps them
+    # on its disk, a volume both APIs mount); the app returns them as
+    # origin-relative paths, so they must be routed here rather than falling
+    # through to Next.
     location /media/ {
         proxy_pass http://rangon_api;
         expires 7d;
-        access_log off;
-    }
-
-    # WhiteNoise serves these from the API image (hashed + precompressed).
-    location /static/ {
-        proxy_pass http://rangon_api;
-        expires 30d;
         access_log off;
     }
 

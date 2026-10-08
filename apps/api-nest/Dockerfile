@@ -25,16 +25,25 @@ WORKDIR /app
 
 # Patch the OS layer to what Debian has published, as the Django image does
 # (D21 in docs/roadmap.md): the base image lags its own security suite.
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+#
+# `appuser`, uid 1001, is the Django image's user too, on purpose. Uploads
+# live on one volume (`api_media`) that the Django image created and has
+# written as 1001, and this API writes the same files: two uids would leave
+# each unable to replace what the other stored.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1001 appuser \
+    && useradd --system --uid 1001 --gid appuser --create-home appuser \
+    && mkdir -p /app/media \
+    && chown appuser:appuser /app/media
 
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist ./dist
+# Root's, and read-only to the process: nothing here is written at run time.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
 # Django's common-password list, read by accounts/passwords.ts from ../../assets.
-COPY --chown=node:node assets ./assets
-COPY --chown=node:node package.json ./
+COPY assets ./assets
+COPY package.json ./
 
-# The image's own unprivileged user.
-USER node
+USER appuser
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

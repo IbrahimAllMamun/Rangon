@@ -13,6 +13,10 @@ Read these alongside it:
 | [architecture/nest-port.md](architecture/nest-port.md) | the port's status, every ported endpoint, the race checks, every deliberate difference and copied defect |
 | [ADR-0013](architecture/decisions/0013-nestjs-api-alongside-django.md) | why NestJS, why beside Django on one database |
 | [ADR-0014](architecture/decisions/0014-nest-enqueues-celery-jobs.md) | why Nest queues Celery tasks for Django's worker |
+| [ADR-0016](architecture/decisions/0016-nest-jobs-on-pg-boss.md) | the background jobs on pg-boss, in PostgreSQL |
+| [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md) | the cutover: the Nest API serves production, Django starts on demand |
+| [ADR-0018](architecture/decisions/0018-nest-s3-without-an-sdk.md) | uploads in S3, without an SDK |
+| [ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md) | errors to Sentry, through `@sentry/core` alone |
 | [roadmap.md](roadmap.md) | the verification log (one entry per part) and the known-defects table (D-numbers) |
 | [business-rules.md](business-rules.md) | the rules a port must reproduce, and every `DECISION REQUIRED` |
 | [.claude/environment.md](../.claude/environment.md) | the traps of the Windows workstation; §2 below covers the Linux one |
@@ -29,8 +33,10 @@ Read these alongside it:
    review. It compares status, media type, the headers that matter (`Location`, `Allow`,
    `WWW-Authenticate`, request id) and every JSON value. For writes it also compares every row
    written and every job queued.
-3. **Nothing routes to the Nest API yet.** Cutover is per path, at the proxy, and only after that
-   path is green. Until then Django serves everything.
+3. **The Nest API serves production** (ADR-0017, 2026-10-08): the production compose files run
+   it, and start Django only on demand. So a difference between the two APIs is no longer a
+   drift in a side project: whichever way it goes, production has the wrong one. The development
+   stack is still Django's, and `docker-compose.django.yml` puts production back on Django.
 4. **A write path is ported only with its row locks and its concurrency tests.** Stock and money go
    through one transaction with `SELECT … FOR UPDATE` on the rows whose invariant is protected. The
    race is driven across both APIs at once. Then the lock is removed and the test must fail
@@ -64,6 +70,13 @@ Read these alongside it:
 | 2026-10-07 | Which queue replaces Celery? | **pg-boss, in PostgreSQL** (not BullMQ, which the plan had): a job is written in the transaction that decides it. pg-boss owns the `pgboss` schema: ADR-0016 |
 | 2026-10-07 | Where do the jobs run? | **In the API process, separable by a setting** (`RANGON_JOBS_WORKER=0` and `node dist/worker.js`) |
 | 2026-10-07 | When is Celery switched off? | **At the cutover.** Until then `RANGON_JOBS_BACKEND` stays `celery` and no Django code changes |
+| 2026-10-08 | How does traffic move? | **One switch, all paths** (not per path): which compose files are laid together. ADR-0017 |
+| 2026-10-08 | What does Django do afterwards? | **Starts only on demand**: migrations and commands (`run --rm api`), the admin and docs (`--profile django`), going back (`docker-compose.django.yml`) |
+| 2026-10-08 | Which API do the production compose files run by default? | **The Nest API**, from the merge of phase 7 part 5 |
+| 2026-10-08 | Where does a rule change first, after the cutover? | **Still Django**, with its tests, then the port. To be revisited once the Nest API has run in production for a while |
+| 2026-10-08 | "Port S3 media storage to the NestJS API" | done the same day, without an SDK: ADR-0018 |
+| 2026-10-08 | "Report NestJS API errors to Sentry" | done: errors only, through `@sentry/core`, nothing personal sent. ADR-0019 |
+| 2026-10-08 | "Add a .dockerignore for the Django image build" | done, and for the web image, which had the same fault (D240) |
 | 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
 Waiting on the owner, each written up as DECISION REQUIRED in `business-rules.md` with the code's
@@ -182,6 +195,47 @@ PARITY_ONLY="jobs: " PARITY_VERBOSE=1 scripts/nest-parity.sh run
 The ten handlers beside their Celery tasks, each run on demand, with what each wrote and
 sent. `PARITY_ONLY=concurrency PARITY_RACES=sweep` runs the reservation sweep's races.
 
+```bash
+PARITY_S3=1 scripts/nest-parity.sh reset
+```
+
+```bash
+PARITY_S3=1 scripts/nest-parity.sh run
+```
+
+The same stack with both APIs' uploads in an S3 server (`USE_S3=1`; the `s3` service, the
+Versity gateway). Every case, and for every write the object each API stored: its name, bytes,
+type and encoding (`parity/bucket.ts`). **Give `PARITY_S3=1` to `reset` and to every command
+after it**: a database seeded one way holds files the other cannot find, so go back to the
+ordinary stack with a plain `reset`. Run it when a change touches an upload, a stored file's
+URL, or `common/storage.ts` and `common/s3.ts`.
+
+### The stack production runs (run from the repository root)
+
+```bash
+scripts/e2e-local.sh nest
+```
+
+The browser suite (`apps/web/e2e`) against the web app's production build on the Nest API, as CI's
+E2E job runs it: a fresh database, migrated and seeded by Django, everything in containers named
+`rangon-e2e-*`. `django` in place of `nest` is the other leg. About five minutes once the images
+exist. The parity harness compares the API; this is the only check that the shop works through it.
+
+```bash
+DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' scripts/rebuild-local-prod.sh
+```
+
+The local production stack (`-p rangon-prod`, port 4100) built from nothing, as the production
+compose files now start it: `api-nest` serving, Django migrating and seeding in one-off containers.
+**It begins with `down -v` on that project. Never run it on a machine whose `rangon-prod` stack
+holds a shop** -- the owner's does (`docs/operations/upgrading-local-production.md`). Check first:
+`docker volume ls | grep rangon-prod`.
+
+Which API is answering, on any stack: `curl -s -o /dev/null -w '%{http_code}' <origin>/api/v1/` --
+`404` is the Nest API, `401` is Django. Back to Django and forward again:
+`docs/operations/deployment.md`, "Back to Django" (the order matters: stop Django before leaving
+the rollback file out).
+
 ### Django-side checks
 
 Parity settings and fixtures are Python. Lint what you touched inside the running container:
@@ -213,6 +267,17 @@ apps/api-nest/
                               eager run, for the parity stack. `worker.ts` is the worker alone
     jobs/mailer.service.ts, jobs/sms.ts, jobs/sms.service.ts
                               SMTP as Django's settings have it; `notifications.sms`
+    media/media.ts            `/media/<path>`: uploaded files, as `core.media.serve_media` serves
+                              them. A Fastify route, not a controller: a plain Django view
+    common/storage.ts         where an upload is kept: `DiskStorage` or `S3MediaStorage`, one
+                              naming algorithm over both; `mediaStorage(env)` picks
+    common/s3.ts              the bucket: a file's URL as `S3Storage.url` builds it, and the three
+                              signed requests (ADR-0018: no SDK)
+    observability/error-reports.service.ts
+                              `ErrorReports`: what is sent to Sentry, and all that is (ADR-0019).
+                              Called from the envelope filter, the job worker, and for an
+                              exception that ends the process
+    common/mimetypes.ts       Python's `mimetypes` table, printed in the Django image
     auth/view-registry.ts     what the view at a route pattern asks of any request (who may call,
                               how it is throttled): for a method no handler takes
     notifications/            the notices a signed-in user reads and marks read
@@ -294,6 +359,10 @@ apps/api-nest/
                               keeps what a job sent, and refuses on request
     jobs-cases.ts, sweep-concurrency.ts, worker-check.ts
                               each job beside its Celery task; the sweep's races; the worker itself
+    media-cases.ts, fixture_media.py
+                              `/media/`, over files of known names, sizes and times
+    django-only-cases.ts      the pages only Django serves, each a declared difference
+    bucket.ts                 with `PARITY_S3=1`: what each write stored in the bucket
   test/unit/                  unit tests; expected values printed by Django or DRF themselves
 ```
 
@@ -521,6 +590,19 @@ apps/api-nest/
 | The first worker check expected a job waiting to be retried to show `retry_count = 1` | pg-boss counts a retry when the job is delivered again, not when it is owed: a job in `retry` after one failure still says 0 | read `pgboss.job` once by hand before asserting on its columns |
 | A new parity script that imported a helper ran the whole comparison | `run.ts` starts its run when loaded, and `concurrency.ts`, `checkout-cases.ts` and the rest import it | a script that is not part of the run stands alone, as `throttle.ts` and `worker-check.ts` do: its own requests, its own token |
 | The seed's unpaid orders made a weak race for the sweep: 2 ledger rows for 57 lines | a release takes what the line asks for or what the shelf holds, whichever is less, and the seed reserves next to nothing | before a race over seeded rows, count what it will actually move; arrange the shelves so a second release would show |
+| A `HEAD` case crashed the harness: "Parse Error: Data after `Connection: close`" | Django under gunicorn sends a body after a HEAD's headers (the 404 page, for one), which no HTTP client will read; nginx strips it in production | a HEAD of anything with a body cannot be a parity case; say so in "Deliberate differences" and check the port's answer with `nc` |
+| `GET /media/%ff.png` answered 400 from the router where Django answered 404 | Fastify's router refuses a URL whose percent-escapes are not UTF-8 before any route is chosen | `rewriteUrl` can hand the router a readable spelling and keep the original for the handler (`media/media.ts`); try a malformed escape on any route whose path is free text |
+| The cutover "at the proxy" would have moved almost nothing | the web app calls the API server-side over the private network (`API_INTERNAL_URL`), and proxies the browser's calls the same way; nginx's `/api/` carries only webhooks and feeds | before planning a switch, find every place the address of the thing is written -- here two, and they must move together |
+| A plain `up -d` after removing the rollback file left beat running beside a scheduling Nest API | compose does not stop a service whose profile has just gone inactive; it simply stops managing it | a procedure that removes services says `stop` first, and was tried in that order |
+| The browser suite failed one test on the Nest API and none on Django | eleven tests sign in from one address, the limit is ten a minute, and the faster API fits all eleven inside the minute | a suite that passes "by being slow" is a limit about to be hit: count what it spends against each throttle. The suite now keeps one session per account |
+| An ordinary upgrade guide would have broken the one shop that exists | the local production stack on the owner's machine holds real data and still runs Django; the roadmap's "no live environment" did not mean "nothing running" | read the operations docs for what is actually deployed before saying nothing is |
+| Django under `USE_S3=1` kept writing uploads to disk in the parity stack | `config/settings/dev.py` sets `STORAGES` back to `FileSystemStorage` whatever `USE_S3` says, and the parity settings inherit it (D237) | before comparing a setting's effect, print what Django actually resolved (`type(default_storage)`), not what the environment says |
+| The S3 server the development stack names could not be pulled | MinIO's images are no longer published (`minio/minio`, on Docker Hub and Quay) | an image named `:latest` in a compose file is a dependency nobody is watching; the parity stack pins `versity/versitygw` by version |
+| Three URL rows differed from botocore, all for one two-letter bucket name | botocore addresses a name S3 would never accept by rules of its own | split the reference set by what can exist; pin what differs for the impossible ones rather than copy it |
+| `fetch` would have handed back a stored object changed | it unpacks a body whose `Content-Encoding` says gzip, and an object stored under a `.gz` name carries that header | read bytes that must come back as stored with `node:http`, and test it with a body that is not valid gzip |
+| A stored object's fallback type was `binary/octet-stream` in the port and `application/octet-stream` in Django | written from memory of S3's own default; django-storages sets its own, and no existing case sent a file with no type and an extension Python's table lacks | a constant copied from memory is a guess until a case reaches it: for each fallback in the code, write the case that takes it (three receipt cases did) |
+| "As Django does" had nothing behind it for Sentry | `prod.py` sets `sentry_sdk` up inside a `try` that swallows `ImportError`, and the package is in no requirements file: the configuration reads as working and does nothing (D241) | before porting an integration, check it runs on the Django side: `pip show` in the production image, not the settings file |
+| A chain of verification steps had to be stopped half way, and the kill took the wrong shell with it | `pgrep -f <text>` matches the command that contains the text -- the one doing the killing | kill by process id, read from `pgrep` in an earlier command |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 
@@ -567,22 +649,24 @@ Every part of a phase updates, in the same branch:
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | done 2026-10-07 | merged to `main` (PR #88), ten parts (the list is in `nest-port.md`, "Phase 6: the back office") |
-| 7 | in progress on `phase/nest-7-reports-jobs-cutover` (parts 1 to 3 merged to `main` in PR #89; part 4 has a PR of its own), five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 4 -- the audit log, notifications, the reports, DRF's `initial()` on every view, the pg-boss queue, and the ten jobs with their worker and schedule -- done 2026-10-07 | next: part 5, the cutover per path at the proxy |
+| 7 | done 2026-10-08, five parts (the list is in `nest-port.md`, "Phase 7"): the audit log, notifications, the reports, DRF's `initial()` on every view, the pg-boss queue, the ten jobs with their worker and schedule, and the cutover. Parts 1 to 3 merged in PR #89, part 4 in PR #90; part 5 is on `phase/nest-7-reports-jobs-cutover` until its PR | the port's phases are finished; what follows is below |
 
-Before the next part:
+After the port:
 
-1. Part 5 switches the jobs over, and that has an order. While Django serves any path it
-   queues for Celery, so Celery's worker stays until the last path has moved. The schedule
-   must fire in exactly one place: start the Nest worker with `RANGON_JOBS_SCHEDULE=0` while
-   beat runs, and stop beat in the same step that turns the schedule on -- two sweeps at once
-   are harmless to stock but both count (D234), and two digests are two emails. Set
-   `RANGON_JOBS_BACKEND=pgboss` on the API only once a worker is up to take what it queues;
-   the database role needs `CREATE` on the database for the `pgboss` schema.
-2. Part 5, the cutover, must account for the paths Django serves that are not in the port's
-   tables: the router's API root (`GET /api/v1/`, a 401 or a map of the routes), `/api/schema/`,
-   `/api/docs/`, `/django-admin/` and `/media/`.
-3. The owner should still see D221 first, then D166, D149, D158, D164, D167, D204, D207 and
-   D222, and the decisions listed in §2.
+1. **Every change is now a change to production twice.** The rule stands (Django first, with
+   its tests, then the port, then parity), and CI runs the comparison both ways and the browser
+   suite on both APIs. A change to an endpoint that skips the port ships the old behaviour.
+2. **One thing is still unmeasured**: what happens to the Nest API when Redis is down (the
+   throttles and the page cache live there). Object storage (ADR-0018) and Sentry (ADR-0019)
+   were the other two limits the cutover left, and were done on 2026-10-08.
+3. **A provider written for Django needs its twin.** An SMS gateway (`docs/operations/sms.md`)
+   or a payment gateway registered in Django alone is never called in production: the Nest API
+   has its own registries (`jobs/sms.service.ts`, `payments/providers.ts`).
+4. **The owner's standing question**: whether Django stays the place a rule changes first once
+   the Nest API has run in production for a while. Until that is answered, do not remove
+   Django code, and do not let the parity harness rot.
+5. The owner should still see D221 first, then D233, D166, D149, D158, D164, D167, D204, D207
+   and D222, and the decisions listed in §2.
 
 ### Checklist for a part
 
@@ -595,7 +679,8 @@ Before the next part:
 [ ] races across both APIs; each fails with the port's lock removed
 [ ] throttle scenario if a scope changed
 [ ] unit tests with values Django printed
-[ ] five Nest gates at 0; reset + run exit 0; ruff clean on touched Python
+[ ] five Nest gates at 0; reset + run + run-jobs exit 0; ruff clean on touched Python
+[ ] scripts/e2e-local.sh nest (and django) if anything the web app calls changed
 [ ] defects numbered, copied or fixed per §7; differences declared twice
 [ ] nest-port.md, roadmap entry, ADR/business rules as needed; this file if a rule changed
 [ ] committed on the phase branch; no push until asked
