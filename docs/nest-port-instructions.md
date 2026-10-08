@@ -17,6 +17,8 @@ Read these alongside it:
 | [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md) | the cutover: the Nest API serves production, Django starts on demand |
 | [ADR-0018](architecture/decisions/0018-nest-s3-without-an-sdk.md) | uploads in S3, without an SDK |
 | [ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md) | errors to Sentry, through `@sentry/core` alone |
+| [ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md) | Django is removed in steps; the owner's four decisions, and when a rule stops changing in Django first |
+| [architecture/django-removal-plan.md](architecture/django-removal-plan.md) | the eight steps, and which are reversible |
 | [roadmap.md](roadmap.md) | the verification log (one entry per part) and the known-defects table (D-numbers) |
 | [business-rules.md](business-rules.md) | the rules a port must reproduce, and every `DECISION REQUIRED` |
 | [.claude/environment.md](../.claude/environment.md) | the traps of the Windows workstation; §2 below covers the Linux one |
@@ -77,6 +79,8 @@ Read these alongside it:
 | 2026-10-08 | "Port S3 media storage to the NestJS API" | done the same day, without an SDK: ADR-0018 |
 | 2026-10-08 | "Report NestJS API errors to Sentry" | done: errors only, through `@sentry/core`, nothing personal sent. ADR-0019 |
 | 2026-10-08 | "Add a .dockerignore for the Django image build" | done, and for the web image, which had the same fault (D240) |
+| 2026-10-08 | Remove Django? The plan's four questions | **In steps** (ADR-0020). One month on the real shop before the first Drizzle migration; the Django admin and the API docs dropped; the demo seed replaced by a database snapshot; the `DJANGO_*` settings and the `api-nest` service keep their names |
+| 2026-10-08 | Where does a rule change first, now? | **Still Django, until the first Drizzle migration** (the plan's step 6.4), which needs the owner's word. §1 stands as written until then |
 | 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
 Waiting on the owner, each written up as DECISION REQUIRED in `business-rules.md` with the code's
