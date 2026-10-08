@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 
 import { ENV, Env } from '../config/env';
+import { ErrorReports } from '../observability/error-reports.service';
 import { JobHandlers, RetryJob } from './job-handlers.service';
 import { PgBossTransport } from './pg-boss.service';
 import { JOB_QUEUES, JOB_SCHEDULE } from './queues';
@@ -33,6 +34,7 @@ export class JobWorker implements OnApplicationBootstrap {
   constructor(
     private readonly handlers: JobHandlers,
     private readonly pgBoss: PgBossTransport,
+    private readonly reports: ErrorReports,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -43,7 +45,9 @@ export class JobWorker implements OnApplicationBootstrap {
       // One job at a delivery: what the handler answers is that job's output.
       await boss.work<{ args?: unknown[] }>(task, { pollingIntervalSeconds: 2 }, async (jobs) => {
         let output: JobOutput = { result: null };
-        for (const job of jobs) output = await this.work(task, job.data.args ?? []);
+        for (const job of jobs) {
+          output = await this.work(task, job.data.args ?? [], job.retryCount);
+        }
         return output;
       });
     }
@@ -61,21 +65,31 @@ export class JobWorker implements OnApplicationBootstrap {
   }
 
   /**
-   * One delivery of a job. A fault its task retries is raised, for pg-boss
-   * to deliver the job again as often and as far apart as the queue says.
-   * Any other failure is logged and the job closed, with the reason on its
-   * row: Celery fails such a task once and does not run it again.
+   * One delivery of a job; `retries` is how many times it has been delivered
+   * before. A fault its task retries is raised, for pg-boss to deliver the
+   * job again as often and as far apart as the queue says. Any other failure
+   * is logged and the job closed, with the reason on its row: Celery fails
+   * such a task once and does not run it again.
+   *
+   * A failure that will not be tried again is reported (ADR-0019): the kind
+   * that is never retried, at once; the kind that is, on the delivery that
+   * spends its last retry. The attempts in between are not errors yet.
    */
-  async work(task: string, args: unknown[]): Promise<JobOutput> {
+  async work(task: string, args: unknown[], retries = 0): Promise<JobOutput> {
     try {
       return { result: await this.handlers.run(task, args) };
     } catch (error) {
       if (error instanceof RetryJob) {
-        throw error.fault instanceof Error ? error.fault : new Error(String(error.fault));
+        const fault = error.fault instanceof Error ? error.fault : new Error(String(error.fault));
+        if (retries >= (JOB_QUEUES[task]?.retryLimit ?? 0)) {
+          this.reports.job(fault, task, retries + 1);
+        }
+        throw fault;
       }
       this.logger.error(
         `The job ${task} failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
       );
+      this.reports.job(error, task, retries + 1);
       return { result: null, error: error instanceof Error ? error.message : String(error) };
     }
   }

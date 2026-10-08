@@ -50,6 +50,9 @@ services:
       DJANGO_DEBUG: "0"
       # As for Django below: one proxy in front, the nginx of this file.
       DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
+      # The image's own tag, unless told otherwise: an error reported to Sentry
+      # names the release it came from (ADR-0019).
+      RANGON_RELEASE: ${RANGON_RELEASE:-${TAG}}
     read_only: true
     tmpfs:
       - /tmp

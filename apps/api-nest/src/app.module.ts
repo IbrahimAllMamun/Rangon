@@ -22,6 +22,7 @@ import { InventoryAdminModule } from './inventory/admin/inventory-admin.module';
 import { FinanceModule } from './finance/finance.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PosModule } from './pos/pos.module';
+import { ErrorReports } from './observability/error-reports.service';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PurchasingModule } from './purchasing/purchasing.module';
 import { RedisService } from './redis/redis.service';
@@ -51,6 +52,7 @@ export class CoreModule {
         Revalidation,
         Throttles,
         ViewRegistry,
+        ErrorReports,
       ],
       exports: [
         ENV,
@@ -65,6 +67,7 @@ export class CoreModule {
         Revalidation,
         Throttles,
         ViewRegistry,
+        ErrorReports,
       ],
     };
   }

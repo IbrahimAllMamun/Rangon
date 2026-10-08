@@ -26,6 +26,7 @@ import {
   PermissionDenied,
   RouteNotMatched,
 } from './errors';
+import { ErrorReports } from '../observability/error-reports.service';
 import { NOT_FOUND_PAGE } from './http';
 
 /**
@@ -52,6 +53,7 @@ export class EnvelopeFilter implements ExceptionFilter {
     private readonly permissions: RolePermissions,
     private readonly views: ViewRegistry,
     private readonly throttles: Throttles,
+    private readonly reports: ErrorReports,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -191,6 +193,7 @@ export class EnvelopeFilter implements ExceptionFilter {
     //    should have caught first. Log loudly, tell the client nothing useful.
     if (isIntegrityViolation(exception)) {
       this.logger.error(`Integrity error escaped the service layer: ${String(exception)}`);
+      this.reports.request(exception, request, 409);
       return {
         status: 409,
         code: 'CONFLICT',
@@ -204,6 +207,7 @@ export class EnvelopeFilter implements ExceptionFilter {
       `Unhandled exception on ${request.method} ${request.url}`,
       exception instanceof Error ? exception.stack : String(exception),
     );
+    this.reports.request(exception, request, 500);
     return {
       status: 500,
       code: 'SERVER_ERROR',

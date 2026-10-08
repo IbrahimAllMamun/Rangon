@@ -51,6 +51,10 @@ x-api-env: &api-env
   JWT_REFRESH_TOKEN_DAYS: ${JWT_REFRESH_TOKEN_DAYS:-14}
   PAYMENT_DEFAULT_PROVIDER: ${PAYMENT_DEFAULT_PROVIDER:-manual}
   SENTRY_DSN: ${SENTRY_DSN:-}
+  # What a reported error says it came from. Both were read by the settings
+  # and passed by nothing until 2026-10-08.
+  RANGON_ENV: ${RANGON_ENV:-production}
+  RANGON_RELEASE: ${RANGON_RELEASE:-}
   WEB_REVALIDATE_URL: ${WEB_REVALIDATE_URL:-}
   WEB_REVALIDATE_SECRET: ${WEB_REVALIDATE_SECRET:-}
 

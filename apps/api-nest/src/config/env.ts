@@ -131,6 +131,13 @@ const schema = z.object({
   S3_ACCESS_KEY: z.string().default(''),
   S3_SECRET_KEY: z.string().default(''),
   S3_REGION: z.string().default(''),
+
+  // Error reporting (`config/settings/prod.py`): on under production settings
+  // when the DSN is set. The environment and the release name what an event
+  // came from (observability/error-reports.service.ts, ADR-0019).
+  SENTRY_DSN: z.string().default(''),
+  RANGON_ENV: z.string().default(''),
+  RANGON_RELEASE: z.string().default(''),
 });
 
 type Parsed = z.infer<typeof schema>;
@@ -154,6 +161,8 @@ export interface Env extends Parsed {
   s3: S3Settings | null;
   /** What a stored file's URL is built from: `MEDIA_URL`, or the bucket. */
   mediaBase: MediaBase;
+  /** Where unhandled errors are reported; null when they are only logged. */
+  sentry: { dsn: string; environment: string; release: string } | null;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -216,6 +225,16 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     jobsSchedule: jobsWorker && env.RANGON_JOBS_SCHEDULE,
     s3,
     mediaBase: s3 ?? env.MEDIA_URL,
+    // prod.py alone sets Sentry up: `SENTRY_DSN` under any other settings is ignored.
+    sentry:
+      production && env.SENTRY_DSN.trim()
+        ? {
+            dsn: env.SENTRY_DSN.trim(),
+            // `env("RANGON_ENV", "production")` and `env("RANGON_RELEASE", "")`.
+            environment: env.RANGON_ENV.trim() || 'production',
+            release: env.RANGON_RELEASE.trim(),
+          }
+        : null,
     throttlingDisabled: env.DJANGO_SETTINGS_MODULE.endsWith('.parity'),
     jwtSigningKey: env.JWT_SIGNING_KEY || env.DJANGO_SECRET_KEY,
     // dev.py: ALLOWED_HOSTS = ["*"] and CORS_ALLOW_ALL_ORIGINS = True.

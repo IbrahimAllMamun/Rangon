@@ -23,7 +23,15 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "."
+    "rootDir": ".",
+    // `@sentry/core` publishes its server half as a subpath export, which
+    // "moduleResolution": "node" does not read. Node itself does: this is for
+    // the type checker alone, and nothing is rewritten in what is emitted.
+    "paths": {
+      "@sentry/core/server": [
+        "./node_modules/@sentry/core/build/types/server"
+      ]
+    }
   },
   "include": [
     "src/**/*.ts",

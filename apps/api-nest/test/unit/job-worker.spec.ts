@@ -2,6 +2,7 @@ import { loadEnv } from '../../src/config/env';
 import { type JobHandlers, RetryJob } from '../../src/jobs/job-handlers.service';
 import { JobWorker } from '../../src/jobs/job-worker.service';
 import type { PgBossTransport } from '../../src/jobs/pg-boss.service';
+import type { ErrorReports } from '../../src/observability/error-reports.service';
 import { JOB_QUEUES, JOB_SCHEDULE } from '../../src/jobs/queues';
 import { isGsm7, smsBodyFor, smsSegments, trackingUrl } from '../../src/jobs/sms';
 
@@ -22,7 +23,7 @@ describe('the worker settings', () => {
 });
 
 describe('JobWorker', () => {
-  type Deliver = (jobs: { data: { args?: unknown[] } }[]) => Promise<unknown>;
+  type Deliver = (jobs: { data: { args?: unknown[] }; retryCount?: number }[]) => Promise<unknown>;
   const make = (settings: Record<string, string> = {}) => {
     const run = jest.fn<Promise<string>, [string, unknown[]]>();
     const boss = {
@@ -30,14 +31,16 @@ describe('JobWorker', () => {
       schedule: jest.fn().mockResolvedValue(undefined),
     };
     const pgBoss = { start: jest.fn().mockResolvedValue(boss) };
+    const reports = { job: jest.fn() };
     const worker = new JobWorker(
       { run } as unknown as JobHandlers,
       pgBoss as unknown as PgBossTransport,
+      reports as unknown as ErrorReports,
       loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', ...settings }),
     );
     // Its failures are logged; a test need not print them.
     jest.spyOn(worker['logger'], 'error').mockImplementation(() => undefined);
-    return { worker, run, boss, pgBoss };
+    return { worker, run, boss, pgBoss, reports };
   };
 
   it('does nothing in a process that is not a worker: pg-boss is not even started', async () => {
@@ -95,6 +98,61 @@ describe('JobWorker', () => {
     await expect(worker.work(EMAIL, [])).resolves.toEqual({
       result: null,
       error: 'No handler for the job x.',
+    });
+  });
+
+  describe('what is reported (ADR-0019)', () => {
+    it('reports a failure that is never retried, at once, as the first attempt', async () => {
+      const { worker, run, reports } = make();
+      const failure = new Error('No handler for the job x.');
+      run.mockRejectedValueOnce(failure);
+      await worker.work(EMAIL, ['order-1']);
+      expect(reports.job).toHaveBeenCalledTimes(1);
+      expect(reports.job).toHaveBeenCalledWith(failure, EMAIL, 1);
+    });
+
+    it('does not report a fault that will be tried again', async () => {
+      const { worker, run, reports } = make();
+      for (const retries of [0, 1, 2]) {
+        run.mockRejectedValueOnce(new RetryJob(new Error('refused')));
+        await expect(worker.work(EMAIL, ['order-1'], retries)).rejects.toThrow('refused');
+      }
+      expect(reports.job).not.toHaveBeenCalled();
+    });
+
+    it('reports it on the delivery that spends the last retry', async () => {
+      const { worker, run, reports } = make();
+      const fault = new Error('refused');
+      run.mockRejectedValueOnce(new RetryJob(fault));
+      await expect(worker.work(EMAIL, ['order-1'], 3)).rejects.toBe(fault);
+      expect(reports.job).toHaveBeenCalledWith(fault, EMAIL, 4);
+    });
+
+    it('reports a fault at once where the task never retries', async () => {
+      const { worker, run, reports } = make();
+      run.mockRejectedValueOnce(new RetryJob(new Error('refused')));
+      await expect(worker.work(SWEEP, [])).rejects.toThrow('refused');
+      expect(reports.job).toHaveBeenCalledWith(expect.any(Error), SWEEP, 1);
+    });
+
+    it('is told which delivery this is by the queue', async () => {
+      const { worker, run, boss, reports } = make();
+      await worker.onApplicationBootstrap();
+      const deliver = boss.work.mock.calls.find(([task]) => task === EMAIL)?.[2] as Deliver;
+      run.mockRejectedValueOnce(new RetryJob(new Error('refused')));
+      await expect(deliver([{ data: { args: ['order-1'] }, retryCount: 3 }])).rejects.toThrow(
+        'refused',
+      );
+      expect(reports.job).toHaveBeenCalledWith(expect.any(Error), EMAIL, 4);
+    });
+
+    it('reports nothing for a job that succeeds, and nothing from the eager run', async () => {
+      const { worker, run, reports } = make();
+      run.mockResolvedValueOnce('sent');
+      await worker.work(EMAIL, ['order-1']);
+      run.mockRejectedValueOnce(new Error('boom'));
+      await worker.apply(EMAIL, ['order-1']);
+      expect(reports.job).not.toHaveBeenCalled();
     });
   });
 
