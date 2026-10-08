@@ -14,6 +14,14 @@ export interface KnownDifference {
 export const KNOWN_DIFFERENCES: KnownDifference[] = [
   {
     reason:
+      "Django's own pages (ADR-0017): the router's index (`/api/v1/`, `/api/v1/pos/`), the OpenAPI " +
+      'schema and its Swagger page (`/api/schema/`, `/api/docs/`) and the Django admin are not in the ' +
+      'Nest API, which answers each 404. Nothing in the web app calls them; Django serves the last ' +
+      'three on demand.',
+    appliesTo: (testCase) => testCase.name.startsWith('django only: '),
+  },
+  {
+    reason:
       "401 message: Django prints the Python repr of SimpleJWT's error dict " +
       '("{\'detail\': ErrorDetail(string=...") -- the Nest API sends the words inside it. Status and code match.',
     appliesTo: (_testCase, difference) =>

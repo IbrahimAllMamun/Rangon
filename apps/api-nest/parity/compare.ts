@@ -78,7 +78,15 @@ export function compare(django: Captured, nest: Captured, sentRequestId?: string
     'allow',
     'www-authenticate',
     ...(download
-      ? ['content-disposition', 'cache-control', 'x-content-type-options', 'content-length']
+      ? [
+          'content-disposition',
+          'cache-control',
+          'x-content-type-options',
+          'content-length',
+          // A file served from disk also says when it was written and how it is packed.
+          'last-modified',
+          'content-encoding',
+        ]
       : []),
   ]) {
     if ((django.headers[header] ?? null) !== (nest.headers[header] ?? null)) {

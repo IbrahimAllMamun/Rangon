@@ -22,7 +22,9 @@ import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
 import { adminConcurrencyChecks } from './admin-concurrency.ts';
 import { inventoryConcurrencyChecks } from './inventory-concurrency.ts';
+import { djangoOnlyCases } from './django-only-cases.ts';
 import { jobsCases } from './jobs-cases.ts';
+import { mediaCases } from './media-cases.ts';
 import { jobsConcurrencyChecks } from './jobs-concurrency.ts';
 import { contentConcurrencyChecks } from './content-concurrency.ts';
 import { merchandisingConcurrencyChecks } from './merchandising-concurrency.ts';
@@ -835,6 +837,8 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await notificationsCases()));
   cases.push(...(await reportsCases()));
   cases.push(...(await jobsCases()));
+  cases.push(...mediaCases());
+  cases.push(...djangoOnlyCases());
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
