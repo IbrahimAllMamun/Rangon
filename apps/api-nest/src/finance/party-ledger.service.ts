@@ -24,7 +24,7 @@ const P = '"purchasing_purchaseorder"';
 const S = '"purchasing_supplier"';
 
 /** Each model's columns, in its fields' order: what `select_related` selects. */
-const ORDER_COLUMNS = [
+export const ORDER_COLUMNS = [
   'id',
   'created_at',
   'updated_at',

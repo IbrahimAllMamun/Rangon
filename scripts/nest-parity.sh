@@ -4,6 +4,9 @@
 #   scripts/nest-parity.sh up       build and start both APIs on one database
 #   scripts/nest-parity.sh seed     demo data plus the parity fixture
 #   scripts/nest-parity.sh run      compare every case; non-zero on a difference
+#   scripts/nest-parity.sh run-jobs the same, with the Nest API queuing its jobs in pg-boss (ADR-0016),
+#                                   then `worker`
+#   scripts/nest-parity.sh worker   the Nest worker on what the API queues: run, retried, closed
 #   scripts/nest-parity.sh reset    DESTRUCTIVE to the parity database only: drop it, then up + seed
 #   scripts/nest-parity.sh down     stop, keeping the database
 #
@@ -56,12 +59,35 @@ case "${1:-}" in
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_audit.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_notifications.py
     "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_reports.py
+    "${compose[@]}" exec -T -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= django python manage.py shell < apps/api-nest/parity/fixture_jobs.py
     ;;
   run)
     "${compose[@]}" run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" -e PARITY_RACES="${PARITY_RACES:-}" parity
     ;;
+  run-jobs)
+    # The throttled pair's trick, for the same reason: a container left from
+    # before a reset still names the network that reset removed.
+    "${compose[@]}" --profile jobs up -d --build --force-recreate nest-jobs
+    wait_for http://127.0.0.1:8630/api/health/
+    "${compose[@]}" --profile jobs run --rm -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" -e PARITY_RACES="${PARITY_RACES:-}" parity-jobs
+    bash "$0" worker
+    ;;
+  worker)
+    # The worker itself, on what the Nest API queues: run, retried, closed.
+    # Whatever the comparison left queued goes first; the worker would run it.
+    "${compose[@]}" --profile jobs up -d nest-jobs
+    wait_for http://127.0.0.1:8630/api/health/
+    "${compose[@]}" exec -T db psql -q -U rangon -d rangon -c 'DELETE FROM pgboss.job'
+    "${compose[@]}" --profile worker up -d --force-recreate nest-worker
+    status=0
+    "${compose[@]}" --profile jobs run --rm parity-jobs node parity/worker-check.ts || status=$?
+    "${compose[@]}" --profile worker rm -sf nest-worker
+    exit "$status"
+    ;;
   reset)
-    "${compose[@]}" down -v --remove-orphans
+    # Every profile: a container left from one of them still names the network
+    # this removes, and the next `up` of it fails.
+    "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle down -v --remove-orphans
     bash "$0" up
     bash "$0" seed
     ;;
@@ -69,6 +95,6 @@ case "${1:-}" in
     "${compose[@]}" down
     ;;
   *)
-    sed -n '2,11p' "$0"; exit 2
+    sed -n '2,13p' "$0"; exit 2
     ;;
 esac

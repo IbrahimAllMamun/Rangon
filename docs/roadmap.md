@@ -481,6 +481,132 @@ is still open and tracked in
 
 ## Verification log
 
+### The NestJS API, phase 7 part 4b: the ten jobs, the worker and the schedule, 2026-10-07
+
+Asked for: part 4, the background jobs; this is its second half. Ported: every Celery task
+as a Nest handler (`JobHandlers`), the mail and SMS senders they use, the worker that runs
+them from the pg-boss queue (`JobWorker`, and `src/worker.ts` for a worker of its own), and
+beat's schedule. **Nothing is switched on**: the port still queues for Celery unless
+`RANGON_JOBS_BACKEND=pgboss`, and Celery still does the work until the cutover
+([ADR-0016](architecture/decisions/0016-nest-jobs-on-pg-boss.md)).
+
+```text
+parity, jobs queued for Celery (run) .......... 12138/12138 (63 new), 125 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12138/12138, the same 125
+concurrency ................................... 211/211 with Celery (3 new: the sweep); 214/214 with pg-boss
+worker check (new) ............................ 5/5, of the Nest worker alone
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1316 passed (47 new: the worker's retries and its schedule, the
+                                                schedule switch, SMS segments and wording against what Django prints)
+tsc / eslint / prettier / build ............... clean
+ruff (the parity gateway, fixture_jobs.py) .... clean
+```
+
+**How a job is compared with its task.** The parity stack has no worker -- a queued job
+stays queued, to be read -- so each job is run on demand. Both APIs carry a route, in the
+parity stack only, that runs one job now and says what it came to: Django's calls
+`task.apply()`, Celery's eager run with every retry taken at once, and Nest's calls
+`JobWorker.apply`, which does the same. Sixty-two cases compare the word each returns
+(`sent`, `suppressed`, `released:<n>`, `digest:<n>`), the rows it wrote, the jobs it queued in
+turn, and what it sent. For that last there is a sink (`parity/sink.ts`): one container that
+is a mail server and the web app's revalidation route to both APIs, keeping each message as
+a reader sees it. It can be told to refuse, which is how the retries are seen: four attempts
+at a refused email from each side, three at a refused revalidation. A sixty-third case
+compares the schedule itself -- beat's five lines, its clock, the time limit, and every
+registered task with the retries it asks for, read off Celery, beside the port's own tables.
+
+**The worker itself** is checked by `scripts/nest-parity.sh worker`, which `run-jobs` now
+ends with: the image started as `node dist/worker.js` on what the Nest API queues. A banner
+added through the API has its revalidation run; a queued email is sent; an email the server
+refuses is left due in two minutes with three retries in hand, and sent on its first retry
+once the server is back; an email for a key that is no key is closed with the reason on its
+row and not tried again. The parity worker fires no schedule (`RANGON_JOBS_SCHEDULE=0`, a
+setting added for a worker that runs beside beat): the sweep would cancel the fixtures'
+orders every five minutes. With the schedule on, seen once by hand: `pgboss.schedule` held
+the five lines under `Asia/Dhaka`, and the sweep fired at the next fifth minute and closed
+as `released:64`.
+
+**The sweep is the one job that moves stock**, so it has races. Django's task and the Nest
+handler at once, over every unpaid order past the window -- each shelf they name first given
+what their lines ask for and five over -- cancel each order once and give each line back
+once: every shelf is left with its five. And an order confirmed while a sweep waits on its
+row is cancelled all the same, by either API: that is D233, below, copied.
+
+Found in Django, and copied:
+
+- **D233.** The sweep picks its orders, then locks them one at a time, and the status machine
+  does not ask again whether the order is still pending: one paid for in between is
+  cancelled as "PAYMENT_TIMEOUT" and its stock released, with the payment taken.
+- **D234.** `transition` answers an order already cancelled as done, and the sweep counts it:
+  two sweeps at once report more released than were (`released:53` and `released:56` for 56
+  orders). The schedule firing in two places would do it.
+
+Lessons, in `nest-port-instructions.md`: a Celery task run from a view carries the view's
+audit context, so the stand-in runs it in a context of its own; pg-boss counts a retry when
+it is delivered, not when it is owed; and a script that imports `run.ts` runs the whole
+comparison, so the worker check stands alone, as the throttle check does.
+
+Not done, and next: part 5, the cutover -- with Celery switched off, `RANGON_JOBS_BACKEND`
+set, and the schedule fired in exactly one place.
+
+### The NestJS API, phase 7 part 4a: the job queue, on pg-boss, 2026-10-07
+
+Asked for: part 4, the background jobs. The owner was asked three things first and decided
+them ([ADR-0016](architecture/decisions/0016-nest-jobs-on-pg-boss.md)): the queue is
+**pg-boss, in PostgreSQL** -- not BullMQ, which the plan had; jobs run **in the API process,
+separable by a setting**; and **Celery is switched off at the cutover**, not before. This is
+the first half: the queue and the hand-over to it. The ten jobs themselves, and the worker
+that runs them, are part 4b.
+
+```text
+parity, jobs queued for Celery (run) .......... 12075/12075 (none new), 125 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12075/12075, the same 125
+concurrency ................................... 208/208 with Celery; 211/211 with pg-boss (3 new, of the Nest API alone)
+throttle-check ................................ 17/17 (none new)
+nest unit tests ............................... 1269 passed (9 new: the queues against what Celery reports; the
+                                                settings; the hand-over, with Celery and with pg-boss)
+tsc / eslint / prettier / build ............... clean
+```
+
+**Nothing is switched on.** `RANGON_JOBS_BACKEND` is `celery` unless set, and with it the port
+queues exactly as it did: the ordinary run is unchanged. Set to `pgboss`, a job is a row in
+PostgreSQL, and one decided inside a transaction is written in that transaction -- a
+checkout's email and SMS, and the low-stock alert of any stock movement. That is what pg-boss
+was chosen for: an order that commits has its email queued, one that rolls back has queued
+nothing, and there is no moment between the two for a broker to be down in (D116).
+
+**How it is proven.** `scripts/nest-parity.sh run-jobs` runs the whole comparison a second
+time against a Nest API that queues in pg-boss. Every case that compares the jobs each API
+queued then compares Celery's messages with pg-boss's rows, by task and arguments. And three
+checks, of the Nest API alone, show the transaction: a checkout that commits has its three
+jobs under the order's own transaction id; the same checkout, refused after its low-stock
+alert was written (the harness takes the coupon's last use while the checkout waits on the
+coupon's row), leaves nothing queued and nothing held; a write-off into low stock has its
+alert under the write-off's id. With the port made to queue outside the transaction all three
+fail, and the refused checkout leaves an alert for an order that does not exist.
+
+One thing those checks taught: the ledger entry and the shelf are written under a savepoint,
+and a subtransaction has a transaction id of its own, so "the same `xmin`" has to be asked of
+a row written at the top level -- the audit entry.
+
+**pg-boss owns a schema.** `pgboss`, created the first time a process starts with that
+backend. It is the one exception to "Django owns the schema", the owner's, and bounded in the
+ADR: nothing of Django's is in it and nothing of pg-boss's is outside it. CLAUDE.md says so
+now. Two dependencies were added at exact versions, `pg-boss` 12.37.0 and `nodemailer`
+10.0.16 (for part 4b's mail); the ADR says why each.
+
+**Running everything twice found two more orders left to the heap**, neither to do with jobs
+-- the second run is the first on a database a full run has already churned. A new stock
+count lists its lines as PostgreSQL returns the branch's stock rows, which the restore before
+each API's request moves: the case now compares a document's lines by SKU. And the site-pages
+list selected only the page's columns, so PostgreSQL dropped the join to the editor's account
+and pages that tie under `ordering=-is_published` came back another way than Django's
+statement gives -- the audit log's lesson again, in a phase 4 port. Its statement is Django's
+now.
+
+Not done, and next: part 4b -- the ten handlers, each compared with its Celery task on
+demand; the mail and SMS senders; the worker and the schedule.
+
 ### The NestJS API, phase 7 part 3: the reports, 2026-10-07
 
 Asked for: part 3. Ported: the eleven views of `reports.api.views` over `reports.services` --
@@ -4668,6 +4794,8 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D230 | **A guest's order writes notices nobody can read.** `notify_customer` creates its `Notification` with `user = order.customer.user`, which is `None` for a customer with no account -- every guest checkout. The model says a null user means "addressed to a permission group", but `permission_code` is left blank, and `NotificationViewSet` lists `user=request.user` and nothing else: the row is in nobody's list and nobody's unread count, is never marked read, and stays. The email and the SMS, which are what a guest receives, are queued separately and are unaffected. *Found reading `get_queryset` against the rows the demo seed leaves: fourteen `ORDER_CONFIRMED` notices with no user and no permission code.* | Low | Copied by the port, which has written the same row since phase 3. Write no row when there is no account. `notifications/services.py` |
 | D231 | **The reports' CSV renderer renders nothing, and four things follow.** `reports.api.views.CSVRenderer.render` returns its data: it exists so that `?format=csv` negotiates, and the export itself is a hand-built `HttpResponse`. Every other answer that negotiated CSV is handed to `HttpResponse.content` as a dict, which joins whatever iterating it yields -- its keys. Measured in both APIs: (1) any refusal under `?format=csv` -- a bad date, an unknown branch, `RolePermission`'s 403, a 401, a 405 -- is the five letters `error` as `text/csv` with the refusal's status, so a reader who may not export is sent `error` and nothing says why; (2) `Accept: text/csv` with no `format` is a 200 whose body is `results`, or `rangekpissales_over_time...` for the dashboard; (3) `?format=csv` with `Accept: application/json` is a 406 (the format leaves only the CSV renderer); (4) `dashboard.csv` is always empty, because `BaseReportView.csv_rows` looks for `daily` and the dashboard's days are `sales_over_time` -- D19 again, on the one report it was not fixed for. And `SalesReportView` refuses an export with `{"detail": "Export not permitted."}`, not the envelope. *Found by the cases that ask each report for CSV as each reader.* | Medium | Copied by the port. A renderer that renders the envelope (or `renderer_classes` narrowed per request); `csv_rows` on `DashboardView`; the envelope on the sales view. `reports/api/views.py` |
 | D232 | **Three ways to a 500 on a report.** `SalesReportView` passes `channel` to the filter as typed: a NUL in it reaches PostgreSQL and the `DataError` is nobody's to catch. And `_fill_missing_days` walks the window's days with `day += timedelta(days=1)`: a dashboard window of 370 days or fewer whose last day is 9999-12-31 steps past `date.max` (`OverflowError`), as does one whose end, moved to the shop's time, is past what a date can hold (`date_to=9999-12-31T23:59:59-01:00`, or a first instant before year 1). *Found by the cases at the edges of the window.* | Low | Copied by the port. Refuse the NUL; bound the window. `reports/api/views.py`, `reports/services.py` |
+| D233 | **The reservation sweep can cancel an order that was paid for while it ran.** `orders.tasks.release_expired_reservations` reads the unpaid online orders past the window, then hands each to `transition(order, CANCELLED)`, which locks the row and reads the status again -- but only to see whether the move is allowed, and a confirmed order may be cancelled. An order whose payment is captured between the sweep's query and its lock on that order is cancelled as "PAYMENT_TIMEOUT: reservation expired", its stock released, with the payment taken and nothing refunding it. The window is the time the sweep spends on the orders ahead of it. Measured in both APIs: an order confirmed while the sweep waits on its row is left `CANCELLED`. *Found by racing the sweep against a confirmation.* | Medium | Copied by the port. Under the lock, skip an order that is no longer pending (or pass the expected status to `transition`). `orders/tasks.py` |
+| D234 | **Two sweeps at once count the same order twice.** `transition` returns an order already in the status asked for, and the sweep adds one for every call that returns: a sweep that waited on an order another sweep cancelled counts it too. Measured: 56 orders, `released:53` from one sweep and `released:56` from the other; each order was cancelled once and each line released once, so only the count is wrong. It needs the schedule to fire in two places, or a sweep slower than five minutes. *Found by running Django's task and the Nest handler together.* | Low | Copied by the port. Count only an order the call moved. `orders/tasks.py` |
 
 ## Still API-only (no UI)
 

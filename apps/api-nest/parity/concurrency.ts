@@ -144,7 +144,7 @@ export async function concurrencyChecks(apis: {
 }
 
 /** Guest carts made for a race, each holding `quantity` of `sku`, optionally with a coupon. */
-async function raceCarts(
+export async function raceCarts(
   db: pg.Client,
   prefix: string,
   count: number,
@@ -177,7 +177,7 @@ async function raceCarts(
 }
 
 /** A COD checkout of one cart; `phone` is the shopper's -- a different one per shopper. */
-function checkout(
+export function checkout(
   base: URL,
   token: string,
   key: string,
@@ -197,9 +197,9 @@ function checkout(
 }
 
 /** A distinct mobile per shopper. */
-const shopper = (index: number) => `0171100${6100 + index}`;
+export const shopper = (index: number) => `0171100${6100 + index}`;
 
-async function count(db: pg.Client, sql: string, values: unknown[] = []): Promise<number> {
+export async function count(db: pg.Client, sql: string, values: unknown[] = []): Promise<number> {
   return Number((await db.query<{ count: string }>(sql, values)).rows[0]?.count ?? -1);
 }
 

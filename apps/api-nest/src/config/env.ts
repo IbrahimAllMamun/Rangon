@@ -79,6 +79,33 @@ const schema = z.object({
   PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
   // Django's Celery broker: jobs this API queues are run by Django's worker.
   CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
+  // Where this API queues its background jobs (ADR-0016): `celery`, for
+  // Django's worker, until the cutover; `pgboss`, in PostgreSQL, after it.
+  RANGON_JOBS_BACKEND: z.enum(['celery', 'pgboss']).default('celery'),
+  // Whether this process works the queue and fires the schedule. Unset, it
+  // does when the backend is pg-boss; `0` leaves that to a separate worker.
+  RANGON_JOBS_WORKER: z.string().optional(),
+  // Whether a worker also fires the schedule. On by default; `0` for a worker
+  // started while Celery's beat still does, so nothing is fired twice.
+  RANGON_JOBS_SCHEDULE: flag(true),
+  // What the jobs themselves read, each as `config/settings/base.py` reads it.
+  // Mail (`EMAIL_*`): SMTP, with a timeout so a stalled server cannot hold a job.
+  EMAIL_HOST: z.string().default('localhost'),
+  EMAIL_PORT: z.coerce.number().int().default(1025),
+  EMAIL_USER: z.string().default(''),
+  EMAIL_PASSWORD: z.string().default(''),
+  EMAIL_USE_TLS: flag(false),
+  EMAIL_TIMEOUT: z.coerce.number().int().default(30),
+  DEFAULT_FROM_EMAIL: z.string().default('Rangon Fashion <no-reply@rangonfashion.test>'),
+  // SMS: `console` logs and sends nothing; off a live environment only the
+  // allowlist is texted, and an empty one means nobody.
+  SMS_PROVIDER: z.string().default('console'),
+  SMS_LIVE: flag(false),
+  SMS_ALLOWLIST: z.string().default(''),
+  // How long an unpaid online order holds its stock.
+  RANGON_RESERVATION_MINUTES: z.coerce.number().int().default(60),
+  // Sent with a storefront revalidation, for the web app to check.
+  WEB_REVALIDATE_SECRET: z.string().default(''),
   // The storefront's cache-revalidation endpoint (`content.tasks`): when set,
   // a navigation, category or content change queues a job asking it to drop
   // the cached pages. Unset, nothing is queued.
@@ -108,6 +135,10 @@ export interface Env extends Parsed {
   trustForwardedProto: boolean;
   sslRedirect: boolean;
   referrerPolicy: string;
+  /** This process runs the job handlers and the schedule (`RANGON_JOBS_WORKER`). */
+  jobsWorker: boolean;
+  /** This process also fires the schedule (`RANGON_JOBS_SCHEDULE`, in a worker only). */
+  jobsSchedule: boolean;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -140,9 +171,21 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error('USE_S3=1 is not supported by the NestJS API yet.');
   }
 
+  const workerSetting = (env.RANGON_JOBS_WORKER ?? '').trim().toLowerCase();
+  const jobsWorker =
+    workerSetting === ''
+      ? env.RANGON_JOBS_BACKEND === 'pgboss'
+      : ['1', 'true', 'yes', 'on'].includes(workerSetting);
+  if (jobsWorker && env.RANGON_JOBS_BACKEND !== 'pgboss') {
+    // Celery's own worker runs what is queued for Celery; two would run it twice.
+    throw new Error('RANGON_JOBS_WORKER needs RANGON_JOBS_BACKEND=pgboss.');
+  }
+
   return {
     ...env,
     production,
+    jobsWorker,
+    jobsSchedule: jobsWorker && env.RANGON_JOBS_SCHEDULE,
     throttlingDisabled: env.DJANGO_SETTINGS_MODULE.endsWith('.parity'),
     jwtSigningKey: env.JWT_SIGNING_KEY || env.DJANGO_SECRET_KEY,
     // dev.py: ALLOWED_HOSTS = ["*"] and CORS_ALLOW_ALL_ORIGINS = True.

@@ -20,7 +20,7 @@ import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
 import { dataGet, pyTruthy } from '../http/request-body';
 import { AfterCommit, StockService } from '../inventory/stock.service';
-import { CeleryService } from '../jobs/celery.service';
+import { Jobs } from '../jobs/jobs.service';
 import { type Moved, OrderLifecycle, reasonOr } from './order-lifecycle.service';
 import { OrderPayments } from './order-payments.service';
 import { type StaffOrderRow, StaffOrders } from './staff-order.service';
@@ -58,7 +58,7 @@ export class StaffOrderActions {
     private readonly payments: OrderPayments,
     private readonly stock: StockService,
     private readonly notices: NoticesService,
-    private readonly celery: CeleryService,
+    private readonly jobs: Jobs,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -92,7 +92,7 @@ export class StaffOrderActions {
       moved.notice[0],
       moved.notice[1],
     );
-    for (const job of jobs) await this.celery.delay(job.task, job.args);
+    for (const job of jobs) await this.jobs.delay(job.task, job.args);
   }
 
   /** `status`: the body is validated before the order is looked for. */

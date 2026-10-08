@@ -22,6 +22,8 @@ import { checkoutCases } from './checkout-cases.ts';
 import { paymentCases } from './payment-cases.ts';
 import { adminConcurrencyChecks } from './admin-concurrency.ts';
 import { inventoryConcurrencyChecks } from './inventory-concurrency.ts';
+import { jobsCases } from './jobs-cases.ts';
+import { jobsConcurrencyChecks } from './jobs-concurrency.ts';
 import { contentConcurrencyChecks } from './content-concurrency.ts';
 import { merchandisingConcurrencyChecks } from './merchandising-concurrency.ts';
 import { posConcurrencyChecks } from './pos-concurrency.ts';
@@ -62,6 +64,7 @@ import { purchaseOrderCases } from './purchase-order-cases.ts';
 import { purchaseOrderConcurrencyChecks } from './purchase-order-concurrency.ts';
 import { purchasingCases } from './purchasing-cases.ts';
 import { supplierPaymentCases } from './supplier-payment-cases.ts';
+import { sweepConcurrencyChecks } from './sweep-concurrency.ts';
 import { supplierPaymentConcurrencyChecks } from './supplier-payment-concurrency.ts';
 import { purchasingConcurrencyChecks } from './purchasing-concurrency.ts';
 import { expensesConcurrencyChecks } from './expenses-concurrency.ts';
@@ -115,6 +118,12 @@ export interface Case {
   /** Adjust the `Location` header the same way: a stored file's random suffix. */
   normalizeLocation?: (location: string) => string;
   /**
+   * Compare what each API's request sent to the parity sink (sink.ts): mail,
+   * decoded to what a reader sees, and storefront revalidations. `refuse`
+   * has the sink turn mail or revalidations away for this case.
+   */
+  sink?: boolean | { mail?: 'refuse'; revalidate?: 'refuse' };
+  /**
    * Compare the Celery jobs each API queued (task and arguments, ids read as
    * the order number or the variant they name), emptying the queue around it.
    */
@@ -126,17 +135,54 @@ const broker = new Redis(process.env.CELERY_BROKER_URL ?? 'redis://redis:6379/1'
   lazyConnect: true,
 });
 
-/** The jobs queued since the queue was emptied, oldest first, their ids made readable. */
-async function queuedJobs(db: pg.Client): Promise<unknown[]> {
+/**
+ * `PARITY_NEST_JOBS=pgboss`: the Nest side queues its jobs in PostgreSQL
+ * (ADR-0016), so they are read from `pgboss.job`. A transaction's jobs share
+ * one timestamp there, so in this mode both sides' jobs are compared sorted.
+ */
+const NEST_JOBS_IN_PGBOSS = process.env.PARITY_NEST_JOBS === 'pgboss';
+
+async function emptyJobs(db: pg.Client): Promise<void> {
+  await broker.del('celery');
+  if (NEST_JOBS_IN_PGBOSS) await db.query(`DELETE FROM pgboss.job`);
+}
+
+/** What one side queued, as Celery's `(task, args, kwargs)`. */
+async function rawJobs(db: pg.Client, side: Side): Promise<[string, unknown[], unknown][]> {
+  if (NEST_JOBS_IN_PGBOSS && side === 'nest') {
+    const rows = await db.query<{ name: string; data: { args: unknown[] } }>(
+      `SELECT name, data FROM pgboss.job WHERE state = 'created' ORDER BY created_on, id`,
+    );
+    await db.query(`DELETE FROM pgboss.job`);
+    return rows.rows.map((row) => [row.name, row.data.args, {}]);
+  }
   const raw = await broker.lrange('celery', 0, -1);
   await broker.del('celery');
-  const jobs: unknown[] = [];
-  for (const entry of raw.reverse()) {
+  return raw.reverse().map((entry) => {
     const message = JSON.parse(entry) as { headers: { task: string }; body: string };
     const [args, kwargs] = JSON.parse(Buffer.from(message.body, 'base64').toString('utf8')) as [
       unknown[],
       unknown,
     ];
+    return [message.headers.task, args, kwargs];
+  });
+}
+
+const SINK = process.env.PARITY_SINK ?? 'http://sink:8025';
+
+/** Everything the sink has kept since it was last asked, which it then forgets. */
+async function sinkTake(): Promise<unknown> {
+  return (await fetch(`${SINK}/take`)).json();
+}
+
+async function sinkMode(mode: { mail?: string; revalidate?: string }): Promise<void> {
+  await fetch(`${SINK}/mode`, { method: 'POST', body: JSON.stringify(mode) });
+}
+
+/** The jobs queued since the queue was emptied, oldest first, their ids made readable. */
+async function queuedJobs(db: pg.Client, side: Side): Promise<unknown[]> {
+  const jobs: unknown[] = [];
+  for (const [task, args, kwargs] of await rawJobs(db, side)) {
     const readable: unknown[] = [];
     for (const arg of args) {
       const order = await db.query<{ number: string }>(
@@ -147,15 +193,29 @@ async function queuedJobs(db: pg.Client): Promise<unknown[]> {
         `SELECT v.sku FROM inventory_inventory i JOIN catalog_productvariant v ON v.id = i.variant_id WHERE i.id::text = $1`,
         [arg],
       );
+      // A notice's id is minted by whichever API wrote it: read as who it is for.
+      const notice = await db.query<{ email: string | null; title: string }>(
+        `SELECT u.email, n.title FROM notifications_notification n
+           LEFT JOIN accounts_user u ON u.id = n.user_id WHERE n.id::text = $1`,
+        [arg],
+      );
       readable.push(
         order.rows[0]
           ? `order:${order.rows[0].number}`
           : stock.rows[0]
             ? `inventory:${stock.rows[0].sku}`
-            : arg,
+            : notice.rows[0]
+              ? `notice:${notice.rows[0].email ?? ''}:${notice.rows[0].title}`
+              : arg,
       );
     }
-    jobs.push({ task: message.headers.task, args: readable, kwargs });
+    jobs.push({ task, args: readable, kwargs });
+  }
+  if (NEST_JOBS_IN_PGBOSS) {
+    return jobs
+      .map((job) => JSON.stringify(job))
+      .sort()
+      .map((job) => JSON.parse(job) as unknown);
   }
   return jobs;
 }
@@ -774,6 +834,7 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await auditCases()));
   cases.push(...(await notificationsCases()));
   cases.push(...(await reportsCases()));
+  cases.push(...(await jobsCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -792,14 +853,22 @@ async function run(
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
   const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
-  if (testCase.jobs) await broker.del('celery');
+  if (testCase.jobs) await emptyJobs(db);
+  if (testCase.sink) {
+    await sinkMode(typeof testCase.sink === 'object' ? testCase.sink : {});
+    await sinkTake();
+  }
   const response = normalizeBody(await send(base, sent), testCase);
   const effects: unknown[][] = [];
   for (const query of testCase.effects ?? []) {
     const parameters = query.includes('$1') ? [since] : [];
     effects.push((await db.query(query, parameters)).rows);
   }
-  if (testCase.jobs) effects.push(await queuedJobs(db));
+  if (testCase.jobs) effects.push(await queuedJobs(db, side));
+  if (testCase.sink) {
+    effects.push([await sinkTake()]);
+    await sinkMode({});
+  }
   if (writes) await undoWrites(db, since as string);
   return { response, effects };
 }
@@ -933,6 +1002,9 @@ async function main(): Promise<void> {
       ['reviews', () => reviewsConcurrencyChecks({ DJANGO, NEST })],
       ['team', () => teamConcurrencyChecks({ DJANGO, NEST })],
       ['notifications', () => notificationsConcurrencyChecks({ DJANGO, NEST })],
+      ['sweep', () => sweepConcurrencyChecks({ DJANGO, NEST })],
+      // Only when the Nest side queues in pg-boss (`run-jobs`): nothing otherwise.
+      ['jobs', () => jobsConcurrencyChecks({ NEST })],
     ];
     const checks: { name: string; passed: boolean; detail: string }[] = [];
     for (const [group, run] of groups) {

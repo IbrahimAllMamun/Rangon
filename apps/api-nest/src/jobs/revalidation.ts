@@ -1,12 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import { ENV, Env } from '../config/env';
-import { CeleryService } from './celery.service';
+import { Jobs } from './jobs.service';
 
 /**
  * `content.tasks.request_revalidation(*tags)`: ask the storefront to drop the
- * pages cached under these tags, by queueing `revalidate_storefront` for
- * Django's worker. Fire-and-forget, and nothing at all when
+ * pages cached under these tags, by queueing `revalidate_storefront`. Fire-and-forget, and nothing at all when
  * `WEB_REVALIDATE_URL` is unset -- a fresh install works without it.
  *
  * Django sends it from model signals (a category or navigation item saved or
@@ -15,13 +14,13 @@ import { CeleryService } from './celery.service';
 @Injectable()
 export class Revalidation {
   constructor(
-    private readonly celery: CeleryService,
+    private readonly jobs: Jobs,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
   async request(...tags: string[]): Promise<void> {
     if (!this.env.WEB_REVALIDATE_URL) return;
-    await this.celery.delay('content.tasks.revalidate_storefront', [tags]);
+    await this.jobs.delay('content.tasks.revalidate_storefront', [tags]);
   }
 }
 

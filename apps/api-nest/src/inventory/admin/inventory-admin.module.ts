@@ -23,5 +23,7 @@ import { TransfersService } from './transfers.service';
     StockCountsController,
   ],
   providers: [InventoryAdminService, LedgerEntries, TransfersService, CountsService],
+  // The nightly integrity job replays the ledger as the endpoint does.
+  exports: [InventoryAdminService],
 })
 export class InventoryAdminModule {}

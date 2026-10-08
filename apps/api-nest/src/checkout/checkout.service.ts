@@ -24,7 +24,7 @@ import { pyStr, pyStrip } from '../common/python';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable, Transaction } from '../database/database.service';
 import { StockService } from '../inventory/stock.service';
-import { CeleryService } from '../jobs/celery.service';
+import { Jobs } from '../jobs/jobs.service';
 import { OrderRef, OrderWritesService } from '../orders/order-writes.service';
 import { CartRow, CartService, ShippingMethodRow } from './cart.service';
 import { CouponsService } from './coupons.service';
@@ -113,7 +113,7 @@ export class CheckoutService {
     private readonly ledger: StockService,
     private readonly orders: OrderWritesService,
     private readonly notices: NoticesService,
-    private readonly celery: CeleryService,
+    private readonly jobs: Jobs,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -302,9 +302,7 @@ export class CheckoutService {
         orderId,
       );
       for (const inventoryId of lowStock) {
-        afterCommit.push(() =>
-          this.celery.delay('inventory.tasks.notify_low_stock', [inventoryId]),
-        );
+        await this.jobs.delayIn(tx, afterCommit, 'inventory.tasks.notify_low_stock', [inventoryId]);
       }
       await this.orders.logEvent(tx, orderId, 'STOCK_RESERVED', 'Stock reserved', {
         customerVisible: false,
@@ -381,23 +379,23 @@ export class CheckoutService {
       });
 
       const count = itemCount(priced);
-      afterCommit.push(() =>
-        this.notices.notifyStaff({
+      afterCommit.push(async () => {
+        await this.notices.notifyStaff({
           type: 'NEW_ONLINE_ORDER',
           title: `New online order ${number}`,
           body: `${count} item(s), ${money(priced.grandTotal)} ${this.env.RANGON_CURRENCY}`,
           permission: 'orders.view',
           branchId: cart.branch_id,
           link: `/admin/orders/${orderId}`,
-        }),
-      );
+        });
+      });
       const jobs: Job[] = await this.notices.notifyCustomer(
         tx,
         { id: orderId, number, customerUserId: customer?.user_id ?? null },
         'ORDER_CONFIRMED',
         `We have your order ${number}`,
       );
-      for (const job of jobs) afterCommit.push(() => this.celery.delay(job.task, job.args));
+      for (const job of jobs) await this.jobs.delayIn(tx, afterCommit, job.task, job.args);
       return { orderId, guestToken };
     });
 

@@ -47,6 +47,37 @@ const PAGE_COLUMNS = `"content_sitepage"."id", "content_sitepage"."created_at",
   "content_sitepage"."meta_description", "content_sitepage"."body", "content_sitepage"."is_published",
   "content_sitepage"."is_system", "content_sitepage"."updated_by_id"`;
 
+/**
+ * The account `select_related("updated_by")` joins, every column, as Django
+ * selects it. Nothing here reads them: with nothing selected from the join
+ * PostgreSQL drops it, and pages that tie in the order asked for then come
+ * back in another order than Django's statement gives.
+ */
+const EDITOR_COLUMNS = [
+  'password',
+  'last_login',
+  'is_superuser',
+  'id',
+  'created_at',
+  'updated_at',
+  'email',
+  'first_name',
+  'last_name',
+  'phone',
+  'organization_id',
+  'branch_id',
+  'role_id',
+  'status',
+  'is_staff',
+  'is_active',
+  'date_joined',
+  'last_login_ip',
+]
+  .map((name) => `"accounts_user"."${name}" AS "editor_${name}"`)
+  .join(', ');
+const PAGE_WITH_EDITOR = `SELECT ${PAGE_COLUMNS}, ${EDITOR_COLUMNS} FROM "content_sitepage"
+  LEFT OUTER JOIN "accounts_user" ON ("content_sitepage"."updated_by_id" = "accounts_user"."id")`;
+
 /** `OrderingFilter` with no `ordering_fields`: every serializer field the database holds. */
 const PAGE_ORDERING: Record<string, string> = Object.fromEntries(
   [
@@ -163,9 +194,7 @@ export class PagesAdminService {
 
   async list(query: QueryDict) {
     const pages = await this.db.query<PageRow>(
-      `SELECT ${PAGE_COLUMNS} FROM "content_sitepage"
-         LEFT OUTER JOIN "accounts_user" ON ("content_sitepage"."updated_by_id" = "accounts_user"."id")
-        ORDER BY ${this.order(query).join(', ')}`,
+      `${PAGE_WITH_EDITOR} ORDER BY ${this.order(query).join(', ')}`,
     );
     const out = [];
     for (const page of pages) out.push(await this.serialize(page));
@@ -175,8 +204,7 @@ export class PagesAdminService {
   /** `get_object()`: by slug, through the view's filters. */
   private async find(slug: string, query: QueryDict): Promise<PageRow> {
     const page = await this.db.one<PageRow>(
-      `SELECT ${PAGE_COLUMNS} FROM "content_sitepage"
-         LEFT OUTER JOIN "accounts_user" ON ("content_sitepage"."updated_by_id" = "accounts_user"."id")
+      `${PAGE_WITH_EDITOR}
         WHERE "content_sitepage"."slug" = $1 ORDER BY ${this.order(query).join(', ')} LIMIT 21`,
       [slug],
     );

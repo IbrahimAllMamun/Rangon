@@ -25,8 +25,10 @@ export class NoticesService {
 
   /**
    * `notify_staff`: one notification per member of staff holding the
-   * permission -- at the branch, or an owner or admin anywhere. Django runs
-   * this after the order commits, so it is called after commit here too.
+   * permission -- at the branch, or an owner or admin anywhere; with no
+   * branch, everyone who holds it. Django runs this after the order commits,
+   * so it is called after commit here too. Answers the notices it wrote, in
+   * order, for a caller that also emails them.
    */
   async notifyStaff(
     entry: {
@@ -34,13 +36,13 @@ export class NoticesService {
       title: string;
       body: string;
       permission: string;
-      branchId: string;
+      branchId: string | null;
       link: string;
       level?: string;
       data?: Record<string, unknown>;
     },
     q: Queryable = this.db,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const users = await q.query<{
       id: string;
       role_code: string | null;
@@ -49,13 +51,15 @@ export class NoticesService {
     }>(
       `SELECT DISTINCT u.id, u.email, r.code AS role_code, u.is_superuser, u.role_id
          FROM accounts_user u LEFT JOIN accounts_role r ON r.id = u.role_id
-        WHERE u.is_active AND (u.branch_id = $1::uuid OR r.code IN ('OWNER', 'ADMIN'))
+        WHERE u.is_active${entry.branchId ? ` AND (u.branch_id = $1::uuid OR r.code IN ('OWNER', 'ADMIN'))` : ''}
         ORDER BY u.email ASC`,
-      [entry.branchId],
+      entry.branchId ? [entry.branchId] : [],
     );
+    const written: string[] = [];
     for (const user of users) {
       if (user.role_code === 'CUSTOMER') continue;
       if (!(await this.holds(user, entry.permission, q))) continue;
+      const id = randomUUID();
       await q.query(
         `INSERT INTO notifications_notification
            (id, created_at, updated_at, user_id, permission_code, branch_id, notification_type, level,
@@ -63,7 +67,7 @@ export class NoticesService {
          VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, $4::uuid, $5, $9, $6,
                  $7, $8, $10::jsonb, NULL, NULL)`,
         [
-          randomUUID(),
+          id,
           user.id,
           entry.permission,
           entry.branchId,
@@ -75,7 +79,9 @@ export class NoticesService {
           JSON.stringify(entry.data ?? {}),
         ],
       );
+      written.push(id);
     }
+    return written;
   }
 
   /** `User.has_perm_code`: an owner or a superuser holds everything. */

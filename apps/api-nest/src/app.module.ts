@@ -11,6 +11,9 @@ import { ENV, Env } from './config/env';
 import { Database } from './database/database.service';
 import { HealthController } from './health/health.controller';
 import { CeleryService } from './jobs/celery.service';
+import { JobWorkerModule } from './jobs/job-worker.module';
+import { Jobs } from './jobs/jobs.service';
+import { PgBossTransport } from './jobs/pg-boss.service';
 import { Revalidation } from './jobs/revalidation';
 import { RouteRegistry } from './http/routes';
 import { ContentAdminModule } from './content/admin/content-admin.module';
@@ -43,6 +46,8 @@ export class CoreModule {
         Authenticator,
         RolePermissions,
         CeleryService,
+        PgBossTransport,
+        Jobs,
         Revalidation,
         Throttles,
         ViewRegistry,
@@ -55,6 +60,8 @@ export class CoreModule {
         Authenticator,
         RolePermissions,
         CeleryService,
+        PgBossTransport,
+        Jobs,
         Revalidation,
         Throttles,
         ViewRegistry,
@@ -84,6 +91,7 @@ export class AppModule {
         EngagementModule,
         NotificationsModule,
         ReportsModule,
+        JobWorkerModule,
       ],
       controllers: [HealthController],
       providers: [
