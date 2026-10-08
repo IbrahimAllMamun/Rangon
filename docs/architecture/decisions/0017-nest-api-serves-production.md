@@ -101,9 +101,12 @@ schema at first start; the database role needs `CREATE` on the database.
 - **`USE_S3=1` is not supported by the default.** The NestJS API refuses to start with it:
   django-storages' uploads and URLs are not ported. Every documented deployment uses
   `USE_S3=0`. A deployment on object storage runs Django, with the rollback file, until that is
-  ported.
+  ported. *(Ported the same day: [ADR-0018](0018-nest-s3-without-an-sdk.md). `USE_S3=1` now
+  works on either API.)*
 - **Errors are not reported to Sentry.** Django's production settings initialise it from
-  `SENTRY_DSN`; the NestJS API logs to its container's output and nothing else.
+  `SENTRY_DSN`; the NestJS API logs to its container's output and nothing else. *(Done the
+  same day: [ADR-0019](0019-nest-errors-to-sentry.md). It also found that Django's own
+  reporting had never run -- its SDK is not installed.)*
 - **The Django admin, `/api/docs/` and `/api/schema/` are down unless started.** So are the
   router's index pages for good: `GET /api/v1/` and `GET /api/v1/pos/` are a 404 from the
   NestJS API. Nothing in the web app calls any of them.

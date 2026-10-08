@@ -13,6 +13,10 @@ Read these alongside it:
 | [architecture/nest-port.md](architecture/nest-port.md) | the port's status, every ported endpoint, the race checks, every deliberate difference and copied defect |
 | [ADR-0013](architecture/decisions/0013-nestjs-api-alongside-django.md) | why NestJS, why beside Django on one database |
 | [ADR-0014](architecture/decisions/0014-nest-enqueues-celery-jobs.md) | why Nest queues Celery tasks for Django's worker |
+| [ADR-0016](architecture/decisions/0016-nest-jobs-on-pg-boss.md) | the background jobs on pg-boss, in PostgreSQL |
+| [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md) | the cutover: the Nest API serves production, Django starts on demand |
+| [ADR-0018](architecture/decisions/0018-nest-s3-without-an-sdk.md) | uploads in S3, without an SDK |
+| [ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md) | errors to Sentry, through `@sentry/core` alone |
 | [roadmap.md](roadmap.md) | the verification log (one entry per part) and the known-defects table (D-numbers) |
 | [business-rules.md](business-rules.md) | the rules a port must reproduce, and every `DECISION REQUIRED` |
 | [.claude/environment.md](../.claude/environment.md) | the traps of the Windows workstation; §2 below covers the Linux one |
@@ -70,6 +74,9 @@ Read these alongside it:
 | 2026-10-08 | What does Django do afterwards? | **Starts only on demand**: migrations and commands (`run --rm api`), the admin and docs (`--profile django`), going back (`docker-compose.django.yml`) |
 | 2026-10-08 | Which API do the production compose files run by default? | **The Nest API**, from the merge of phase 7 part 5 |
 | 2026-10-08 | Where does a rule change first, after the cutover? | **Still Django**, with its tests, then the port. To be revisited once the Nest API has run in production for a while |
+| 2026-10-08 | "Port S3 media storage to the NestJS API" | done the same day, without an SDK: ADR-0018 |
+| 2026-10-08 | "Report NestJS API errors to Sentry" | done: errors only, through `@sentry/core`, nothing personal sent. ADR-0019 |
+| 2026-10-08 | "Add a .dockerignore for the Django image build" | done, and for the web image, which had the same fault (D240) |
 | 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
 Waiting on the owner, each written up as DECISION REQUIRED in `business-rules.md` with the code's
@@ -188,6 +195,21 @@ PARITY_ONLY="jobs: " PARITY_VERBOSE=1 scripts/nest-parity.sh run
 The ten handlers beside their Celery tasks, each run on demand, with what each wrote and
 sent. `PARITY_ONLY=concurrency PARITY_RACES=sweep` runs the reservation sweep's races.
 
+```bash
+PARITY_S3=1 scripts/nest-parity.sh reset
+```
+
+```bash
+PARITY_S3=1 scripts/nest-parity.sh run
+```
+
+The same stack with both APIs' uploads in an S3 server (`USE_S3=1`; the `s3` service, the
+Versity gateway). Every case, and for every write the object each API stored: its name, bytes,
+type and encoding (`parity/bucket.ts`). **Give `PARITY_S3=1` to `reset` and to every command
+after it**: a database seeded one way holds files the other cannot find, so go back to the
+ordinary stack with a plain `reset`. Run it when a change touches an upload, a stored file's
+URL, or `common/storage.ts` and `common/s3.ts`.
+
 ### The stack production runs (run from the repository root)
 
 ```bash
@@ -247,6 +269,14 @@ apps/api-nest/
                               SMTP as Django's settings have it; `notifications.sms`
     media/media.ts            `/media/<path>`: uploaded files, as `core.media.serve_media` serves
                               them. A Fastify route, not a controller: a plain Django view
+    common/storage.ts         where an upload is kept: `DiskStorage` or `S3MediaStorage`, one
+                              naming algorithm over both; `mediaStorage(env)` picks
+    common/s3.ts              the bucket: a file's URL as `S3Storage.url` builds it, and the three
+                              signed requests (ADR-0018: no SDK)
+    observability/error-reports.service.ts
+                              `ErrorReports`: what is sent to Sentry, and all that is (ADR-0019).
+                              Called from the envelope filter, the job worker, and for an
+                              exception that ends the process
     common/mimetypes.ts       Python's `mimetypes` table, printed in the Django image
     auth/view-registry.ts     what the view at a route pattern asks of any request (who may call,
                               how it is throttled): for a method no handler takes
@@ -332,6 +362,7 @@ apps/api-nest/
     media-cases.ts, fixture_media.py
                               `/media/`, over files of known names, sizes and times
     django-only-cases.ts      the pages only Django serves, each a declared difference
+    bucket.ts                 with `PARITY_S3=1`: what each write stored in the bucket
   test/unit/                  unit tests; expected values printed by Django or DRF themselves
 ```
 
@@ -565,6 +596,13 @@ apps/api-nest/
 | A plain `up -d` after removing the rollback file left beat running beside a scheduling Nest API | compose does not stop a service whose profile has just gone inactive; it simply stops managing it | a procedure that removes services says `stop` first, and was tried in that order |
 | The browser suite failed one test on the Nest API and none on Django | eleven tests sign in from one address, the limit is ten a minute, and the faster API fits all eleven inside the minute | a suite that passes "by being slow" is a limit about to be hit: count what it spends against each throttle. The suite now keeps one session per account |
 | An ordinary upgrade guide would have broken the one shop that exists | the local production stack on the owner's machine holds real data and still runs Django; the roadmap's "no live environment" did not mean "nothing running" | read the operations docs for what is actually deployed before saying nothing is |
+| Django under `USE_S3=1` kept writing uploads to disk in the parity stack | `config/settings/dev.py` sets `STORAGES` back to `FileSystemStorage` whatever `USE_S3` says, and the parity settings inherit it (D237) | before comparing a setting's effect, print what Django actually resolved (`type(default_storage)`), not what the environment says |
+| The S3 server the development stack names could not be pulled | MinIO's images are no longer published (`minio/minio`, on Docker Hub and Quay) | an image named `:latest` in a compose file is a dependency nobody is watching; the parity stack pins `versity/versitygw` by version |
+| Three URL rows differed from botocore, all for one two-letter bucket name | botocore addresses a name S3 would never accept by rules of its own | split the reference set by what can exist; pin what differs for the impossible ones rather than copy it |
+| `fetch` would have handed back a stored object changed | it unpacks a body whose `Content-Encoding` says gzip, and an object stored under a `.gz` name carries that header | read bytes that must come back as stored with `node:http`, and test it with a body that is not valid gzip |
+| A stored object's fallback type was `binary/octet-stream` in the port and `application/octet-stream` in Django | written from memory of S3's own default; django-storages sets its own, and no existing case sent a file with no type and an extension Python's table lacks | a constant copied from memory is a guess until a case reaches it: for each fallback in the code, write the case that takes it (three receipt cases did) |
+| "As Django does" had nothing behind it for Sentry | `prod.py` sets `sentry_sdk` up inside a `try` that swallows `ImportError`, and the package is in no requirements file: the configuration reads as working and does nothing (D241) | before porting an integration, check it runs on the Django side: `pip show` in the production image, not the settings file |
+| A chain of verification steps had to be stopped half way, and the kill took the wrong shell with it | `pgrep -f <text>` matches the command that contains the text -- the one doing the killing | kill by process id, read from `pgrep` in an earlier command |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 
@@ -618,10 +656,9 @@ After the port:
 1. **Every change is now a change to production twice.** The rule stands (Django first, with
    its tests, then the port, then parity), and CI runs the comparison both ways and the browser
    suite on both APIs. A change to an endpoint that skips the port ships the old behaviour.
-2. **Three things the Nest API does not do**, each a candidate for the next piece of work:
-   object storage (`USE_S3=1`: it refuses to start; `common/storage.ts` writes to disk only),
-   Sentry (`SENTRY_DSN` is read by Django alone), and a measured answer to "what happens when
-   Redis is down" (the throttles and the page cache live there).
+2. **One thing is still unmeasured**: what happens to the Nest API when Redis is down (the
+   throttles and the page cache live there). Object storage (ADR-0018) and Sentry (ADR-0019)
+   were the other two limits the cutover left, and were done on 2026-10-08.
 3. **A provider written for Django needs its twin.** An SMS gateway (`docs/operations/sms.md`)
    or a payment gateway registered in Django alone is never called in production: the Nest API
    has its own registries (`jobs/sms.service.ts`, `payments/providers.ts`).

@@ -222,8 +222,14 @@ rules: `apps/api-nest/src/media/media.ts` is `core.media.serve_media` over Djang
 `static.serve`, compared with it case by case -- the private prefix, the refusal to leave the
 root, `If-Modified-Since`, the type Python's table gives each extension. (That table has no
 `.webp`: either API serves one as `application/octet-stream`, D235. Browsers and the Next image
-optimizer read the bytes, not the header, so the photographs show.) It does not start with
-`USE_S3=1`: uploads to object storage are not ported, and a shop on a bucket runs Django.
+optimizer read the bytes, not the header, so the photographs show.)
+
+**And `USE_S3=1` works on the NestJS API too**
+([ADR-0018](decisions/0018-nest-s3-without-an-sdk.md)): `common/storage.ts` has a bucket form
+beside the disk one, chosen by the setting as Django's storage is; `common/s3.ts` signs the
+three requests it makes and builds a file's URL as `S3Storage.url` does; and `/media/` is then
+not mounted, as it is not in Django. What each API stores for the same upload -- the object's
+name, bytes, type and encoding -- is compared by the parity suite's S3 run.
 
 ### The files have to survive a rebuild
 

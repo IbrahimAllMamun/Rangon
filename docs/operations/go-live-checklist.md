@@ -50,8 +50,8 @@ consciously waived in writing.
 - [ ] Secrets in a secret manager; no `.env` on the production host
 - [ ] Database on durable storage, private network, least-privilege user
 - [ ] Nightly backups running **and a restore rehearsed** (`docs/operations/backups.md` table has a row)
-- [ ] Media in object storage with versioning -- **not possible on the NestJS API yet**, which production runs since 2026-10-08 and which does not start with `USE_S3=1` ([deployment.md](deployment.md#which-api-serves)). Until object storage is ported: go live on the media volume with it in the nightly backup, and say so here; or serve from Django
-- [ ] Error tracking (Sentry DSN) receiving events -- **Django only**: the NestJS API reports nothing to Sentry yet. Until it does, its errors are in `docker compose logs api-nest` and nowhere else; ship that log somewhere that alerts
+- [ ] Media in object storage with versioning (`USE_S3=1`; either API since 2026-10-08, [ADR-0018](../architecture/decisions/0018-nest-s3-without-an-sdk.md)). `S3_ENDPOINT` must be an address the browser can reach too, `S3_REGION` the bucket's own, and the bucket's public-read policy must not cover `expenses/*` ([deployment.md](deployment.md#which-api-serves))
+- [ ] Error tracking (Sentry DSN) receiving events: set `SENTRY_DSN`, deploy, and **see one event arrive** -- the NestJS API reports since 2026-10-08 ([ADR-0019](../architecture/decisions/0019-nest-errors-to-sentry.md)), and has not yet been pointed at a real Sentry project. Django reports nothing either way ([D241](../roadmap.md#known-defects))
 - [ ] Structured logs shipped somewhere searchable; request ids present
 - [ ] Health and readiness endpoints wired to the load balancer
 - [ ] Background jobs running, and the schedule fired in **exactly one** place: `api-nest` itself, or -- when Django serves -- the Celery worker and one beat replica, never both. Scheduled jobs observed to fire (`SELECT name, state, completed_on FROM pgboss.job ORDER BY created_on DESC LIMIT 5`)

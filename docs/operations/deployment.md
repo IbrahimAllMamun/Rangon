@@ -29,14 +29,43 @@ the schema: every migration is Django's.
 | The Django admin, `/api/docs/`, `/api/schema/` | `... --profile django up -d api worker`, and `... --profile django stop api worker` when done. Until then nginx answers those three paths 503 and says so |
 | Django for everything again | add `-f docker-compose.django.yml`, then `up -d` and restart nginx: see [Back to Django](#back-to-django) |
 
-Three things the NestJS API does not do, each a reason to run Django instead for now:
+One thing the NestJS API does not do:
 
-- **`USE_S3=1`.** It refuses to start: uploads to object storage are not ported. Every
-  documented deployment keeps uploads on a volume (`USE_S3=0`).
-- **Sentry.** `SENTRY_DSN` is read by Django only. The NestJS API logs to its container's
-  output: `docker compose ... logs api-nest`.
 - **`GET /api/v1/` and `GET /api/v1/pos/`**, the router's index pages, are a 404. Nothing calls
   them.
+
+**Errors are reported to Sentry when `SENTRY_DSN` is set**
+([ADR-0019](../architecture/decisions/0019-nest-errors-to-sentry.md)): a request that ended in a
+500, a background job that failed for good, and an exception that ends the process. Nothing
+personal leaves with one -- no body, query string, header, cookie or user; the request id does,
+which is the same id the client was shown and the log carries. `RANGON_ENV` names the environment
+(`production` unless set) and `RANGON_RELEASE` the release (the image's `TAG` unless set). Two
+things to know:
+
+- **Django reports nothing, DSN or no DSN** ([D241](../roadmap.md#known-defects)): its settings
+  ask for `sentry_sdk`, which is not installed, and the import failure is swallowed. Running on
+  Django -- `docker-compose.django.yml` -- is running without error reporting until that is
+  fixed.
+- It has been tested against a stand-in for Sentry, not against a Sentry project. **Send one
+  event on purpose after the first deploy** and see it arrive before trusting it.
+
+**Uploads in object storage (`USE_S3=1`) work on either API** since 2026-10-08
+([ADR-0018](../architecture/decisions/0018-nest-s3-without-an-sdk.md)), with three things to
+know that boto used to hide:
+
+- `S3_BUCKET`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` must all be set; the NestJS API refuses to
+  start without them and names the one missing. It does not look for an instance role or
+  `~/.aws`.
+- `S3_REGION` must be the bucket's own region (`us-east-1` if unset). A wrong one is a refused
+  signature, where boto would have found the right one by itself. The compose files pass it
+  through now; before, it was read from nowhere.
+- A file's URL in a payload is `S3_ENDPOINT` + bucket + key (or the bucket's AWS address when
+  `S3_ENDPOINT` is blank), exactly as Django builds it. **`S3_PUBLIC_ENDPOINT` is read by
+  nothing** ([D238](../roadmap.md#known-defects)): if `S3_ENDPOINT` is a private address such as
+  `http://minio:9000`, every image URL names a host no browser can reach. Point `S3_ENDPOINT` at
+  an address both the API and the browser can use.
+
+It has been proven against an S3 server in the parity stack, not against AWS itself.
 
 A management command that queues a background job (`seed_demo` does: saving a category asks
 the storefront to revalidate) queues it for Celery, and no Celery worker is running. Start one
@@ -54,6 +83,12 @@ web:       node:22-alpine (deps → build) → node:22-alpine runtime, Next.js s
 ```
 
 Both API images run as uid 1001: uploads are on one volume, written by either.
+
+Each image is built from its own directory, and what the builder is sent is decided by the
+`.dockerignore` in that directory (`apps/api`, `apps/api-nest`, `apps/web`) -- not by the one at
+the top of the repository, which no build reads. They are why an image built on a workstation is
+the image CI builds: no local `media/`, caches or `.env` in the Django image, no local
+`node_modules` or `.next` in the web image ([D240](../roadmap.md#known-defects)).
 
 Tags are immutable and derived from the commit: `ghcr.io/<org>/rangon-api-nest:<git-sha>`,
 `…/rangon-api:<git-sha>`, `…/rangon-web:<git-sha>`. `latest` may exist for convenience but is **never** what production

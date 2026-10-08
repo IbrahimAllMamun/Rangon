@@ -1079,6 +1079,71 @@ either API.
 
 **What it costs.** `api-nest` on the local production stack, by `docker stats`: 88 MiB after warm-up traffic (300 storefront requests and an order), 112 MiB at the higher of two readings. It is the API, the job worker and the schedule. Django's three processes measured about 235, 100 and 98 MB on 2026-09-30.
 
+### Errors to Sentry (after the cutover)
+
+[ADR-0019](decisions/0019-nest-errors-to-sentry.md). `observability/error-reports.service.ts` is
+`ErrorReports`, and the whole of what this API tells Sentry. It is on under production settings
+with `SENTRY_DSN` set -- where `config/settings/prod.py` would switch Django's on -- and is
+called from three places, each of which already logged the error:
+
+| Where | What is reported | With |
+|---|---|---|
+| `EnvelopeFilter`, the two branches that log at error level | an exception nothing expected (the 500), and a database constraint that fired past the service layer (the 409) | method, path, route, status, request id |
+| `JobWorker` | a job's failure that will not be tried again: one its task does not retry, at once; one it does, on the attempt that spends the last retry | the task's name, the attempt |
+| Node's `uncaughtExceptionMonitor` | an exception about to end the process | where it came from |
+
+Nothing else is collected, so nothing else can leak: no body, query string, header, cookie or
+user. The client is `@sentry/core` with a `fetch` for its transport; nothing is instrumented and
+no request this API makes carries a header it did not have before.
+
+This is the one part of the API with no Django to compare with. Django's own Sentry set-up has
+never run -- its SDK is not installed (D241) -- so the parity harness has nothing to say, and
+the proof is the unit tests: a stand-in for Sentry's endpoint that keeps what it is sent.
+
+### Uploads in S3 (after the cutover)
+
+`USE_S3=1` puts uploads in a bucket instead of on the API's disk, and it was the first limit
+ADR-0017 named: the port refused to start with it. It works now, without an SDK
+([ADR-0018](decisions/0018-nest-s3-without-an-sdk.md)).
+
+| Piece | What it is |
+|---|---|
+| `common/storage.ts` | `MediaStorage`: `FieldFile.save` and `.open`. The naming is one algorithm (`upload_to` through the shop's clock, the valid file name, an underscore and seven random characters when a name is taken, the stem cut to fit the column) over two places to keep the bytes: `DiskStorage` (`FileSystemStorage`: written exclusively, `0o644`) and `S3MediaStorage` (`S3Storage` with `file_overwrite=False`: a HEAD to see whether a name is taken, then one PUT). `mediaStorage(env)` picks, as Django's `STORAGES` does |
+| `common/s3.ts` | the key (`clean_name`, then `safe_join` under the bucket's top), the URL (`S3Storage.url` unsigned), and `S3Client`: HEAD, PUT and GET of one object, signed with Signature Version 4 |
+| `mediaUrl(name, env.mediaBase)` | every image in every payload. `mediaBase` is `MEDIA_URL` on disk and the bucket's settings with `USE_S3`, where the URL is absolute and passed through unchanged (the product feed already left an absolute URL alone) |
+
+**What an object is stored with** is `S3Storage._get_write_parameters`: the upload's own type
+-- for an image, the one found in its bytes; for a receipt, the one the client claimed -- else
+the type its extension has in Python's table, else `application/octet-stream`; and a
+`Content-Encoding` when the name says how it is packed.
+
+**A file's URL**, with these options: `<S3_ENDPOINT>/<bucket>/<key>` for any endpoint that is
+set; for AWS itself `https://<bucket>.s3.amazonaws.com/<key>` where the bucket's name can be a
+host name, whatever the region, and `https://s3.<region>.amazonaws.com/<bucket>/<key>` where it
+cannot (a dot in it). The key is percent-encoded as botocore encodes it: everything but
+letters, digits, `-._~` and the slashes.
+
+**`/media/` is not mounted**, as in Django: the files are not on the API's disk to serve.
+
+It is proven by running the whole comparison with both APIs' uploads in one S3 server:
+
+```bash
+PARITY_S3=1 scripts/nest-parity.sh reset
+PARITY_S3=1 scripts/nest-parity.sh run
+```
+
+`s3` (profile `s3`) is the Versity gateway over a directory: it checks every request's
+signature, which a mock would not, and keeps each object's type. The fixtures are seeded
+through the bucket by Django; every case then runs as usual, and so does every URL in every
+payload. For a write, `parity/bucket.ts` adds one more effect: the objects behind the file
+names that were not in the rows before the request -- each as its name, its size, a digest of
+its bytes, and the type and encoding stored with it, read back through the Nest API's own
+client. On 2026-10-08: 12243 of 12243 cases and 211 race checks, with 23 writes that store an object -- product photographs as PNG, JPEG, WebP and AVIF, navigation and banner images, and receipts with every way a type is arrived at -- each object the same on both sides.
+
+The unit tests hold the reference values: `S3Storage.url` across 13 endpoints, 4 regions and 7
+bucket names; 27 names with every character a key can make awkward; and botocore's own
+signature for 7 requests at a fixed moment.
+
 ## Running it
 
 ```bash
@@ -1166,7 +1231,11 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | Two concurrent refreshes of one token | both succeed, each minting a pair | the second is refused (401) | `get_or_create` lets both pass; the port blacklists with `ON CONFLICT DO NOTHING` and refuses the loser. A fix for Django too |
 | `bcrypt_sha256$` password hashes | verified | read as a wrong password, and logged | No version of this project wrote one: Argon2 was first in PASSWORD_HASHERS from the first migration |
 | `OPTIONS` without CORS headers | DRF's view metadata | 405 | Nothing calls it |
-| `USE_S3=1` | S3 URLs | refuses to start | django-storages' URL building is not ported; a wrong image URL is worse than a refusal |
+| `USE_S3=1` without `S3_BUCKET`, `S3_ACCESS_KEY` or `S3_SECRET_KEY` | starts, and fails at the first upload; boto also finds credentials in an instance role or `~/.aws` | refuses to start, naming what is missing | [ADR-0018](decisions/0018-nest-s3-without-an-sdk.md): the two settings or nothing |
+| `USE_S3=1` with `S3_REGION` not the bucket's | boto follows S3's redirect to the right region | S3 refuses the signature | The same ADR. Set the region |
+| `USE_S3=1` under the development settings | uploads go to disk all the same, and `/media/` is not served (D237) | uploads go to the bucket | Not a defect worth copying: the API does what the setting says. The parity settings give Django the bucket too, so the suite compares the two |
+| An upload over 8 MB with `USE_S3=1` | boto sends it in parts | one PUT | The same object; only its ETag differs, and nothing reads it |
+| An unhandled error, with `SENTRY_DSN` set under production settings | nothing: `sentry_sdk` is not installed, and the failed import is swallowed (D241) | reported to Sentry | [ADR-0019](decisions/0019-nest-errors-to-sentry.md). The settings say what Django meant to do; the port does it, for errors only |
 | Celery broker down when a checkout commits | 500, though the order is placed (D116) | 201, the failure logged | Raising after the commit tells a shopper an order failed when it did not; the harness cannot see this, as its broker is up |
 | Format-suffix URLs (`/api/v1/brands.json`, `/brands/<id>.json`, `/brands.api`) | served by `DefaultRouter`, `.api` as the browsable HTML API | not routed: 404, or a slash redirect and then 404 | No client appends a suffix; the web app calls the plain paths |
 | The browsable API: `?format=api`, or an `Accept` of `text/html` (or `text/*`), under any settings but production's | DRF's HTML page | the JSON answer | The port has no HTML pages. Under production's settings Django has no such renderer either and both refuse: 404 and 406 |
@@ -1462,6 +1531,8 @@ the port):
 - An uploaded `.webp` is served as `application/octet-stream`: Python 3.12's type table has no
   such extension, and the image has no `/etc/mime.types` to add it (D235).
 - A media name longer than the filesystem allows is a 500, not a 404 (D236).
+- With `USE_S3=1` a file's URL is built from `S3_ENDPOINT`; `S3_PUBLIC_ENDPOINT` is read by
+  nothing. Against a private endpoint every image URL names a host no browser can reach (D238).
 - A product's `published` may be set on a draft when the payload does not also name the status:
   the serializer refuses only the pair.
 - The review endpoint does not enforce its own permissions. `shop_urls.py` builds it with
