@@ -567,7 +567,7 @@ Every part of a phase updates, in the same branch:
 | 4 | done 2026-10-01 | merged to `main` (PR #77) |
 | 5 | done 2026-10-06 | on `phase/nest-5-pos`, seven parts; its PR is opened when the owner asks |
 | 6 | done 2026-10-07 | merged to `main` (PR #88), ten parts (the list is in `nest-port.md`, "Phase 6: the back office") |
-| 7 | in progress on `phase/nest-7-reports-jobs-cutover` (PR #89 holds parts 1 to 3), five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 4 -- the audit log, notifications, the reports, DRF's `initial()` on every view, the pg-boss queue, and the ten jobs with their worker and schedule -- done 2026-10-07 | next: part 5, the cutover per path at the proxy |
+| 7 | in progress on `phase/nest-7-reports-jobs-cutover` (parts 1 to 3 merged to `main` in PR #89; part 4 has a PR of its own), five parts (the list is in `nest-port.md`, "Phase 7"): parts 1 to 4 -- the audit log, notifications, the reports, DRF's `initial()` on every view, the pg-boss queue, and the ten jobs with their worker and schedule -- done 2026-10-07 | next: part 5, the cutover per path at the proxy |
 
 Before the next part:
 
