@@ -20,6 +20,8 @@ coverage.xml
 *.sqlite3
 /apps/api/staticfiles/
 /apps/api/media/
+# The recorded proof's snapshot and answers: made from the commit they sit beside.
+/apps/api-nest/parity/recorded/
 /apps/api/logs/
 
 # --- node / next ---

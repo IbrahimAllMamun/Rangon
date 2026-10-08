@@ -10,6 +10,7 @@
 import pg from 'pg';
 
 import { STAFF, staffHeaders, type Who } from './catalog-admin-cases.ts';
+import { heldToARecording } from './recording.ts';
 import { type Case, token } from './run.ts';
 
 const MISSING = '00000000-0000-4000-8000-000000000000';
@@ -74,8 +75,29 @@ export async function auditCases(): Promise<Case[]> {
   /** The fixture's days, and nothing the run wrote. */
   const WINDOW = 'date_from=2025-03-10&date_to=2025-03-12';
   const one = (label: string) => `${LOGS}${entry(label)}/`;
+  // Entries the run itself has written -- a case's own sign-ins, which no
+  // reset takes away -- are in every list with no end to its window. The two
+  // APIs read the same ones; a replay reads its own, the same in kind and
+  // number, with ids, request ids and moments of its own.
+  const built = Date.now();
+  const sinceBuilt = (body: unknown) => {
+    if (!heldToARecording()) return;
+    const rows = (body as { results?: Record<string, unknown>[] } | null)?.results;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (typeof row.created_at !== 'string' || Date.parse(row.created_at) < built) continue;
+      // `entity_id` too: what a case registers and removes again has a new id each time.
+      for (const minted of ['id', 'entity_id', 'request_id', 'created_at', 'ip_address'])
+        if (minted in row) row[minted] = '<written by this run>';
+    }
+  };
   const read = (name: string, path: string, who: Reader = 'owner', extra: Partial<Case> = {}) =>
-    cases.push({ name: `audit log: ${name}`, path, headers: auth(who), ...extra });
+    cases.push({
+      name: `audit log: ${name}`,
+      path,
+      headers: auth(who),
+      normalize: sinceBuilt,
+      ...extra,
+    });
   const everyone: Reader[] = [...(Object.keys(STAFF) as Who[]), 'auditor'];
 
   // === Who may read it, and what a method the view does not serve answers ======================

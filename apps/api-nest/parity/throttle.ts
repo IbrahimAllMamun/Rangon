@@ -5,12 +5,26 @@
  *   docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run --rm throttle-check
  *
  * Each API keeps its own buckets, so each gets the same budget from zero.
+ *
+ * `PARITY_MODE=record` keeps the Nest API's side of a run in which every
+ * scenario matched; `PARITY_MODE=replay` drives the Nest API alone and holds
+ * it to what was kept (recording.ts). Nothing here depends on the database's
+ * ids, so this recording is good for any seed.
  */
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 
 import { Redis } from 'ioredis';
 import pg from 'pg';
+
+import { parityMode, readRecording, Recorder } from './recording.ts';
+
+interface Throttled {
+  name: string;
+  /** Runs of equal statuses: "60x200 2x429". */
+  statuses: string;
+  refusal: string;
+}
 
 const APIS = {
   django: new URL(process.env.DJANGO_BASE ?? 'http://django-throttled:8000'),
@@ -238,10 +252,14 @@ async function main(): Promise<void> {
     body?: unknown;
   }[];
 
+  const mode = parityMode();
+  const recorder = mode === 'record' ? new Recorder<Throttled>() : null;
+  const recording = mode === 'replay' ? readRecording<Throttled>('throttle') : null;
   let failed = 0;
   for (const scenario of scenarios) {
     const results: Record<string, { statuses: number[]; refusal: string }> = {};
     for (const [name, base] of Object.entries(APIS)) {
+      if (recording && name === 'django') continue;
       await redis.flushdb();
       const statuses: number[] = [];
       let refusal = '';
@@ -264,13 +282,31 @@ async function main(): Promise<void> {
       }
       results[name] = { statuses, refusal };
     }
-    const django = results.django as { statuses: number[]; refusal: string };
     const nest = results.nest as { statuses: number[]; refusal: string };
-    const same = runs(django.statuses) === runs(nest.statuses) && django.refusal === nest.refusal;
+    // What the Nest API's answers are held against: Django's, or what was kept.
+    const kept = recording?.get(scenario.name);
+    const expected = recording
+      ? { statuses: kept?.statuses ?? '<not recorded>', refusal: kept?.refusal ?? '' }
+      : {
+          statuses: runs((results.django as { statuses: number[] }).statuses),
+          refusal: (results.django as { refusal: string }).refusal,
+        };
+    const same = expected.statuses === runs(nest.statuses) && expected.refusal === nest.refusal;
     if (!same) failed += 1;
     console.log(`${same ? 'MATCH' : 'DIFF '} ${scenario.name}`);
-    console.log(`      django: ${runs(django.statuses)}  ${django.refusal}`);
+    console.log(
+      `      ${recording ? 'recorded' : 'django'}: ${expected.statuses}  ${expected.refusal}`,
+    );
     console.log(`      nest:   ${runs(nest.statuses)}  ${nest.refusal}`);
+    recorder?.add({ name: scenario.name, statuses: runs(nest.statuses), refusal: nest.refusal });
+  }
+  if (recording && recording.size !== scenarios.length) {
+    failed += 1;
+    console.log(`DIFF  ${recording.size} scenarios recorded, ${scenarios.length} run`);
+  }
+  if (recorder) {
+    if (failed) console.log(`not recorded: ${failed} scenarios differ`);
+    else console.log(`recorded ${recorder.size} scenarios in ${recorder.write('throttle').path}`);
   }
   redis.disconnect();
   process.exitCode = failed ? 1 : 0;

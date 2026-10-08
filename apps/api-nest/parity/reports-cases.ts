@@ -12,6 +12,7 @@
 import pg from 'pg';
 
 import { STAFF, staffHeaders, type Who } from './catalog-admin-cases.ts';
+import { endOfTheFirst } from './recording.ts';
 import { type Case, token } from './run.ts';
 
 const MISSING = '00000000-0000-4000-8000-000000000000';
@@ -115,7 +116,15 @@ export async function reportsCases(): Promise<Case[]> {
       name: `reports: ${name}`,
       path: path(report, query),
       headers: { ...auth(who), ...(headers ?? {}) },
-      normalize: blankNow(query),
+      normalize: (body) => {
+        blankNow(query)(body);
+        // The dashboard's ten best sellers are the first ten by units sold,
+        // and its categories the first ten by revenue: where the tenth ties
+        // with the eleventh, which is shown is the heap's choice
+        // (recording.ts, "A page cut through a tie").
+        endOfTheFirst(10, 'top_products', ['units'])(body);
+        endOfTheFirst(10, 'category_sales', ['revenue'])(body);
+      },
       ...rest,
     });
   };

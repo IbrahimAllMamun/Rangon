@@ -10,8 +10,22 @@
 import pg from 'pg';
 
 import { STAFF, staffHeaders, type Who } from './catalog-admin-cases.ts';
+import { pageOf } from './recording.ts';
 import { restoreTables } from './restore.ts';
 import { type Case, token } from './run.ts';
+
+/** What `?ordering=` may name: the serializer's fields (the view declares none of its own). */
+const ORDERED_BY = [
+  'id',
+  'notification_type',
+  'level',
+  'title',
+  'body',
+  'link',
+  'data',
+  'read_at',
+  'created_at',
+];
 
 export const NOTIFICATION_TABLES = ['notifications_notification'];
 
@@ -193,7 +207,11 @@ export async function notificationsCases(): Promise<Case[]> {
     // Not filters: ignored.
     'level=ERROR&notification_type=LOW_STOCK&search=one&is_read=false&user=abc',
   ]) {
-    read(`the list ${query || 'as it is'}`, `${NOTICES}?${query}`);
+    // Newest first, and the fixture's notices were made in one instant: a
+    // page may end inside the tie (recording.ts, "A page cut through a tie").
+    read(`the list ${query || 'as it is'}`, `${NOTICES}?${query}`, 'auditor', {
+      normalize: pageOf(query, ['created_at'], ORDERED_BY),
+    });
   }
   read('the list of a customer', NOTICES, 'bare');
   read('the unread of a customer', `${NOTICES}?unread=true`, 'bare');
