@@ -13,6 +13,10 @@ schedule. **Django remains the source of truth for the schema and the rules.** I
 migration; a rule changes there first, with its tests, and is then ported; and one compose file
 puts the whole stack back on it. The development stack is Django's.
 
+**Django is to be removed, in steps** ([ADR-0020](decisions/0020-django-is-removed-in-steps.md),
+[the plan](django-removal-plan.md)); nothing of it has been yet. The first step is a proof that
+does not need it: [recorded-proof.md](recorded-proof.md).
+
 ## Status
 
 | Phase | Scope | State |
@@ -1172,6 +1176,17 @@ the stand-in payment gateway described above; the throttled pair does not.
 
 **Always pass `-p rangon-nest`** when calling compose directly: `.env` sets
 `COMPOSE_PROJECT_NAME=rangon`, and without `-p` these containers join the development project.
+
+Two more commands keep the Nest API's answers and hold it to them with no Django running
+([recorded-proof.md](recorded-proof.md)); they run beside the comparison, not in place of it:
+
+```bash
+scripts/nest-parity.sh record
+```
+
+```bash
+scripts/nest-parity.sh replay
+```
 
 Inside `apps/api-nest/` (Node is not needed on the host; run these in `node:22-bookworm-slim`):
 

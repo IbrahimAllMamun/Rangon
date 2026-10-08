@@ -495,6 +495,68 @@ is still open and tracked in
 
 ## Verification log
 
+### Removing Django, steps 0 and 1: the decisions, and a proof that does not need Django, 2026-10-09
+
+Asked for: "Do steps 0 and 1" of [the plan to remove Django](architecture/django-removal-plan.md).
+**Nothing of Django's was removed or changed**, and production runs what it ran.
+
+**Step 0** is the owner's four decisions, in
+[ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md): one month on the real shop
+before the first Drizzle migration; the Django admin and the API docs dropped; the demo seed
+replaced by a database snapshot; the names kept. A rule still changes in Django first until
+that migration. The month has not begun: it runs from the day the shop on the owner's machine
+is upgraded.
+
+**Step 1** is [the recorded proof](architecture/recorded-proof.md): `scripts/nest-parity.sh
+record` keeps the NestJS API's answer to every case the two APIs agree on, with a snapshot of
+the database; `replay` holds the API to them on a stack with no Django in it
+(`docker-compose.recorded.yml`), races and all.
+
+```text
+record: every case to both APIs, on a restore of the snapshot ... 12,243 match, 0 differ; 12,243 answers kept (2.8 MB), 17 rate-limit scenarios
+replay, no Django, PARITY_TIES=mark ............................. 12,243 of 12,243 as recorded; 84 cases marked as holding tied rows
+races, across two Nest processes ................................ 220 pass, 0 fail (211 + the queue's 3 + 6 new)
+worker check / rate limits against the recording ................ 5 of 5 / 17 of 17
+the same recording replayed strictly, minutes later ............. 12,191 as recorded; 52 not: one report's tied rows in another order (D245)
+mutation, a lock: the coupon's FOR UPDATE removed ............... its 2 race checks fail, one on each Nest process
+mutation, a rule: a percentage coupon divided by 101 ............ the same 30 cases differ from Django and from the recording; the recording finds 9 more
+clock one day ahead, unset / forty days ......................... 475 / 775 cases answer differently (ADR-0021: the replay's clock is set)
+every table's rows turned over (PARITY_HEAP=reversed) ........... 546 cases reorder tied rows; 239 answer differently (D243, D244, D245)
+nest unit tests ................................................. 1763 passed (18 new: what a recording keeps, tied rows, a page cut through a tie, keeping in step)
+tsc / eslint / prettier / build ................................. clean
+new race checks against Django and Nest together ................ 6 of 6 pass (compare mode, before they were relied on)
+```
+
+**The plan said to measure first, and the measurement is most of the result.** The first whole
+replay differed in 167 cases of 12,243 and none was the API: the harness's own address in the
+audit log, what two APIs' turns leave behind against one's, rows a case dated from "now", and
+tied rows on another heap. Each is dealt with in `parity/recording.ts` and said in the
+document's table. Then the date: a recording replayed with the clock a day ahead loses 475
+cases, and they are right answers to another question -- a return window closed, a debt a day
+older. So the replay stack runs at the hour of its recording
+([ADR-0021](architecture/decisions/0021-the-recorded-proof-replays-on-a-set-clock.md):
+libfaketime, in the two replay images and nowhere else).
+
+**It found three defects the comparison with Django never could** (D243 to D245), by replaying
+on a database whose every table had its rows put back in reverse. Both APIs read the same
+tables, so they agree with each other about a variant's label whether it says "M / White" or
+"White / M". The label is copied onto order lines.
+
+**What it does not do yet, said plainly.** A replay is run with `PARITY_TIES=mark`, which
+passes an answer that is the recorded rows in another order: until lists cannot tie (D245) the
+order of a list is held by the comparison with Django, not by the recording. And of the plan's
+step 1.6 only the concurrency tests are done: Django's 23 each have a race check on two Nest
+processes (five had none; six checks were written). The other 1,491 tests are sorted by file
+and not by test, and none is ported. Both are in the document's last section, with the method
+for the second.
+
+**One thing went wrong on the way.** The first recording was run beside another session's
+comparison in a Docker VM of 1.7 GB, and the kernel killed a NestJS container of each during
+their races. That session's run of 2026-10-08 22:40 +06 failed for that reason and no other.
+
+CI: the parity job now records, stops Django and both APIs, and replays. **That has not run on
+GitHub.**
+
 ### The NestJS API reports its errors to Sentry, 2026-10-08
 
 Asked for: "Report NestJS API errors to Sentry" -- the second limit the cutover left. With
@@ -5049,6 +5111,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D239 | **The development stack names an image that no longer exists.** `docker-compose.dev.yml` runs `minio/minio:latest`, and MinIO's images are gone from Docker Hub and Quay: `docker compose ... up` on a machine without a cached copy fails to pull, and the whole development stack with it, though nothing needs the bucket unless `USE_S3=1`. *Found by trying to start the same image for the parity stack on 2026-10-08.* | Medium | The parity stack uses `versity/versitygw`, pinned. The development stack is the owner's call: the same gateway behind a profile, or no S3 server unless asked for. `docker-compose.dev.yml` |
 | ~~D240~~ | ~~**An image built on a workstation carried the workstation's files.**~~ **Fixed 2026-10-08.** Every image is built with its own directory as the context, and Docker reads `.dockerignore` from the root of the context: the one at the top of the repository, written as if the root were the context, was never read by any build. So the Django image's `COPY . .` took everything in `apps/api` -- on the machine where it was noticed, 1,564 uploaded files under `media/` (receipts among them), 44 MB of type-checker cache and the test suite -- and because Docker fills a new named volume from the image the first time, **a fresh `api_media` volume began life holding those uploads**. The web image's builder did the same after its own `npm ci`: the workstation's `node_modules` (750 MB, installed for the workstation's system) and its stale `.next` were laid over the clean install. CI never saw either, because a fresh checkout has none of it; so the images CI scanned were not the images a workstation built. *Found while rebuilding the local production stack for the cutover: a 430 MB build context, and receipts in a new stack's media volume.* | Medium | `apps/api/.dockerignore` and `apps/web/.dockerignore` now decide what each image is built from; `apps/api-nest` already had one. The Django image's app directory went from 64 MB to 13 MB and its `media/` is empty; its test suite is no longer in the production image. **An existing `api_media` volume is not cleaned by this**: one first created from a workstation-built image may hold files no row refers to. `.dockerignore` |
 | D241 | **Django reports nothing to Sentry, with `SENTRY_DSN` set or not.** `config/settings/prod.py` initialises `sentry_sdk` inside a `try` and passes on `ImportError`; `sentry-sdk` is in no requirements file, so the import always fails and the block is always skipped, without a word in the log. The compose file passes `SENTRY_DSN`, `.env.example` documents it, and the go-live checklist has "Error tracking (Sentry DSN) receiving events" as an item: an operator who sets the DSN has every reason to believe errors are being reported, and none are. Confirmed in the production image (`pip show sentry-sdk`: not found). The settings also read `RANGON_ENV` and `RANGON_RELEASE`, which no compose file passed. *Found when the NestJS API was to report "as Django does".* | Medium | The NestJS API, which serves production, reports since 2026-10-08 (ADR-0019), and the compose files pass both names now. Django still does not: add `sentry-sdk` to `requirements/base.txt`, and log when a DSN is set and the SDK is missing rather than passing. Until then, running on Django is running without error reporting. `config/settings/prod.py`, `requirements/base.txt` |
+| D243 | **A variant's label depends on the order its rows lie in.** `ProductVariant.label` joins the variant's attribute values in the order `self.attribute_values.all()` returns them, and `VariantAttributeValue` has no `Meta.ordering`: PostgreSQL returns them as they lie in the table. Measured on 2026-10-09 by restoring a database and putting every table's rows back in reverse order -- the same rows, the same ids -- in the NestJS API, whose statement is Django's: a variant that read "M / White" reads "White / M". The label is the product feed's title, the cart line, the counter's grid, the inventory list, and it is **copied onto the order line when the order is placed** (`variant_label`), so the receipt keeps whichever it was that day. Nothing has to be restored for it to happen: any update of a `catalog_variantattributevalue` row moves it in the table. Both APIs. *Found by replaying the recorded proof on a turned-over database ([recorded-proof.md](architecture/recorded-proof.md)); the comparison of the two APIs could never see it, because both read the same table.* | Medium | Not fixed: a rule changes in Django first (ADR-0020). Order the join by the attribute's position, then its code -- `attribute__position, attribute__code` -- in `label` and in every prefetch that feeds it, then port it. `apps/api/catalog/models.py` |
+| D244 | **The dashboard's top expense category is whichever of the largest comes first.** `_dashboard` reads `expenses["by_category"][0]`, and the categories are ordered by their total alone: where two tie, the table decides. Measured the same way: "Transport", then "Rent", for the same quarter and the same expenses. Both APIs. *Found as D243 was.* | Low | Not fixed. A last key on the ordering (the category's name). `apps/api/reports/services.py` |
+| D245 | **A list ordered by a column that ties can show a row twice across its pages, or not at all.** Wherever a list's ordering does not tell two rows apart -- `?ordering=on_hand` on the inventory, a supplier's offers by `-is_preferred, last_cost`, the notifications newest first when several were made in one instant, the dashboard's ten best sellers by units sold, the home page's featured products -- PostgreSQL returns the tied rows as they lie, and that changes with every update of one of them. A page that ends inside the tie then shows a different row from one request to the next. D161 is one instance; this is the class. Measured on 2026-10-09: of 12,243 parity cases, **546** answer with tied rows in another order once every table is turned over, and a further handful are pages cut through a tie. Both APIs: the port's statements are Django's. *Found as D243 was.* | Medium | Not fixed. A last ordering key that is unique (`id`), added by one filter backend for every list rather than view by view; the reports' "first ten" likewise. Until then the recorded proof holds such rows only as far as their order was seen to hold ([recorded-proof.md](architecture/recorded-proof.md), "Tied rows"). `apps/api/core/pagination.py`, the views' `ordering` |
 
 ## Still API-only (no UI)
 

@@ -1,8 +1,10 @@
 # Removing Django: a plan
 
 **Status: accepted 2026-10-08 ([ADR-0020](decisions/0020-django-is-removed-in-steps.md)). Step 0's
-decisions are made; its wait has not begun. Step 1 is being built. Nothing of Django's has
-been removed.** It follows
+decisions are made; its wait has not begun. Step 1 is built as far as
+[recorded-proof.md](recorded-proof.md) says, which is not all of it: Django's own tests are
+not yet sorted and ported, and three defects it found (D243 to D245) stand between a recording
+and the order of a list. Nothing of Django's has been removed.** It follows
 from the cutover ([ADR-0017](decisions/0017-nest-api-serves-production.md)), which left Django out
 of serving requests and in charge of four other things.
 
@@ -82,7 +84,8 @@ Today "the Nest API is right" means "it answered as Django just did". This step 
 2. **Make the state repeatable.** A database snapshot (step 2) in place of a fresh seed gives
    stable ids. For time, either the cases that depend on the clock arrange their own rows
    relative to it -- many already do -- or the stack runs with a pinned clock. Decide from the
-   measurement.
+   measurement. *(Measured 2026-10-09: 475 cases answer differently a day later. The clock is
+   set: [ADR-0021](decisions/0021-the-recorded-proof-replays-on-a-set-clock.md).)*
 3. **Record.** A harness mode that runs each case against the Nest API alone and compares with a
    stored answer: status, headers, body, effects, queued jobs, stored objects -- what `compare`
    already compares. The recording is taken from a run in which Django and Nest agree, so every
