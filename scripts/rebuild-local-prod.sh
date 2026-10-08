@@ -20,21 +20,25 @@
 # (docs/operations/local-production.md, .claude/environment.md §11):
 #
 #  - **The images are built by hand.** `docker-compose.prodlocal.yml` sets
-#    `build: !reset null` on api, worker, beat and web, so `up -d --build`
-#    builds *nothing* and then fails on a missing image. The two `docker build`
-#    calls below are not a convenience; they are the only thing that produces
-#    `rangon-api:prod` and `rangon-web:prod`.
+#    `build: !reset null` on every application service, so `up -d --build`
+#    builds *nothing* and then fails on a missing image. The three
+#    `docker build` calls below are not a convenience; they are the only thing
+#    that produces `rangon-api:prod`, `rangon-api-nest:prod` and
+#    `rangon-web:prod`.
 #
-#  - **nginx is restarted last.** `local-prod/default.conf` names its upstreams
-#    as `server api:8000` / `server web:3000`, and nginx resolves those once at
-#    startup and caches the address for the life of the process. Recreating api
-#    or web hands them new addresses, so every `/api/` request answers 502 while
-#    `getent hosts api` inside the very same nginx container prints the correct
-#    new IP -- which reads as an API fault rather than a proxy one.
+#  - **Django migrates and seeds, and is not left running.** The NestJS API
+#    serves this stack (ADR-0017); Django still owns the schema. Both steps are
+#    `compose run --rm api ...`, which works on a service `up` does not start,
+#    and they happen *before* `up`: the NestJS API works the job queue and
+#    fires the schedule from the moment it starts, and should find its tables.
 #
-#  - **`migrate` runs twice.** Once against whatever is already running, before
-#    anything is replaced, and once against the new image. The first is skipped
-#    when no api container is up, which is the normal case on a cold start.
+#  - **nginx is restarted last.** `local-prod/default.conf.template` names its
+#    upstreams as `server api-nest:3000` / `server web:3000`, and nginx resolves
+#    those once at startup and caches the address for the life of the process.
+#    Recreating either hands it a new address, so every `/api/` request answers
+#    502 while `getent hosts api-nest` inside the very same nginx container
+#    prints the correct new IP -- which reads as an API fault rather than a
+#    proxy one.
 #
 # Docker Desktop has ~4 GB here and the OOM killer is silent. This script
 # builds *before* bringing the stack up rather than alongside it, for that
@@ -73,9 +77,11 @@ compose() {
 
 
 
-# `exec -T`: there is no terminal when this runs from CI or a scheduler, and
-# without it Django's output is mangled rather than failing outright.
-api() { compose exec -T api "$@"; }
+# Django, for one command: `run --rm` starts a container of the `api` service
+# (and the database it depends on), runs the command and removes it. `-T`:
+# there is no terminal when this runs from CI or a scheduler, and without it
+# Django's output is mangled rather than failing outright.
+django() { compose run --rm -T "$@"; }
 
 step() { printf '\n==> %s\n' "$*"; }
 
@@ -111,10 +117,7 @@ rangon12345)
 esac
 
 
-# --------------------------------------------------------------- 1. migrate --
-# Only if something is already running. On a cold start there is no container
-# to exec into, and `set -e` would abort the whole script on that.
-
+# ------------------------------------------------------------ 1. tear down ---
 step "tear down the stack that is already running"
 compose down -v
 
@@ -133,47 +136,56 @@ docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web \
    --build-arg "NEXT_PUBLIC_TIME_ZONE=${SHOP_TIME_ZONE}"
 
 
-# ------------------------------------------------------------------- 3. up ---
+step "building rangon-api-nest:prod"
+docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
+
+
+# -------------------------------------------------------------- 3. migrate ---
+# Before anything else is up. `run` waits for the database's healthcheck
+# (the service depends on it), so there is no gap to migrate into.
+step "migrating"
+django api python manage.py migrate --noinput
+
+# ----------------------------------------------------------------- 4. seed ---
+step "reseeding demo data"
+# Opted in for this one command only: no running container carries
+# DJANGO_ALLOW_DEMO_SEED, so a later `seed_demo` is still refused.
+#
+# The seed saves categories and navigation items, whose signals queue a
+# storefront revalidation for Celery -- and no Celery worker runs in this
+# stack. Run inline instead, with nowhere to send them: nothing is listening
+# yet, and nothing is cached yet either.
+django \
+    -e DJANGO_ALLOW_DEMO_SEED=1 \
+    -e "DJANGO_DEMO_SEED_PASSWORD=${DJANGO_DEMO_SEED_PASSWORD}" \
+    -e CELERY_TASK_ALWAYS_EAGER=1 \
+    -e WEB_REVALIDATE_URL= \
+    api python manage.py seed_demo --reset
+
+
+# ------------------------------------------------------------------- 5. up ---
 step "starting the stack"
 compose up -d
 
-# `up -d` returns as soon as the containers are created, which is well before
-# Postgres will accept a connection. Migrating into that gap fails in a way
-# that looks like a broken migration.
 step "waiting for the api to report healthy"
 for attempt in $(seq 1 60); do
     state="$(docker inspect -f '{{.State.Health.Status}}' \
-        "$(compose ps -q api)" 2>/dev/null || echo starting)"
+        "$(compose ps -q api-nest)" 2>/dev/null || echo starting)"
     [ "$state" = "healthy" ] && break
     [ "$attempt" = 60 ] && {
-        echo "!! the api container never became healthy. Recent logs:" >&2
-        compose logs --tail 40 api >&2
+        echo "!! the api-nest container never became healthy. Recent logs:" >&2
+        compose logs --tail 40 api-nest >&2
         exit 1
     }
     sleep 2
 done
 echo "    healthy after ~$((attempt * 2))s"
 
-# -------------------------------------------------------------- 4. migrate ---
-step "migrating against the new image"
-api python manage.py migrate
-
-# ----------------------------------------------------------------- 5. seed ---
-
-
-step "reseeding demo data"
-# Opted in for this one command only: the running containers never carry
-# DJANGO_ALLOW_DEMO_SEED, so a later `seed_demo` inside them is still refused.
-compose exec -T \
-    -e DJANGO_ALLOW_DEMO_SEED=1 \
-    -e "DJANGO_DEMO_SEED_PASSWORD=${DJANGO_DEMO_SEED_PASSWORD}" \
-    api python manage.py seed_demo --reset
-
 
 # ---------------------------------------------------------------- 6. nginx ---
-# Last, and always: api and web have just been replaced, so nginx is holding
-# addresses that no longer exist. See the header.
-step "restarting nginx so it re-resolves api and web"
+# Last, and always: api-nest and web have just been replaced, so nginx is
+# holding addresses that no longer exist. See the header.
+step "restarting nginx so it re-resolves api-nest and web"
 compose restart nginx
 
 # ---------------------------------------------------------------- 7. check ---
@@ -203,7 +215,7 @@ if ! ./scripts/smoke-test.sh "$PUBLIC_URL"; then
     echo "!! the stack is up but not serving correctly." >&2
     echo "!! ${PUBLIC_URL} answered, but not with what was expected -- check:" >&2
     echo "!!   docker compose -p ${COMPOSE_PROJECT} --env-file ${ENV_FILE} \\" >&2
-    echo "!!     -f docker-compose.yml -f docker-compose.prodlocal.yml logs --tail 50 api web nginx" >&2
+    echo "!!     -f docker-compose.yml -f docker-compose.prodlocal.yml logs --tail 50 api-nest web nginx" >&2
     exit 1
 fi
 

@@ -8,6 +8,12 @@
 # a Postgres data directory with it — two servers on one data dir is how you
 # lose a database.
 #
+# Which API serves is as in production (ADR-0017): the NestJS one, `api-nest`,
+# with Django started on demand -- `--profile django up -d api worker` for the
+# Django admin and the API docs, `run --rm api ...` for a management command,
+# and `-f docker-compose.django.yml` laid over this file to go back to Django
+# for everything.
+#
 # Differences from a real deployment, all of them intentional:
 #   * plain HTTP on localhost, so SECURE_SSL_REDIRECT is off (see below)
 #   * images are built locally rather than pulled by immutable tag
@@ -15,8 +21,9 @@
 #     not applied — it changes nothing about what you see in the browser
 #
 # Nginx fronts the whole thing on 4100 as a single origin, exactly as the
-# deployed topology does; the API is *also* published on ${API_PORT:-8100} so
-# it can be poked directly, and Mailpit on ${MAILPIT_PORT:-8125}. Override
+# deployed topology does; the NestJS API is *also* published on
+# ${API_PORT:-8100} so it can be poked directly (Django, when it is started, on
+# ${DJANGO_PORT:-8101}), and Mailpit on ${MAILPIT_PORT:-8125}. Override
 # either in the env file when Windows has reserved that range — it moves on
 # every reboot and has already taken 8125 and 8100 (.claude/environment.md §2).
 # For the real thing see docker-compose.prod.yml and docs/operations/.
@@ -24,7 +31,27 @@
 # docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml down
 
 services:
+  api-nest:
+    profiles: !reset []
+    image: rangon-api-nest:prod
+    build: !reset null
+    environment:
+      # `prod` to this API is what it is to Django: strict hosts, no debug
+      # output, and a redirect to https -- which plain http://localhost cannot
+      # follow, hence the second line.
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_SECURE_SSL_REDIRECT: "0"
+      # Matches production: nginx is one hop. The published port below is a
+      # debugging door *around* nginx, and a request through it carries no
+      # proxy-appended entry -- so measure throttling through 4100, not 8100.
+      DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
+    ports:
+      - "${API_PORT:-8100}:3000"
+    restart: unless-stopped
+
+  # Django, on demand: see the header.
   api:
+    profiles: [django]
     image: rangon-api:prod
     build: !reset null
     environment:
@@ -38,10 +65,11 @@ services:
       # proxy-appended entry -- so measure throttling through 4100, not 8100.
       DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
     ports:
-      - "${API_PORT:-8100}:8000"
+      - "${DJANGO_PORT:-8101}:8000"
     restart: unless-stopped
 
   worker:
+    profiles: [django]
     image: rangon-api:prod
     build: !reset null
     environment:
@@ -53,7 +81,9 @@ services:
        "--pool=threads", "--concurrency=4"]
     restart: unless-stopped
 
+  # Only through docker-compose.django.yml: the schedule fires in one place.
   beat:
+    profiles: [django-schedule]
     image: rangon-api:prod
     build: !reset null
     environment:
@@ -68,7 +98,8 @@ services:
       NODE_ENV: production
       # Server-side calls stay on the private network. NEXT_PUBLIC_* values are
       # already baked into the bundle at build time and cannot be changed here.
-      API_INTERNAL_URL: http://api:8000/api/v1
+      API_INTERNAL_URL: http://api-nest:3000/api/v1
+    depends_on: !override [api-nest]
     # No published port: nginx owns 4100 so everything is one origin, which is
     # what the deployed topology looks like and what smoke-test.sh assumes.
     restart: unless-stopped
@@ -76,10 +107,17 @@ services:
   # One origin for the whole app, exactly like production but without TLS.
   nginx:
     image: nginx:1.27-alpine
-    depends_on: [api, web]
+    depends_on: !override [api-nest, web]
+    environment:
+      # Where `/api/` and `/media/` go; the Django-only paths always go to
+      # Django, and say so when it is not running.
+      RANGON_API_UPSTREAM: api-nest:3000
+      # Substitute our own names only: nginx's runtime variables must survive.
+      NGINX_ENVSUBST_FILTER: RANGON_
     volumes:
       - ./infrastructure/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./infrastructure/docker/nginx/local-prod:/etc/nginx/conf.d:ro
+      # A template: the image renders it into conf.d/ at start.
+      - ./infrastructure/docker/nginx/local-prod:/etc/nginx/templates:ro
     ports:
       - "4100:80"
     networks: [frontend, backend]

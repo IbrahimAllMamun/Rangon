@@ -102,6 +102,38 @@ services:
     networks: [backend, frontend]
     restart: unless-stopped
 
+  # The NestJS API (ADR-0013): the same endpoints over the same database, and
+  # since the cutover (ADR-0017) the API production runs. Behind a profile in
+  # this file, because the development stack is still Django's: rules change
+  # there first. The production overlays switch it on.
+  api-nest:
+    profiles: [nest]
+    image: rangon-api-nest:latest
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+    environment:
+      <<: *api-env
+      # The web app reaches this service by its own name. Appended rather than
+      # put in the default, so a deployment that sets DJANGO_ALLOWED_HOSTS
+      # (every real one) is not refused with a 400 on every request.
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,api},api-nest
+      # Background jobs in PostgreSQL, worked and scheduled by this process
+      # (ADR-0016). `celery` hands them to Django's worker instead.
+      RANGON_JOBS_BACKEND: ${RANGON_JOBS_BACKEND:-pgboss}
+      RANGON_JOBS_SCHEDULE: ${RANGON_JOBS_SCHEDULE:-1}
+      # Blank: this process works the queue. `0` leaves that to a separate
+      # `node dist/worker.js` of the same image.
+      RANGON_JOBS_WORKER: ${RANGON_JOBS_WORKER:-}
+    # Uploads, on the volume Django's image created: both run as uid 1001.
+    volumes:
+      - api_media:/app/media
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [backend, frontend]
+    restart: unless-stopped
+
   worker:
     image: rangon-api:latest
     build:

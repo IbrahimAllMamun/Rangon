@@ -1,0 +1,49 @@
+# Back to Django: the whole stack served by the Django API again (ADR-0017).
+#
+# Laid over a production overlay, last:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.django.yml up -d
+#
+# (or with docker-compose.prodlocal.yml in place of the prod file). It is one
+# switch with four parts, and they belong together:
+#
+#   * `api`, `worker` and `beat` start with the stack again;
+#   * the web app's server-side calls go to `api`;
+#   * nginx sends `/api/` and `/media/` to `api`;
+#   * `api-nest` stops firing the schedule, because beat is firing it.
+#
+# `api-nest` itself stays up, with no traffic: jobs it queued in PostgreSQL
+# before the switch are still its to run. Once `pgboss.job` holds nothing in
+# `created` or `retry`, it can be stopped (docs/operations/deployment.md).
+#
+# Restart nginx after any switch: it resolves its upstream once, at start.
+#
+# The way forward again is NOT just leaving this file out: `up` without it no
+# longer manages `api`, `worker` and `beat`, and leaves them running -- beat
+# beside an `api-nest` that fires the schedule again. Stop those three first,
+# with this file still named (docs/operations/deployment.md, "Back to Django").
+
+services:
+  api:
+    profiles: !reset []
+
+  worker:
+    profiles: !reset []
+
+  beat:
+    profiles: !reset []
+
+  api-nest:
+    environment:
+      RANGON_JOBS_SCHEDULE: "0"
+
+  web:
+    environment:
+      API_INTERNAL_URL: http://api:8000/api/v1
+    depends_on: !override [api]
+
+  nginx:
+    environment:
+      RANGON_API_UPSTREAM: api:8000
+    depends_on: !override [api, web]
