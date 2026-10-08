@@ -504,15 +504,16 @@ good, and an exception that ends the process
 ([ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md)).
 
 ```text
+(one full pass on the final commit of PR #91, 2026-10-08, every stage exit 0)
 nest unit tests ............................... 1745 passed (18 new: what is sent and what is not, against a stand-in for Sentry's endpoint;
                                                 which answers and which job failures are reported)
 tsc / eslint / prettier / build ............... clean
 npm audit --omit=dev .......................... 0 vulnerabilities
-parity, uploads on disk (run) ................. final run in progress when this was committed; updated when it ends
-parity, Nest queuing in pg-boss (run-jobs) .... final run in progress when this was committed; updated when it ends
-concurrency / worker check / throttle-check ... final run in progress when this was committed; updated when it ends
-parity, uploads in S3 (PARITY_S3=1 run) ....... final run in progress when this was committed; updated when it ends
-browser suite, web app on the NestJS API ...... final run in progress when this was committed; updated when it ends
+parity, uploads on disk (run) ................. 12243/12243, 131 by the documented differences
+parity, Nest queuing in pg-boss (run-jobs) .... 12243/12243, the same 131
+concurrency / worker check / throttle-check ... 211/211 (214/214 with pg-boss) / 5/5 / 17/17
+parity, uploads in S3 (PARITY_S3=1 run) ....... 12243/12243, every stored object equal; 211/211 race checks
+browser suite, web app on the NestJS API ...... 50/50, on the web image built with its ignore file
 ```
 
 **"As Django does" had nothing behind it.** Django's production settings initialise
@@ -566,7 +567,7 @@ Django production image, built on this workstation     before            after
 manage.py check, wsgi import, 37 management commands .. ok
 development image (Dockerfile.dev) .................... builds; context 115 bytes
 test image, one module run through it ................. 41 passed (the suite is mounted, not copied)
-web image ............................................. builds; context 836 MB before, about 4 MB after. Browser suite on it: with the final run
+web image ............................................. builds; context 836 MB before, about 4 MB after; browser suite on it 50/50
 ```
 
 What that media folder did: Docker fills a new named volume from the image the first time it is
