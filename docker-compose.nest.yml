@@ -21,6 +21,17 @@
 
 name: rangon-nest
 
+# Where uploads go. On disk unless `PARITY_S3=1`, which `scripts/nest-parity.sh`
+# reads too: it then starts `s3` (profile `s3`) and makes the bucket, and
+# both APIs keep their uploads there, as a deployment with `USE_S3=1` does.
+# The keys are this stack's own, for a server nothing else can reach.
+x-storage-env: &storage-env
+  USE_S3: ${PARITY_S3:-0}
+  S3_ENDPOINT: http://s3:7070
+  S3_BUCKET: rangon-parity
+  S3_ACCESS_KEY: parity-s3-key
+  S3_SECRET_KEY: parity-s3-not-a-secret
+
 x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: config.settings.parity
   DJANGO_SECRET_KEY: nest-parity-not-a-secret
@@ -49,6 +60,7 @@ x-django-env: &django-env
   # harness runs on demand reaches the sink.
   WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
   WEB_REVALIDATE_SECRET: parity-revalidate-secret
+  <<: *storage-env
 
 services:
   db:
@@ -75,6 +87,22 @@ services:
 
   # Where both APIs' background jobs send their mail and their storefront
   # revalidations, kept for the harness (apps/api-nest/parity/sink.ts).
+  # An S3 server, for `PARITY_S3=1` only: the Versity gateway over a directory.
+  # It checks every request's signature, which a mock would not -- and the
+  # Nest API signs its own (common/s3.ts). (MinIO's images, which the
+  # development stack names, are no longer published.)
+  s3:
+    profiles: [s3]
+    image: versity/versitygw:v1.8.0
+    environment:
+      ROOT_ACCESS_KEY: parity-s3-key
+      ROOT_SECRET_KEY: parity-s3-not-a-secret
+    command: ["--port", ":7070", "posix", "/data"]
+    # Gone with the container: every reset starts from an empty bucket. Not a
+    # tmpfs -- the gateway keeps an object's type in extended attributes.
+    volumes:
+      - /data
+
   sink:
     image: rangon-api-nest:parity
     build:
@@ -144,6 +172,7 @@ services:
       EMAIL_PORT: "1025"
       SMS_ALLOWLIST: "01711000001, 8801911000801"
       MEDIA_ROOT: /media
+      <<: *storage-env
       PORT: "3000"
     # The image's own app, plus the stand-in payment gateway the Django side
     # installs too (parity/serve.ts). The image's command runs without it.
@@ -177,6 +206,9 @@ services:
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
       PARITY_SINK: http://sink:8025
       PARITY_ONLY: ${PARITY_ONLY:-}
+      # With uploads in a bucket, the harness reads what each API stored there.
+      PARITY_S3: ${PARITY_S3:-0}
+      <<: *storage-env
     command: ["node", "parity/run.ts"]
     depends_on:
       django: {condition: service_healthy}
@@ -207,6 +239,7 @@ services:
       EMAIL_PORT: "1025"
       SMS_ALLOWLIST: "01711000001, 8801911000801"
       MEDIA_ROOT: /media
+      <<: *storage-env
       PORT: "3000"
     volumes:
       - ./apps/api-nest/parity:/app/parity:ro
@@ -242,6 +275,7 @@ services:
       EMAIL_PORT: "1025"
       SMS_ALLOWLIST: "01711000001, 8801911000801"
       MEDIA_ROOT: /media
+      <<: *storage-env
     volumes:
       - ./apps/api/media:/media
     command: ["node", "dist/worker.js"]
@@ -271,6 +305,9 @@ services:
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
       PARITY_SINK: http://sink:8025
       PARITY_ONLY: ${PARITY_ONLY:-}
+      # With uploads in a bucket, the harness reads what each API stored there.
+      PARITY_S3: ${PARITY_S3:-0}
+      <<: *storage-env
     command: ["node", "parity/run.ts"]
     depends_on:
       django: {condition: service_healthy}

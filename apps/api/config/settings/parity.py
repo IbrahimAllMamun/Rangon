@@ -9,8 +9,9 @@ Never used in production: it inherits `dev`, which allows every host, and it
 installs a payment gateway that believes whatever it is sent.
 """
 
+from . import base
 from .dev import *
-from .dev import INSTALLED_APPS, REST_FRAMEWORK
+from .dev import INSTALLED_APPS, REST_FRAMEWORK, STORAGES, USE_S3
 
 REST_FRAMEWORK = {**REST_FRAMEWORK, "DEFAULT_THROTTLE_CLASSES": ()}
 
@@ -27,3 +28,10 @@ ROOT_URLCONF = "parity_gateway.urls"
 # dev image runs Django as root, the Nest image as `node`): directories
 # Django makes must take the other's files too. File modes are unchanged.
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o777
+
+# `dev` puts the default storage back on disk whatever `USE_S3` says, while the
+# URL conf still drops `/media/` for it -- uploads land where nothing serves
+# them (D237 in docs/roadmap.md). The S3 run of the parity suite (`PARITY_S3=1`)
+# compares what production does with a bucket, so it takes `base`'s storage.
+if USE_S3:
+    STORAGES = {**STORAGES, "default": base.STORAGES["default"]}

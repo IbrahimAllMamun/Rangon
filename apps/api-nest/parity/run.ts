@@ -31,6 +31,7 @@ import { merchandisingConcurrencyChecks } from './merchandising-concurrency.ts';
 import { posConcurrencyChecks } from './pos-concurrency.ts';
 import { posSaleConcurrencyChecks } from './pos-sale-concurrency.ts';
 import { concurrencyChecks } from './concurrency.ts';
+import { BUCKET_MODE, fileNames, storedObjects } from './bucket.ts';
 import { type Captured, compare, describeTokens, type Difference, diffJson } from './compare.ts';
 import { KNOWN_DIFFERENCES } from './known-differences.ts';
 import { notificationsCases } from './notifications-cases.ts';
@@ -857,6 +858,9 @@ async function run(
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
   const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  // With uploads in a bucket (`PARITY_S3=1`), what a write stored there is an
+  // effect like any other: the rows say where, the bucket says what.
+  const filesBefore = writes && BUCKET_MODE ? await fileNames(db) : null;
   if (testCase.jobs) await emptyJobs(db);
   if (testCase.sink) {
     await sinkMode(typeof testCase.sink === 'object' ? testCase.sink : {});
@@ -873,6 +877,7 @@ async function run(
     effects.push([await sinkTake()]);
     await sinkMode({});
   }
+  if (filesBefore) effects.push(await storedObjects(db, filesBefore));
   if (writes) await undoWrites(db, since as string);
   return { response, effects };
 }

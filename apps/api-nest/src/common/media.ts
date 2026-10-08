@@ -7,6 +7,8 @@
  * `filepath_to_uri` percent-encodes everything except the characters in its
  * safe set, and turns backslashes into slashes.
  */
+import { type S3Settings, s3ObjectUrl } from './s3';
+
 const SAFE = new Set("/~!*()'".split(''));
 
 export function filepathToUri(path: string): string {
@@ -19,8 +21,19 @@ export function filepathToUri(path: string): string {
   return out;
 }
 
-export function mediaUrl(name: string | null | undefined, mediaBase = '/media/'): string {
+/**
+ * What `FieldFile.url` is built from: `MEDIA_URL` for files on disk, the
+ * bucket's settings with `USE_S3` -- where the URL is the bucket's own,
+ * absolute, and passed through unchanged (docs/api/conventions.md).
+ */
+export type MediaBase = string | S3Settings;
+
+export function mediaUrl(
+  name: string | null | undefined,
+  mediaBase: MediaBase = '/media/',
+): string {
   if (!name) return '';
+  if (typeof mediaBase !== 'string') return s3ObjectUrl(mediaBase, name);
   // `urljoin(base, url)` with a base ending in `/` and a relative name is a
   // plain concatenation; a name starting with `/` would replace the path.
   const uri = filepathToUri(name);

@@ -625,6 +625,15 @@ export async function expensesCases(): Promise<Case[]> {
   form('a picture named as a script', [...fields, file('run.sh', 'image/png')]);
   form('a picture with a type in capitals', [...fields, file('receipt.png', 'IMAGE/PNG')]);
   form('a receipt with no type', [...fields, file('receipt.png', '')]);
+  // In a bucket (`PARITY_S3=1`) a receipt is stored with a type: the one the
+  // client claimed, else the one its extension has in Python's table, else
+  // `binary/octet-stream`. These three are the fallbacks.
+  form('a PDF receipt with no type', [...fields, file('bill.pdf', '', PDF)]);
+  form('a WebP receipt with no type', [...fields, file('scan.webp', '')]);
+  form('a PDF receipt whose type has a parameter', [
+    ...fields,
+    file('bill.pdf', 'application/pdf; charset=binary', PDF),
+  ]);
   form('an empty receipt', [...fields, file('receipt.png', 'image/png', Buffer.alloc(0))]);
   form('a receipt sent as text', [...fields, ['attachment', 'receipt.png']]);
   form('a receipt and a refused amount', [

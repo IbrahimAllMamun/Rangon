@@ -198,7 +198,7 @@ export class PosReadsService {
       if (!current || (row.is_primary && !current.is_primary)) chosen.set(row.product_id, row);
     }
     for (const [productId, row] of chosen)
-      urls.set(productId, mediaUrl(row.image, this.env.MEDIA_URL));
+      urls.set(productId, mediaUrl(row.image, this.env.mediaBase));
     return urls;
   }
 }

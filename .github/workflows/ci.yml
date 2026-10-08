@@ -179,6 +179,30 @@ jobs:
         if: failure()
         run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs --profile worker logs --tail 200 django nest nest-jobs nest-worker
 
+  # The comparison a third time, with both APIs' uploads in an S3 server
+  # instead of on disk (`USE_S3=1`, ADR-0018): every case, and for every write
+  # the object each API stored -- its name, bytes, type and encoding. A job of
+  # its own, beside the one above: it needs its own database, seeded through
+  # the bucket, and nothing waits for it.
+  api-nest-parity-s3:
+    name: NestJS API parity with Django, uploads in S3
+    runs-on: ubuntu-latest
+    needs: [api-nest]
+    env:
+      PARITY_S3: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start both APIs and the S3 server, migrate, seed, apply the parity fixtures
+        run: bash scripts/nest-parity.sh reset
+
+      - name: Compare every case, and every stored object
+        run: bash scripts/nest-parity.sh run
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile s3 logs --tail 200 django nest s3
+
   # ------------------------------------------------------------------- e2e --
   # The four critical flows, driven in a real browser against a real API and a
   # real database (docs/testing/strategy.md).

@@ -516,3 +516,18 @@ export function pyHtmlUnescape(text: string): string {
     return `&${ref}`;
   });
 }
+
+/** `posixpath.normpath(path)`. */
+export function pyNormpath(path: string): string {
+  if (!path) return '.';
+  let slashes = path.startsWith('/') ? 1 : 0;
+  // POSIX leaves two leading slashes to the implementation; three or more are one.
+  if (slashes && path.startsWith('//') && !path.startsWith('///')) slashes = 2;
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part !== '..' || (!slashes && !parts.length) || parts.at(-1) === '..') parts.push(part);
+    else if (parts.length) parts.pop();
+  }
+  return '/'.repeat(slashes) + parts.join('/') || '.';
+}

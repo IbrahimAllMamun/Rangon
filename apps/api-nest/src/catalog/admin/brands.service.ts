@@ -72,7 +72,7 @@ export class BrandsService {
       name: row.name,
       slug: row.slug,
       description: row.description,
-      logo: mediaUrl(row.logo, this.env.MEDIA_URL),
+      logo: mediaUrl(row.logo, this.env.mediaBase),
       is_active: row.is_active,
       is_featured: row.is_featured,
     };

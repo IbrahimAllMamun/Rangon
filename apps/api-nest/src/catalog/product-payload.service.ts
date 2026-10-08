@@ -193,7 +193,7 @@ export class ProductPayloadService {
     tax: TaxSettings,
   ): Record<string, unknown> {
     const images = relations.images.map((image) => ({
-      url: mediaUrl(image.image, this.env.MEDIA_URL),
+      url: mediaUrl(image.image, this.env.mediaBase),
       alt: effectiveAlt(image, product.name),
       // `null` marks a shared image -- a flat-lay or a size chart -- which
       // shows for every colour and never changes the selection.

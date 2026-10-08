@@ -31,7 +31,7 @@ import {
 import { mediaUrl } from '../../common/media';
 import { pyStr } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
-import { MediaStorage } from '../../common/storage';
+import { type MediaStorage, mediaStorage } from '../../common/storage';
 import { parseUuid } from '../../common/uuid';
 import { ENV, Env } from '../../config/env';
 import { Database, type Queryable } from '../../database/database.service';
@@ -250,7 +250,7 @@ export class NavigationAdminService {
     private readonly revalidation: Revalidation,
     @Inject(ENV) private readonly env: Env,
   ) {
-    this.storage = new MediaStorage(env.MEDIA_ROOT, env.DJANGO_TIME_ZONE);
+    this.storage = mediaStorage(env);
   }
 
   /**
@@ -276,7 +276,7 @@ export class NavigationAdminService {
       display_label: displayLabel(row),
       url: row.url,
       badge: row.badge,
-      image: mediaUrl(row.image, this.env.MEDIA_URL),
+      image: mediaUrl(row.image, this.env.mediaBase),
       description: row.description,
       layout: row.layout,
       position: row.position,

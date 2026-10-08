@@ -39,8 +39,9 @@ export async function createApp(): Promise<{ app: NestFastifyApplication; env: E
   routes.attach(fastify);
   installPipeline(fastify, env, routes);
   installBodyCapture(fastify);
-  // Uploaded files, as `config.urls` mounts them beside the API (media/media.ts).
-  installMedia(fastify, env);
+  // Uploaded files, as `config.urls` mounts them beside the API (media/media.ts) --
+  // not with `USE_S3`: nothing is mounted when the files are in a bucket.
+  if (!env.USE_S3) installMedia(fastify, env);
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.forRoot(env, routes),

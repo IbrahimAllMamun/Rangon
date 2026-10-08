@@ -19,7 +19,7 @@ import { NotFound, ValidationError } from '../../common/errors';
 import { applyFilters, booleanFilter, choiceFilter, orderingFrom } from '../../common/filtering';
 import { mediaUrl } from '../../common/media';
 import type { QueryDict } from '../../common/query-dict';
-import { MediaStorage } from '../../common/storage';
+import { type MediaStorage, mediaStorage } from '../../common/storage';
 import { parseUuid } from '../../common/uuid';
 import { ENV, Env } from '../../config/env';
 import { Database } from '../../database/database.service';
@@ -124,7 +124,7 @@ export class BannersAdminService {
     private readonly revalidation: Revalidation,
     @Inject(ENV) private readonly env: Env,
   ) {
-    this.storage = new MediaStorage(env.MEDIA_ROOT, env.DJANGO_TIME_ZONE);
+    this.storage = mediaStorage(env);
   }
 
   /** `StorefrontBannerSerializer(banner).data`. */
@@ -138,7 +138,7 @@ export class BannersAdminService {
       subtitle: row.subtitle,
       cta_label: row.cta_label,
       url: row.url,
-      image: mediaUrl(row.image, this.env.MEDIA_URL),
+      image: mediaUrl(row.image, this.env.mediaBase),
       dismissible: row.dismissible,
       priority: row.priority,
       is_active: row.is_active,

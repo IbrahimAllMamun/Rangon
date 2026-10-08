@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { MediaBase } from '../common/media';
+import type { S3Settings } from '../common/s3';
 
 /**
  * Configuration, read once from the environment and validated at startup.
@@ -119,7 +121,16 @@ const schema = z.object({
   // FileSystemStorage writes to, shared between the two processes.
   MEDIA_URL: z.string().default('/media/'),
   MEDIA_ROOT: z.string().default('/app/media'),
+  // Uploads in a bucket instead (`config/settings/base.py`, the USE_S3
+  // branch): any S3-compatible server at S3_ENDPOINT, AWS itself when it is
+  // blank. `/media/` is then not served at all, and a file's URL is the
+  // bucket's (common/s3.ts).
   USE_S3: flag(false),
+  S3_ENDPOINT: z.string().default(''),
+  S3_BUCKET: z.string().default(''),
+  S3_ACCESS_KEY: z.string().default(''),
+  S3_SECRET_KEY: z.string().default(''),
+  S3_REGION: z.string().default(''),
 });
 
 type Parsed = z.infer<typeof schema>;
@@ -139,6 +150,10 @@ export interface Env extends Parsed {
   jobsWorker: boolean;
   /** This process also fires the schedule (`RANGON_JOBS_SCHEDULE`, in a worker only). */
   jobsSchedule: boolean;
+  /** The bucket uploads live in, with `USE_S3`; null when they are on disk. */
+  s3: S3Settings | null;
+  /** What a stored file's URL is built from: `MEDIA_URL`, or the bucket. */
+  mediaBase: MediaBase;
 }
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
@@ -164,11 +179,24 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       throw new Error("DJANGO_ALLOWED_HOSTS must not contain '*' in production.");
     }
   }
+  let s3: S3Settings | null = null;
   if (env.USE_S3) {
-    // django-storages builds S3 URLs from the bucket, endpoint and addressing
-    // style; that is not ported yet, and a wrong image URL is worse than a
-    // refusal to start. See docs/architecture/nest-port.md.
-    throw new Error('USE_S3=1 is not supported by the NestJS API yet.');
+    // Django would start and fail at the first upload; this says so at once.
+    // boto also finds credentials in places this does not look (an instance
+    // role, `~/.aws`): here they are the two settings or nothing.
+    const missing = (['S3_BUCKET', 'S3_ACCESS_KEY', 'S3_SECRET_KEY'] as const).filter(
+      (name) => !env[name].trim(),
+    );
+    if (missing.length) throw new Error(`USE_S3=1 needs ${missing.join(', ')}.`);
+    s3 = {
+      // `env("S3_ENDPOINT") or None`.
+      endpoint: env.S3_ENDPOINT.trim() || null,
+      bucket: env.S3_BUCKET.trim(),
+      accessKey: env.S3_ACCESS_KEY.trim(),
+      secretKey: env.S3_SECRET_KEY.trim(),
+      // `env("S3_REGION", "us-east-1")`.
+      region: env.S3_REGION.trim() || 'us-east-1',
+    };
   }
 
   const workerSetting = (env.RANGON_JOBS_WORKER ?? '').trim().toLowerCase();
@@ -186,6 +214,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     production,
     jobsWorker,
     jobsSchedule: jobsWorker && env.RANGON_JOBS_SCHEDULE,
+    s3,
+    mediaBase: s3 ?? env.MEDIA_URL,
     throttlingDisabled: env.DJANGO_SETTINGS_MODULE.endsWith('.parity'),
     jwtSigningKey: env.JWT_SIGNING_KEY || env.DJANGO_SECRET_KEY,
     // dev.py: ALLOWED_HOSTS = ["*"] and CORS_ALLOW_ALL_ORIGINS = True.

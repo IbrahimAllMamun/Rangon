@@ -463,7 +463,7 @@ export class StaffOrders {
     const images = new Map<string, string>();
     for (const item of items) {
       if (item.product_id && !images.has(item.product_id))
-        images.set(item.product_id, await primaryImageUrl(q, item.product_id, this.env.MEDIA_URL));
+        images.set(item.product_id, await primaryImageUrl(q, item.product_id, this.env.mediaBase));
     }
     const emails = new Map<string, string>();
     const emailOf = async (userId: string | null) => {

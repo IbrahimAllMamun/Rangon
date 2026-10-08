@@ -127,7 +127,7 @@ export class CategoriesService {
       name: row.name,
       slug: row.slug,
       description: row.description,
-      image: mediaUrl(row.image, this.env.MEDIA_URL),
+      image: mediaUrl(row.image, this.env.mediaBase),
       position: row.position,
       is_active: row.is_active,
       show_in_navigation: row.show_in_navigation,

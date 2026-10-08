@@ -38,7 +38,7 @@ import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../co
 import { pySlice, pySplit, pyStrip } from '../common/python';
 import type { QueryDict } from '../common/query-dict';
 import { nextNumber } from '../common/sequence';
-import { MediaStorage } from '../common/storage';
+import { type MediaStorage, mediaStorage } from '../common/storage';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
@@ -153,7 +153,7 @@ export class ExpensesService {
     private readonly cashBook: CashBookService,
     @Inject(ENV) private readonly env: Env,
   ) {
-    this.storage = new MediaStorage(env.MEDIA_ROOT, env.DJANGO_TIME_ZONE);
+    this.storage = mediaStorage(env);
   }
 
   private iso(value: string | null): string | null {
@@ -619,6 +619,7 @@ export class ExpensesService {
               `expenses/${now.slice(0, 4)}/${now.slice(5, 7)}/`,
               `${randomUUID().replaceAll('-', '')}${pathSuffix(asked.attachment.name).toLowerCase()}`,
               asked.attachment.bytes,
+              asked.attachment.contentType,
             )
           : '';
         await tx.query(
