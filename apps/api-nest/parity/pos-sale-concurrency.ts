@@ -548,6 +548,90 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
         });
       }
     }
+    // 9 and 10. The two of Django's own concurrency tests
+    //    (apps/api/tests/test_concurrency.py) that no check above stood for:
+    //    sales whose lines name the same two SKUs in opposite orders, and
+    //    sales of different SKUs. Neither can deadlock while every counter
+    //    sale queues on the number sequence first; these say so by running,
+    //    and would say otherwise the day that sequence lock is not taken.
+    await restore();
+    const shelves = (
+      await db.query<{ id: string; variant_id: string; sku: string }>(
+        `SELECT i.id, i.variant_id, v.sku FROM inventory_inventory i
+           JOIN catalog_productvariant v ON v.id = i.variant_id
+           JOIN catalog_product p ON p.id = v.product_id
+          WHERE i.branch_id = $1 AND i.id <> $2 AND i.on_hand - i.reserved >= 6
+            AND v.status = 'ACTIVE' AND p.status = 'ACTIVE'
+          ORDER BY v.sku LIMIT 4`,
+        [linen.branch_id, linen.id],
+      )
+    ).rows;
+    const figures = async (id: string) =>
+      (await one<{ on_hand: number; ledger: number }>(
+        `SELECT i.on_hand,
+                COALESCE((SELECT SUM(t.quantity) FROM inventory_inventorytransaction t
+                           WHERE t.branch_id = i.branch_id AND t.variant_id = i.variant_id
+                             AND t.transaction_type NOT IN ('RESERVATION', 'RESERVATION_RELEASE')), 0)::int
+                  AS ledger
+           FROM inventory_inventory i WHERE i.id = $1`,
+        [id],
+      )) as { on_hand: number; ledger: number };
+    const [first, second] = shelves;
+    if (shelves.length < 4 || !first || !second) {
+      checks.push({
+        name: 'counter: sales of two SKUs in opposite orders, and of different SKUs, at once',
+        passed: false,
+        detail: `the branch has ${shelves.length} other shelves of six or more; the checks need four`,
+      });
+    } else {
+      const before = [await figures(first.id), await figures(second.id)] as const;
+      const crossed = await Promise.all(
+        Array.from({ length: 6 }, (_, index) => {
+          const lines = index % 2 ? [second, first] : [first, second];
+          return sell(index % 3 ? apis.NEST : apis.DJANGO, {
+            lines: lines.map((line) => ({ variant: line.variant_id, quantity: 1 })),
+            payments: card,
+          });
+        }),
+      );
+      const after = [await figures(first.id), await figures(second.id)] as const;
+      checks.push({
+        name: 'counter: 6 two-line sales at once, the two SKUs in opposite orders, across both APIs -- no deadlock, six sold of each',
+        passed:
+          crossed.every((response) => response.status === 201) &&
+          after[0].on_hand === before[0].on_hand - 6 &&
+          after[1].on_hand === before[1].on_hand - 6 &&
+          after[0].ledger - before[0].ledger === -6 &&
+          after[1].ledger - before[1].ledger === -6,
+        detail: `statuses ${crossed.map((response) => response.status).join(',')}, ${first.sku} ${before[0].on_hand} -> ${after[0].on_hand}, ${second.sku} ${before[1].on_hand} -> ${after[1].on_hand}`,
+      });
+
+      await restore();
+      const apart = await Promise.all(
+        shelves.map((line, index) =>
+          sell(index % 2 ? apis.NEST : apis.DJANGO, {
+            lines: [{ variant: line.variant_id, quantity: 2 }],
+            payments: card,
+          }),
+        ),
+      );
+      const sold = await db.query<{ sku: string; quantity: string }>(
+        `SELECT v.sku, -SUM(t.quantity) AS quantity FROM inventory_inventorytransaction t
+           JOIN catalog_productvariant v ON v.id = t.variant_id
+          WHERE t.transaction_type = 'SALE' AND t.variant_id = ANY($1::uuid[])
+            AND t.id NOT IN (SELECT id FROM "snap_inventory_inventorytransaction")
+          GROUP BY v.sku ORDER BY v.sku`,
+        [shelves.map((line) => line.variant_id)],
+      );
+      checks.push({
+        name: 'counter: 4 sales of 4 different SKUs at once, across both APIs -- all four go through, two sold of each',
+        passed:
+          apart.every((response) => response.status === 201) &&
+          sold.rows.length === 4 &&
+          sold.rows.every((row) => Number(row.quantity) === 2),
+        detail: `statuses ${apart.map((response) => response.status).join(',')}, sold ${sold.rows.map((row) => `${row.sku}:${row.quantity}`).join(' ')}`,
+      });
+    }
     await restore();
   } finally {
     await db.end();

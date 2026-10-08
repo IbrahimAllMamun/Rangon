@@ -180,6 +180,35 @@ export async function financeConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
       detail: `statuses ${statuses(clicks).join(',')}, ${new Set(clicks.map((response) => idOf(response.body))).size} movement id, drawer ${before} -> ${end.balance}, ${end.made} movement`,
     });
 
+    // 2b. Six clicks of one withdrawal of all the drawer holds, under one
+    //     key (Django's own `test_a_replayed_withdrawal_is_answered_not_refused`).
+    //     The losers reach the balance check with nothing left: unless the key
+    //     is read again under the account's lock they are told the drawer is
+    //     short, for a withdrawal that was made.
+    await restore();
+    const held = (await state(drawer)).balance;
+    const reclicks = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        post(
+          either(index),
+          MOVE,
+          { account: drawer, transaction_type: 'WITHDRAWAL', amount: held, reason: 'Banked' },
+          'parity-withdrawal-clicked',
+        ),
+      ),
+    );
+    end = await state(drawer);
+    checks.push({
+      name: 'cash book: 6 clicks of one withdrawal of all a drawer holds with one Idempotency-Key, across both APIs -- six 201s, one movement, none told the drawer is short',
+      passed:
+        statuses(reclicks).every((status) => status === 201) &&
+        new Set(reclicks.map((response) => idOf(response.body))).size === 1 &&
+        end.made === '1' &&
+        end.balance === '0.00' &&
+        end.balance === end.ledger,
+      detail: `statuses ${statuses(reclicks).join(',')}, ${new Set(reclicks.map((response) => idOf(response.body))).size} movement id, drawer ${held} -> ${end.balance}, ${end.made} movement`,
+    });
+
     for (const [side, api] of [
       ['Django', apis.DJANGO],
       ['Nest', apis.NEST],
