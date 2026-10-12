@@ -16,7 +16,13 @@ import {
   runSerializer,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, booleanFilter, choiceFilter, orderingFrom } from '../../common/filtering';
+import {
+  applyFilters,
+  booleanFilter,
+  choiceFilter,
+  orderingFrom,
+  uniqueLast,
+} from '../../common/filtering';
 import { mediaUrl } from '../../common/media';
 import type { QueryDict } from '../../common/query-dict';
 import { type MediaStorage, mediaStorage } from '../../common/storage';
@@ -152,7 +158,10 @@ export class BannersAdminService {
   private async queryset(query: QueryDict, sql: SqlParams) {
     const where: string[] = [];
     await applyFilters(this.db, query, FILTERS, sql, where);
-    return { where, order: (orderingFrom(query, ORDERING) ?? DEFAULT_ORDER).join(', ') };
+    return {
+      where,
+      order: uniqueLast(orderingFrom(query, ORDERING) ?? DEFAULT_ORDER, `${B}."id"`).join(', '),
+    };
   }
 
   async list(query: QueryDict) {

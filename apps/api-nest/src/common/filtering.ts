@@ -275,6 +275,17 @@ export function orderingFrom(
   return orderingPlan(query, columns)?.order ?? null;
 }
 
+/**
+ * `core.ordering.unique_last`: the order as it is, and by the row's primary
+ * key after that -- so that rows an ordering does not tell apart come back in
+ * one order rather than as they lie in the table (D245). `key` is the list's
+ * own id column; an ordering that already names it is left as it is.
+ */
+export function uniqueLast(order: readonly string[], key: string): string[] {
+  const named = order.some((term) => term.replace(/ (ASC|DESC)$/, '') === key);
+  return named ? [...order] : [...order, `${key} ASC`];
+}
+
 /** Python's `\s`, and its complement, for `smart_split`. */
 const WS =
   '\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';

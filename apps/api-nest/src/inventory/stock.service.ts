@@ -1160,7 +1160,8 @@ export class StockService {
          INNER JOIN "catalog_productvariant"
            ON ("inventory_stockcountitem"."variant_id" = "catalog_productvariant"."id")
         WHERE ("inventory_stockcountitem"."stock_count_id" = $1::uuid
-          AND "inventory_stockcountitem"."counted_quantity" IS NOT NULL)`,
+          AND "inventory_stockcountitem"."counted_quantity" IS NOT NULL)
+        ORDER BY "inventory_stockcountitem"."created_at" ASC, "inventory_stockcountitem"."id" ASC`,
       [count.id],
     );
     if (!counted.length) {

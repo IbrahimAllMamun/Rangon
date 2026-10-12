@@ -15,7 +15,7 @@ import {
   uuidField,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, modelFilter, orderingFrom } from '../../common/filtering';
+import { applyFilters, modelFilter, orderingFrom, uniqueLast } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import { PyFloat, pyStr } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
@@ -359,6 +359,7 @@ export class InventoryAdminService {
       await applyFilters(this.db, query, FILTERS, sql, where);
       order = orderingFrom(query, ORDERING) ?? defaultOrder;
     }
+    order = uniqueLast(order, `${I}."id"`);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const count = Number(
       (
@@ -610,13 +611,14 @@ export class InventoryAdminService {
         [pgInt(row.on_hand) ?? 0, pgInt(row.reserved) ?? 0] as const,
       ]),
     );
-    // Django's statement, every column of the three tables: the issues come
-    // back in the order PostgreSQL returns the rows.
+    // Django's statement, every column of the three tables, in one order
+    // since D245: by branch, SKU and then the row's id.
     const inventories = await this.db.query<InventoryRow>(
       `SELECT ${INTEGRITY_SELECT} FROM ${I}
          INNER JOIN "accounts_branch" ON (${I}."branch_id" = "accounts_branch"."id")
          INNER JOIN "catalog_productvariant" ON (${I}."variant_id" = "catalog_productvariant"."id")
-        ${branch ? `WHERE ${I}."branch_id" = $1::uuid` : ''}`,
+        ${branch ? `WHERE ${I}."branch_id" = $1::uuid` : ''}
+        ORDER BY "accounts_branch"."code" ASC, "catalog_productvariant"."sku" ASC, ${I}."id" ASC`,
       branch ? [branch.id] : [],
     );
     const issues: Record<string, unknown>[] = [];

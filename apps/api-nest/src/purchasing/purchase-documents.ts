@@ -176,7 +176,8 @@ export class PurchaseDocuments {
     const sql = new SqlParams();
     return q.query<DocumentLine>(
       `SELECT "id", "${parent}" AS "document_id", "purchase_order_item_id", "quantity", "unit_cost"
-         FROM "${table}" WHERE "${table}"."${parent}" IN ${sql.list(ids, 'uuid')}`,
+         FROM "${table}" WHERE "${table}"."${parent}" IN ${sql.list(ids, 'uuid')}
+        ORDER BY "${table}"."created_at" ASC, "${table}"."id" ASC`,
       sql.values,
     );
   }
@@ -290,7 +291,8 @@ export class PurchaseDocuments {
     const within = `IN ${sql.list(ids, 'uuid')}`;
     const items = await q.query<ItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM "purchasing_purchaseorderitem"
-        WHERE "purchasing_purchaseorderitem"."purchase_order_id" ${within}`,
+        WHERE "purchasing_purchaseorderitem"."purchase_order_id" ${within}
+        ORDER BY "purchasing_purchaseorderitem"."created_at" ASC, "purchasing_purchaseorderitem"."id" ASC`,
       sql.values,
     );
     const variants = await this.variants(

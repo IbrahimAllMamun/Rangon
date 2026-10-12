@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { NotFound } from '../common/errors';
-import { orderingPlan, type OrderingTerm } from '../common/filtering';
+import { orderingPlan, uniqueLast, type OrderingTerm } from '../common/filtering';
 import type { QueryDict } from '../common/query-dict';
 import { parseUuid } from '../common/uuid';
 import { Database } from '../database/database.service';
@@ -79,7 +79,7 @@ export class RolesService {
 
   async list(query: QueryDict) {
     const plan = orderingPlan(query, ROLE_ORDERING);
-    const order = plan?.order ?? [`${R}."name" ASC`];
+    const order = uniqueLast(plan?.order ?? [`${R}."name" ASC`], `${R}."id"`);
     return this.serialise(
       await this.db.query<RoleRow>(
         `SELECT ${columns(R, ROLE_COLUMNS)} FROM ${R} ${(plan?.joins ?? []).join(' ')}
@@ -102,10 +102,10 @@ export class RolesService {
 
   /** `PermissionSerializer(permissions, many=True).data`. */
   permissions(query: QueryDict) {
-    const order = orderingPlan(query, PERMISSION_ORDERING)?.order ?? [
-      `${P}."group" ASC`,
-      `${P}."code" ASC`,
-    ];
+    const order = uniqueLast(
+      orderingPlan(query, PERMISSION_ORDERING)?.order ?? [`${P}."group" ASC`, `${P}."code" ASC`],
+      `${P}."id"`,
+    );
     return this.db.query(
       `SELECT ${columns(P, PERMISSION_COLUMNS)} FROM ${P} ORDER BY ${order.join(', ')}`,
     );

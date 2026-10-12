@@ -16,7 +16,7 @@ import {
   runSerializer,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { orderingPlan, type OrderingTerm } from '../../common/filtering';
+import { orderingPlan, uniqueLast, type OrderingTerm } from '../../common/filtering';
 import { PyFloat, pySlice, pySplit, pyStr, pyStrip } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
 import { parseUuid } from '../../common/uuid';
@@ -387,11 +387,12 @@ export class SiteAdminService {
     ) {
       throw new Error("FieldError: Cannot resolve keyword 'get_platform_display' into field.");
     }
-    return (
+    return uniqueLast(
       (query && orderingPlan(query, LINK_ORDERING)?.order) ?? [
         '"content_sociallink"."position" ASC',
         '"content_sociallink"."platform" ASC',
-      ]
+      ],
+      '"content_sociallink"."id"',
     );
   }
 

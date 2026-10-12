@@ -27,6 +27,7 @@ import {
   choiceFilter,
   type FilterField,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { searchDigits } from '../common/phone';
@@ -203,7 +204,10 @@ export class CustomersAdminService {
     const sql = new SqlParams();
     const where = await this.conditions(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${C}."created_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${C}."created_at" DESC`],
+      `${C}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

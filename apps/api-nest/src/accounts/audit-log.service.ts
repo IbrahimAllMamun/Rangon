@@ -13,6 +13,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { pyStrip } from '../common/python';
@@ -235,7 +236,7 @@ export class AuditLogService {
       )?.count ?? 0,
     );
     const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
-    const order = orderingFrom(query, ORDERING) ?? ORDER;
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? ORDER, `${A}."id"`);
     const rows = await this.db.arrays(
       `SELECT ${SELECT} ${this.from(query)} ${whereSql} ORDER BY ${order.join(', ')}
         LIMIT ${page.limit} OFFSET ${page.offset}`,

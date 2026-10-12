@@ -32,6 +32,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
   searchTerms,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
@@ -193,7 +194,10 @@ export class ExpensesService {
     const sql = new SqlParams();
     const where = await this.categoryConditions(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, CATEGORY_ORDERING) ?? [`${C}."name" ASC`];
+    const order = uniqueLast(
+      orderingFrom(query, CATEGORY_ORDERING) ?? [`${C}."name" ASC`],
+      `${C}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(
@@ -438,10 +442,10 @@ export class ExpensesService {
     const sql = new SqlParams();
     const where = await this.expenseConditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, EXPENSE_ORDERING) ?? [
-      `${E}."spent_at" DESC`,
-      `${E}."created_at" DESC`,
-    ];
+    const order = uniqueLast(
+      orderingFrom(query, EXPENSE_ORDERING) ?? [`${E}."spent_at" DESC`, `${E}."created_at" DESC`],
+      `${E}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(
@@ -824,7 +828,8 @@ export class ExpensesService {
       `SELECT ${E}."category_id", ${C}."name", ${C}."code", SUM(${E}."amount") AS "total",
               COUNT(${E}."id") AS "count"
          FROM ${E} INNER JOIN ${C} ON (${E}."category_id" = ${C}."id") ${whereSql}
-        GROUP BY ${E}."category_id", ${C}."name", ${C}."code" ORDER BY 4 DESC`,
+        GROUP BY ${E}."category_id", ${C}."name", ${C}."code"
+        ORDER BY 4 DESC, ${C}."name" ASC, ${E}."category_id" ASC`,
       sql.values,
     );
     const total = quantize(totals.total ?? ZERO);

@@ -321,7 +321,8 @@ export class ReportsService {
       `SELECT ${E}."category_id", ${EC}."name", ${EC}."code", SUM(${E}."amount") AS "total",
               COUNT(${E}."id") AS "count"
          FROM ${E} INNER JOIN ${EC} ON (${E}."category_id" = ${EC}."id") WHERE ${where(sql)}
-        GROUP BY ${E}."category_id", ${EC}."name", ${EC}."code" ORDER BY 4 DESC`,
+        GROUP BY ${E}."category_id", ${EC}."name", ${EC}."code"
+        ORDER BY 4 DESC, ${EC}."name" ASC, ${E}."category_id" ASC`,
       sql.values,
     );
     return {
@@ -413,7 +414,7 @@ export class ReportsService {
     const byChannel = await this.db.query<Raw>(
       `SELECT ${O}."channel", COUNT(${O}."id") AS "orders",
               COALESCE(SUM(${O}."grand_total"), 0.00) AS "revenue"
-         FROM ${O} WHERE (${this.sold(sql, O, scope)}) GROUP BY ${O}."channel" ORDER BY 3 DESC`,
+         FROM ${O} WHERE (${this.sold(sql, O, scope)}) GROUP BY ${O}."channel" ORDER BY 3 DESC, ${O}."channel" ASC`,
       sql.values,
     );
 
@@ -435,7 +436,7 @@ export class ReportsService {
          FROM "orders_payment"
         WHERE ("orders_payment"."order_id" IN (SELECT U0."id" FROM ${O} U0 WHERE (${this.sold(sql, 'U0', scope)}))
           AND "orders_payment"."status" IN ('CAPTURED', 'PARTIALLY_REFUNDED'))
-        GROUP BY "orders_payment"."method" ORDER BY 2 DESC`,
+        GROUP BY "orders_payment"."method" ORDER BY 2 DESC, "orders_payment"."method" ASC`,
       sql.values,
     );
 
@@ -443,7 +444,8 @@ export class ReportsService {
     const topProducts = await this.db.query<Raw>(
       `SELECT ${I}."sku", ${I}."product_name", SUM(${I}."quantity") AS "units", ${netRevenue()} AS "revenue"
          ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)}
-        GROUP BY ${I}."sku", ${I}."product_name" ORDER BY 3 DESC LIMIT 10`,
+        GROUP BY ${I}."sku", ${I}."product_name"
+        ORDER BY 3 DESC, ${I}."sku" ASC, ${I}."product_name" ASC LIMIT 10`,
       sql.values,
     );
 
@@ -455,7 +457,7 @@ export class ReportsService {
          INNER JOIN "catalog_productvariant" ON (${I}."variant_id" = "catalog_productvariant"."id")
          INNER JOIN "catalog_product" ON ("catalog_productvariant"."product_id" = "catalog_product"."id")
          INNER JOIN "catalog_category" ON ("catalog_product"."category_id" = "catalog_category"."id")
-        WHERE ${this.soldLines(sql, scope)} GROUP BY 1 ORDER BY 3 DESC LIMIT 10`,
+        WHERE ${this.soldLines(sql, scope)} GROUP BY 1 ORDER BY 3 DESC, 1 ASC LIMIT 10`,
       sql.values,
     );
 
@@ -607,7 +609,7 @@ export class ReportsService {
               ${O}."grand_total", "customers_customer"."name" AS "customer",
               "accounts_branch"."code" AS "branch_code"
          FROM ${O} ${joins} WHERE (${this.sold(sql, O, scope, channel)})
-        ORDER BY ${O}."placed_at" DESC`,
+        ORDER BY ${O}."placed_at" DESC, ${O}."id" ASC`,
       sql.values,
     );
     return rows.map((row) => ({
@@ -634,7 +636,8 @@ export class ReportsService {
               ${netRevenue()} AS "revenue", ${COGS} AS "cost",
               COALESCE(SUM(${I}."returned_quantity"), 0) AS "returned"
          ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)}
-        GROUP BY ${I}."sku", ${I}."product_name", ${I}."variant_label" ORDER BY 5 DESC`,
+        GROUP BY ${I}."sku", ${I}."product_name", ${I}."variant_label"
+        ORDER BY 5 DESC, ${I}."sku" ASC, ${I}."product_name" ASC, ${I}."variant_label" ASC`,
       sql.values,
     );
     return rows.map((row) => {
@@ -671,7 +674,8 @@ export class ReportsService {
               (${INV}."on_hand" * "catalog_productvariant"."price") AS "retail_value"
          FROM ${INV} ${branchId ? `${branch} ${variant}` : `${variant} ${branch}`}` +
         (branchId ? ` WHERE ${INV}."branch_id" = ${sql.add(branchId, 'uuid')}` : '') +
-        ` ORDER BY "catalog_product"."name" ASC`,
+        ` ORDER BY "catalog_product"."name" ASC, "catalog_productvariant"."sku" ASC, ` +
+        `"accounts_branch"."code" ASC, ${INV}."id" ASC`,
       sql.values,
     );
     return rows.map((row) => ({
@@ -717,7 +721,7 @@ export class ReportsService {
               ((${P}."grand_total" - ${P}."paid_total") - ${P}."credited_total") AS "outstanding"
          FROM ${P} INNER JOIN "purchasing_supplier" ON (${P}."supplier_id" = "purchasing_supplier"."id")
         WHERE (${this.window(sql, `${P}."created_at"`, scope, `${P}."branch_id"`)})
-        ORDER BY ${P}."created_at" DESC`,
+        ORDER BY ${P}."created_at" DESC, ${P}."id" ASC`,
       sql.values,
     );
     return rows.map((row) => ({
@@ -744,7 +748,7 @@ export class ReportsService {
          LEFT OUTER JOIN ${RI} ON (${R}."id" = ${RI}."return_request_id")
         WHERE (${this.window(sql, `${R}."created_at"`, scope, `${O}."branch_id"`)})
         GROUP BY ${R}."number", ${R}."reason", ${R}."status", ${R}."refund_amount", ${R}."created_at", 6, 7
-        ORDER BY ${R}."created_at" DESC`,
+        ORDER BY ${R}."created_at" DESC, ${R}."number" ASC`,
       sql.values,
     );
     return rows.map((row) => ({
@@ -962,7 +966,8 @@ export class ReportsService {
               COALESCE(SUM(${I}."tax_amount"), 0.00) AS "vat",
               COUNT(DISTINCT ${I}."order_id") AS "orders"
          ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)}
-        GROUP BY ${O}."tax_rate", ${O}."tax_mode" ORDER BY ${O}."tax_rate" DESC`,
+        GROUP BY ${O}."tax_rate", ${O}."tax_mode"
+        ORDER BY ${O}."tax_rate" DESC, ${O}."tax_mode" ASC`,
       sql.values,
     );
     return rows.map((row) => ({
