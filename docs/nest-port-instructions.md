@@ -17,6 +17,10 @@ Read these alongside it:
 | [ADR-0017](architecture/decisions/0017-nest-api-serves-production.md) | the cutover: the Nest API serves production, Django starts on demand |
 | [ADR-0018](architecture/decisions/0018-nest-s3-without-an-sdk.md) | uploads in S3, without an SDK |
 | [ADR-0019](architecture/decisions/0019-nest-errors-to-sentry.md) | errors to Sentry, through `@sentry/core` alone |
+| [ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md) | Django is removed in steps; the owner's four decisions, and when a rule stops changing in Django first |
+| [ADR-0021](architecture/decisions/0021-the-recorded-proof-replays-on-a-set-clock.md) | the recorded proof replays at the hour it was recorded: libfaketime, in the replay images only |
+| [architecture/recorded-proof.md](architecture/recorded-proof.md) | the proof that needs no Django: what it is, what it cannot hold, what is left of it |
+| [architecture/django-removal-plan.md](architecture/django-removal-plan.md) | the eight steps, and which are reversible |
 | [roadmap.md](roadmap.md) | the verification log (one entry per part) and the known-defects table (D-numbers) |
 | [business-rules.md](business-rules.md) | the rules a port must reproduce, and every `DECISION REQUIRED` |
 | [.claude/environment.md](../.claude/environment.md) | the traps of the Windows workstation; §2 below covers the Linux one |
@@ -41,6 +45,10 @@ Read these alongside it:
    through one transaction with `SELECT … FOR UPDATE` on the rows whose invariant is protected. The
    race is driven across both APIs at once. Then the lock is removed and the test must fail
    (§6.4).
+4a. **Every list has one order.** A list's ordering ends with its own id (`uniqueLast` in
+   `common/filtering.ts`, which is `core.ordering.unique_last`); a list inside a row is in
+   the child model's `Meta.ordering`; a "first so many" names a last key. A new statement
+   that returns rows says what orders them to the last key, as Django's does (D245).
 5. **Copy Django's defects; don't fix them in the port.** The two APIs must agree until Django is
    fixed. List each copied defect in `nest-port.md`. **Exception: a security hole** is fixed in
    Django first, on its own branch, and the port implements the fixed rule (D113 is the example).
@@ -77,6 +85,8 @@ Read these alongside it:
 | 2026-10-08 | "Port S3 media storage to the NestJS API" | done the same day, without an SDK: ADR-0018 |
 | 2026-10-08 | "Report NestJS API errors to Sentry" | done: errors only, through `@sentry/core`, nothing personal sent. ADR-0019 |
 | 2026-10-08 | "Add a .dockerignore for the Django image build" | done, and for the web image, which had the same fault (D240) |
+| 2026-10-08 | Remove Django? The plan's four questions | **In steps** (ADR-0020). One month on the real shop before the first Drizzle migration; the Django admin and the API docs dropped; the demo seed replaced by a database snapshot; the `DJANGO_*` settings and the `api-nest` service keep their names |
+| 2026-10-08 | Where does a rule change first, now? | **Still Django, until the first Drizzle migration** (the plan's step 6.4), which needs the owner's word. §1 stands as written until then |
 | 2026-10-02 | D115: may the counter sell units reserved for online orders? | **No by default; the owner may allow it shop-wide** (`Organization.counter_sells_reserved`, owner-only), and the online orders left short are flagged for staff ([business-rules.md §1.4](business-rules.md)). Fixed in Django first; phase 5 ports it with the POS |
 
 Waiting on the owner, each written up as DECISION REQUIRED in `business-rules.md` with the code's
@@ -209,6 +219,42 @@ type and encoding (`parity/bucket.ts`). **Give `PARITY_S3=1` to `reset` and to e
 after it**: a database seeded one way holds files the other cannot find, so go back to the
 ordinary stack with a plain `reset`. Run it when a change touches an upload, a stored file's
 URL, or `common/storage.ts` and `common/s3.ts`.
+
+### The proof that needs no Django (run from the repository root)
+
+```bash
+scripts/nest-parity.sh record
+```
+
+After `reset`. A snapshot of the parity database and its uploads, then the `run-jobs` comparison
+with the Nest API's answer to every case kept, then the rate limits the same way -- in
+`apps/api-nest/parity/recorded/`, untracked. The comparison is made on a restore of that
+snapshot. It keeps nothing if a case differs. It takes `PARITY_ONLY` and `PARITY_RACES`
+(`PARITY_RACES=none`: every case, no race).
+
+```bash
+scripts/nest-parity.sh replay
+```
+
+A second stack with no Django in it (`docker-compose.recorded.yml`, `-p rangon-recorded`, port
+8640), restored from that snapshot, from nothing each time: every case to the Nest API alone
+against its recorded answer, the races across two Nest processes, the worker, the rate limits.
+The same three filters. Every clock in it is set to the hour of the recording
+([ADR-0021](architecture/decisions/0021-the-recorded-proof-replays-on-a-set-clock.md)).
+`replay-down` removes it. What it is and what it cannot hold:
+[architecture/recorded-proof.md](architecture/recorded-proof.md).
+
+```bash
+PARITY_TIES=mark scripts/nest-parity.sh replay
+```
+
+An answer that is the recorded rows with tied ones in another order is marked, not failed.
+`PARITY_HEAP=reversed` beside it turns every table over first: what that replay marks or
+differs in depends on the order rows lie in, and since D243 to D245 nothing should. **Run it
+on any part that returns a list, a "first so many", or a text built from rows.**
+
+**Until the plan's step 6 this runs beside the comparison with Django, not in place of it**
+(ADR-0020): a part is still proven by `reset`, `run`, `run-jobs`.
 
 ### The stack production runs (run from the repository root)
 
@@ -351,6 +397,8 @@ apps/api-nest/
     races.ts                  what the phase 6 race files share: `behind`, the mid-flight helper
     throttle.ts               rate-limit comparison
     known-differences.ts      the deliberate differences the harness accepts
+    recording.ts              `PARITY_MODE`: the Nest API's answers kept (`record`) and held
+                              to (`replay`); `recorded/` is where, untracked
     fixture*.py               Django shell scripts that add what the demo seed lacks
     serve.ts, gateway.ts, gateway/   the parity stack's Nest entry and stand-in payment gateway;
                               on both sides, the routes that run a job on demand and say what is
@@ -606,6 +654,15 @@ apps/api-nest/
 | One case in 12,243 differed in CI and never locally: a row arranged before the request counted as written by it | the harness read `clock_timestamp()` into a JavaScript `Date` (milliseconds) and compared it with columns that hold microseconds | a moment that will be compared in SQL is read as text and handed back as text; never round-trip a timestamp through `Date` |
 | The image scan failed on the first image it had never scanned before, for packages the API does not use | the Node base image ships npm, and npm vendors its own dependencies | a runtime image keeps what it runs: remove npm and corepack, with a guard that fails the build if the path has moved |
 | Two checks added to CI failed the first time GitHub ran them, after the PR had been merged | they had been run locally, in a different order and on a faster disk; "CI builds and scans..." was written before CI had | a pull request that changes the workflow is not verified until that workflow has run on it: say so in the PR, and read the run before calling the work done |
+| A recording run ended in "socket hang up", and so did another session's comparison | two parity stacks in one Docker VM of 1.7 GB: a staff race hashes six passwords at once, 100 MB each, and the kernel killed a Nest container of each stack without a word (`docker inspect --format '{{.State.OOMKilled}}'` says `true`) | one harness at a time in a small VM; a second checkout names its own stack (`PARITY_PROJECT` and the rest) and still waits its turn |
+| A first replay of 12,243 recorded answers differed in 167, and none was the API | what two requests a moment apart share and two runs do not: the harness's own address in the audit log, the leftovers of two APIs' turns against one's, rows a case dated from "now", and tied rows on another heap | measure a recording against itself before building on it; each of the four has its row in `recorded-proof.md` and its lines in `parity/recording.ts` |
+| A recording held that night and lost 475 cases a day later | the snapshot is a shop on one night, and every rule with a calendar in it reads the calendar against it | the replay stack runs at the hour of the recording (ADR-0021); never "fix" such a case by loosening what it compares |
+| "The same rows in another order" was sometimes not | with every table's rows put back in reverse, 206 of 239 remaining differences were a variant's label reading "White / M" for "M / White": Django joins the attribute values in no order (D243). Both APIs, so the comparison never saw it | `PARITY_HEAP=reversed scripts/nest-parity.sh replay` on any part that returns a list or builds a text from rows; it is the one check that finds what both APIs get wrong alike |
+| A marking replay matched every case and the strict one after it missed 52 | rows the cases write to are put back by the resets, and tied ones land differently each time | it was the sign that lists tied, not a fault of marking: every list was given one order (D245), and a replay has been strict since 2026-10-13 |
+| A second turned-over replay "found" one tied list where the first had found 196 | the marks of the first run were still on file, and a mark settles a list silently: the 196 were reordered before anyone compared them | a measurement starts with no `ties.jsonl.gz`; `record` removes it, and a script that replays without recording must |
+| Django could not be measured on its own for what depends on row order, since the replay stack has no Django | point both of the harness's bases at Django (`DJANGO_BASE` and `NEST_BASE`), record on a restore, restore again, pipe `parity/reverse-heap.sql` into the database, replay with `PARITY_TIES=mark` | it measures the API a rule is changed in first, before the port exists; with no set clock, read the "<now>" differences as noise and the rest as findings |
+| Two last keys written in Django ordered by something else | `order_by("variant__product")` and `?ordering=items` name a relation, and Django orders a relation by the related model's own `Meta.ordering`, through a join -- so giving `ReturnItem` an ordering changed what `?ordering=items` sorts by | name the column (`variant__product_id`); and after any change of a model's `Meta.ordering`, look for every ordering term that names a relation to it, in both APIs |
+| A grouped storefront query had no `ORDER BY` in Django and gained one when the paginator ended its order with the key | Django leaves a model's `Meta.ordering` out of a grouped query's SQL but keeps it on the queryset; ending the order "as it was" names it | when a rule is applied to "whatever the order is", print the SQL before and after for a grouped query and a cleared one (`order_by()`) |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 

@@ -252,7 +252,10 @@ export class JobHandlers {
       `SELECT "catalog_variantattributevalue"."id", "catalog_variantattributevalue"."created_at",
               "catalog_variantattributevalue"."updated_at", "catalog_variantattributevalue"."variant_id",
               "catalog_variantattributevalue"."attribute_id", "catalog_variantattributevalue"."attribute_value_id"
-         FROM "catalog_variantattributevalue" WHERE "catalog_variantattributevalue"."variant_id" = $1::uuid`,
+         FROM "catalog_variantattributevalue" INNER JOIN "catalog_attribute" ON ("catalog_variantattributevalue"."attribute_id" = "catalog_attribute"."id")
+        WHERE "catalog_variantattributevalue"."variant_id" = $1::uuid
+        -- The attributes' own order: VariantAttributeValue.Meta.ordering (D243).
+        ORDER BY "catalog_attribute"."position" ASC, "catalog_attribute"."name" ASC`,
       [row.variant_id],
     );
     const values: string[] = [];
@@ -376,7 +379,8 @@ export class JobHandlers {
       await this.db.arrays(
         `SELECT ${STOCK_ROW_SELECT} ${STOCK_ROW_FROM}
           WHERE "inventory_inventory"."on_hand" <= ("inventory_inventory"."reorder_point")
-          ORDER BY "accounts_branch"."name" ASC, "inventory_inventory"."on_hand" ASC LIMIT 100`,
+          ORDER BY "accounts_branch"."name" ASC, "inventory_inventory"."on_hand" ASC,
+                   "inventory_inventory"."id" ASC LIMIT 100`,
       )
     ).map(stockRow);
     if (!low.length) return 'none';
@@ -411,7 +415,8 @@ export class JobHandlers {
           WHERE ("inventory_inventory"."on_hand" > ("inventory_inventory"."reserved")
             AND "catalog_productvariant"."expiry_date" IS NOT NULL
             AND "catalog_productvariant"."expiry_date" <= (clock_timestamp() AT TIME ZONE 'UTC')::date + $1::int)
-          ORDER BY "catalog_productvariant"."expiry_date" ASC LIMIT 100`,
+          ORDER BY "catalog_productvariant"."expiry_date" ASC, "accounts_branch"."code" ASC,
+                   "catalog_productvariant"."sku" ASC, "inventory_inventory"."id" ASC LIMIT 100`,
         [days],
       )
     ).map(stockRow);

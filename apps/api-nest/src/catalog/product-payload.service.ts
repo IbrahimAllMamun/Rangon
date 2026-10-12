@@ -154,11 +154,14 @@ export class ProductPayloadService {
         `SELECT "catalog_variantattributevalue"."id", "catalog_variantattributevalue"."created_at", ` +
           `"catalog_variantattributevalue"."updated_at", "catalog_variantattributevalue"."variant_id", ` +
           `"catalog_variantattributevalue"."attribute_id", "catalog_variantattributevalue"."attribute_value_id" ` +
-          `FROM "catalog_variantattributevalue" WHERE "catalog_variantattributevalue"."variant_id" IN ` +
+          `FROM "catalog_variantattributevalue" INNER JOIN "catalog_attribute" ON ("catalog_variantattributevalue"."attribute_id" = "catalog_attribute"."id") ` +
+          `WHERE "catalog_variantattributevalue"."variant_id" IN ` +
           linkParams.list(
             variants.map((variant) => variant.id),
             'uuid',
-          ),
+          ) +
+          // The attributes' own order (`VariantAttributeValue.Meta.ordering`, D243).
+          ` ORDER BY "catalog_attribute"."position" ASC, "catalog_attribute"."name" ASC`,
         linkParams.values,
       );
       if (links.length) {

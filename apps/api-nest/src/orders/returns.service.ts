@@ -31,6 +31,7 @@ import {
   type FilterField,
   modelFilter,
   orderingPlan,
+  uniqueLast,
   type OrderingTerm,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
@@ -115,7 +116,8 @@ const ORDERING: Record<string, OrderingTerm> = {
   refund_amount: `${R}."refund_amount"`,
   refund_shipping: `${R}."refund_shipping"`,
   items: {
-    columns: ['"orders_returnitem"."id"'],
+    // The lines' own order, since D245 gave them one (`ReturnItem.Meta.ordering`).
+    columns: ['"orders_returnitem"."created_at"', '"orders_returnitem"."id"'],
     join: `LEFT OUTER JOIN "orders_returnitem"
       ON (${R}."id" = "orders_returnitem"."return_request_id")`,
   },
@@ -313,7 +315,8 @@ export class ReturnsService {
               "orders_returnitem"."order_item_id", "orders_returnitem"."quantity",
               "orders_returnitem"."restock_decision", "orders_returnitem"."condition_note",
               "orders_returnitem"."refund_amount"
-         FROM "orders_returnitem" WHERE "orders_returnitem"."return_request_id" IN (${marks})`,
+         FROM "orders_returnitem" WHERE "orders_returnitem"."return_request_id" IN (${marks})
+        ORDER BY "orders_returnitem"."created_at" ASC, "orders_returnitem"."id" ASC`,
       rows.map((row) => row.id),
     );
     const lines = new Map(
@@ -382,7 +385,7 @@ export class ReturnsService {
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const plan = orderingPlan(query, ORDERING);
-    const order = plan?.order ?? [`${R}."created_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${R}."created_at" DESC`], `${R}."id"`);
     // The count is of returns; the page is cut from the rows as ordered, lines
     // joined in or not.
     const count = Number(
@@ -697,7 +700,8 @@ export class ReturnsService {
                 "orders_orderitem"."sku"
            FROM "orders_returnitem" INNER JOIN "orders_orderitem"
              ON ("orders_returnitem"."order_item_id" = "orders_orderitem"."id")
-          WHERE "orders_returnitem"."return_request_id" = $1`,
+          WHERE "orders_returnitem"."return_request_id" = $1
+          ORDER BY "orders_returnitem"."created_at" ASC, "orders_returnitem"."id" ASC`,
         [id],
       );
 

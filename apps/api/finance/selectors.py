@@ -162,7 +162,9 @@ def expense_totals(
     rows = (
         queryset.values("category_id", "category__name", "category__code")
         .annotate(total=Sum("amount"), count=Count("id"))
-        .order_by("-total")
+        # The largest first, and by name where two come to the same: the
+        # dashboard calls the first of these "the top category" (D244).
+        .order_by("-total", "category__name", "category_id")
     )
     return {
         "total": total,

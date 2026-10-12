@@ -16,7 +16,13 @@ import {
   type UniqueCheck,
 } from '../common/drf';
 import { NotFound, ValidationError } from '../common/errors';
-import { applyFilters, choiceFilter, orderingFrom, searchTerms } from '../common/filtering';
+import {
+  applyFilters,
+  choiceFilter,
+  orderingFrom,
+  uniqueLast,
+  searchTerms,
+} from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { normalizeIfMobile } from '../common/phone';
 import { pySlice } from '../common/python';
@@ -154,7 +160,7 @@ export class SuppliersService {
     const sql = new SqlParams();
     const where = await this.conditions(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${S}."name" ASC`];
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? [`${S}."name" ASC`], `${S}."id"`);
     const count = Number(
       (
         await this.db.one<{ count: string }>(

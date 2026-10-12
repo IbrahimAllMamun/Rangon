@@ -13,7 +13,7 @@ import {
   uuidField,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { orderingPlan, type OrderingTerm } from '../../common/filtering';
+import { orderingPlan, uniqueLast, type OrderingTerm } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import type { QueryDict } from '../../common/query-dict';
 import { parseUuid } from '../../common/uuid';
@@ -84,7 +84,11 @@ const ORDERING: Record<string, OrderingTerm> = {
   target_branch__code: 'T3."code"',
   status: `${T}."status"`,
   notes: `${T}."notes"`,
-  items: { columns: ['"inventory_stocktransferitem"."id"'], join: ITEMS_JOIN },
+  // The lines' own order, since D245 gave them one (`StockTransferItem.Meta.ordering`).
+  items: {
+    columns: ['"inventory_stocktransferitem"."created_at"', '"inventory_stocktransferitem"."id"'],
+    join: ITEMS_JOIN,
+  },
   created_at: `${T}."created_at"`,
   received_at: `${T}."received_at"`,
 };
@@ -138,7 +142,8 @@ export class TransfersService {
                 "inventory_stocktransferitem"."variant_id", "inventory_stocktransferitem"."quantity",
                 "inventory_stocktransferitem"."unit_cost"
            FROM "inventory_stocktransferitem"
-          WHERE "inventory_stocktransferitem"."transfer_id" = $1::uuid`,
+          WHERE "inventory_stocktransferitem"."transfer_id" = $1::uuid
+          ORDER BY "inventory_stocktransferitem"."created_at" ASC, "inventory_stocktransferitem"."id" ASC`,
         [id],
       );
       for (const item of items) variants.add(item.variant_id);
@@ -195,7 +200,7 @@ export class TransfersService {
       )?.count ?? 0,
     );
     const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
-    const order = plan?.order ?? [`${T}."created_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${T}."created_at" DESC`], `${T}."id"`);
     const rows = count
       ? await this.db.query<TransferRow>(
           `SELECT ${SELECT} ${FROM} ${plan?.joins.join(' ') ?? ''} ${whereSql}

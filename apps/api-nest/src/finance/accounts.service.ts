@@ -32,6 +32,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
   searchTerms,
 } from '../common/filtering';
 import { lookupDateTime } from '../common/model-lookups';
@@ -259,7 +260,7 @@ export class AccountsService {
     const sql = new SqlParams();
     const where = await this.accountConditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ACCOUNT_ORDERING) ?? ACCOUNT_ORDER;
+    const order = uniqueLast(orderingFrom(query, ACCOUNT_ORDERING) ?? ACCOUNT_ORDER, `${A}."id"`);
     const count = Number(
       (
         await this.db.one<{ count: string }>(
@@ -593,7 +594,7 @@ export class AccountsService {
     return this.entryPage(
       where,
       sql,
-      orderingFrom(query, ENTRY_ORDERING) ?? ENTRY_ORDER,
+      uniqueLast(orderingFrom(query, ENTRY_ORDERING) ?? ENTRY_ORDER, `${T}."id"`),
       query,
       absoluteUrl,
     );
@@ -840,7 +841,10 @@ export class AccountsService {
     const sql = new SqlParams();
     const where = this.transferScope(user, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, TRANSFER_ORDERING) ?? [`${X}."occurred_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, TRANSFER_ORDERING) ?? [`${X}."occurred_at" DESC`],
+      `${X}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

@@ -110,7 +110,7 @@ export class DiscoveryService {
         `LEFT OUTER JOIN "catalog_productvariant" ON ("catalog_product"."id" = "catalog_productvariant"."product_id") ` +
         `WHERE ("catalog_product"."published" AND "catalog_product"."status" = 'ACTIVE' AND ` +
         `(UPPER("catalog_product"."name"::text) LIKE UPPER($1) OR UPPER("catalog_brand"."name"::text) LIKE UPPER($1))) ` +
-        `GROUP BY "catalog_product"."id", "catalog_brand"."id" ORDER BY "catalog_product"."name" ASC LIMIT 5`,
+        `GROUP BY "catalog_product"."id", "catalog_brand"."id" ORDER BY "catalog_product"."name" ASC, "catalog_product"."id" ASC LIMIT 5`,
       [pattern],
     );
     const products = productRows.map((row) => {

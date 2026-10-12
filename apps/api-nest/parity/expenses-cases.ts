@@ -423,12 +423,36 @@ export async function expensesCases(): Promise<Case[]> {
   for (const method of ['POST', 'PUT', 'DELETE'])
     read(`${method} the party ledger`, LEDGER, 'owner', { method });
   // Moments fixed as the cases are built: each API is then shown the same one.
+  // One instant for the whole file, and every moment a case arranges counted
+  // back from it in whole days. The ledger prints those moments, and what it
+  // works out from them (a date due, so many days of terms later): read as
+  // "so many days from when the cases were built", so that the answer is the
+  // same whenever that was -- the two APIs are asked a moment apart, a
+  // recording on another day.
+  const built = Date.now();
   const ago = (days: number) =>
-    `'${new Date(Date.now() - days * 86_400_000).toISOString()}'::timestamptz`;
+    `'${new Date(built - days * 86_400_000).toISOString()}'::timestamptz`;
+  const STAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/;
+  const asArranged = (body: unknown) => {
+    const walk = (value: unknown): unknown => {
+      if (typeof value === 'string' && STAMP.test(value)) {
+        const days = (Date.parse(value) - built) / 86_400_000;
+        return Number.isInteger(days) ? `<${days} days from when the cases were built>` : value;
+      }
+      if (Array.isArray(value)) return value.map(walk);
+      if (value && typeof value === 'object') {
+        const row = value as Record<string, unknown>;
+        for (const key of Object.keys(row)) row[key] = walk(row[key]);
+      }
+      return value;
+    };
+    walk(body);
+  };
   const ledgerState = (name: string, ...statements: string[]) =>
     read(`the party ledger, ${name}`, LEDGER, 'owner', {
       reset: resetLedger,
       prepare: after(...statements),
+      normalize: asArranged,
     });
   /**
    * A supplier's documents in a stable order, for a state that gives every
@@ -448,7 +472,10 @@ export async function expensesCases(): Promise<Case[]> {
     read(`the party ledger, ${name}`, LEDGER, 'owner', {
       reset: resetLedger,
       prepare: after(...statements),
-      normalize: byNumber,
+      normalize: (body) => {
+        asArranged(body);
+        byNumber(body);
+      },
     });
   ledgerState(
     'an order placed 45 days ago',

@@ -25,6 +25,7 @@ import {
   type FilterField,
   modelFilter,
   orderingPlan,
+  uniqueLast,
   type OrderingTerm,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
@@ -146,7 +147,7 @@ export class SupplierPaymentsService {
     await applyFilters(this.db, query, FILTERS, sql, where);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const plan = orderingPlan(query, ORDERING);
-    const order = plan?.order ?? [`${P}."paid_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${P}."paid_at" DESC`], `${P}."id"`);
     // The tables in the order Django's query holds them. The scope's filter
     // names the order and the account first -- and the account's branch,
     // which an ordering by account then uses -- before `select_related`

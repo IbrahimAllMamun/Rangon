@@ -519,6 +519,131 @@ async function checkoutRaces(
     detail: `statuses ${couponResults.map((result) => result.status).join(',')}, used ${used}, ${redemptions} redemption(s), ${discounted} discounted order(s)`,
   });
   await resetCheckout(db);
+
+  // 3b. Once per customer (Django's own
+  //     `test_one_customer_cannot_spend_a_one_per_customer_coupon_twice`):
+  //     no limit on the coupon as a whole, one use for each customer, and six
+  //     carts of one returning shopper -- six different orders, not one
+  //     clicked six times. Each cart passed validation when the coupon was
+  //     put on it; the limit has to be counted again under the coupon's lock.
+  await db.query(
+    `UPDATE promotions_coupon SET usage_limit = NULL, usage_limit_per_customer = 1, used_count = 0 WHERE id = $1`,
+    [coupon],
+  );
+  const sameCarts = await raceCarts(db, 'parity-race-once', 6, 'RGN-CLA-L-NAV', 1, coupon);
+  const sameResults = await Promise.all(
+    sameCarts.map((token, index) =>
+      checkout(side(index), token, `race-once-${index}`, '01711000001'),
+    ),
+  );
+  const onceUsed = await count(
+    db,
+    `SELECT used_count AS count FROM promotions_coupon WHERE id = $1`,
+    [coupon],
+  );
+  const onceRedeemed = await count(
+    db,
+    `SELECT count(*) AS count FROM promotions_couponredemption WHERE coupon_id = $1 AND released_at IS NULL`,
+    [coupon],
+  );
+  const onceCustomers = await count(
+    db,
+    `SELECT count(DISTINCT customer_id) AS count FROM orders_order WHERE idempotency_key LIKE 'race-once-%'`,
+  );
+  checks.push({
+    name: 'checkout: 6 orders by one customer for a coupon good once per customer, across both APIs -- redeemed once',
+    passed:
+      onceUsed === 1 &&
+      onceRedeemed === 1 &&
+      onceCustomers === 1 &&
+      sameResults.every(
+        (result) =>
+          result.status === 201 ||
+          (result.status === 422 && result.body.includes('COUPON_INVALID')),
+      ),
+    detail: `statuses ${sameResults.map((result) => result.status).join(',')}, used ${onceUsed}, ${onceRedeemed} redemption(s), ${onceCustomers} customer(s)`,
+  });
+  await resetCheckout(db);
+
+  // 3c. The counter and the website, for a coupon's last use (Django's own
+  //     `test_a_till_and_the_website_cannot_share_a_coupons_last_use`): both
+  //     lock the shelf and then the coupon. Had one taken the coupon first,
+  //     each could hold the row the other waits for, and PostgreSQL would end
+  //     one with a deadlock nobody at the counter could act on. Whichever
+  //     loses must lose on the coupon -- a 422, never a 500. Each way round.
+  const till = (
+    await db.query<{ id: string; password: string }>(
+      `SELECT id, password FROM accounts_user WHERE email = 'parity.staff@rangon.test'`,
+    )
+  ).rows[0];
+  const navy = (
+    await db.query<{ id: string }>(
+      `SELECT id FROM catalog_productvariant WHERE sku = 'RGN-CLA-L-NAV'`,
+    )
+  ).rows[0]?.id;
+  if (till && navy) {
+    const tillToken = bearer(till, apis.SIGNING_KEY);
+    for (const [label, web, counter] of [
+      ['the website on Nest, the counter on Django', apis.NEST, apis.DJANGO],
+      ['the website on Django, the counter on Nest', apis.DJANGO, apis.NEST],
+    ] as const) {
+      await db.query(
+        `UPDATE promotions_coupon SET usage_limit = 1, usage_limit_per_customer = NULL, used_count = 0 WHERE id = $1`,
+        [coupon],
+      );
+      const [cart] = await raceCarts(
+        db,
+        `parity-race-till-${label.length}`,
+        1,
+        'RGN-CLA-L-NAV',
+        1,
+        coupon,
+      );
+      const pair = await Promise.all([
+        checkout(web, cart as string, `race-till-web-${label.length}`, shopper(70)),
+        send(counter, {
+          name: 'counter sale',
+          method: 'POST',
+          path: '/api/v1/pos/sales/',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${tillToken}`,
+            'idempotency-key': `race-till-pos-${label.length}`,
+          },
+          body: JSON.stringify({
+            lines: [{ variant: navy, quantity: 1 }],
+            coupon_code: 'PARITY-RACE',
+            payments: [{ method: 'CARD', amount: '99999.00' }],
+          }),
+        }),
+      ]);
+      const lastUsed = await count(
+        db,
+        `SELECT used_count AS count FROM promotions_coupon WHERE id = $1`,
+        [coupon],
+      );
+      const lastRedeemed = await count(
+        db,
+        `SELECT count(*) AS count FROM promotions_couponredemption WHERE coupon_id = $1`,
+        [coupon],
+      );
+      const lastOrders = await count(
+        db,
+        `SELECT count(*) AS count FROM orders_order WHERE coupon_id = $1`,
+        [coupon],
+      );
+      const won = pair.filter((result) => result.status === 201).length;
+      const lost = pair.filter(
+        (result) => result.status === 422 && result.body.includes('COUPON_INVALID'),
+      ).length;
+      checks.push({
+        name: `checkout: a counter sale and an online order for a coupon's last use at once, ${label} -- one has it, the other is refused on the coupon, no deadlock`,
+        passed: won === 1 && lost === 1 && lastUsed === 1 && lastRedeemed === 1 && lastOrders === 1,
+        detail: `website ${pair[0].status}, counter ${pair[1].status}, used ${lastUsed}, ${lastRedeemed} redemption(s), ${lastOrders} discounted order(s)`,
+      });
+      await resetCheckout(db);
+    }
+  }
   await db.query(`DELETE FROM promotions_coupon WHERE id = $1`, [coupon]);
   return checks;
 }

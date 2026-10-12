@@ -17,7 +17,13 @@ import {
   slugField,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, booleanFilter, modelFilter, orderingFrom } from '../../common/filtering';
+import {
+  applyFilters,
+  booleanFilter,
+  modelFilter,
+  orderingFrom,
+  uniqueLast,
+} from '../../common/filtering';
 import { mediaUrl } from '../../common/media';
 import { compareCodePoints } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
@@ -163,7 +169,10 @@ export class CategoriesService {
     const where: string[] = [];
     if (query.get('tree') === 'true') where.push(`"catalog_category"."parent_id" IS NULL`);
     await applyFilters(this.db, query, FILTERS, sql, where);
-    const order = orderingFrom(query, ORDERING) ?? DEFAULT_ORDER;
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? DEFAULT_ORDER,
+      '"catalog_category"."id"',
+    );
     return { where, order: order.join(', ') };
   }
 

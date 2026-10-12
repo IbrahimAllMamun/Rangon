@@ -28,6 +28,7 @@ import {
   choiceFilter,
   type FilterField,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { compareCodePoints, pyStrip } from '../common/python';
@@ -196,7 +197,10 @@ export class CouponsAdminService {
     const where: string[] = [];
     await applyFilters(this.db, query, FILTERS, sql, where);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${C}."created_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${C}."created_at" DESC`],
+      `${C}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

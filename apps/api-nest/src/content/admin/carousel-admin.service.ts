@@ -8,7 +8,7 @@ import { localIso } from '../../common/datetime';
 import { Dec } from '../../common/decimal';
 import { errorMessages, runSerializer, uuidField } from '../../common/drf';
 import { Conflict, NotFound, ValidationError } from '../../common/errors';
-import { orderingFrom } from '../../common/filtering';
+import { orderingFrom, uniqueLast } from '../../common/filtering';
 import { mediaUrl } from '../../common/media';
 import { pyStr } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
@@ -182,7 +182,7 @@ export class CarouselAdminService {
   private async find(pk: string, query: QueryDict): Promise<CarouselRow> {
     const id = parseUuid(pk);
     if (!id) throw new NotFound();
-    const order = orderingFrom(query, ORDERING) ?? DEFAULT_ORDER;
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? DEFAULT_ORDER, `${H}."id"`);
     const rows = await this.db.arrays(
       `${SELECT} WHERE ${H}."id" = $1::uuid ORDER BY ${order.join(', ')} LIMIT 21`,
       [id],

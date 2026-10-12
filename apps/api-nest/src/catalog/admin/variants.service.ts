@@ -23,6 +23,7 @@ import {
   choiceFilter,
   modelFilter,
   orderingFrom,
+  uniqueLast,
   searchTerms,
 } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
@@ -128,7 +129,7 @@ export class VariantsService {
     const sql = new SqlParams();
     const where = await this.conditions(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? DEFAULT_ORDER;
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? DEFAULT_ORDER, `${V}."id"`);
     const pageSize = pageSizeFrom(query, STANDARD_PAGINATION);
     const count = Number(
       (

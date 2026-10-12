@@ -320,7 +320,7 @@ export class CustomerOrdersService {
     const orders = await this.db.query<OrderRow>(
       `SELECT ${select('orders_order', ORDER_COLUMNS)} FROM "orders_order"
         WHERE "orders_order"."customer_id" = $1::uuid
-        ORDER BY "orders_order"."placed_at" DESC LIMIT 50`,
+        ORDER BY "orders_order"."placed_at" DESC, "orders_order"."id" ASC LIMIT 50`,
       [customerId],
     );
     if (!orders.length) return [];
@@ -450,7 +450,8 @@ export class CustomerOrdersService {
   private async events(orderId: string): Promise<Record<string, unknown>[]> {
     const rows = await this.db.query<EventRow>(
       `SELECT ${select('orders_orderevent', EVENT_COLUMNS)} FROM "orders_orderevent"
-        WHERE "orders_orderevent"."order_id" = $1::uuid ORDER BY "orders_orderevent"."created_at" ASC`,
+        WHERE "orders_orderevent"."order_id" = $1::uuid
+        ORDER BY "orders_orderevent"."created_at" ASC, "orders_orderevent"."id" ASC`,
       [orderId],
     );
     // `sorted(..., key=created_at)`: stable, so a tie keeps the query's order.

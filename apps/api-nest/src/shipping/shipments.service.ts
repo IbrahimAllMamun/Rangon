@@ -25,6 +25,7 @@ import {
   type FilterField,
   modelFilter,
   orderingPlan,
+  uniqueLast,
   type OrderingTerm,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
@@ -237,7 +238,7 @@ export class ShipmentsService {
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const plan = orderingPlan(query, ORDERING);
-    const order = plan?.order ?? [`${S}."created_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${S}."created_at" DESC`], `${S}."id"`);
     const count = Number(
       (
         await this.db.one<{ count: string }>(

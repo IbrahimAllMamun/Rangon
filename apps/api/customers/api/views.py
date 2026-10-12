@@ -133,7 +133,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         from orders.api.serializers import OrderListSerializer
 
         customer = self.get_object()
-        queryset = customer.orders.select_related("branch").order_by("-placed_at")[:100]
+        queryset = customer.orders.select_related("branch").order_by("-placed_at", "pk")[:100]
         return Response(OrderListSerializer(queryset, many=True).data)
 
     # --- addresses ---------------------------------------------------------

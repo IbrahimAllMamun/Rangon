@@ -945,6 +945,21 @@ is now also a real attribute, so the product page shows the free-text column onl
 attribute is stated; nothing prints the term twice. `care_instructions` has no attribute and stays
 prose, because care advice is a sentence, not a value from a list.
 
+4. **A variant's attributes are read in the attributes' own order**: by `Attribute.position`, then
+   by name, exactly as a product's specifications are listed. A variant has one value of each
+   attribute, so that is one order, and it is the order of its `attributes` in the API and of the
+   parts of its label -- "M / White" because Size comes before Colour. A variant made on the
+   product screen keeps the label it was given then (`ProductVariant.name`); one with no name of
+   its own -- an imported one -- is labelled from its attributes each time.
+
+   *Until 2026-10-12 nothing ordered them (D243)*, and PostgreSQL returned the two rows as they
+   happened to lie in the table: the same variant could read "White / M" after any update of
+   either row, on the feed, in the cart and at the counter, and on an order line, which copies the
+   label when the order is placed. **DECISION REQUIRED, with a default taken:** the order could
+   instead have been the one the rows were written in. Position was chosen because it is the
+   order the owner already arranges the attributes in, and the one the specifications use; moving
+   an attribute now moves it in every unnamed variant's label, which it did not before.
+
 ---
 
 ## 5b. Size charts

@@ -3,7 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { RequestUser } from '../auth/authentication';
 import { localIso } from '../common/datetime';
 import { invalidUuid, NotFound } from '../common/errors';
-import { orderingFrom } from '../common/filtering';
+import { orderingFrom, uniqueLast } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { pyStr } from '../common/python';
 import type { QueryDict } from '../common/query-dict';
@@ -109,7 +109,10 @@ export class NotificationsService {
       )?.count ?? 0,
     );
     const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
-    const order = orderingFrom(query, ORDERING) ?? [`${N}."created_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${N}."created_at" DESC`],
+      `${N}."id"`,
+    );
     const rows = await this.db.arrays(
       `SELECT ${SELECT} FROM ${N} WHERE ${where} ORDER BY ${order.join(', ')}
         LIMIT ${page.limit} OFFSET ${page.offset}`,

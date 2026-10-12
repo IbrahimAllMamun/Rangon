@@ -282,7 +282,7 @@ def shipping_options(*, city: str, subtotal: Decimal) -> list[dict[str, Any]]:
             "supports_cod": method.supports_cod,
             "zone": zone.name,
         }
-        for method in zone.methods.filter(is_active=True).order_by("position", "price")
+        for method in zone.methods.filter(is_active=True).order_by("position", "price", "pk")
     ]
 
 

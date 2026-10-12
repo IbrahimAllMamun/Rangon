@@ -61,3 +61,25 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://localhost:3000/api/health/').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
 
 CMD ["node", "dist/main.js"]
+
+
+# ---------------------------------------------------------------------------
+# The replay stack's image and nothing else's (`--target replay`,
+# docker-compose.recorded.yml): the runtime image with libfaketime under it,
+# so that a recording can be replayed at the hour it was taken
+# (docs/architecture/recorded-proof.md, "The clock"). With `FAKETIME` unset
+# the clock is the real one.
+FROM runtime AS replay
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libfaketime \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "/usr/lib/$(uname -m)-linux-gnu/faketime/libfaketime.so.1" /usr/local/lib/libfaketime.so.1
+# Wall time only: Node's timers run on the monotonic clock, which stays real.
+ENV LD_PRELOAD=/usr/local/lib/libfaketime.so.1 FAKETIME_DONT_FAKE_MONOTONIC=1
+USER appuser
+
+
+# ---------------------------------------------------------------------------
+# Last, so that it is what a build with no target makes: the image production
+# runs and the scan reads. Nothing above this line but `runtime` is in it.
+FROM runtime

@@ -241,7 +241,10 @@ export class CartService {
       `SELECT "catalog_variantattributevalue"."id", "catalog_variantattributevalue"."created_at",
               "catalog_variantattributevalue"."updated_at", "catalog_variantattributevalue"."variant_id",
               "catalog_variantattributevalue"."attribute_id", "catalog_variantattributevalue"."attribute_value_id"
-         FROM "catalog_variantattributevalue" WHERE "catalog_variantattributevalue"."variant_id" = $1::uuid`,
+         FROM "catalog_variantattributevalue" INNER JOIN "catalog_attribute" ON ("catalog_variantattributevalue"."attribute_id" = "catalog_attribute"."id")
+        WHERE "catalog_variantattributevalue"."variant_id" = $1::uuid
+        -- The attributes' own order: VariantAttributeValue.Meta.ordering (D243).
+        ORDER BY "catalog_attribute"."position" ASC, "catalog_attribute"."name" ASC`,
       [variantId],
     );
     const values: string[] = [];
@@ -495,7 +498,7 @@ export class CartService {
       cities: unknown;
       is_default: boolean;
     }>(
-      `SELECT id, name, cities, is_default FROM shipping_shippingzone WHERE is_active ORDER BY position ASC, name ASC`,
+      `SELECT id, name, cities, is_default FROM shipping_shippingzone WHERE is_active ORDER BY position ASC, name ASC, id ASC`,
     );
     // Evaluated whether or not a zone matches, as Python evaluates `next()`'s default.
     const fallback = await this.db.one<{ id: string; name: string }>(
@@ -512,7 +515,7 @@ export class CartService {
     const methods = await this.db.query<ShippingMethodRow>(
       `SELECT id, code, name, description, price, free_over, min_days, max_days, is_pickup, supports_cod
          FROM shipping_shippingmethod WHERE (zone_id = $1::uuid AND is_active)
-        ORDER BY position ASC, price ASC`,
+        ORDER BY position ASC, price ASC, id ASC`,
       [zone.id],
     );
     return methods.map((method) => ({

@@ -66,6 +66,21 @@ import { expensesCases } from './expenses-cases.ts';
 import { purchaseOrderCases } from './purchase-order-cases.ts';
 import { purchaseOrderConcurrencyChecks } from './purchase-order-concurrency.ts';
 import { purchasingCases } from './purchasing-cases.ts';
+import {
+  kept,
+  mergedTies,
+  type Moment,
+  Names,
+  Pace,
+  parityMode,
+  plain,
+  readRecording,
+  readTies,
+  Recorder,
+  settled,
+  type Tied,
+  tiesBetween,
+} from './recording.ts';
 import { supplierPaymentCases } from './supplier-payment-cases.ts';
 import { sweepConcurrencyChecks } from './sweep-concurrency.ts';
 import { supplierPaymentConcurrencyChecks } from './supplier-payment-concurrency.ts';
@@ -853,7 +868,7 @@ async function run(
   base: URL,
   side: Side,
   testCase: Case,
-): Promise<{ response: Captured; effects: unknown[][] }> {
+): Promise<{ response: Captured; effects: unknown[][]; at: string }> {
   const writes = testCase.reset !== undefined;
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
@@ -863,6 +878,9 @@ async function run(
   // failed one case in one CI run (2026-10-08) and none here.
   const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
     ?.now;
+  // The same moment by this process's clock, which is the database's: kept
+  // with a recorded answer, for a replay to keep in step with (recording.ts).
+  const at = new Date().toISOString();
   // With uploads in a bucket (`PARITY_S3=1`), what a write stored there is an
   // effect like any other: the rows say where, the bucket says what.
   const filesBefore = writes && BUCKET_MODE ? await fileNames(db) : null;
@@ -884,7 +902,7 @@ async function run(
   }
   if (filesBefore) effects.push(await storedObjects(db, filesBefore));
   if (writes) await undoWrites(db, since as string);
-  return { response, effects };
+  return { response, effects, at };
 }
 
 /**
@@ -906,6 +924,93 @@ async function undoWrites(db: pg.Client, since: string): Promise<void> {
         AND NOT EXISTS (SELECT 1 FROM token_blacklist_blacklistedtoken b WHERE b.token_id = token_blacklist_outstandingtoken.id)`,
   );
   await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);
+}
+
+/**
+ * Every moment any row holds from a few minutes back to some hours ahead,
+ * and the midnights in that stretch (the shop's and UTC's): what is "today",
+ * and whether a dated row has happened yet, change at those and nowhere else.
+ */
+async function momentsAhead(db: pg.Client): Promise<string[]> {
+  const columns = await db.query<{ table_name: string; column_name: string }>(
+    `SELECT c.table_name, c.column_name FROM information_schema.columns c
+       JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+      WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+        AND c.data_type IN ('timestamp with time zone', 'timestamp without time zone')
+      ORDER BY 1, 2`,
+  );
+  const WINDOW = `> clock_timestamp() - interval '10 minutes' AND at < clock_timestamp() + interval '6 hours'`;
+  const moments = new Set<string>();
+  for (const { table_name: table, column_name: column } of columns.rows) {
+    const found = await db.query<{ at: Date }>(
+      `SELECT DISTINCT at FROM (SELECT "${column}"::timestamptz AS at FROM "${table}") dated WHERE at ${WINDOW}`,
+    );
+    for (const row of found.rows) moments.add(row.at.toISOString());
+  }
+  const midnights = await db.query<{ at: Date }>(
+    `SELECT at FROM (
+       SELECT (date_trunc('day', clock_timestamp() AT TIME ZONE zone) + interval '1 day') AT TIME ZONE zone AS at
+         FROM unnest(ARRAY['UTC', $1]) AS zone
+     ) midnight WHERE at ${WINDOW}`,
+    [process.env.DJANGO_TIME_ZONE || 'Asia/Dhaka'],
+  );
+  for (const row of midnights.rows) moments.add(row.at.toISOString());
+  return [...moments].sort();
+}
+
+interface TurnMark {
+  now: string;
+  outstanding: string;
+  blacklisted: string;
+  /** The search-term log as it stood, as JSON: a search counts itself there. */
+  searched: string;
+}
+
+/** Where the session tables and the log stand before an API's turn at a case. */
+async function turnMark(db: pg.Client): Promise<TurnMark> {
+  return (
+    await db.query<TurnMark>(
+      `SELECT clock_timestamp()::text AS now,
+              (SELECT COALESCE(max(id), 0) FROM token_blacklist_outstandingtoken)::text AS outstanding,
+              (SELECT COALESCE(max(id), 0) FROM token_blacklist_blacklistedtoken)::text AS blacklisted,
+              (SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) FROM catalog_searchterm t)::text AS searched`,
+    )
+  ).rows[0] as TurnMark;
+}
+
+/**
+ * That turn taken away again, as far as these tables go. By row id, not by
+ * time: the tokens a case registers for itself are dated a minute back, on
+ * purpose, so that `undoWrites` leaves them for the request to find.
+ */
+async function undoTurn(db: pg.Client, mark: TurnMark): Promise<void> {
+  await db.query(
+    `DELETE FROM token_blacklist_blacklistedtoken
+      WHERE id > $1 OR token_id IN (SELECT id FROM token_blacklist_outstandingtoken WHERE id > $2)`,
+    [mark.blacklisted, mark.outstanding],
+  );
+  await db.query(`DELETE FROM token_blacklist_outstandingtoken WHERE id > $1`, [mark.outstanding]);
+  await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [mark.now]);
+  // Every storefront search adds one to its term's count, and the "popular"
+  // list is ordered by those counts: two APIs' turns would count each search
+  // twice, and a term searched in more cases than another would overtake it.
+  await db.query(
+    `DELETE FROM catalog_searchterm
+      WHERE id NOT IN (SELECT (was->>'id')::uuid FROM jsonb_array_elements($1::jsonb) AS was)`,
+    [mark.searched],
+  );
+  await db.query(
+    `UPDATE catalog_searchterm t
+        SET hits = was.hits, last_result_count = was.last_result_count,
+            last_searched_at = was.last_searched_at, updated_at = was.updated_at
+       FROM jsonb_to_recordset($1::jsonb) AS was(
+              id uuid, hits integer, last_result_count integer,
+              last_searched_at timestamptz, updated_at timestamptz)
+      WHERE t.id = was.id
+        AND (t.hits, t.last_result_count, t.last_searched_at, t.updated_at)
+            IS DISTINCT FROM (was.hits, was.last_result_count, was.last_searched_at, was.updated_at)`,
+    [mark.searched],
+  );
 }
 
 /** Tokens described rather than compared (each API mints its own), then the case's own adjustments. */
@@ -941,53 +1046,201 @@ function isKnown(testCase: Case, difference: Difference): string | null {
 }
 
 async function main(): Promise<void> {
+  // `record` keeps the Nest API's answer wherever the two agree; `replay`
+  // asks the Nest API alone and compares with what was kept (recording.ts).
+  // In a replay `DJANGO_BASE` names a second Nest process: the cases that
+  // carry a token from one API to the other, and every race, still have two.
+  const mode = parityMode();
   const cases = await buildCases();
   let failed = 0;
   let known = 0;
   const knownReasons = new Map<string, number>();
+  const names = new Names();
+  const recorder = mode === 'record' ? new Recorder() : null;
+  const recording = mode === 'replay' ? readRecording('answers') : null;
+  const replayed = new Set<string>();
+  const reference = recording ? 'recorded' : 'django';
+  // Rows a list's ordering does not tell apart, which come back as the heap
+  // holds them (recording.ts, "Tied rows"). `PARITY_TIES=mark` in a replay
+  // keeps where an answer is the recorded one with such rows permuted; every
+  // replay lets rows change places there, and nowhere else.
+  const tied = recording ? readTies() : new Map<string, Tied>();
+  const marking = Boolean(recording) && process.env.PARITY_TIES === 'mark';
+  let marked = 0;
 
   const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
   const redis = new Redis(process.env.REDIS_URL ?? 'redis://redis:6379/0');
+  // The clock (recording.ts): the moments the database holds in the hours
+  // ahead, kept when recording; a replay waits where it would pass a case
+  // before one of them that the recording had already passed.
+  if (recorder) {
+    const moments = new Recorder<Moment>();
+    for (const moment of await momentsAhead(db)) moments.add({ name: moment });
+    console.log(
+      `${moments.size} moments in the database fall in the hours ahead (kept in ${moments.write('moments').path})`,
+    );
+  }
+  const pace = new Pace(recording ? readRecording<Moment>('moments').keys() : []);
   for (const testCase of cases) {
     if (testCase.flushCache) await redis.flushdb();
     for (const statement of testCase.setup ?? []) await db.query(statement);
+    const key = names.key(testCase.name);
     let differences: Difference[];
+    let nest: { response: Captured; effects: unknown[][] };
+    let asked: string;
     try {
-      const django = await run(db, DJANGO, 'django', testCase);
-      const nest = await run(db, NEST, 'nest', testCase);
-      differences = compare(django.response, nest.response, testCase.headers?.['x-request-id']);
-      if (VERBOSE) {
-        console.log(
-          `CASE  ${testCase.name}: ${django.response.status} ${django.response.body.slice(0, 160)}`,
+      // The answer the Nest API's is held against: Django's, or the one kept.
+      let expected: { response: Captured; effects: unknown[][]; at?: string } | undefined;
+      if (recording) {
+        expected = recording.get(key);
+        replayed.add(key);
+        // In step with the recording past every moment the database holds.
+        const recordedAt = expected?.at ? Date.parse(expected.at) : NaN;
+        const wait = Number.isNaN(recordedAt) ? 0 : pace.wait(recordedAt, Date.now());
+        if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      } else {
+        // A recording is of one API answering. What Django's turn leaves
+        // behind that no reset takes away -- the sign-ins a case makes to get
+        // its tokens, their audit entries -- is taken away here, so that the
+        // Nest API's turn finds what it will find in a replay.
+        const before = recorder ? await turnMark(db) : undefined;
+        expected = await run(db, DJANGO, 'django', testCase);
+        if (before) await undoTurn(db, before);
+      }
+      const answer = await run(db, NEST, 'nest', testCase);
+      asked = answer.at;
+      nest = recording
+        ? { response: answer.response, effects: plain(answer.effects) as unknown[][] }
+        : answer;
+      const held = (theirs: { response: Captured; effects: unknown[][] }, ours: typeof nest) => {
+        const found = compare(theirs.response, ours.response, testCase.headers?.['x-request-id']);
+        if (theirs.effects.length !== ours.effects.length) {
+          found.push({
+            path: 'effects.length',
+            django: theirs.effects.length,
+            nest: ours.effects.length,
+          });
+        }
+        theirs.effects.forEach((rows, index) =>
+          found.push(...diffJson(rows, ours.effects[index], `effects[${index}]`)),
         );
-        for (const rows of django.effects)
+        return found;
+      };
+      if (!expected) {
+        differences = [
+          {
+            path: 'recording',
+            django: '<no answer recorded for this case>',
+            nest: nest.response.status,
+          },
+        ];
+      } else if (!recording) {
+        differences = held(expected, nest);
+      } else {
+        const known = tied.get(key)?.ties ?? [];
+        const asKnown = settled(expected, nest, known);
+        differences = held(expected, asKnown);
+        if (differences.length && marking) {
+          // The recorded rows in another order? Then where, and held to that.
+          const found = tiesBetween(expected, asKnown);
+          if (found) {
+            const ties = mergedTies(known, found);
+            const again = held(expected, settled(expected, nest, ties));
+            if (!again.length) {
+              tied.set(key, { name: key, ties });
+              marked += 1;
+              differences = again;
+            }
+          }
+        }
+      }
+      if (VERBOSE) {
+        const shown = expected ?? nest;
+        console.log(
+          `CASE  ${testCase.name}: ${shown.response.status} ${shown.response.body.slice(0, 160)}`,
+        );
+        for (const rows of shown.effects)
           console.log(`      ${JSON.stringify(rows).slice(0, 400)}`);
       }
-      django.effects.forEach((rows, index) =>
-        differences.push(...diffJson(rows, nest.effects[index], `effects[${index}]`)),
-      );
     } finally {
       for (const statement of testCase.teardown ?? []) await db.query(statement);
       await testCase.reset?.(db);
     }
     const unexplained = differences.filter((difference) => {
-      const reason = isKnown(testCase, difference);
+      // The documented differences are between the two APIs. A recording
+      // is this API's own answer: nothing excuses a departure from it.
+      const reason = recording ? null : isKnown(testCase, difference);
       if (reason) knownReasons.set(reason, (knownReasons.get(reason) ?? 0) + 1);
       return !reason;
     });
     if (unexplained.length) {
       failed += 1;
-      console.log(`DIFF  ${testCase.name}  [${testCase.method ?? 'GET'} ${testCase.path}]`);
+      console.log(`DIFF  ${key}  [${testCase.method ?? 'GET'} ${testCase.path}]`);
       for (const difference of unexplained.slice(0, 12)) {
         console.log(
-          `      ${difference.path}: django=${JSON.stringify(difference.django)} nest=${JSON.stringify(difference.nest)}`,
+          `      ${difference.path}: ${reference}=${JSON.stringify(difference.django)} nest=${JSON.stringify(difference.nest)}`,
         );
       }
       if (unexplained.length > 12) console.log(`      ... and ${unexplained.length - 12} more`);
     } else if (differences.length) {
       known += 1;
     }
+    // Kept only where the two agreed (a deliberate difference is agreement
+    // of a kind: what is kept is this API's side of it).
+    if (recorder && !unexplained.length) {
+      recorder.add({
+        name: key,
+        request: `${testCase.method ?? 'GET'} ${testCase.path}`,
+        at: asked,
+        response: kept(nest.response),
+        effects: plain(nest.effects) as unknown[][],
+      });
+    }
+  }
+
+  if (marking) {
+    const ties = new Recorder<Tied>();
+    for (const entry of tied.values()) ties.add(entry);
+    console.log(
+      `${marked} cases answered with the recorded rows, tied ones in another order: marked (${tied.size} cases hold ties, in ${ties.write('ties').path})`,
+    );
+  } else if (recording) {
+    console.log(`${tied.size} cases hold tied rows, which may come back in either order`);
+  }
+  if (recording) {
+    console.log(
+      `kept in step with the recording: waited ${Math.round(pace.waited / 1000)} s in all, ${pace.waits} times, for a moment the database holds` +
+        (pace.ahead
+          ? `; ${pace.ahead} cases were reached after a moment the recording had not yet passed`
+          : ''),
+    );
+  }
+
+  // An answer on file that no case asked for: a case was removed or renamed,
+  // and the recording was not taken again. Only a whole run can tell.
+  let unasked = 0;
+  if (recording && !ONLY) {
+    for (const name of recording.keys()) {
+      if (replayed.has(name)) continue;
+      unasked += 1;
+      if (unasked <= 12) console.log(`GONE  ${name}: recorded, and no case of that name ran`);
+    }
+    if (unasked > 12) console.log(`      ... and ${unasked - 12} more`);
+  }
+
+  // Before the races, which are no part of it: the answers are whole once the
+  // last case has run, and a race that fails afterwards does not unmake them.
+  let recordedLine = '';
+  if (recorder) {
+    // A recording with a hole in it would pass a replay that skips the hole.
+    if (failed) {
+      recordedLine = `not recorded: ${failed} cases differ, and a recording is of a run that agrees`;
+    } else {
+      const { path, bytes } = recorder.write('answers');
+      recordedLine = `recorded ${recorder.size} answers (${names.repeated} under a repeated name) in ${path}, ${bytes} bytes`;
+    }
+    console.log(recordedLine);
   }
 
   // Invariants that hold only under the right lock, driven concurrently.
@@ -1026,16 +1279,31 @@ async function main(): Promise<void> {
     }
     for (const check of checks) {
       if (!check.passed) racesFailed += 1;
-      console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${check.name}: ${check.detail}`);
+      // In a replay the second API is a second Nest process, and the checks'
+      // names were written for Django: say what was actually raced.
+      const name = recording
+        ? check.name
+            .replaceAll('across both APIs', 'across two Nest processes')
+            .replaceAll('one per API', 'one per Nest process')
+            .replaceAll('Django', 'the second Nest process')
+        : check.name;
+      console.log(`${check.passed ? 'RACE ' : 'FAIL '} ${name}: ${check.detail}`);
     }
   }
 
   console.log('');
-  console.log(
-    `${cases.length} cases: ${cases.length - failed} match (${known} only by documented differences), ${failed} differ`,
-  );
+  if (recording) {
+    console.log(
+      `${cases.length} cases against the recording: ${cases.length - failed} as recorded, ${failed} differ, ${unasked} recorded and not asked`,
+    );
+  } else {
+    console.log(
+      `${cases.length} cases: ${cases.length - failed} match (${known} only by documented differences), ${failed} differ`,
+    );
+  }
   for (const [reason, count] of knownReasons) console.log(`  documented (${count}x): ${reason}`);
-  process.exitCode = failed || racesFailed ? 1 : 0;
+  if (recordedLine) console.log(recordedLine);
+  process.exitCode = failed || racesFailed || unasked ? 1 : 0;
 }
 
 void main()

@@ -26,6 +26,7 @@ import {
   type FilterField,
   modelFilter,
   orderingPlan,
+  uniqueLast,
   type OrderingTerm,
 } from '../common/filtering';
 import { normalizeIfMobile } from '../common/phone';
@@ -257,10 +258,10 @@ export class ShippingSettingsService {
     const sql = new SqlParams();
     const where: string[] = [];
     await applyFilters(this.db, query, METHOD_FILTERS, sql, where);
-    const order = orderingPlan(query, METHOD_ORDERING)?.order ?? [
-      `${M}."position" ASC`,
-      `${M}."price" ASC`,
-    ];
+    const order = uniqueLast(
+      orderingPlan(query, METHOD_ORDERING)?.order ?? [`${M}."position" ASC`, `${M}."price" ASC`],
+      `${M}."id"`,
+    );
     const rows = await this.db.query<MethodRow>(
       `SELECT ${METHOD_SELECT} ${METHOD_FROM} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY ${order.join(', ')}`,
@@ -464,7 +465,7 @@ export class ShippingSettingsService {
       ? await this.db.query<MethodRow>(
           `SELECT ${columns(M, METHOD_COLUMNS)} FROM ${M}
             WHERE ${M}."zone_id" IN ${sql.list(ids, 'uuid')}
-            ORDER BY ${M}."position" ASC, ${M}."price" ASC`,
+            ORDER BY ${M}."position" ASC, ${M}."price" ASC, ${M}."id" ASC`,
           sql.values,
         )
       : [];
@@ -484,7 +485,10 @@ export class ShippingSettingsService {
 
   async zones(query: QueryDict) {
     const plan = orderingPlan(query, ZONE_ORDERING);
-    const order = plan?.order ?? [`${Z}."position" ASC`, `${Z}."name" ASC`];
+    const order = uniqueLast(
+      plan?.order ?? [`${Z}."position" ASC`, `${Z}."name" ASC`],
+      `${Z}."id"`,
+    );
     return this.zonesOf(
       await this.db.query<ZoneRow>(
         `SELECT ${ZONE_SELECT} FROM ${Z} ${(plan?.joins ?? []).join(' ')}
@@ -589,7 +593,10 @@ export class ShippingSettingsService {
   // --- Couriers --------------------------------------------------------------------------------
 
   async couriers(query: QueryDict) {
-    const order = orderingPlan(query, COURIER_ORDERING)?.order ?? [`${K}."name" ASC`];
+    const order = uniqueLast(
+      orderingPlan(query, COURIER_ORDERING)?.order ?? [`${K}."name" ASC`],
+      `${K}."id"`,
+    );
     return this.db.query<CourierRow>(
       `SELECT ${columns(K, COURIER_COLUMNS)} FROM ${K} ORDER BY ${order.join(', ')}`,
     );

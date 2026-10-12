@@ -27,6 +27,7 @@ import {
   choiceFilter,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../../common/filtering';
 import { mediaUrl } from '../../common/media';
 import { pyStr } from '../../common/python';
@@ -296,7 +297,7 @@ export class NavigationAdminService {
   private async queryset(query: QueryDict, sql: SqlParams) {
     const where: string[] = [];
     await applyFilters(this.db, query, FILTERS, sql, where);
-    const order = orderingFrom(query, ORDERING) ?? DEFAULT_ORDER;
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? DEFAULT_ORDER, `${N}."id"`);
     return { where, order: order.join(', ') };
   }
 

@@ -495,6 +495,161 @@ is still open and tracked in
 
 ## Verification log
 
+### D243 to D245 ported to the NestJS API: one order for every list, in production's API, 2026-10-13
+
+Asked for: "port D243 to D245 to the NestJS API". The rules were fixed in Django on
+2026-10-12 (the entry below); this is the same change in the API that serves production, on the
+same branch, `fix/answers-that-depend-on-row-order`. The two APIs agree again, so the branch
+can be merged as a whole.
+
+```text
+parity, fresh database (run) ................................. 12,243 match, 0 differ (131 by documented differences); 217 races pass
+parity, Nest queuing in pg-boss, on a restore (record) ....... 12,243 match, 0 differ; 12,243 answers and 17 rate-limit scenarios kept
+replay, no Django, strict .................................... 12,243 of 12,243 as recorded, no marks on file; 220 races, worker 5 of 5, rate limits 17 of 17
+replay, every table turned over (PARITY_HEAP=reversed) ....... 0 cases reorder tied rows (546 on 2026-10-09); 24 differ, each the harness picking its own row
+fixed Django against the port before it / after it ........... 814 cases differed / 0
+nest unit tests .............................................. 1759 passed (1 new, for the last-key helper; 5 removed with the page-cut reading)
+tsc / eslint / prettier / build .............................. clean
+Django, for three additions found while porting .............. pytest 1761 passed (1 new); ruff, mypy clean; 1 more migration, Meta options only
+```
+
+**What the port is.** `uniqueLast` in `common/filtering.ts` is `core.ordering.unique_last`, and
+is applied at each of the 43 places a list's ordering is built. The four statements that read
+a variant's attributes join the attribute and order by its position and name. The reports'
+breakdowns, the lines of each document, order events, shipping zones and methods, and every
+"first so many" carry the last key Django's now do. One pass took the comparison from 814
+differing cases to 24, a second to none.
+
+**Three things the port found in Django**, fixed there first and committed with it: a supplier
+return's lines were the one child list still without an ordering; the home page's price drops
+were a "first so many" the grep for them had missed; and two last keys named a relation
+(`variant__product`; `?ordering=items`), which Django orders by the related model's own
+ordering -- so giving a return's lines an order had changed what "order by lines" sorts by.
+
+**What it changes for the proof.** A replay is strict now, and CI's is: an answer that is the
+recorded rows in another order fails. The reading of "a page cut through a tie" that three
+case files carried for four days is gone; every row of every page is compared. One more
+leftover of two APIs' turns turned up on the way, the search-term log (every search counts
+itself, and "popular searches" is ordered by the counts), and is taken away after Django's
+turn like the others.
+
+**Not done.** The 24 cases in which the harness picks its subject with an unordered query
+still ask about another row on a turned-over database, so that replay is a check to run by
+hand, not yet one CI can run. Django's other 1,444 tests are still sorted by file only
+([recorded-proof.md](architecture/recorded-proof.md), "What is not in it yet"). And none of
+this branch has run on GitHub.
+
+### D243 to D245 fixed in Django: an answer no longer depends on how rows lie in a table, 2026-10-12
+
+Asked for: "D243 to D245 in Django". Three commits on `fix/answers-that-depend-on-row-order`,
+stacked on the recorded-proof branch. **Django only.** The NestJS API serves production and
+still has all three until the port, which is the next piece of work and is sized below.
+
+```text
+pytest ........................................ 1760 passed (33 new, tests/test_one_order.py; 9 of the first 14 behaviour tests fail on the code as it was)
+ruff check / ruff format --check / mypy ....... clean, 256 files / 164 source files
+makemigrations --check ........................ no changes; 5 new migrations, each a change of Meta options only (no SQL)
+Django asked twice, tables turned over ........ 0 of 12,243 cases reorder tied rows (546 when first measured, through the port; 196 after the first commit)
+   what still differs there ................... 617 cases of clock noise (no set clock on this stack) and 26 that are not rules:
+                                                24 where the harness picks its own subject with an unordered query, Django's
+                                                admin sign-in page, and a memory address in a tracking URL (a known difference)
+fixed Django against the unported NestJS API .. 814 of 12,243 cases differ, on a turned-over database: the port's work
+```
+
+**What changed.**
+
+- **D243.** `VariantAttributeValue` is ordered by its attribute's position, then name, as a
+  product's specifications are. Narrower than first written: a variant made on the product
+  screen stores its label and was never affected; it was the variants with no name of their
+  own, and the `attributes` list of every variant. The choice of order is a rule and is written
+  as one, with the alternative ([business-rules.md](business-rules.md) §5a, rule 4).
+- **D244.** Expense categories that spent the same come by name.
+- **D245.** `core.ordering.unique_last` ends whatever a queryset is ordered by with its primary
+  key. `core.filters.OrderingFilter` (now the default backend) does it for every list and
+  `core.pagination.StandardPagination` for every page, so a view does nothing. The reports'
+  breakdowns name a last key in their own queries.
+- **And what the measurement found after that**, which the first commit did not reach: the
+  lists *inside* a row had no ordering at all (D161 and five like it), and every "first so
+  many" was a cut through an order that could tie. A customer with 52 orders, two placed in
+  one instant, was shown a different fiftieth.
+
+**How it was measured.** The replay stack has no Django in it, so the harness's two bases were
+both pointed at Django: record on a restore, restore again, turn every table over
+(`parity/reverse-heap.sql`), replay. The second run of it reported one tied list where the
+first had reported 196 -- because the first run's marks were still on file and settled the
+rows before anything compared them. Run again from nothing: none. Both are in the port's
+instructions now.
+
+**Not done at the time, and since done** (the entry above, 2026-10-13): the port. Until it
+landed, the comparison of the two APIs failed in 814 cases and production had the defects it
+had. By area: the reports (197), the variants (94), purchasing (79), shipping (63), returns
+(59), stock documents (54), labels (48), purchase orders (40), inventory (36), the counter
+(33), and under twenty each elsewhere. In the port that is one helper for the 43 places an
+ordering is built, an `ORDER BY` on the 33 statements that read a variant's attributes, and
+the reports' and the home page's statements one by one.
+
+### Removing Django, steps 0 and 1: the decisions, and a proof that does not need Django, 2026-10-09
+
+Asked for: "Do steps 0 and 1" of [the plan to remove Django](architecture/django-removal-plan.md).
+**Nothing of Django's was removed or changed**, and production runs what it ran.
+
+**Step 0** is the owner's four decisions, in
+[ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md): one month on the real shop
+before the first Drizzle migration; the Django admin and the API docs dropped; the demo seed
+replaced by a database snapshot; the names kept. A rule still changes in Django first until
+that migration. The month has not begun: it runs from the day the shop on the owner's machine
+is upgraded.
+
+**Step 1** is [the recorded proof](architecture/recorded-proof.md): `scripts/nest-parity.sh
+record` keeps the NestJS API's answer to every case the two APIs agree on, with a snapshot of
+the database; `replay` holds the API to them on a stack with no Django in it
+(`docker-compose.recorded.yml`), races and all.
+
+```text
+record: every case to both APIs, on a restore of the snapshot ... 12,243 match, 0 differ; 12,243 answers kept (2.8 MB), 17 rate-limit scenarios
+replay, no Django, PARITY_TIES=mark ............................. 12,243 of 12,243 as recorded; 84 cases marked as holding tied rows
+races, across two Nest processes ................................ 220 pass, 0 fail (211 + the queue's 3 + 6 new)
+worker check / rate limits against the recording ................ 5 of 5 / 17 of 17
+the same recording replayed strictly, minutes later ............. 12,191 as recorded; 52 not: one report's tied rows in another order (D245)
+mutation, a lock: the coupon's FOR UPDATE removed ............... its 2 race checks fail, one on each Nest process
+mutation, a rule: a percentage coupon divided by 101 ............ the same 30 cases differ from Django and from the recording; the recording finds 9 more
+clock one day ahead, unset / forty days ......................... 475 / 775 cases answer differently (ADR-0021: the replay's clock is set)
+every table's rows turned over (PARITY_HEAP=reversed) ........... 546 cases reorder tied rows; 239 answer differently (D243, D244, D245)
+nest unit tests ................................................. 1763 passed (18 new: what a recording keeps, tied rows, a page cut through a tie, keeping in step)
+tsc / eslint / prettier / build ................................. clean
+new race checks against Django and Nest together ................ 6 of 6 pass (compare mode, before they were relied on)
+```
+
+**The plan said to measure first, and the measurement is most of the result.** The first whole
+replay differed in 167 cases of 12,243 and none was the API: the harness's own address in the
+audit log, what two APIs' turns leave behind against one's, rows a case dated from "now", and
+tied rows on another heap. Each is dealt with in `parity/recording.ts` and said in the
+document's table. Then the date: a recording replayed with the clock a day ahead loses 475
+cases, and they are right answers to another question -- a return window closed, a debt a day
+older. So the replay stack runs at the hour of its recording
+([ADR-0021](architecture/decisions/0021-the-recorded-proof-replays-on-a-set-clock.md):
+libfaketime, in the two replay images and nowhere else).
+
+**It found three defects the comparison with Django never could** (D243 to D245), by replaying
+on a database whose every table had its rows put back in reverse. Both APIs read the same
+tables, so they agree with each other about a variant's label whether it says "M / White" or
+"White / M". The label is copied onto order lines.
+
+**What it does not do yet, said plainly.** A replay is run with `PARITY_TIES=mark`, which
+passes an answer that is the recorded rows in another order: until lists cannot tie (D245) the
+order of a list is held by the comparison with Django, not by the recording. And of the plan's
+step 1.6 only the concurrency tests are done: Django's 23 each have a race check on two Nest
+processes (five had none; six checks were written). The other 1,491 tests are sorted by file
+and not by test, and none is ported. Both are in the document's last section, with the method
+for the second.
+
+**One thing went wrong on the way.** The first recording was run beside another session's
+comparison in a Docker VM of 1.7 GB, and the kernel killed a NestJS container of each during
+their races. That session's run of 2026-10-08 22:40 +06 failed for that reason and no other.
+
+CI: the parity job now records, stops Django and both APIs, and replays. **That has not run on
+GitHub.**
+
 ### The checks on PR #91, 2026-10-08
 
 PR #91 was merged with three checks red. Each was read rather than rerun.
@@ -4998,7 +5153,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D158 | **The counter's refund method is not validated.** D95 made `refund_method` a choice on `POST /returns/<id>/complete/`; `PosReturnView` still passes `request.data.get("refund_method", "CASH")` straight to `refund_order`. Measured: a counter return with `"refund_method": "BITCOIN"` is a 201 whose refund of 5770.00 is recorded against no account, with no cash-book entry -- the customer has been paid and no balance has moved. A number, `true`, a list or an object does the same, stored as Python prints it (`"5"`, `"True"`, `"['CASH']"`); `"cash"` in lower case does reach the drawer and is stored as `cash`; a method past the column's 20 characters, or holding a NUL, is a 500. *Found porting the counter return.* | Medium | Copied by the port. Validate it as `CompleteReturnSerializer` does. `orders/api/pos_views.py` |
 | D159 | **Ordering the returns list by `items` lists a return once per line.** The viewset names no `ordering_fields`, so `OrderingFilter` offers every serializer field, the nested `items` among them; ordering by it joins the lines in. Measured: with one two-line return among ten, `?ordering=items` answers `count: 10` and ten rows in which the two-line return appears twice and another return is missing. *Found porting the list's ordering.* | Low | Copied by the port. Name the `ordering_fields`. `orders/api/views.py` |
 | D160 | **A return completed with an `Idempotency-Key` another refund holds pays nothing.** `complete` passes the header's key to `refund_order`, which answers with whatever refund already holds that key -- any order's -- and `complete` then marks the return COMPLETED. Measured: `POST /returns/<id>/complete/` with the key of another return's refund is a 200; the return is COMPLETED and its order REFUNDED, with no refund row, no cash-book entry, `refunded_total` 0.00 and `payment_status` still PAID. The same family as D147. *Found by a case that reuses a key.* | Medium | Copied by the port. Key the lookup by order as well, or refuse a key that belongs to another order. `orders/services/payments.py`, `orders/services/returns.py` |
-| D161 | **A return's lines come back in no stated order.** `ReturnItem` has no `Meta.ordering` and neither the prefetch nor `receive` asks for one, so the `items` of an answer, and the order in which lines are restocked, are whatever order the table yields. Measured: across runs of one request the two lines of a return swapped places, in Django alone. *Found when the parity harness compared the same request twice.* | Low | Copied by the port, which sends the same statements; the harness compares a return's lines by the order line each is for. Order them by `created_at`. `orders/models.py` |
+| D161 | **A return's lines come back in no stated order.** `ReturnItem` has no `Meta.ordering` and neither the prefetch nor `receive` asks for one, so the `items` of an answer, and the order in which lines are restocked, are whatever order the table yields. Measured: across runs of one request the two lines of a return swapped places, in Django alone. *Found when the parity harness compared the same request twice.* | Low | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13**, with the rest of its kind (D245): `ReturnItem.Meta.ordering` is `created_at, id`. `orders/models.py`, `orders/returns.service.ts` |
 | D162 | **Approve and reject take the comment unvalidated.** Both read `request.data.get("comment", "")`. Measured: `{"comment": null}` is the column's `NOT NULL` answering the generic 409; a number, a list or an object is stored as Python prints it (`"5"`, `"{'a': 1}"`) and, on reject, written into the timeline that way; a NUL is a 500; a body that is a JSON list is a 500 (`'list' object has no attribute 'get'`). *Found by the comment cases.* | Low | Copied by the port. Give the two actions a serializer. `orders/api/views.py` |
 | D163 | **Rejecting a return marks the order delivered, now.** `reject` sends an order in RETURN_REQUESTED to DELIVERED through `transition`, which stamps `delivered_at` with the current time -- whatever other returns the order has, and whatever it was before the return. Measured: a SHIPPED order with a return opened and rejected is DELIVERED though it never was; an order delivered earlier has its `delivered_at` moved to the moment of the rejection, so its 14-day return window starts again; and on an order with two returns, rejecting the second while the first is RECEIVED leaves the order DELIVERED, so completing the first refunds it (`payment_status` REFUNDED) and the order stays DELIVERED. *Found by the reject cases.* | Medium | Copied by the port. Remember the status the order came from, and keep it RETURN_REQUESTED while another return is open. `orders/services/returns.py`, `orders/services/lifecycle.py` |
 | D164 | **A return on a packed order puts goods on the shelf that then ship.** `request_return` asks only that stock is committed, which it is from PACKED on, and moves the order to RETURN_REQUESTED only from SHIPPED or DELIVERED. Measured: a counter return of a PACKED, unpaid online order is a 201 -- the unit goes back on the shelf (42 to 43), the line is marked returned, nothing is refunded -- and the order stays PACKED; `POST /orders/<id>/status/` then ships it, and the shelf still says 43 for a unit that has left. *Found by the cases for each order status.* | Medium | Copied by the port. Refuse a return before SHIPPED (a packed order is cancelled or unpacked, not returned). `orders/services/returns.py` |
@@ -5080,6 +5235,9 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | ~~D240~~ | ~~**An image built on a workstation carried the workstation's files.**~~ **Fixed 2026-10-08.** Every image is built with its own directory as the context, and Docker reads `.dockerignore` from the root of the context: the one at the top of the repository, written as if the root were the context, was never read by any build. So the Django image's `COPY . .` took everything in `apps/api` -- on the machine where it was noticed, 1,564 uploaded files under `media/` (receipts among them), 44 MB of type-checker cache and the test suite -- and because Docker fills a new named volume from the image the first time, **a fresh `api_media` volume began life holding those uploads**. The web image's builder did the same after its own `npm ci`: the workstation's `node_modules` (750 MB, installed for the workstation's system) and its stale `.next` were laid over the clean install. CI never saw either, because a fresh checkout has none of it; so the images CI scanned were not the images a workstation built. *Found while rebuilding the local production stack for the cutover: a 430 MB build context, and receipts in a new stack's media volume.* | Medium | `apps/api/.dockerignore` and `apps/web/.dockerignore` now decide what each image is built from; `apps/api-nest` already had one. The Django image's app directory went from 64 MB to 13 MB and its `media/` is empty; its test suite is no longer in the production image. **An existing `api_media` volume is not cleaned by this**: one first created from a workstation-built image may hold files no row refers to. `.dockerignore` |
 | D241 | **Django reports nothing to Sentry, with `SENTRY_DSN` set or not.** `config/settings/prod.py` initialises `sentry_sdk` inside a `try` and passes on `ImportError`; `sentry-sdk` is in no requirements file, so the import always fails and the block is always skipped, without a word in the log. The compose file passes `SENTRY_DSN`, `.env.example` documents it, and the go-live checklist has "Error tracking (Sentry DSN) receiving events" as an item: an operator who sets the DSN has every reason to believe errors are being reported, and none are. Confirmed in the production image (`pip show sentry-sdk`: not found). The settings also read `RANGON_ENV` and `RANGON_RELEASE`, which no compose file passed. *Found when the NestJS API was to report "as Django does".* | Medium | The NestJS API, which serves production, reports since 2026-10-08 (ADR-0019), and the compose files pass both names now. Django still does not: add `sentry-sdk` to `requirements/base.txt`, and log when a DSN is set and the SDK is missing rather than passing. Until then, running on Django is running without error reporting. `config/settings/prod.py`, `requirements/base.txt` |
 | D242 | **The Django image fails its own security scan, and has since before the cutover.** Django 5.1.15 carries CVE-2026-15307 (HIGH: remote code execution through GeoDjango spatial lookups), fixed in 5.2.17 and 6.0.8 and not in the 5.1 line, which is out of support. This project does not install `django.contrib.gis`, so the vulnerable code is not reachable here; the scan gate does not know that and fails "Build & scan images" on every pull request. It was the step that stopped that job before 2026-10-08; with the NestJS image scanned first and now clean, it is the step that stops it again. *Found reading why PR #91's checks were red.* | Medium | Not fixed here: moving Django to 5.2 is a framework upgrade with its own testing, and the owner's to schedule -- or moot, if Django is removed ([django-removal-plan.md](architecture/django-removal-plan.md)). Until then the image job stays red for a reason that is not the pull request's. `requirements/base.txt` |
+| D243 | **A variant's label depends on the order its rows lie in.** `ProductVariant.label` joins the variant's attribute values in the order `self.attribute_values.all()` returns them, and `VariantAttributeValue` has no `Meta.ordering`: PostgreSQL returns them as they lie in the table. Measured on 2026-10-09 by restoring a database and putting every table's rows back in reverse order -- the same rows, the same ids -- in the NestJS API, whose statement is Django's: a variant that read "M / White" reads "White / M". The label is the product feed's title, the cart line, the counter's grid, the inventory list, and it is **copied onto the order line when the order is placed** (`variant_label`), so the receipt keeps whichever it was that day. Nothing has to be restored for it to happen: any update of a `catalog_variantattributevalue` row moves it in the table. Both APIs. *Found by replaying the recorded proof on a turned-over database ([recorded-proof.md](architecture/recorded-proof.md)); the comparison of the two APIs could never see it, because both read the same table.* | Medium | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13.** `VariantAttributeValue.Meta.ordering` is the attributes' own order, `attribute__position, attribute__name`, as `ProductAttributeValue`'s is; every `.all()` and every prefetch follows it ([business-rules.md](business-rules.md) §5a, rule 4, with the decision it takes). Narrower than first written: a variant made on the product screen stores its label in `name` and was never affected -- it is the variants with no name of their own (the importer's, and any made through the API without one) whose label moved, and the `attributes` list of every variant. `apps/api/catalog/models.py`, `tests/test_one_order.py` |
+| D244 | **The dashboard's top expense category is whichever of the largest comes first.** `_dashboard` reads `expenses["by_category"][0]`, and the categories are ordered by their total alone: where two tie, the table decides. Measured the same way: "Transport", then "Rent", for the same quarter and the same expenses. Both APIs. *Found as D243 was.* | Low | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13.** `expense_totals` orders by the total, then the category's name. `apps/api/finance/selectors.py`, `tests/test_one_order.py` |
+| D245 | **A list ordered by a column that ties can show a row twice across its pages, or not at all.** Wherever a list's ordering does not tell two rows apart -- `?ordering=on_hand` on the inventory, a supplier's offers by `-is_preferred, last_cost`, the notifications newest first when several were made in one instant, the dashboard's ten best sellers by units sold, the home page's featured products -- PostgreSQL returns the tied rows as they lie, and that changes with every update of one of them. A page that ends inside the tie then shows a different row from one request to the next. D161 is one instance; this is the class. Measured on 2026-10-09: of 12,243 parity cases, **546** answer with tied rows in another order once every table is turned over, and a further handful are pages cut through a tie. Both APIs: the port's statements are Django's. *Found as D243 was.* | Medium | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13** (`uniqueLast` in `common/filtering.ts`, at the 43 places an ordering is built; the statements' own last keys elsewhere). `core.ordering.unique_last` ends whatever a queryset is ordered by with its primary key. `core.filters.OrderingFilter` (now the default backend, and the one the three view modules that name their own import) applies it to every list, `core.pagination.StandardPagination` to every page, and the reports' breakdowns and "first ten" name a last key of their own. The lists inside a row (D161's kind: a return's lines, a transfer's, a stock count's, a purchase order's and a delivery's) had no ordering at all and now come in the order they were entered, `created_at, id`; order events, shipping methods and zones end theirs with the id; and every "first so many" -- the home page's rows, a customer's newest orders, the counter's grid, suggestions, the two digests -- is cut through an order that ends with the key. **Measured on Django itself**, asked twice on one restored database, the second time with every table's rows turned over: 0 of 12,243 cases answer with tied rows in another order, where 546 did. `apps/api/core/ordering.py`, `core/filters.py`, `core/pagination.py`, `reports/services.py`, `tests/test_one_order.py` |
 
 ## Still API-only (no UI)
 

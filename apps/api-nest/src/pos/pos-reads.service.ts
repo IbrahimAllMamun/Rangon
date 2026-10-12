@@ -155,7 +155,8 @@ export class PosReadsService {
            ON ("catalog_productvariant"."product_id" = "catalog_product"."id")
         INNER JOIN "catalog_category" ON ("catalog_product"."category_id" = "catalog_category"."id")
         WHERE (${where.join(' AND ')})
-        ORDER BY "catalog_product"."name" ASC, "catalog_productvariant"."position" ASC LIMIT 60`,
+        ORDER BY "catalog_product"."name" ASC, "catalog_productvariant"."position" ASC,
+                 "catalog_productvariant"."id" ASC LIMIT 60`,
       sql.values,
     );
     const ids = rows.map((row) => row.id);

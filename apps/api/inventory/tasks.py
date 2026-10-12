@@ -78,7 +78,7 @@ def send_low_stock_digest() -> str:
     low = (
         Inventory.objects.select_related("variant", "variant__product", "branch")
         .filter(on_hand__lte=F("reorder_point"))
-        .order_by("branch", "on_hand")[:100]
+        .order_by("branch", "on_hand", "pk")[:100]
     )
     if not low:
         return "none"

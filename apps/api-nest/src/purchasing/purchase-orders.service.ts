@@ -30,6 +30,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import type { QueryDict } from '../common/query-dict';
@@ -152,7 +153,10 @@ export class PurchaseOrdersService {
     const sql = new SqlParams();
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${PO}."created_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${PO}."created_at" DESC`],
+      `${PO}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

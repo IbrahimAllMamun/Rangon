@@ -16,7 +16,13 @@ import {
   UniqueCheck,
 } from '../../common/drf';
 import { Conflict, NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, modelFilter, orderingPlan, type OrderingTerm } from '../../common/filtering';
+import {
+  applyFilters,
+  modelFilter,
+  orderingPlan,
+  uniqueLast,
+  type OrderingTerm,
+} from '../../common/filtering';
 import { pyStr, pyStrip } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
 import { parseUuid } from '../../common/uuid';
@@ -220,10 +226,10 @@ export class AttributesService {
    */
   private attributeQuery(query: QueryDict | null, where: string[], limit = ''): string {
     const plan = query ? orderingPlan(query, ATTRIBUTE_ORDERING) : null;
-    const order = plan?.order ?? [
-      '"catalog_attribute"."position" ASC',
-      '"catalog_attribute"."name" ASC',
-    ];
+    const order = uniqueLast(
+      plan?.order ?? ['"catalog_attribute"."position" ASC', '"catalog_attribute"."name" ASC'],
+      '"catalog_attribute"."id"',
+    );
     return `SELECT ${ATTRIBUTE_COLUMNS}, ${VARIANT_USAGE} AS "variant_usage_count"
       FROM "catalog_attribute" ${plan?.joins.join(' ') ?? ''}
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -461,7 +467,10 @@ export class AttributesService {
     const where: string[] = [];
     await applyFilters(this.db, query, VALUE_FILTERS, sql, where);
     where.push(...extra(sql));
-    const order = orderingPlan(query, VALUE_ORDERING)?.order ?? VALUE_DEFAULT_ORDER;
+    const order = uniqueLast(
+      orderingPlan(query, VALUE_ORDERING)?.order ?? VALUE_DEFAULT_ORDER,
+      '"catalog_attributevalue"."id"',
+    );
     return `SELECT ${VALUE_COLUMNS} FROM "catalog_attributevalue"
         INNER JOIN "catalog_attribute" ON ("catalog_attributevalue"."attribute_id" = "catalog_attribute"."id")
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}

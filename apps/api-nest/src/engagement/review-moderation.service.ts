@@ -11,6 +11,7 @@ import {
   modelFilter,
   numberFilter,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { pyStr, pyStrip } from '../common/python';
@@ -95,7 +96,10 @@ export class ReviewModerationService {
     const where: string[] = [];
     await applyFilters(this.db, query, FILTERS, sql, where);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${R}."created_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${R}."created_at" DESC`],
+      `${R}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

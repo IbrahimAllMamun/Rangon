@@ -64,7 +64,7 @@ class PosSessionView(APIView):
 
         branch = resolve_branch(request.user, request.query_params.get("branch"))
         organization = get_organization()
-        holds = HeldSale.objects.filter(branch=branch).order_by("-created_at")[:20]
+        holds = HeldSale.objects.filter(branch=branch).order_by("-created_at", "pk")[:20]
 
         # The accounts this branch's takings can land in. Sent with the session
         # rather than fetched separately so opening the register stays one
@@ -166,7 +166,10 @@ class PosProductSearchView(APIView):
         if category:
             variants = variants.filter(product__category__slug=category)
 
-        variants = variants.order_by("product__name", "position")[:60]
+        # The grid is the first sixty of this order, so it has to be one order
+        # (D245): two variants of one product at one position, or two products
+        # of one name, would otherwise swap places as their rows moved.
+        variants = variants.order_by("product__name", "position", "pk")[:60]
         snapshots = inventory_services.availability(branch=branch, variants=list(variants))
 
         results = []

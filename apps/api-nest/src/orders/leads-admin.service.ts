@@ -11,6 +11,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { pyStr, pyStrip } from '../common/python';
@@ -128,7 +129,10 @@ export class LeadsAdminService {
     const sql = new SqlParams();
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${L}."last_seen_at" DESC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${L}."last_seen_at" DESC`],
+      `${L}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

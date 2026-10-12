@@ -142,6 +142,9 @@ class PurchaseOrderItem(BaseModel):
 
     class Meta:
         db_table = "purchasing_purchaseorderitem"
+        # The lines of a document, in the order they were entered: one order,
+        # where nothing said any and they came as they lay in the table (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.UniqueConstraint(
                 fields=["purchase_order", "variant"], name="purchasing_poi_uniq"
@@ -207,6 +210,9 @@ class PurchaseReceiptItem(BaseModel):
 
     class Meta:
         db_table = "purchasing_purchasereceiptitem"
+        # The lines of a document, in the order they were entered: one order,
+        # where nothing said any and they came as they lay in the table (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0), name="purchasing_pri_qty_gt_0"
@@ -448,6 +454,8 @@ class PurchaseReturnItem(BaseModel):
 
     class Meta:
         db_table = "purchasing_purchasereturnitem"
+        # The lines of a document, in the order they were entered (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0), name="purchasing_pri_return_qty_gt_0"

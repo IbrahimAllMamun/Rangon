@@ -9,7 +9,7 @@ from django.http import FileResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.filters import SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -20,6 +20,7 @@ from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
 from core.exceptions import NotFound
+from core.filters import OrderingFilter
 from core.requests import AuthedRequest, actor
 from finance import selectors
 from finance import services as finance_services
