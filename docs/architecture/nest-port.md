@@ -13,12 +13,6 @@ schedule. **Django remains the source of truth for the schema and the rules.** I
 migration; a rule changes there first, with its tests, and is then ported; and one compose file
 puts the whole stack back on it. The development stack is Django's.
 
-**Django is ahead of the port in one thing**, as of 2026-10-12, on the branch
-`fix/answers-that-depend-on-row-order`: D243 to D245 and D161 are fixed there (every list ends
-its ordering with the primary key; a variant's attributes come in the attributes' own order).
-The port still sends the old statements, and the comparison differs in 814 of 12,243 cases
-until it follows. That branch is not to be merged before it does.
-
 **Django is to be removed, in steps** ([ADR-0020](decisions/0020-django-is-removed-in-steps.md),
 [the plan](django-removal-plan.md)); nothing of it has been yet. The first step is a proof that
 does not need it: [recorded-proof.md](recorded-proof.md).
@@ -630,8 +624,9 @@ then take the order's lines, and the shelf through the stock service. Receiving 
 valued at what it cost: `((on_hand * avg) - (qty * cost)) / (on_hand - qty)`, never below
 nothing, an emptied shelf keeping its last average.
 
-An order's lines, a receipt's and a return's have no ordering of their own (D161's kind), so
-they are read with the statements Django's prefetch sends, `IN (...)` in the page's order.
+An order's lines, a receipt's and a return's are read with the statements Django's prefetch
+sends, `IN (...)` in the page's order -- and, since D245 was fixed in both APIs on 2026-10-13,
+in the lines' own order: `created_at`, then `id`.
 
 | Endpoint | Notes |
 |---|---|
@@ -1377,9 +1372,9 @@ the port):
   (D159).
 - A return completed with an `Idempotency-Key` another refund holds is COMPLETED with nothing
   paid (D160).
-- A return's lines are read in no stated order; the port sends the same statements, and the
-  harness compares a return's lines by the order line each is for, and the ledger entries of one
-  request by SKU (D161).
+- ~~A return's lines are read in no stated order~~ (D161): fixed in both APIs on 2026-10-13,
+  with the rest of its kind (D245). The harness still compares a return's lines by the order
+  line each is for, which is now stricter than it needs to be and no weaker.
 - Approve and reject store whatever `comment` holds: Python's `str()` of a number or a list, a 409
   for `null`, a 500 for a body that is not an object (D162).
 - Rejecting a return sends its order to DELIVERED and stamps `delivered_at` now, whatever other

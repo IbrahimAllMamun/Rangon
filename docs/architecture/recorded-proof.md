@@ -46,8 +46,9 @@ Nest API queuing its jobs in pg-boss, as production does -- with the answers kep
 without recording if any case differs. `replay` starts another compose project
 (`docker-compose.recorded.yml`, `-p rangon-recorded`, port 8640) from nothing each time, and
 takes `PARITY_ONLY`, `PARITY_RACES` and `PARITY_VERBOSE` as `run` does.
-`scripts/nest-parity.sh replay-down` removes it. Once after each `record`, the first replay is
-run with `PARITY_TIES=mark` ([Tied rows](#tied-rows)); CI's is always that one.
+`scripts/nest-parity.sh replay-down` removes it. A replay is strict, and CI's is that one;
+`PARITY_TIES=mark` and `PARITY_HEAP=reversed` are for looking for what depends on the order
+rows lie in ([Tied rows](#tied-rows)).
 
 What `record` leaves, in `apps/api-nest/parity/recorded/` (untracked):
 
@@ -114,7 +115,7 @@ then a fifth and larger one, the date ([The clock](#the-clock)):
 |---|---|---|---|
 | **Tied rows, the other way round** | about 125 | A list ordered by a column that ties (`?ordering=on_hand`, a report's top products, the valuation, the counter's product grid) leaves the tied rows to the heap, in Django's statement and so in the port's. The two APIs, asked a moment apart, read one heap and agree. A restored database is another heap | [Tied rows](#tied-rows), below |
 | **The harness's own address** | 22 | The audit log keeps the caller's address; the caller is the harness, and its address is whatever its compose network gave it | read as `<the harness>` on both sides of a replay (`plain` in `recording.ts`) |
-| **How many APIs were asked** | about 13 | What a case's own sign-ins leave behind -- issued tokens, audit entries -- that no reset takes away. A comparison leaves it twice, once per API; a replay once. So the audit log was 397 entries long in the recording and 390 in the replay, and a password change ended 14 sessions, then 7 | while recording, what Django's turn leaves is taken away before the Nest API's turn (`undoWrites`, in `run.ts`): a recording is of one API answering |
+| **How many APIs were asked** | about 13 | What a case's own sign-ins leave behind -- issued tokens, audit entries -- that no reset takes away. A comparison leaves it twice, once per API; a replay once. So the audit log was 397 entries long in the recording and 390 in the replay, and a password change ended 14 sessions, then 7 | while recording, what Django's turn leaves is taken away before the Nest API's turn (`undoTurn`, in `run.ts`): a recording is of one API answering. The search-term log is the same kind, found later: every search adds one to its term's count, and "popular searches" is ordered by the counts |
 | **A moment a case arranged** | 5 | The party ledger's cases move an order to "45 days ago", counted from when the cases were built, and the ledger prints the moment | read as `<45 days before the cases were built>` (`asArranged` in `expenses-cases.ts`) |
 
 ### Tied rows
@@ -149,12 +150,20 @@ the same recording replayed again, strictly, minutes later . 12,191 as recorded;
                                                              valuation, the same rows in another order
 ```
 
-So **until D245 is fixed a replay is run with `PARITY_TIES=mark`**, as CI's is, and what that
-gives up should be said plainly: in a marking replay an answer that is the recorded rows in
-another order passes, whether the rows tie or an `ORDER BY` has just been lost. The order of a
-list is held, today, by the comparison with Django, which reads both APIs off one heap. It has
-to be held by the recording before Django goes, and the way to that is not better marking but
-no ties: a last ordering key, and then a list has one order and a recording holds it whole.
+That was the state on 2026-10-09, and it meant a replay had to be a marking one, in which an
+answer that is the recorded rows in another order passes whether the rows tie or an `ORDER BY`
+has just been lost. The way out was not better marking but no ties.
+
+**Since 2026-10-13 a list has one order, in both APIs** (D243 to D245 and D161: Django first,
+then the port), and a replay is strict:
+
+```text
+recorded on a restore, replayed strictly ................... 12,243 of 12,243 as recorded; no marks on file
+replayed with every table turned over, marking ............. 0 cases marked
+```
+
+The marking stays in the harness for the day a list that ties is written again: it is how
+such a list is found and named. It is no longer how a replay passes.
 
 ### What turning the tables over found
 
@@ -188,19 +197,21 @@ tables in the same order and agree. This is the one place so far where the recor
 something the comparison cannot; it is also a check Django can be put through while it is
 still here, and has not been yet.
 
-It is opt-in and not what CI runs: a marking replay on a turned-over database is thorough
-about ties and fails on every one of the 239 until D243 to D245 are fixed.
+**Fixed since, and measured the same way** (2026-10-13): on a turned-over database the port
+now marks no case and differs in 24, every one of them the harness choosing its own subject
+with an unordered query -- 20 at the counter, where a case scans "a SKU" or reads "a sale at
+another branch", and 4 that read "a ledger row" -- so that the case asks about another row.
+Those are the harness's to fix, and until they are this replay cannot be a check CI runs; it
+is one to run by hand on any part that returns a list.
 
 ### A page cut through a tie
 
-Where a page ends inside a run of tied rows, which of them it shows is the heap's choice too --
-and that is other rows, not other places, so there is nothing to mark. A case that asks for
-such a page says what the list is ordered by (`pageOf`, `endOfTheFirst` in `recording.ts`), and
-in a run that is recorded or replayed the rows at the page's ends that tie with the end row are
-read as "one of the rows that tie on this". Three lists have been seen to do it and their cases
-say so: a supplier's offers (`-is_preferred, last_cost`), the notifications (newest first, the
-fixture's made in one instant), and the dashboard's ten best sellers (by units sold). The
-comparison with Django reads every row in full, as it always has.
+Where a page ends inside a run of tied rows, which of them it shows was the heap's choice too
+-- other rows, not other places, so nothing could be marked. Three lists were seen to do it (a
+supplier's offers, the notifications, the dashboard's ten best sellers), and for four days
+their cases read the rows at a page's ends as "one of the rows that tie on this". With D245
+fixed there is no such page, and that reading was taken out again: every row of every page is
+compared.
 
 ### The clock
 
@@ -300,12 +311,8 @@ port's unit tests do. The two runs and the script that subtracts them were prepa
 
 1. **Django's tests, sorted and ported** (above). Until it is done, removing Django removes
    assertions nothing else makes.
-2. **D243 to D245 in the NestJS API.** Until a list that ties has a last ordering key, a
-   recording cannot hold the order of a list, only its rows ([Tied rows](#tied-rows)). They
-   are rules, so they changed in Django first (ADR-0020): fixed there on 2026-10-12, and
-   Django asked twice on a turned-over database now answers no case with tied rows in another
-   order. **The port is owed**, and until it lands the two APIs differ in 814 cases. After it
-   a replay needs no marking, and a turned-over database is a check CI can run.
+2. ~~D243 to D245.~~ Fixed in Django on 2026-10-12 and in the NestJS API on 2026-10-13; a
+   replay is strict since ([Tied rows](#tied-rows)).
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its
    recording. ADR-0021 says why the set clock should hold at any distance; the first replay at
    a distance is what shows it.
@@ -316,8 +323,9 @@ port's unit tests do. The two runs and the script that subtracts them were prepa
 6. **Where a recording lives once Django cannot make another.** Today it is made from the
    commit it sits beside and is untracked: a snapshot of 0.7 MB and 2.7 MB of answers, in a
    repository whose whole history packs to 11 MB. That is the plan's step 6 to decide.
-7. **The harness's own unordered choices.** A few cases pick their subject with a query that
+7. **The harness's own unordered choices.** 24 cases pick their subject with a query that
    has no order; on a turned-over database they ask about another row. They agree with their
-   recording on a plain restore, and are listed by the turned-over run.
+   recording on a plain restore, and are all that the turned-over run still lists. Giving
+   those queries an order would let that run be a check of its own in CI.
 8. The race checks' names still say "both APIs" and "Django" in the source; a replay prints
    them as "two Nest processes" and "the second Nest process".

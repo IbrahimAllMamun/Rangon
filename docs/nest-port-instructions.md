@@ -45,6 +45,10 @@ Read these alongside it:
    through one transaction with `SELECT … FOR UPDATE` on the rows whose invariant is protected. The
    race is driven across both APIs at once. Then the lock is removed and the test must fail
    (§6.4).
+4a. **Every list has one order.** A list's ordering ends with its own id (`uniqueLast` in
+   `common/filtering.ts`, which is `core.ordering.unique_last`); a list inside a row is in
+   the child model's `Meta.ordering`; a "first so many" names a last key. A new statement
+   that returns rows says what orders them to the last key, as Django's does (D245).
 5. **Copy Django's defects; don't fix them in the port.** The two APIs must agree until Django is
    fixed. List each copied defect in `nest-port.md`. **Exception: a security hole** is fixed in
    Django first, on its own branch, and the port implements the fixed rule (D113 is the example).
@@ -244,9 +248,10 @@ The same three filters. Every clock in it is set to the hour of the recording
 PARITY_TIES=mark scripts/nest-parity.sh replay
 ```
 
-The replay to run, until lists cannot tie (D245): an answer that is the recorded rows with tied
-ones in another order is marked, not failed. `PARITY_HEAP=reversed` beside it turns every
-table over first, and prints what depends on the order rows lie in.
+An answer that is the recorded rows with tied ones in another order is marked, not failed.
+`PARITY_HEAP=reversed` beside it turns every table over first: what that replay marks or
+differs in depends on the order rows lie in, and since D243 to D245 nothing should. **Run it
+on any part that returns a list, a "first so many", or a text built from rows.**
 
 **Until the plan's step 6 this runs beside the comparison with Django, not in place of it**
 (ADR-0020): a part is still proven by `reset`, `run`, `run-jobs`.
@@ -650,9 +655,11 @@ apps/api-nest/
 | A first replay of 12,243 recorded answers differed in 167, and none was the API | what two requests a moment apart share and two runs do not: the harness's own address in the audit log, the leftovers of two APIs' turns against one's, rows a case dated from "now", and tied rows on another heap | measure a recording against itself before building on it; each of the four has its row in `recorded-proof.md` and its lines in `parity/recording.ts` |
 | A recording held that night and lost 475 cases a day later | the snapshot is a shop on one night, and every rule with a calendar in it reads the calendar against it | the replay stack runs at the hour of the recording (ADR-0021); never "fix" such a case by loosening what it compares |
 | "The same rows in another order" was sometimes not | with every table's rows put back in reverse, 206 of 239 remaining differences were a variant's label reading "White / M" for "M / White": Django joins the attribute values in no order (D243). Both APIs, so the comparison never saw it | `PARITY_HEAP=reversed scripts/nest-parity.sh replay` on any part that returns a list or builds a text from rows; it is the one check that finds what both APIs get wrong alike |
-| A marking replay matched every case and the strict one after it missed 52 | rows the cases write to are put back by the resets, and tied ones land differently each time | a replay is run with `PARITY_TIES=mark` until lists cannot tie (D245); the order of a list is held by the comparison with Django meanwhile |
+| A marking replay matched every case and the strict one after it missed 52 | rows the cases write to are put back by the resets, and tied ones land differently each time | it was the sign that lists tied, not a fault of marking: every list was given one order (D245), and a replay has been strict since 2026-10-13 |
 | A second turned-over replay "found" one tied list where the first had found 196 | the marks of the first run were still on file, and a mark settles a list silently: the 196 were reordered before anyone compared them | a measurement starts with no `ties.jsonl.gz`; `record` removes it, and a script that replays without recording must |
 | Django could not be measured on its own for what depends on row order, since the replay stack has no Django | point both of the harness's bases at Django (`DJANGO_BASE` and `NEST_BASE`), record on a restore, restore again, pipe `parity/reverse-heap.sql` into the database, replay with `PARITY_TIES=mark` | it measures the API a rule is changed in first, before the port exists; with no set clock, read the "<now>" differences as noise and the rest as findings |
+| Two last keys written in Django ordered by something else | `order_by("variant__product")` and `?ordering=items` name a relation, and Django orders a relation by the related model's own `Meta.ordering`, through a join -- so giving `ReturnItem` an ordering changed what `?ordering=items` sorts by | name the column (`variant__product_id`); and after any change of a model's `Meta.ordering`, look for every ordering term that names a relation to it, in both APIs |
+| A grouped storefront query had no `ORDER BY` in Django and gained one when the paginator ended its order with the key | Django leaves a model's `Meta.ordering` out of a grouped query's SQL but keeps it on the queryset; ending the order "as it was" names it | when a rule is applied to "whatever the order is", print the SQL before and after for a grouped query and a cleared one (`order_by()`) |
 | A stale `run.log` from an earlier session read as the run just started | the background run had not reached the redirect that overwrites it | give each run's log a new name, or delete the old ones first |
 | The roadmap said "ruff clean" for two parts whose new fixtures had not been run through it | the documented ruff command covers `parity.py` and the gateway, not `apps/api-nest/parity/*.py`, which the Django container does not mount | pipe each new fixture through it: `docker compose ... exec -T django ruff format --check --stdin-filename /app/x.py - < fixture_x.py`, and `ruff check --ignore T201` the same way (fixtures print; `PARITY_PASSWORD` is the one S105) |
 
