@@ -13,8 +13,8 @@
 c83d087811de295cf178e7d01ab16694d17a80a6:apps/api/tests/test_seed_demo_guard.py:generic-api-key:127
 c8877b789c585cb3abb186376c0558607281ee9a:apps/api/tests/test_seed_demo_guard.py:generic-api-key:127
 
-# Image tags in a runbook, not credentials: `prod-before-20261005` is the tag
-# the upgrade guide tells an operator to keep the outgoing images under, and
+# Image tags in a runbook, not credentials: the tag the upgrade guide tells an
+# operator to keep the outgoing images under ("prod-before-" and a date), and
 # the generic-api-key rule reads a colon, a word and digits as a key. Two
 # commits: the guide as first written, and the cutover's edit of it, which
 # added the NestJS image to the same commands.
@@ -22,6 +22,11 @@ c8877b789c585cb3abb186376c0558607281ee9a:apps/api/tests/test_seed_demo_guard.py:
 58390ac8a138d3985b0e8234beebc08c8ce19d6c:docs/operations/upgrading-local-production.md:generic-api-key:279
 d3683c7c35baaef461147245b2e2a591fb50c7c8:docs/operations/upgrading-local-production.md:generic-api-key:372
 d3683c7c35baaef461147245b2e2a591fb50c7c8:docs/operations/upgrading-local-production.md:generic-api-key:383
+
+# This file's own comment on the entries above, as first written: it quoted
+# the tag in full, and the rule read the quotation as it had read the runbook.
+# The comment no longer quotes it; the commit that did is in the history.
+b4ae871afaee096a6d9dcbd17cf0729d56d64693:.gitleaksignore:generic-api-key:16
 
 # A made-up CSRF secret in the parity harness, typed in to exercise Django's
 # token masking against the NestJS port of it. It protects nothing: no
