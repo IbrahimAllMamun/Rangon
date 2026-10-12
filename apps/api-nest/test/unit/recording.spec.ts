@@ -4,13 +4,10 @@
  */
 import {
   type Answered,
-  edgesOfAPage,
-  endOfTheFirst,
   kept,
   mergedTies,
   Names,
   Pace,
-  pageOf,
   plain,
   settled,
   type Tie,
@@ -184,83 +181,6 @@ describe('tied rows', () => {
       },
       { path: ['body', 'top'], runs: [[0, 1]] },
     ]);
-  });
-});
-
-describe('a page cut through a tie', () => {
-  const page = (count: number, ...costs: (string | null)[]) => ({
-    count,
-    results: costs.map((last_cost, index) => ({ id: `row-${index}`, last_cost })),
-  });
-  const tied = (last_cost: string | null) => ({ 'one of the rows that tie on': { last_cost } });
-
-  afterEach(() => {
-    delete process.env.PARITY_MODE;
-  });
-
-  it('reads the rows that tie with either end of the page as one of those that tie', () => {
-    process.env.PARITY_MODE = 'replay';
-    const body = page(9, '5.00', '5.00', '7.00', '9.00', '9.00');
-    edgesOfAPage(['last_cost'])(body);
-    expect(body.results).toEqual([
-      tied('5.00'),
-      tied('5.00'),
-      { id: 'row-2', last_cost: '7.00' },
-      tied('9.00'),
-      tied('9.00'),
-    ]);
-  });
-
-  it('leaves a whole list alone: nothing was cut, and its order can be marked', () => {
-    process.env.PARITY_MODE = 'record';
-    const body = page(3, '5.00', '5.00', '7.00');
-    edgesOfAPage(['last_cost'])(body);
-    expect(body).toEqual(page(3, '5.00', '5.00', '7.00'));
-  });
-
-  it('leaves everything alone when two APIs are compared', () => {
-    const body = page(9, '5.00', '5.00', '7.00');
-    edgesOfAPage(['last_cost'])(body);
-    expect(body).toEqual(page(9, '5.00', '5.00', '7.00'));
-  });
-
-  it('reads the tail of "the first ten" the same way, and leaves a shorter list alone', () => {
-    process.env.PARITY_MODE = 'replay';
-    const best = (...units: number[]) => ({
-      top_products: units.map((sold, index) => ({ sku: `sku-${index}`, units: sold })),
-    });
-    const body = best(9, 9, 5, 5);
-    endOfTheFirst(4, 'top_products', ['units'])(body);
-    expect(body.top_products).toEqual([
-      { sku: 'sku-0', units: 9 },
-      { sku: 'sku-1', units: 9 },
-      { 'one of the rows that tie on': { units: 5 } },
-      { 'one of the rows that tie on': { units: 5 } },
-    ]);
-    const short = best(9, 5, 5);
-    endOfTheFirst(4, 'top_products', ['units'])(short);
-    expect(short).toEqual(best(9, 5, 5));
-  });
-
-  it("orders by what was asked for, where the view takes it, and by the view's own otherwise", () => {
-    process.env.PARITY_MODE = 'replay';
-    const read = (query: string) => {
-      const body = {
-        count: 9,
-        results: [
-          { id: 'a', is_preferred: true, last_cost: '5.00', supplier: 's1' },
-          { id: 'b', is_preferred: true, last_cost: '6.00', supplier: 's1' },
-          { id: 'c', is_preferred: false, last_cost: '6.00', supplier: 's2' },
-        ],
-      };
-      pageOf(query, ['is_preferred', 'last_cost'], ['last_cost', 'created_at'])(body);
-      return body.results.map((row) => Object.keys(row).length);
-    };
-    // One key each for a marked row; four for a row left as it was.
-    expect(read('page_size=3')).toEqual([1, 4, 1]);
-    expect(read('ordering=-last_cost&page_size=3')).toEqual([1, 1, 1]);
-    // `supplier` is not a field the view orders by: its own ordering stands.
-    expect(read('ordering=supplier&page_size=3')).toEqual([1, 4, 1]);
   });
 });
 

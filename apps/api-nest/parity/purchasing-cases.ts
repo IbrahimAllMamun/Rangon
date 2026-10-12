@@ -11,7 +11,6 @@ import pg from 'pg';
 
 import { STAFF, staffHeaders, type Who } from './catalog-admin-cases.ts';
 import { mintedBlanker } from './pos-sale-cases.ts';
-import { pageOf } from './recording.ts';
 import { restoreTables } from './restore.ts';
 import type { Case } from './run.ts';
 
@@ -409,15 +408,7 @@ export async function purchasingCases(): Promise<Case[]> {
     'page_size=100',
     'page=99',
   ]) {
-    // The view orders by `-is_preferred, last_cost`, which ties, and a page
-    // may end inside the tie (recording.ts, "A page cut through a tie").
-    read(`offers ?${query}`, `${OFFERS}?${query}`, 'owner', {
-      normalize: pageOf(
-        query,
-        ['is_preferred', 'last_cost'],
-        ['last_cost', 'last_purchased_at', 'created_at'],
-      ),
-    });
+    read(`offers ?${query}`, `${OFFERS}?${query}`);
   }
   read('an offer since withdrawn', `${OFFERS}${idleBlack}/`);
   read('an offer that is preferred', `${OFFERS}${soleWhite}/`);

@@ -957,6 +957,8 @@ interface TurnMark {
   now: string;
   outstanding: string;
   blacklisted: string;
+  /** The search-term log as it stood, as JSON: a search counts itself there. */
+  searched: string;
 }
 
 /** Where the session tables and the log stand before an API's turn at a case. */
@@ -965,7 +967,8 @@ async function turnMark(db: pg.Client): Promise<TurnMark> {
     await db.query<TurnMark>(
       `SELECT clock_timestamp()::text AS now,
               (SELECT COALESCE(max(id), 0) FROM token_blacklist_outstandingtoken)::text AS outstanding,
-              (SELECT COALESCE(max(id), 0) FROM token_blacklist_blacklistedtoken)::text AS blacklisted`,
+              (SELECT COALESCE(max(id), 0) FROM token_blacklist_blacklistedtoken)::text AS blacklisted,
+              (SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) FROM catalog_searchterm t)::text AS searched`,
     )
   ).rows[0] as TurnMark;
 }
@@ -983,6 +986,26 @@ async function undoTurn(db: pg.Client, mark: TurnMark): Promise<void> {
   );
   await db.query(`DELETE FROM token_blacklist_outstandingtoken WHERE id > $1`, [mark.outstanding]);
   await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [mark.now]);
+  // Every storefront search adds one to its term's count, and the "popular"
+  // list is ordered by those counts: two APIs' turns would count each search
+  // twice, and a term searched in more cases than another would overtake it.
+  await db.query(
+    `DELETE FROM catalog_searchterm
+      WHERE id NOT IN (SELECT (was->>'id')::uuid FROM jsonb_array_elements($1::jsonb) AS was)`,
+    [mark.searched],
+  );
+  await db.query(
+    `UPDATE catalog_searchterm t
+        SET hits = was.hits, last_result_count = was.last_result_count,
+            last_searched_at = was.last_searched_at, updated_at = was.updated_at
+       FROM jsonb_to_recordset($1::jsonb) AS was(
+              id uuid, hits integer, last_result_count integer,
+              last_searched_at timestamptz, updated_at timestamptz)
+      WHERE t.id = was.id
+        AND (t.hits, t.last_result_count, t.last_searched_at, t.updated_at)
+            IS DISTINCT FROM (was.hits, was.last_result_count, was.last_searched_at, was.updated_at)`,
+    [mark.searched],
+  );
 }
 
 /** Tokens described rather than compared (each API mints its own), then the case's own adjustments. */

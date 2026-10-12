@@ -348,77 +348,8 @@ export function readTies(): Map<string, Tied> {
   return existsSync(file('ties')) ? readRecording<Tied>('ties') : new Map<string, Tied>();
 }
 
-// --- A page cut through a tie -------------------------------------------------
-//
-// Where a page ends inside a run of tied rows, which of them it shows is the
-// heap's choice too, and that is no permutation: other rows, not other places.
-// Nothing can be marked. A case that asks for such a page says what the list
-// is ordered by, and in a run that is recorded or replayed the rows at the
-// page's two ends that tie with the end row are read as "one of the rows that
-// tie on this". The comparison with Django reads them in full, as ever.
-
 /** Whether this run keeps answers or is held to them, rather than comparing two APIs. */
 export const heldToARecording = (): boolean => parityMode() !== 'compare';
-
-/** The rows at the cut end (or both ends) of `rows` that tie on `keys` with the end row, read as one of those that tie. */
-function tiedAtTheCut(rows: unknown[], keys: string[], ends: 'both' | 'last'): void {
-  if (!rows.length) return;
-  const tiesOn = (row: unknown) =>
-    Object.fromEntries(keys.map((key) => [key, (row as Record<string, unknown>)[key] ?? null]));
-  const first = ends === 'both' ? JSON.stringify(tiesOn(rows[0])) : null;
-  const last = JSON.stringify(tiesOn(rows[rows.length - 1]));
-  rows.forEach((row, index) => {
-    const on = JSON.stringify(tiesOn(row));
-    if (on === first || on === last) rows[index] = { 'one of the rows that tie on': tiesOn(row) };
-  });
-}
-
-export function edgesOfAPage(keys: string[]): (body: unknown) => void {
-  return (body) => {
-    if (!heldToARecording()) return;
-    const page = body as { count?: unknown; results?: unknown[] } | null;
-    const rows = Array.isArray(body) ? body : page?.results;
-    if (!Array.isArray(rows) || !rows.length) return;
-    // The whole list on one page: nothing was cut, and its order can be marked.
-    if (Array.isArray(body) || page?.count === rows.length) return;
-    tiedAtTheCut(rows, keys, 'both');
-  };
-}
-
-/**
- * The same for "the first so many" of a list the answer never gives the
- * length of (a report's ten best sellers, ordered by units sold): the rows
- * that tie with the last one may be any of those that tie.
- */
-export function endOfTheFirst(
-  limit: number,
-  list: string,
-  keys: string[],
-): (body: unknown) => void {
-  return (body) => {
-    if (!heldToARecording()) return;
-    const rows = (body as Record<string, unknown> | null)?.[list];
-    // Fewer than the limit: the whole list, and nothing cut.
-    if (Array.isArray(rows) && rows.length >= limit) tiedAtTheCut(rows, keys, 'last');
-  };
-}
-
-/**
- * `edgesOfAPage` for a list asked for with `query`: ordered by its
- * `ordering` where the view takes those fields (DRF's OrderingFilter drops
- * the others), by the view's own ordering otherwise.
- */
-export function pageOf(
-  query: string,
-  byDefault: string[],
-  allowed: string[],
-): (body: unknown) => void {
-  const asked = (new URLSearchParams(query).get('ordering') ?? '')
-    .split(',')
-    .map((term) => term.trim().replace(/^-/, ''))
-    .filter((term) => allowed.includes(term));
-  return edgesOfAPage(asked.length ? asked : byDefault);
-}
 
 // --- The clock ---------------------------------------------------------------
 //

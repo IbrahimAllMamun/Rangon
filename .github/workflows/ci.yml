@@ -187,14 +187,10 @@ jobs:
       - name: Stop Django and both APIs
         run: bash scripts/nest-parity.sh down
 
-      # `PARITY_TIES=mark`: the recording is minutes old and has no list of
-      # tied rows yet, so a list that comes back with tied rows the other way
-      # round is marked, not failed. The order itself was held a step ago,
-      # against Django, on one heap.
+      # Strictly: an answer that is the recorded rows in another order fails.
+      # Every list has one order since D245, so there is nothing to allow for.
       - name: With no Django -- every case against its recorded answer, the races, the worker, the rate limits
         run: bash scripts/nest-parity.sh replay
-        env:
-          PARITY_TIES: mark
 
       - name: Logs on failure
         if: failure()
