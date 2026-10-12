@@ -454,6 +454,8 @@ class PurchaseReturnItem(BaseModel):
 
     class Meta:
         db_table = "purchasing_purchasereturnitem"
+        # The lines of a document, in the order they were entered (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(quantity__gt=0), name="purchasing_pri_return_qty_gt_0"

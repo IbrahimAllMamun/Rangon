@@ -305,6 +305,7 @@ class TestTheLinesOfADocument:
             "orders.ReturnItem",
             "purchasing.PurchaseOrderItem",
             "purchasing.PurchaseReceiptItem",
+            "purchasing.PurchaseReturnItem",
         ],
     )
     def test_come_in_the_order_they_were_entered(self, model: str) -> None:
