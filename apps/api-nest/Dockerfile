@@ -30,7 +30,18 @@ WORKDIR /app
 # live on one volume (`api_media`) that the Django image created and has
 # written as 1001, and this API writes the same files: two uids would leave
 # each unable to replace what the other stored.
+#
+# The API runs under plain `node`; npm is never invoked here. It ships with
+# the base image and vendors a dependency tree of its own (brace-expansion,
+# pacote, sigstore, ip-address ...), whose advisories fail the image scan
+# while being unreachable from anything this API declares -- no pin in
+# package.json answers them. Removing npm removes them, as the web image
+# does. The guard turns a path that has moved into a build failure rather
+# than a quiet no-op.
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+        /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    && ! command -v npm > /dev/null \
     && groupadd --system --gid 1001 appuser \
     && useradd --system --uid 1001 --gid appuser --create-home appuser \
     && mkdir -p /app/media \
