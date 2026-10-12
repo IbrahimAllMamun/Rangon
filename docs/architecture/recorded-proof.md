@@ -300,11 +300,12 @@ port's unit tests do. The two runs and the script that subtracts them were prepa
 
 1. **Django's tests, sorted and ported** (above). Until it is done, removing Django removes
    assertions nothing else makes.
-2. **D243 to D245, and they are not optional.** Until a list that ties has a last ordering
-   key, a recording cannot hold the order of a list, only its rows ([Tied rows](#tied-rows)).
-   They are rules, so they change in Django first (ADR-0020), and belong in the first row of
-   that ADR's triage: fixed in both before step 6. After them a replay needs no marking, and
-   a turned-over database is a check CI can run.
+2. **D243 to D245 in the NestJS API.** Until a list that ties has a last ordering key, a
+   recording cannot hold the order of a list, only its rows ([Tied rows](#tied-rows)). They
+   are rules, so they changed in Django first (ADR-0020): fixed there on 2026-10-12, and
+   Django asked twice on a turned-over database now answers no case with tied rows in another
+   order. **The port is owed**, and until it lands the two APIs differ in 814 cases. After it
+   a replay needs no marking, and a turned-over database is a check CI can run.
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its
    recording. ADR-0021 says why the set clock should hold at any distance; the first replay at
    a distance is what shows it.

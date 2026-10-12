@@ -13,6 +13,12 @@ schedule. **Django remains the source of truth for the schema and the rules.** I
 migration; a rule changes there first, with its tests, and is then ported; and one compose file
 puts the whole stack back on it. The development stack is Django's.
 
+**Django is ahead of the port in one thing**, as of 2026-10-12, on the branch
+`fix/answers-that-depend-on-row-order`: D243 to D245 and D161 are fixed there (every list ends
+its ordering with the primary key; a variant's attributes come in the attributes' own order).
+The port still sends the old statements, and the comparison differs in 814 of 12,243 cases
+until it follows. That branch is not to be merged before it does.
+
 **Django is to be removed, in steps** ([ADR-0020](decisions/0020-django-is-removed-in-steps.md),
 [the plan](django-removal-plan.md)); nothing of it has been yet. The first step is a proof that
 does not need it: [recorded-proof.md](recorded-proof.md).

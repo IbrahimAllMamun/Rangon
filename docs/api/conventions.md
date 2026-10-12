@@ -124,6 +124,21 @@ GET /api/v1/shop/products/?attr_size=M&attr_color=black&sort=price_asc
 
 `ordering` accepts a whitelist per endpoint. Unknown query params are ignored, never guessed.
 
+**Every list has one order.** Whatever a list is ordered by -- what `ordering` asked for, or the
+endpoint's own default -- the row's `id` ends it, so rows the ordering does not tell apart come
+back the same way on every request and a row is on exactly one page. A client never needs to
+ask for it. (`core.ordering.unique_last`, applied by `core.filters.OrderingFilter` and
+`core.pagination.StandardPagination`; D245.) A query that is not a list of rows -- a report's
+breakdown by channel, its ten best sellers -- names its own last key where it is written.
+
+**So does a list inside a row.** The lines of a return, a transfer, a stock count, a purchase
+order and a delivery come in the order they were entered (`created_at`, then `id`); a zone's
+delivery methods by position, price, then `id`.
+
+**And "the first so many".** The home page's rows, a customer's newest orders, the counter's
+product grid, search suggestions, the related products: each is a cut through an order, so
+each order ends with `id` (or, for a grouped query, with what it is grouped by).
+
 ## Throttling
 
 | Scope | Limit |
