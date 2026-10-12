@@ -23,7 +23,7 @@ def check_expiring_stock(days: int = 60) -> str:
             variant__expiry_date__lte=horizon,
             on_hand__gt=F("reserved"),
         )
-        .order_by("variant__expiry_date")[:100]
+        .order_by("variant__expiry_date", "branch__code", "variant__sku", "pk")[:100]
     )
     if not rows:
         return "none"

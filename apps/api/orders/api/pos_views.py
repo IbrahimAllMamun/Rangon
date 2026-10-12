@@ -64,7 +64,7 @@ class PosSessionView(APIView):
 
         branch = resolve_branch(request.user, request.query_params.get("branch"))
         organization = get_organization()
-        holds = HeldSale.objects.filter(branch=branch).order_by("-created_at")[:20]
+        holds = HeldSale.objects.filter(branch=branch).order_by("-created_at", "pk")[:20]
 
         # The accounts this branch's takings can land in. Sent with the session
         # rather than fetched separately so opening the register stays one

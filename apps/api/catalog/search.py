@@ -256,7 +256,7 @@ def suggest(query: str, *, limit: int = 5) -> dict[str, Any]:
         .select_related("brand")
         .prefetch_related("images")
         .annotate(price_from=Min("variants__price"))
-        .order_by("name")[:limit]
+        .order_by("name", "pk")[:limit]
     )
 
     categories = list(
@@ -283,7 +283,7 @@ def admin_search_variants(query: str, *, limit: int = 20) -> QuerySet[ProductVar
         Q(sku__icontains=cleaned)
         | Q(product__name__icontains=cleaned)
         | Q(product__name__trigram_similar=cleaned)
-    ).order_by("product__name", "position")[:limit]
+    ).order_by("product__name", "position", "pk")[:limit]
 
 
 def attribute_options() -> list[dict[str, Any]]:
