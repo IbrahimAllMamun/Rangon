@@ -219,7 +219,8 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 25,
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
-        "rest_framework.filters.OrderingFilter",
+        # DRF's, and then the primary key: one order for every list (D245).
+        "core.filters.OrderingFilter",
     ),
     "EXCEPTION_HANDLER": "core.handlers.rangon_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",

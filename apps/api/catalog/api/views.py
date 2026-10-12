@@ -18,7 +18,7 @@ from django.db.models.functions import Coalesce
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.filters import SearchFilter
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -70,6 +70,7 @@ from catalog.services import (
 )
 from core import audit
 from core.exceptions import Conflict, ValidationError
+from core.filters import OrderingFilter
 from core.requests import AuthedRequest, actor
 from inventory import labels as label_services
 from inventory import services as inventory_services
