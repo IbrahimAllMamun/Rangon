@@ -37,7 +37,8 @@ export async function financeConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
       ?.id;
     if (!drawer || !bank || !petty || !home) return [];
     const auth = await staffHeaders(db);
-    const since = (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+    const since = (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))
+      ?.now as string;
     const restore = async () => {
       await resetFinance(db);
       await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);

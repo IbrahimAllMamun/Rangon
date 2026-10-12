@@ -54,7 +54,8 @@ export async function posSaleConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
     );
     if (!linen || !mirpur || !tee || !shirt || !drawer || !shopper || !coupon || !marker) return [];
     const auth = await staffHeaders(db);
-    const since = (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+    const since = (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))
+      ?.now as string;
     const restore = async () => {
       await resetSales(db);
       await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);

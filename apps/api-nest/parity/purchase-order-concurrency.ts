@@ -58,7 +58,8 @@ export async function purchaseOrderConcurrencyChecks(apis: {
               (SELECT id FROM purchasing_supplier WHERE code = 'PARITY-IDLE') AS idle`,
     )) as { a: string; c: string; home: string; mirpur: string; idle: string };
     const auth = await staffHeaders(db);
-    const since = (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+    const since = (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))
+      ?.now as string;
     const restore = async () => {
       await resetPurchases(db);
       await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);

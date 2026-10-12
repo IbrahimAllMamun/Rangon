@@ -37,7 +37,8 @@ export async function purchasingConcurrencyChecks(apis: {
     const sole = await offerOf('PARITY-SOLE');
     if (!idle || !sole) return [];
     const auth = await staffHeaders(db);
-    const since = (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+    const since = (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))
+      ?.now as string;
     const restore = async () => {
       await resetSuppliers(db);
       await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);
@@ -64,7 +65,7 @@ export async function purchasingConcurrencyChecks(apis: {
         [from],
       )) as { preferred: string | null; audits: string };
     const now = async () =>
-      (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+      (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))?.now as string;
 
     // 1. An offer withdrawn while its promotion waits on its row.
     for (const [side, api] of [

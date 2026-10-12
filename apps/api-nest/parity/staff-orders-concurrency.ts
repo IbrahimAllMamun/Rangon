@@ -47,7 +47,8 @@ export async function staffOrdersConcurrencyChecks(apis: {
     );
     if (!cod || !paid || !delivered || !drawer || !tee) return [];
     const auth = await staffHeaders(db);
-    const since = (await one<{ now: string }>(`SELECT clock_timestamp() AS now`))?.now as string;
+    const since = (await one<{ now: string }>(`SELECT clock_timestamp()::text AS now`))
+      ?.now as string;
     const restore = async () => {
       await resetReturns(db);
       await db.query(`DELETE FROM core_auditlog WHERE created_at >= $1`, [since]);

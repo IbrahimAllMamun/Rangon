@@ -21,7 +21,7 @@ export async function sweepConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
   await db.connect();
   const checks: Check[] = [];
   try {
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
       ?.now as string;
     const sweep = (api: URL) =>
       send(api, {

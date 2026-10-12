@@ -857,7 +857,12 @@ async function run(
   const writes = testCase.reset !== undefined;
   if (writes) await testCase.reset?.(db);
   const sent = { ...testCase, ...(await testCase.prepare?.(side)) };
-  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  // As text, microseconds and all. Read as a timestamp it becomes a JavaScript
+  // Date, which keeps milliseconds: a row a case arranged in the same
+  // millisecond, just before, then counted as written by the request. That
+  // failed one case in one CI run (2026-10-08) and none here.
+  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
+    ?.now;
   // With uploads in a bucket (`PARITY_S3=1`), what a write stored there is an
   // effect like any other: the rows say where, the bucket says what.
   const filesBefore = writes && BUCKET_MODE ? await fileNames(db) : null;
