@@ -292,3 +292,68 @@ class TestAReportsRowsThatTie:
         rows = product_performance(date_range=self._period(), branch=shop["branch"])
 
         assert [row["sku"] for row in rows] == ["AA-EARLIER", "ZZ-LATER"]
+
+
+class TestTheLinesOfADocument:
+    """D245, one level down: the lists inside a row, which nothing ordered."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "inventory.StockTransferItem",
+            "inventory.StockCountItem",
+            "orders.ReturnItem",
+            "purchasing.PurchaseOrderItem",
+            "purchasing.PurchaseReceiptItem",
+        ],
+    )
+    def test_come_in_the_order_they_were_entered(self, model: str) -> None:
+        from django.apps import apps
+
+        assert apps.get_model(model)._meta.ordering == ("created_at", "id")
+
+    def test_a_purchase_orders_lines_read_in_that_order(self, shop) -> None:
+        from purchasing import services as purchasing_services
+        from purchasing.services import PurchaseLine
+
+        variants = [factories.variant(shop["product"]) for _ in range(5)]
+        order = purchasing_services.create_purchase_order(
+            supplier=factories.supplier(),
+            branch=shop["branch"],
+            lines=[
+                PurchaseLine(variant_id=variant.pk, quantity=1, unit_cost=Decimal("10.00"))
+                for variant in variants
+            ],
+            actor=shop["owner"],
+        )
+        # Rewrite the first line, which moves its row to the end of the table.
+        order.items.filter(variant=variants[0]).update(unit_cost=Decimal("11.00"))
+
+        assert [item.variant_id for item in order.items.all()] == [v.pk for v in variants]
+
+    @pytest.mark.parametrize(
+        "model",
+        ["orders.OrderEvent", "shipping.ShippingMethod", "shipping.ShippingZone"],
+    )
+    def test_an_ordering_that_can_tie_is_ended_by_the_id(self, model: str) -> None:
+        from django.apps import apps
+
+        assert apps.get_model(model)._meta.ordering[-1] == "id"
+
+    def test_two_shipping_methods_at_one_price_come_in_one_order(self) -> None:
+        from orders.services.checkout import shipping_options
+        from shipping.models import ShippingMethod, ShippingZone
+
+        zone = ShippingZone.objects.create(name="Everywhere", is_default=True, is_active=True)
+        made = [
+            ShippingMethod.objects.create(
+                zone=zone, code=f"m{index}", name=f"Method {index}", price=Decimal("60.00")
+            )
+            for index in range(6)
+        ]
+
+        offered = [
+            option["id"] for option in shipping_options(city="Dhaka", subtotal=Decimal("100.00"))
+        ]
+
+        assert offered == _in_id_order([str(method.pk) for method in made])

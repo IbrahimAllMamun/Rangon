@@ -350,7 +350,8 @@ class OrderEvent(AppendOnlyModel):
 
     class Meta:
         db_table = "orders_orderevent"
-        ordering = ("created_at",)
+        # Two events of one instant (a status change and its note) in one order.
+        ordering = ("created_at", "id")
         indexes = [models.Index(fields=["order", "created_at"])]
 
     def __str__(self) -> str:
@@ -593,6 +594,9 @@ class ReturnItem(BaseModel):
 
     class Meta:
         db_table = "orders_returnitem"
+        # The lines of a document, in the order they were entered: one order,
+        # where nothing said any and they came as they lay in the table (D161, D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.UniqueConstraint(
                 fields=["return_request", "order_item"], name="orders_returnitem_uniq"

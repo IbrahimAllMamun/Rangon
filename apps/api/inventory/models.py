@@ -237,6 +237,9 @@ class StockTransferItem(BaseModel):
 
     class Meta:
         db_table = "inventory_stocktransferitem"
+        # The lines of a document, in the order they were entered: one order,
+        # where nothing said any and they came as they lay in the table (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.UniqueConstraint(
                 fields=["transfer", "variant"], name="inventory_transferitem_uniq"
@@ -287,6 +290,9 @@ class StockCountItem(BaseModel):
 
     class Meta:
         db_table = "inventory_stockcountitem"
+        # The lines of a document, in the order they were entered: one order,
+        # where nothing said any and they came as they lay in the table (D245).
+        ordering = ("created_at", "id")
         constraints = [
             models.UniqueConstraint(
                 fields=["stock_count", "variant"], name="inventory_countitem_uniq"

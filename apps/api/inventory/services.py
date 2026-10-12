@@ -1108,7 +1108,11 @@ def verify_integrity(*, branch: Branch | None = None) -> list[IntegrityIssue]:
     Runs nightly (inventory.tasks.verify_inventory_integrity) and in the test
     suite after every scenario.
     """
-    inventories = Inventory.objects.select_related("branch", "variant")
+    # In one order, so that the alert a drift raises lists the same shelves
+    # the same way each night (D245).
+    inventories = Inventory.objects.select_related("branch", "variant").order_by(
+        "branch__code", "variant__sku", "pk"
+    )
     ledger_qs = InventoryTransaction.objects.all()
     if branch is not None:
         inventories = inventories.filter(branch=branch)

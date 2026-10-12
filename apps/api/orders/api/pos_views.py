@@ -166,7 +166,10 @@ class PosProductSearchView(APIView):
         if category:
             variants = variants.filter(product__category__slug=category)
 
-        variants = variants.order_by("product__name", "position")[:60]
+        # The grid is the first sixty of this order, so it has to be one order
+        # (D245): two variants of one product at one position, or two products
+        # of one name, would otherwise swap places as their rows moved.
+        variants = variants.order_by("product__name", "position", "pk")[:60]
         snapshots = inventory_services.availability(branch=branch, variants=list(variants))
 
         results = []
