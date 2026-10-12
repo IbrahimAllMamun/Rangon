@@ -495,6 +495,35 @@ is still open and tracked in
 
 ## Verification log
 
+### The checks on PR #91, 2026-10-08
+
+PR #91 was merged with three checks red. Each was read rather than rerun.
+
+| Check | Why it was red | What was done |
+|---|---|---|
+| NestJS API parity with Django | one case of 12,243 differed, in the second pass (jobs in pg-boss) that this PR added to CI: a navigation item a case had just arranged read as *written by the request* on one side. The harness took its "since" moment as a JavaScript `Date`, which keeps milliseconds; PostgreSQL keeps microseconds; a row written in the same millisecond, just before, compared as after. It had never happened in a local run | the moment is read as text, at 23 places, and compared at the database's own precision |
+| Build & scan images | the new step that scans the NestJS image found 10 HIGH advisories -- all in **npm's own packages**, which ship in the Node base image and which the API never runs | npm and corepack are removed from the runtime image, as the web image already does. Scanned locally with the same options: clean. The Django image's own finding (D242) is behind it, and older |
+| Secret scan (gitleaks) | six findings, none a secret: image tags of the form `prod-before-20261005` in the upgrade guide (two there before, three added by the cutover's edit of the same commands), and a made-up CSRF string in the parity harness, there since PR #81 | each fingerprint is in `.gitleaksignore` with its reason, which is the procedure `security.md` gives for a false positive. Scanned locally with the pinned version: no leaks |
+
+```text
+parity, uploads on disk (run) ................. 12243 cases match, 0 differ; 211 races pass
+parity, Nest queuing in pg-boss (run-jobs) .... 12243 cases match, 0 differ; 214 races pass; worker check 5 of 5
+trivy, NestJS image, HIGH/CRITICAL, fixed ..... 0
+gitleaks 8.21.2, whole history ................ no leaks found
+```
+
+The two parity lines are from 2026-10-13, on a fresh database. The runs started on 2026-10-08
+were cut short: a second parity stack, started from another checkout on the same machine, got
+a container of each stack killed for memory in a Docker VM of 1.7 GB. Nothing in them had
+differed up to that point, and they were not counted.
+
+Two of the three were this PR's own doing -- it added the pg-boss pass and the NestJS scan to
+CI, and neither had run on GitHub before it was merged, which the PR said. The lesson is in the
+port's instructions: a check added to CI has not passed until CI has run it.
+
+These fixes, and the final verification numbers for the S3, Sentry and ignore-file commits, are
+on the branch and **not in `main`**: PR #91 was merged before they were pushed.
+
 ### The NestJS API reports its errors to Sentry, 2026-10-08
 
 Asked for: "Report NestJS API errors to Sentry" -- the second limit the cutover left. With
@@ -5050,6 +5079,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D239 | **The development stack names an image that no longer exists.** `docker-compose.dev.yml` runs `minio/minio:latest`, and MinIO's images are gone from Docker Hub and Quay: `docker compose ... up` on a machine without a cached copy fails to pull, and the whole development stack with it, though nothing needs the bucket unless `USE_S3=1`. *Found by trying to start the same image for the parity stack on 2026-10-08.* | Medium | The parity stack uses `versity/versitygw`, pinned. The development stack is the owner's call: the same gateway behind a profile, or no S3 server unless asked for. `docker-compose.dev.yml` |
 | ~~D240~~ | ~~**An image built on a workstation carried the workstation's files.**~~ **Fixed 2026-10-08.** Every image is built with its own directory as the context, and Docker reads `.dockerignore` from the root of the context: the one at the top of the repository, written as if the root were the context, was never read by any build. So the Django image's `COPY . .` took everything in `apps/api` -- on the machine where it was noticed, 1,564 uploaded files under `media/` (receipts among them), 44 MB of type-checker cache and the test suite -- and because Docker fills a new named volume from the image the first time, **a fresh `api_media` volume began life holding those uploads**. The web image's builder did the same after its own `npm ci`: the workstation's `node_modules` (750 MB, installed for the workstation's system) and its stale `.next` were laid over the clean install. CI never saw either, because a fresh checkout has none of it; so the images CI scanned were not the images a workstation built. *Found while rebuilding the local production stack for the cutover: a 430 MB build context, and receipts in a new stack's media volume.* | Medium | `apps/api/.dockerignore` and `apps/web/.dockerignore` now decide what each image is built from; `apps/api-nest` already had one. The Django image's app directory went from 64 MB to 13 MB and its `media/` is empty; its test suite is no longer in the production image. **An existing `api_media` volume is not cleaned by this**: one first created from a workstation-built image may hold files no row refers to. `.dockerignore` |
 | D241 | **Django reports nothing to Sentry, with `SENTRY_DSN` set or not.** `config/settings/prod.py` initialises `sentry_sdk` inside a `try` and passes on `ImportError`; `sentry-sdk` is in no requirements file, so the import always fails and the block is always skipped, without a word in the log. The compose file passes `SENTRY_DSN`, `.env.example` documents it, and the go-live checklist has "Error tracking (Sentry DSN) receiving events" as an item: an operator who sets the DSN has every reason to believe errors are being reported, and none are. Confirmed in the production image (`pip show sentry-sdk`: not found). The settings also read `RANGON_ENV` and `RANGON_RELEASE`, which no compose file passed. *Found when the NestJS API was to report "as Django does".* | Medium | The NestJS API, which serves production, reports since 2026-10-08 (ADR-0019), and the compose files pass both names now. Django still does not: add `sentry-sdk` to `requirements/base.txt`, and log when a DSN is set and the SDK is missing rather than passing. Until then, running on Django is running without error reporting. `config/settings/prod.py`, `requirements/base.txt` |
+| D242 | **The Django image fails its own security scan, and has since before the cutover.** Django 5.1.15 carries CVE-2026-15307 (HIGH: remote code execution through GeoDjango spatial lookups), fixed in 5.2.17 and 6.0.8 and not in the 5.1 line, which is out of support. This project does not install `django.contrib.gis`, so the vulnerable code is not reachable here; the scan gate does not know that and fails "Build & scan images" on every pull request. It was the step that stopped that job before 2026-10-08; with the NestJS image scanned first and now clean, it is the step that stops it again. *Found reading why PR #91's checks were red.* | Medium | Not fixed here: moving Django to 5.2 is a framework upgrade with its own testing, and the owner's to schedule -- or moot, if Django is removed ([django-removal-plan.md](architecture/django-removal-plan.md)). Until then the image job stays red for a reason that is not the pull request's. `requirements/base.txt` |
 
 ## Still API-only (no UI)
 
