@@ -235,8 +235,10 @@ export class CataloguePayloads {
       `SELECT "catalog_variantattributevalue"."id", "catalog_variantattributevalue"."created_at",
               "catalog_variantattributevalue"."updated_at", "catalog_variantattributevalue"."variant_id",
               "catalog_variantattributevalue"."attribute_id", "catalog_variantattributevalue"."attribute_value_id"
-         FROM "catalog_variantattributevalue"
-        WHERE "catalog_variantattributevalue"."variant_id" IN ${sql.list(variantIds, 'uuid')}`,
+         FROM "catalog_variantattributevalue" INNER JOIN "catalog_attribute" ON ("catalog_variantattributevalue"."attribute_id" = "catalog_attribute"."id")
+        WHERE "catalog_variantattributevalue"."variant_id" IN ${sql.list(variantIds, 'uuid')}
+        -- The attributes' own order: VariantAttributeValue.Meta.ordering (D243).
+        ORDER BY "catalog_attribute"."position" ASC, "catalog_attribute"."name" ASC`,
       sql.values,
     );
     if (!rows.length) return links;

@@ -84,7 +84,7 @@ export class MerchandisingService {
     const rows = await this.db.arrays(
       `SELECT ${P}."id" FROM ${P} INNER JOIN "content_homecarouselitem" ON (${P}."id" = "content_homecarouselitem"."product_id") ` +
         `WHERE (${VISIBLE} AND "content_homecarouselitem"."id" IS NOT NULL) ` +
-        `ORDER BY "content_homecarouselitem"."position" ASC, "content_homecarouselitem"."created_at" ASC`,
+        `ORDER BY "content_homecarouselitem"."position" ASC, "content_homecarouselitem"."created_at" ASC, ${P}."id" ASC`,
     );
     return rows.map((row) => row[0] as string);
   }
@@ -103,7 +103,7 @@ export class MerchandisingService {
         `INNER JOIN "catalog_category" ON (${P}."category_id" = "catalog_category"."id") ` +
         `LEFT OUTER JOIN "catalog_brand" ON (${P}."brand_id" = "catalog_brand"."id") ` +
         `WHERE (${VISIBLE}) GROUP BY ${P}."id", "catalog_category"."id", "catalog_brand"."id" ` +
-        `HAVING COUNT("orders_orderitem"."id") > 0 ORDER BY ${PRODUCT_COLUMNS.length + 1} DESC LIMIT ${Number(limit)}`,
+        `HAVING COUNT("orders_orderitem"."id") > 0 ORDER BY ${PRODUCT_COLUMNS.length + 1} DESC, ${P}."id" ASC LIMIT ${Number(limit)}`,
     );
     return rows.map((row) => toProduct(row, PRODUCT_COLUMNS.length + 1));
   }
@@ -132,7 +132,7 @@ export class MerchandisingService {
         `INNER JOIN "catalog_productvariant" U2 ON (U0."variant_id" = U2."id") ` +
         `WHERE (U1."status" IN ${params.list(SOLD_STATUSES)} AND U2."product_id" = ${productId})) ` +
         `AND NOT ("catalog_productvariant"."product_id" = ${productId})) ` +
-        `GROUP BY "catalog_productvariant"."product_id" ORDER BY 2 DESC LIMIT ${Number(limit)}`,
+        `GROUP BY "catalog_productvariant"."product_id" ORDER BY 2 DESC, "catalog_productvariant"."product_id" ASC LIMIT ${Number(limit)}`,
       params.values,
     );
     const rankedIds = coOccurring.map((row) => row[0] as string);
@@ -157,7 +157,7 @@ export class MerchandisingService {
       const filler = await this.visibleIds(
         `${P}."category_id" = ${fillerParams.add(product.category.id, 'uuid')} AND NOT (${P}."id" IN ${fillerParams.list(seen, 'uuid')})`,
         fillerParams.values,
-        `ORDER BY ${P}."created_at" DESC LIMIT ${Number(limit - result.length)}`,
+        `ORDER BY ${P}."created_at" DESC, ${P}."id" ASC LIMIT ${Number(limit - result.length)}`,
       );
       result.push(...filler);
     }
@@ -179,7 +179,7 @@ export class MerchandisingService {
         `INNER JOIN "catalog_productvariant" ON (${P}."id" = "catalog_productvariant"."product_id") ` +
         `WHERE (${VISIBLE} AND "catalog_productvariant"."compare_at_price" > ("catalog_productvariant"."price") ` +
         `AND "catalog_productvariant"."compare_at_price" IS NOT NULL) ` +
-        `ORDER BY ${PRODUCT_COLUMNS.length + 1} DESC LIMIT ${Number(limit)}`,
+        `ORDER BY ${PRODUCT_COLUMNS.length + 1} DESC, ${P}."id" ASC LIMIT ${Number(limit)}`,
     );
     return rows.map((row) => row[0] as string);
   }

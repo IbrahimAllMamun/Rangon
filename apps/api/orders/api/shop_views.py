@@ -36,6 +36,7 @@ from content.models import BannerPlacement, StorefrontBanner
 from content.selectors import category_path, category_url
 from core.exceptions import NotFound, ValidationError
 from core.media import media_url
+from core.ordering import unique_last
 from core.pagination import StandardPagination
 from core.requests import AuthedRequest
 from customers import services as customer_services
@@ -622,13 +623,13 @@ class ShopHomeView(APIView):
         best_sellers = (
             base.annotate(sold=Count("variants__order_items"))
             .filter(sold__gt=0)
-            .order_by("-sold")[:8]
+            .order_by("-sold", "pk")[:8]
         )
 
         hero = (
             StorefrontBanner.objects.live()
             .filter(placement=BannerPlacement.HOME_HERO)
-            .order_by("-priority", "-created_at")
+            .order_by("-priority", "-created_at", "pk")
             .first()
         )
 
@@ -639,7 +640,7 @@ class ShopHomeView(APIView):
         carousel = (
             visible_products()
             .filter(home_carousel_items__isnull=False)
-            .order_by("home_carousel_items__position", "home_carousel_items__created_at")
+            .order_by("home_carousel_items__position", "home_carousel_items__created_at", "pk")
         )
 
         return Response(
@@ -651,8 +652,11 @@ class ShopHomeView(APIView):
                 # row, whose `featured_categories` this payload no longer
                 # carries: the navbar already lists the categories.
                 "carousel": serialise(_ranked(carousel)),
-                "new_arrivals": serialise(base.order_by("-created_at")[:8]),
-                "featured": serialise(base.filter(featured=True)[:8]),
+                # Each row is the first eight of an order, so each order ends
+                # with the id: which of two products made in one instant is
+                # the eighth is otherwise the table's choice (D245).
+                "new_arrivals": serialise(base.order_by("-created_at", "pk")[:8]),
+                "featured": serialise(unique_last(base.filter(featured=True))[:8]),
                 "best_sellers": serialise(best_sellers),
                 # Deepest reduction first, so the row leads with what a shopper
                 # would call a bargain rather than the dearest thing that
@@ -886,7 +890,7 @@ class AccountOrdersView(APIView):
         orders = (
             Order.objects.filter(customer=customer)
             .prefetch_related("items")
-            .order_by("-placed_at")[:50]
+            .order_by("-placed_at", "pk")[:50]
         )
         return Response({"results": CustomerOrderListSerializer(orders, many=True).data})
 

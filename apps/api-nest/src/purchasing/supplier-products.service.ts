@@ -25,6 +25,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
   searchTerms,
   uuidFilter,
 } from '../common/filtering';
@@ -180,10 +181,10 @@ export class SupplierProductsService {
     const sql = new SqlParams();
     const { where, from } = await this.queryset(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [
-      `${O}."is_preferred" DESC`,
-      `${O}."last_cost" ASC`,
-    ];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${O}."is_preferred" DESC`, `${O}."last_cost" ASC`],
+      `${O}."id"`,
+    );
     const count = Number(
       (
         await this.db.one<{ count: string }>(

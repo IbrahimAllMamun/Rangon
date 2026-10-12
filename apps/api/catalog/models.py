@@ -429,6 +429,12 @@ class VariantAttributeValue(BaseModel):
 
     class Meta:
         db_table = "catalog_variantattributevalue"
+        # The attributes' own order, as a product's specifications are listed
+        # (`ProductAttributeValue` below): a variant reads "M / White" because
+        # Size comes before Colour, not because that is how two rows happen to
+        # lie in the table (D243). A variant has one value of an attribute, so
+        # this is one order.
+        ordering = ("attribute__position", "attribute__name")
         constraints = [
             models.UniqueConstraint(
                 fields=["variant", "attribute"], name="catalog_variantattr_uniq"

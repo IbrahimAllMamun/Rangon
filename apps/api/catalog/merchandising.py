@@ -64,7 +64,7 @@ def price_drops(*, limit: int = 12) -> Any:
             variants__compare_at_price__gt=F("variants__price"),
         )
         .annotate(drop_percent=discount)
-        .order_by("-drop_percent")
+        .order_by("-drop_percent", "pk")
         .distinct()[:limit]
     )
 
@@ -87,7 +87,7 @@ def bought_together(*, product: Product, limit: int = 8) -> list[Product]:
         .exclude(variant__product=product)
         .values("variant__product")
         .annotate(shared=Count("order_id", distinct=True))
-        .order_by("-shared")[:limit]
+        .order_by("-shared", "variant__product_id")[:limit]
     )
     ranked_ids = [row["variant__product"] for row in co_occurring]
 
@@ -104,7 +104,7 @@ def bought_together(*, product: Product, limit: int = 8) -> list[Product]:
             visible_products()
             .filter(category=product.category)
             .exclude(pk__in=seen)
-            .order_by("-created_at")[: limit - len(products)]
+            .order_by("-created_at", "pk")[: limit - len(products)]
         )
         products.extend(filler)
 

@@ -18,7 +18,7 @@ import {
   withDefault,
 } from '../../common/drf';
 import { Conflict, NotFound, ValidationError } from '../../common/errors';
-import { orderingPlan, type OrderingTerm } from '../../common/filtering';
+import { orderingPlan, uniqueLast, type OrderingTerm } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import { compareCodePoints } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
@@ -73,7 +73,11 @@ const ORDERING: Record<string, OrderingTerm> = {
   branch__code: '"accounts_branch"."code"',
   status: `${C}."status"`,
   notes: `${C}."notes"`,
-  items: { columns: ['"inventory_stockcountitem"."id"'], join: ITEMS_JOIN },
+  // The lines' own order, since D245 gave them one (`StockCountItem.Meta.ordering`).
+  items: {
+    columns: ['"inventory_stockcountitem"."created_at"', '"inventory_stockcountitem"."id"'],
+    join: ITEMS_JOIN,
+  },
   created_at: `${C}."created_at"`,
   applied_at: `${C}."applied_at"`,
 };
@@ -129,7 +133,8 @@ export class CountsService {
       ? `"inventory_stockcountitem"."stock_count_id" IN ${sql.list(ids, 'uuid')}`
       : `"inventory_stockcountitem"."stock_count_id" = ${sql.add(ids[0], 'uuid')}`;
     return q.query<ItemRow>(
-      `SELECT ${ITEM_COLUMNS} FROM "inventory_stockcountitem" WHERE ${condition}`,
+      `SELECT ${ITEM_COLUMNS} FROM "inventory_stockcountitem" WHERE ${condition}
+        ORDER BY "inventory_stockcountitem"."created_at" ASC, "inventory_stockcountitem"."id" ASC`,
       sql.values,
     );
   }
@@ -189,7 +194,7 @@ export class CountsService {
       )?.count ?? 0,
     );
     const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
-    const order = plan?.order ?? [`${C}."created_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${C}."created_at" DESC`], `${C}."id"`);
     const rows = count
       ? await this.db.query<CountRow>(
           `SELECT ${SELECT} ${FROM} ${plan?.joins.join(' ') ?? ''} ${whereSql}
@@ -396,7 +401,8 @@ export class CountsService {
     const items = await this.db.query<ItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM "inventory_stockcountitem"
         WHERE ("inventory_stockcountitem"."stock_count_id" = ${sql.add(row.id, 'uuid')}
-          AND "inventory_stockcountitem"."variant_id" IN ${sql.list([...byVariant.keys()], 'uuid')})`,
+          AND "inventory_stockcountitem"."variant_id" IN ${sql.list([...byVariant.keys()], 'uuid')})
+        ORDER BY "inventory_stockcountitem"."created_at" ASC, "inventory_stockcountitem"."id" ASC`,
       sql.values,
     );
     if (items.length !== byVariant.size) {

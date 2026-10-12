@@ -174,7 +174,7 @@ export class ContentService {
     }>(
       `SELECT id, placement, message, title, subtitle, cta_label, url, image, dismissible
          FROM content_storefrontbanner WHERE ${live()} AND placement = $1
-        ORDER BY priority DESC, created_at DESC LIMIT 1`,
+        ORDER BY priority DESC, created_at DESC, id ASC LIMIT 1`,
       [placement],
     );
     if (!banner) return null;
@@ -360,7 +360,7 @@ export class ContentService {
           await this.db.query<{ id: string; name: string; slug: string }>(
             `SELECT id, name, slug FROM catalog_category
               WHERE parent_id IS NULL AND is_active AND show_in_navigation
-              ORDER BY position ASC, name ASC LIMIT ${FOOTER_CATEGORY_LIMIT}`,
+              ORDER BY position ASC, name ASC, id ASC LIMIT ${FOOTER_CATEGORY_LIMIT}`,
           )
         ).map((root) => node({ id: root.id, label: root.name, url: categoryUrl(root.slug) }))
       : [];

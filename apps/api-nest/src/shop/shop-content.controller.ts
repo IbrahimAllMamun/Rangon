@@ -39,11 +39,11 @@ export class ShopContentController {
     const carousel = await this.merchandising.ranked(await this.merchandising.carouselIds());
     const newArrivals = await this.merchandising.visibleWithRelated(
       '',
-      'ORDER BY "catalog_product"."created_at" DESC LIMIT 8',
+      'ORDER BY "catalog_product"."created_at" DESC, "catalog_product"."id" ASC LIMIT 8',
     );
     const featured = await this.merchandising.visibleWithRelated(
       '"catalog_product"."featured"',
-      'ORDER BY "catalog_product"."created_at" DESC LIMIT 8',
+      'ORDER BY "catalog_product"."created_at" DESC, "catalog_product"."id" ASC LIMIT 8',
     );
     const bestSellers = await this.merchandising.bestSellers(8);
     // Deepest reduction first; `_ranked` reapplies the order the query lost.

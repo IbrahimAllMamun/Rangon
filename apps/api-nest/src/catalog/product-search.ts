@@ -337,7 +337,11 @@ export class ProductSearchService {
       `${columns(categoryAlias, CATEGORY_COLUMNS)}, ${columns(brandAlias, BRAND_COLUMNS)}` +
       ` FROM ${P}${finalPlan.render()} WHERE ${whereSql}` +
       ` GROUP BY ${P}."id"${rank ? ', 22' : ''}, ${categoryAlias}."id", ${brandAlias}."id"${havingSql}` +
-      (orderBy ? ` ORDER BY ${orderBy}` : '');
+      // The page is cut by `StandardPagination`, whose `unique_last` ends the
+      // order with the id (D245). Where the query had no order -- Django
+      // leaves a model's own ordering out of a grouped query -- it is now
+      // that ordering, named, and then the id.
+      ` ORDER BY ${orderBy ?? `${P}."created_at" DESC`}, ${P}."id" ASC`;
 
     const categoryStart = PRODUCT_COLUMNS.length + 2 + (rank ? 1 : 0);
     const brandStart = categoryStart + CATEGORY_COLUMNS.length;

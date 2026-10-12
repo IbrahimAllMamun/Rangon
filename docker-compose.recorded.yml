@@ -1,0 +1,251 @@
+# The NestJS API proven with no Django anywhere: every parity case against the
+# answer recorded for it, and every race across two Nest processes
+# (docs/architecture/recorded-proof.md; step 1 of django-removal-plan.md).
+#
+#   scripts/nest-parity.sh record     with the parity stack up and seeded: a
+#                                     snapshot of its database, and the answers
+#   scripts/nest-parity.sh replay     this stack, from that snapshot
+#
+# No service here is built from apps/api, runs Python, or migrates anything:
+# the database is restored from the snapshot, schema and rows together.
+#
+# **Always pass `-p rangon-recorded`** (the script does): `.env` sets
+# `COMPOSE_PROJECT_NAME=rangon`, which beats the `name:` below.
+#
+# Its own project, database and media volume, so it can run beside the parity
+# stack and touches nothing of it. One port, bound to 127.0.0.1:
+#   8640  NestJS (`nest`)
+
+name: rangon-recorded
+
+# The Nest API as production runs it, but for the worker: jobs queued in
+# PostgreSQL by pg-boss (ADR-0016) and left there for the harness to read.
+x-nest: &nest
+  image: rangon-api-nest:replay
+  build:
+    context: ./apps/api-nest
+    dockerfile: Dockerfile
+    # The runtime image with libfaketime under it, for the clock below.
+    target: replay
+  # The image's own app, plus the stand-in payment gateway and the routes
+  # that run a job on demand (parity/serve.ts).
+  volumes:
+    - ./apps/api-nest/parity:/app/parity:ro
+    - recorded_media:/media
+  command: ["node", "parity/serve.ts"]
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    sink: {condition: service_started}
+
+# The clock. A recording is of one night: its answers hold which orders can
+# still be returned, how old a debt is, what a report's "today" covers, and
+# the database it was taken from ages by the day. So every process here that
+# tells the time runs the same number of seconds behind the real clock --
+# `scripts/nest-parity.sh replay` works out how many -- and it is always the
+# hour the recording was taken. `+0` is the real clock.
+x-clock: &clock
+  FAKETIME: "${PARITY_FAKETIME:-+0}"
+
+x-nest-env: &nest-env
+  <<: *clock
+  # The settings module's name chooses the profile (src/config/env.ts); the
+  # parity one: rate limits off, as the recording was taken.
+  DJANGO_SETTINGS_MODULE: config.settings.parity
+  DJANGO_SECRET_KEY: nest-parity-not-a-secret
+  DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  RANGON_JOBS_BACKEND: pgboss
+  RANGON_JOBS_WORKER: "0"
+  RANGON_PUBLIC_URL: https://shop.parity.test
+  WEB_REVALIDATE_URL: http://sink:8025/api/revalidate
+  WEB_REVALIDATE_SECRET: parity-revalidate-secret
+  EMAIL_HOST: sink
+  EMAIL_PORT: "1025"
+  SMS_ALLOWLIST: "01711000001, 8801911000801"
+  MEDIA_ROOT: /media
+  USE_S3: "0"
+  PORT: "3000"
+
+x-harness-env: &harness-env
+  <<: *clock
+  # Two Nest processes. The second stands where Django stood: a token one
+  # issues is used on the other, and each race is split between them.
+  DJANGO_BASE: http://nest-b:3000
+  NEST_BASE: http://nest:3000
+  PARITY_NEST_JOBS: pgboss
+  DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  DJANGO_SECRET_KEY: nest-parity-not-a-secret
+  PARITY_SINK: http://sink:8025
+  PARITY_RECORDING: /recorded
+
+services:
+  db:
+    # PostgreSQL tells the time too (`now()`, `clock_timestamp()`): the same
+    # image as everywhere else, with libfaketime under it.
+    image: rangon-postgres:replay
+    build:
+      context: ./apps/api-nest/parity
+      dockerfile_inline: |
+        FROM postgres:16-alpine
+        RUN apk add --no-cache libfaketime
+        ENV LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1 FAKETIME_DONT_FAKE_MONOTONIC=1
+    environment:
+      <<: *clock
+      POSTGRES_DB: rangon
+      POSTGRES_USER: rangon
+      POSTGRES_PASSWORD: rangon_nest_password
+    volumes:
+      - recorded_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rangon -d rangon"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The snapshot into the empty database and the empty media volume. The
+  # database image has `pg_restore` and a `tar`; nothing else is needed.
+  restore:
+    profiles: [restore]
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: rangon_nest_password
+      # `reversed`: every table's rows turned over once they are in, for a
+      # replay that marks tied rows (parity/reverse-heap.sql).
+      PARITY_HEAP: ${PARITY_HEAP:-}
+    volumes:
+      - ${PARITY_RECORDED_DIR:-./apps/api-nest/parity/recorded}:/recorded:ro
+      - ./apps/api-nest/parity:/app/parity:ro
+      - recorded_media:/media
+    depends_on:
+      db: {condition: service_healthy}
+    command:
+      - sh
+      - -ec
+      - |
+        pg_restore --exit-on-error --no-owner -h db -U rangon -d rangon /recorded/snapshot.dump
+        if [ "$$PARITY_HEAP" = reversed ]; then
+          psql -q -v ON_ERROR_STOP=1 -h db -U rangon -d rangon -f /app/parity/reverse-heap.sql
+          echo "every table's rows turned over"
+        fi
+        tar -xzf /recorded/media.tar.gz -C /media
+        # Uploads are written by the API's user, which is not this one.
+        chmod -R a+rwX /media
+        echo "restored: $$(psql -h db -U rangon -d rangon -Atc 'SELECT count(*) FROM orders_order') orders, $$(find /media -type f | wc -l) files"
+
+  # Where the jobs send their mail and their revalidations (parity/sink.ts).
+  sink:
+    image: rangon-api-nest:replay
+    build:
+      context: ./apps/api-nest
+      dockerfile: Dockerfile
+      target: replay
+    environment:
+      <<: *clock
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+    command: ["node", "parity/sink.ts"]
+    healthcheck:
+      disable: true
+
+  nest:
+    <<: *nest
+    environment:
+      <<: *nest-env
+    ports:
+      - "127.0.0.1:${RECORDED_PORT:-8640}:3000"
+
+  nest-b:
+    <<: *nest
+    environment:
+      <<: *nest-env
+
+  # Every case to the Nest API, against the answer recorded for it; then the races.
+  replay:
+    image: rangon-api-nest:replay
+    profiles: [replay]
+    working_dir: /app
+    # /recorded is read, but for a replay that marks tied rows
+    # (`PARITY_TIES=mark`), which the script runs as the user who owns it.
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+      - ${PARITY_RECORDED_DIR:-./apps/api-nest/parity/recorded}:/recorded
+    environment:
+      <<: *harness-env
+      PARITY_MODE: replay
+      PARITY_TIES: ${PARITY_TIES:-}
+      PARITY_ONLY: ${PARITY_ONLY:-}
+      PARITY_VERBOSE: ${PARITY_VERBOSE:-}
+      PARITY_RACES: ${PARITY_RACES:-}
+    command: ["node", "parity/run.ts"]
+    depends_on:
+      nest: {condition: service_healthy}
+      nest-b: {condition: service_healthy}
+
+  # The worker alone, for parity/worker-check.ts: started once the replay is
+  # over, as in the parity stack -- during it a queued job stays queued.
+  nest-worker:
+    profiles: [worker]
+    image: rangon-api-nest:replay
+    environment:
+      <<: *nest-env
+      RANGON_JOBS_WORKER: "1"
+      RANGON_JOBS_SCHEDULE: "0"
+    volumes:
+      - recorded_media:/media
+    command: ["node", "dist/worker.js"]
+    healthcheck:
+      disable: true
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      sink: {condition: service_started}
+
+  # The Nest API with its rate limits on (the development profile), and the
+  # check that drives it past each: parity/throttle.ts against what it recorded.
+  nest-throttled:
+    profiles: [throttle]
+    image: rangon-api-nest:replay
+    environment:
+      <<: *nest-env
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+    volumes:
+      - recorded_media:/media
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  throttle-replay:
+    profiles: [throttle]
+    image: rangon-api-nest:replay
+    working_dir: /app
+    volumes:
+      - ./apps/api-nest/parity:/app/parity:ro
+      - ${PARITY_RECORDED_DIR:-./apps/api-nest/parity/recorded}:/recorded:ro
+    environment:
+      <<: *clock
+      NEST_BASE: http://nest-throttled:3000
+      DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      PARITY_MODE: replay
+      PARITY_RECORDING: /recorded
+    command: ["node", "parity/throttle.ts"]
+    depends_on:
+      nest-throttled: {condition: service_healthy}
+
+volumes:
+  recorded_postgres:
+  recorded_media:

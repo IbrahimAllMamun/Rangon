@@ -7,7 +7,7 @@ from django_filters import rest_framework as filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.filters import SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from accounts.permissions import RolePermission
 from accounts.services import branch_queryset, resolve_branch
 from core.dates import parse_window
+from core.filters import OrderingFilter
 from core.requests import AuthedRequest, actor
 from purchasing import services as purchasing_services
 from purchasing.api.serializers import (

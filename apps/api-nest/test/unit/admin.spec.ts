@@ -16,7 +16,7 @@ import {
   runSerializer,
   uuidField,
 } from '../../src/common/drf';
-import { booleanValue, orderingPlan, searchTerms } from '../../src/common/filtering';
+import { booleanValue, orderingPlan, searchTerms, uniqueLast } from '../../src/common/filtering';
 import { PyFloat } from '../../src/common/python';
 import { QueryDict } from '../../src/common/query-dict';
 import { slugify, slugText } from '../../src/common/slugs';
@@ -250,6 +250,32 @@ describe('OrderingFilter', () => {
     });
     expect(orderingPlan(new QueryDict('ordering=bogus,-'), terms)).toBeNull();
     expect(orderingPlan(new QueryDict(''), terms)).toBeNull();
+  });
+
+  // `core.ordering.unique_last` (D245): what `queryset.query.order_by` holds after it for
+  // `Inventory.objects.order_by(...)`, as Django's own `tests/test_one_order.py` asserts.
+  it("ends an ordering with the list's own id, once", () => {
+    const key = '"t"."id"';
+    // ("-on_hand", "reserved") -> ("-on_hand", "reserved", "pk")
+    expect(uniqueLast(['"t"."on_hand" DESC', '"t"."reserved" ASC'], key)).toEqual([
+      '"t"."on_hand" DESC',
+      '"t"."reserved" ASC',
+      '"t"."id" ASC',
+    ]);
+    // () -> ("pk",)
+    expect(uniqueLast([], key)).toEqual(['"t"."id" ASC']);
+    // ("on_hand", "-pk") and ("on_hand", "id") are left as they are.
+    expect(uniqueLast(['"t"."on_hand" ASC', '"t"."id" DESC'], key)).toEqual([
+      '"t"."on_hand" ASC',
+      '"t"."id" DESC',
+    ]);
+    expect(uniqueLast(['"t"."id" ASC'], key)).toEqual(['"t"."id" ASC']);
+    // Another table's id is not this list's (`_names` reads "branch__id" whole).
+    expect(uniqueLast(['"b"."id" ASC'], key)).toEqual(['"b"."id" ASC', '"t"."id" ASC']);
+    // The order handed in is not changed.
+    const given = ['"t"."name" ASC'];
+    uniqueLast(given, key);
+    expect(given).toEqual(['"t"."name" ASC']);
   });
 });
 

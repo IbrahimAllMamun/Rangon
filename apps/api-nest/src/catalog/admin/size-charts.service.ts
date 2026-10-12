@@ -15,7 +15,13 @@ import {
   uuidField,
 } from '../../common/drf';
 import { Conflict, NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, modelFilter, orderingPlan, type OrderingTerm } from '../../common/filtering';
+import {
+  applyFilters,
+  modelFilter,
+  orderingPlan,
+  uniqueLast,
+  type OrderingTerm,
+} from '../../common/filtering';
 import { PyFloat, pyLen, pySlice, pyStr, pyStrip } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
 import { parseUuid } from '../../common/uuid';
@@ -167,7 +173,7 @@ export class SizeChartsService {
         ${plan?.joins.join(' ') ?? ''}
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         GROUP BY ${['"catalog_sizechart"."id"', '"catalog_attribute"."id"', ...(plan?.groupBy ?? [])].join(', ')}
-        ORDER BY ${(plan?.order ?? DEFAULT_ORDER).join(', ')}`;
+        ORDER BY ${uniqueLast(plan?.order ?? DEFAULT_ORDER, '"catalog_sizechart"."id"').join(', ')}`;
   }
 
   /** `SizeChartSerializer(charts, many=True).data`, the rows fetched in one query. */

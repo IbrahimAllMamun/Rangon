@@ -7,7 +7,7 @@ import { RolePermissions } from '../auth/permissions';
 import { localIso } from '../common/datetime';
 import { charField, errorMessages, jsonField, pkRelatedField, runSerializer } from '../common/drf';
 import { NotFound, ValidationError } from '../common/errors';
-import { orderingPlan, type OrderingTerm } from '../common/filtering';
+import { orderingPlan, uniqueLast, type OrderingTerm } from '../common/filtering';
 import type { QueryDict } from '../common/query-dict';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
@@ -118,7 +118,7 @@ export class HoldsService {
     return this.serialise(
       await this.db.query<HoldRow>(
         `SELECT ${SELECT} FROM ${H} WHERE ${H}."branch_id" = $1
-          ORDER BY ${H}."created_at" DESC LIMIT 20`,
+          ORDER BY ${H}."created_at" DESC, ${H}."id" ASC LIMIT 20`,
         [branchId],
       ),
     );
@@ -132,7 +132,7 @@ export class HoldsService {
   async list(user: RequestUser, query: QueryDict) {
     const branchId = await this.branchId(user, query);
     const plan = orderingPlan(query, ORDERING);
-    const order = plan?.order ?? [`${H}."created_at" DESC`];
+    const order = uniqueLast(plan?.order ?? [`${H}."created_at" DESC`], `${H}."id"`);
     return this.serialise(
       await this.db.query<HoldRow>(
         `SELECT ${SELECT} FROM ${H} ${plan?.joins.find((join) => join.startsWith('INNER')) ?? ''}

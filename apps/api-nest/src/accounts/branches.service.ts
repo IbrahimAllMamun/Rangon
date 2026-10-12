@@ -15,7 +15,7 @@ import {
   runSerializer,
 } from '../common/drf';
 import { NotFound, ValidationError } from '../common/errors';
-import { orderingFrom } from '../common/filtering';
+import { orderingFrom, uniqueLast } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
 import { normalizeIfMobile } from '../common/phone';
 import type { QueryDict } from '../common/query-dict';
@@ -96,7 +96,7 @@ export class BranchesService {
   }
 
   async list(query: QueryDict, absoluteUrl: string) {
-    const order = orderingFrom(query, ORDERING) ?? [`${B}."name" ASC`];
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? [`${B}."name" ASC`], `${B}."id"`);
     const count = Number(
       (await this.db.one<{ count: string }>(`SELECT COUNT(*) AS "count" FROM ${B}`))?.count ?? 0,
     );

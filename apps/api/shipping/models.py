@@ -55,7 +55,9 @@ class ShippingZone(BaseModel):
 
     class Meta:
         db_table = "shipping_shippingzone"
-        ordering = ("position", "name")
+        # Ended by the id: the first zone that matches a city decides what
+        # delivery costs, so "first" has to mean one thing (D245).
+        ordering = ("position", "name", "id")
 
     def __str__(self) -> str:
         return self.name
@@ -85,7 +87,9 @@ class ShippingMethod(BaseModel):
 
     class Meta:
         db_table = "shipping_shippingmethod"
-        ordering = ("position", "price")
+        # Ended by the id: two methods at one position and one price are in
+        # one order at checkout, not as they lie in the table (D245).
+        ordering = ("position", "price", "id")
         constraints = [
             models.UniqueConstraint(fields=["zone", "code"], name="shipping_method_zone_code_uniq"),
             models.CheckConstraint(

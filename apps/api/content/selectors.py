@@ -186,7 +186,7 @@ def site_settings() -> SiteSettings:
 def _top_categories() -> list[NavNode]:
     roots = Category.objects.filter(
         parent__isnull=True, is_active=True, show_in_navigation=True
-    ).order_by("position", "name")[:FOOTER_CATEGORY_LIMIT]
+    ).order_by("position", "name", "pk")[:FOOTER_CATEGORY_LIMIT]
     return [
         NavNode(id=str(root.pk), label=root.name, url=category_url(root.slug)) for root in roots
     ]

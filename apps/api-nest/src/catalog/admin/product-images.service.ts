@@ -15,7 +15,13 @@ import {
   runSerializer,
 } from '../../common/drf';
 import { NotFound, ValidationError } from '../../common/errors';
-import { applyFilters, modelFilter, orderingPlan, type OrderingTerm } from '../../common/filtering';
+import {
+  applyFilters,
+  modelFilter,
+  orderingPlan,
+  uniqueLast,
+  type OrderingTerm,
+} from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import type { QueryDict } from '../../common/query-dict';
 import { type MediaStorage, mediaStorage } from '../../common/storage';
@@ -209,7 +215,7 @@ export class ProductImagesService {
     // Django's slice: no OFFSET on the first page.
     const offset = page.offset ? ` OFFSET ${page.offset}` : '';
     const rows = await this.rows(
-      `${this.select(where, plan?.order ?? DEFAULT_ORDER)} LIMIT ${page.limit}${offset}`,
+      `${this.select(where, uniqueLast(plan?.order ?? DEFAULT_ORDER, `${I}."id"`))} LIMIT ${page.limit}${offset}`,
       sql.values,
     );
     return paginated(page, await this.serialise(rows), absoluteUrl);

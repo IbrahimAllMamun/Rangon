@@ -6,7 +6,7 @@ import { type AuditActor, type AuditContext, recordAudit } from '../../common/au
 import { localIso } from '../../common/datetime';
 import { booleanField, charField, errorMessages, runSerializer } from '../../common/drf';
 import { Conflict, NotFound, ValidationError } from '../../common/errors';
-import { orderingFrom } from '../../common/filtering';
+import { orderingFrom, uniqueLast } from '../../common/filtering';
 import { pySlice, pySplit, pyStr, pyStrip } from '../../common/python';
 import type { QueryDict } from '../../common/query-dict';
 import { slugify } from '../../common/slugs';
@@ -189,7 +189,10 @@ export class PagesAdminService {
   }
 
   private order(query: QueryDict): string[] {
-    return orderingFrom(query, PAGE_ORDERING) ?? DEFAULT_ORDER;
+    return uniqueLast(
+      orderingFrom(query, PAGE_ORDERING) ?? DEFAULT_ORDER,
+      '"content_sitepage"."id"',
+    );
   }
 
   async list(query: QueryDict) {

@@ -18,6 +18,12 @@
 #   8610  Django (gunicorn, current source mounted)
 #   8620  NestJS
 #   8630  NestJS queuing its jobs in pg-boss (profile `jobs`, ADR-0016)
+#
+# A second checkout can run a stack of its own beside this one: a project name
+# (`PARITY_PROJECT`, which scripts/nest-parity.sh reads), the three ports
+# (`PARITY_PORT_DJANGO`, `PARITY_PORT_NEST`, `PARITY_PORT_JOBS`) and the tag the
+# Nest image is built under (`PARITY_IMAGE`) -- or the two would build over
+# each other's image and collide on the ports.
 
 name: rangon-nest
 
@@ -104,7 +110,7 @@ services:
       - /data
 
   sink:
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -148,12 +154,12 @@ services:
       timeout: 3s
       retries: 30
     ports:
-      - "127.0.0.1:8610:8000"
+      - "127.0.0.1:${PARITY_PORT_DJANGO:-8610}:8000"
 
   nest:
     # Named, because the harness runs in it too: it already carries pg and
     # ioredis, which a fresh checkout's apps/api-nest has no node_modules for.
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -187,11 +193,11 @@ services:
       # Django migrates on start; the Nest API reads what that created.
       django: {condition: service_started}
     ports:
-      - "127.0.0.1:8620:3000"
+      - "127.0.0.1:${PARITY_PORT_NEST:-8620}:3000"
 
   # The same requests to both APIs; every difference printed (apps/api-nest/parity/).
   parity:
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     profiles: [parity]
     working_dir: /app
     volumes:
@@ -220,7 +226,7 @@ services:
   # harness to read -- Celery's messages on one side, pg-boss's rows on the other.
   nest-jobs:
     profiles: [jobs]
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -250,7 +256,7 @@ services:
       redis: {condition: service_healthy}
       django: {condition: service_started}
     ports:
-      - "127.0.0.1:8630:3000"
+      - "127.0.0.1:${PARITY_PORT_JOBS:-8630}:3000"
 
   # The worker alone (src/worker.ts): no listener, the queues only. Started by
   # `run-jobs` once the comparison is over -- during it a queued job must stay
@@ -258,7 +264,7 @@ services:
   # fixtures' unpaid orders every five minutes.
   nest-worker:
     profiles: [worker]
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.parity
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
@@ -289,7 +295,7 @@ services:
 
   # The whole comparison again, with the Nest side queuing in pg-boss.
   parity-jobs:
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     profiles: [jobs]
     working_dir: /app
     volumes:
@@ -307,6 +313,10 @@ services:
       PARITY_ONLY: ${PARITY_ONLY:-}
       # With uploads in a bucket, the harness reads what each API stored there.
       PARITY_S3: ${PARITY_S3:-0}
+      # `record` keeps the Nest API's answers where the two agree, in the
+      # directory `scripts/nest-parity.sh record` mounts at /recorded.
+      PARITY_MODE: ${PARITY_MODE:-compare}
+      PARITY_RECORDING: /recorded
       <<: *storage-env
     command: ["node", "parity/run.ts"]
     depends_on:
@@ -338,7 +348,7 @@ services:
 
   nest-throttled:
     profiles: [throttle]
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     build:
       context: ./apps/api-nest
       dockerfile: Dockerfile
@@ -354,7 +364,7 @@ services:
       redis: {condition: service_healthy}
 
   throttle-check:
-    image: rangon-api-nest:parity
+    image: ${PARITY_IMAGE:-rangon-api-nest:parity}
     profiles: [throttle]
     working_dir: /app
     volumes:
@@ -365,6 +375,9 @@ services:
       DATABASE_URL: postgresql://rangon:rangon_nest_password@db:5432/rangon
       REDIS_URL: redis://redis:6379/0
       DJANGO_SECRET_KEY: nest-parity-not-a-secret
+      # `record` keeps the Nest API's side, where `scripts/nest-parity.sh record` mounts /recorded.
+      PARITY_MODE: ${PARITY_MODE:-compare}
+      PARITY_RECORDING: /recorded
     command: ["node", "parity/throttle.ts"]
     # Healthy, not merely started: the first request must not race the boot.
     depends_on:

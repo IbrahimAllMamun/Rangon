@@ -12,6 +12,7 @@ import {
   choiceFilter,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import { compareCodePoints, pyStrip } from '../../common/python';
@@ -221,7 +222,7 @@ export class LedgerEntries {
     const sql = new SqlParams();
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? DEFAULT_ORDER;
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? DEFAULT_ORDER, `${T}."id"`);
     const pageSize = pageSizeFrom(query, STANDARD_PAGINATION);
     const count = where.includes('FALSE')
       ? 0

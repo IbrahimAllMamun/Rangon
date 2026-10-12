@@ -167,17 +167,36 @@ jobs:
         run: bash scripts/nest-parity.sh run
 
       # What production runs since the cutover (ADR-0017): the NestJS API
-      # queuing its jobs in PostgreSQL. Every case again, against that; then the
-      # worker itself on what the API queues (ADR-0016).
-      - name: Compare every case again, with the jobs in pg-boss; then the worker
-        run: bash scripts/nest-parity.sh run-jobs
+      # queuing its jobs in PostgreSQL. Every case again, against that, and
+      # the rate limits with both APIs throttled -- `record` is `run-jobs`
+      # and the throttle check with the NestJS API's answers kept, beside a
+      # snapshot of the database they were given from
+      # (docs/architecture/recorded-proof.md).
+      - name: Compare every case again, with the jobs in pg-boss, and the rate limits; keep the NestJS API's answers
+        run: bash scripts/nest-parity.sh record
 
-      - name: Compare the rate limits (both APIs throttled)
-        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile throttle run --rm throttle-check
+      # The worker itself on what the API queues (ADR-0016).
+      - name: The worker on what the API queues
+        run: bash scripts/nest-parity.sh worker
+
+      # The proof that needs no Django, run beside the one that does until
+      # Django goes (django-removal-plan.md, step 1): every container of the
+      # comparison is stopped, and a second stack that has no Django in it is
+      # restored from the snapshot. Every case against its recorded answer;
+      # every race across two NestJS processes; the worker; the rate limits.
+      - name: Stop Django and both APIs
+        run: bash scripts/nest-parity.sh down
+
+      # Strictly: an answer that is the recorded rows in another order fails.
+      # Every list has one order since D245, so there is nothing to allow for.
+      - name: With no Django -- every case against its recorded answer, the races, the worker, the rate limits
+        run: bash scripts/nest-parity.sh replay
 
       - name: Logs on failure
         if: failure()
-        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs --profile worker logs --tail 200 django nest nest-jobs nest-worker
+        run: |
+          docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs --profile worker logs --tail 200 django nest nest-jobs nest-worker
+          docker compose -p rangon-recorded -f docker-compose.recorded.yml --profile worker --profile throttle logs --tail 200 nest nest-b nest-worker nest-throttled
 
   # The comparison a third time, with both APIs' uploads in an S3 server
   # instead of on disk (`USE_S3=1`, ADR-0018): every case, and for every write

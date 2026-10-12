@@ -339,7 +339,7 @@ def dashboard(
             orders=Count("id"),
             revenue=Coalesce(Sum("grand_total"), Value(ZERO), output_field=MONEY),
         )
-        .order_by("-revenue")
+        .order_by("-revenue", "channel")
     )
 
     daily = list(
@@ -369,7 +369,7 @@ def dashboard(
         .annotate(
             amount=Coalesce(Sum("amount"), Value(ZERO), output_field=MONEY), count=Count("id")
         )
-        .order_by("-amount")
+        .order_by("-amount", "method")
     )
 
     top_products = list(
@@ -379,7 +379,9 @@ def dashboard(
             units=Sum("quantity"),
             revenue=_net_revenue(),
         )
-        .order_by("-units")[:10]
+        # The ten best sellers are a cut through this order: it has to be one
+        # order, or which of two that tie is the tenth is the table's choice (D245).
+        .order_by("-units", "sku", "product_name")[:10]
     )
 
     category_sales = list(
@@ -389,7 +391,7 @@ def dashboard(
             units=Sum("quantity"),
             revenue=_net_revenue(),
         )
-        .order_by("-revenue")[:10]
+        .order_by("-revenue", "category")[:10]
     )
 
     inventory = Inventory.objects.all()
@@ -479,7 +481,7 @@ def sales_report(*, date_range: DateRange, branch: Any = None, channel: str = ""
             customer=F("customer__name"),
             branch_code=F("branch__code"),
         )
-        .order_by("-placed_at")
+        .order_by("-placed_at", "pk")
     )
 
 
@@ -498,7 +500,7 @@ def product_performance(*, date_range: DateRange, branch: Any = None) -> list[di
             ),
             returned=Coalesce(Sum("returned_quantity"), Value(0)),
         )
-        .order_by("-revenue")
+        .order_by("-revenue", "sku", "product_name", "variant_label")
     )
     for row in rows:
         row["gross_profit"] = quantize(row["revenue"] - row["cost"])
@@ -531,7 +533,7 @@ def inventory_report(*, branch: Any = None) -> list[dict]:
             "retail_value",
             "reorder_point",
         )
-        .order_by("variant__product__name")
+        .order_by("variant__product__name", "variant__sku", "branch__code", "pk")
     )
 
 
@@ -559,7 +561,7 @@ def purchase_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
             # the supplier has already credited.
             outstanding=F("grand_total") - F("paid_total") - F("credited_total"),
         )
-        .order_by("-created_at")
+        .order_by("-created_at", "pk")
     )
 
 
@@ -576,7 +578,7 @@ def returns_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
             channel=F("order__channel"),
             units=Coalesce(Sum("items__quantity"), Value(0)),
         )
-        .order_by("-created_at")
+        .order_by("-created_at", "number")
     )
 
 
@@ -1067,7 +1069,7 @@ def _vat_by_rate(lines: Any) -> list[dict[str, Any]]:
             vat=Coalesce(Sum("tax_amount"), Value(ZERO), output_field=MONEY),
             orders=Count("order", distinct=True),
         )
-        .order_by("-order__tax_rate")
+        .order_by("-order__tax_rate", "order__tax_mode")
     )
     return [
         {

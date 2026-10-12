@@ -30,6 +30,7 @@ import {
   choiceFilter,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../../common/pagination';
 import { compareCodePoints, pyRepr, pyStrip } from '../../common/python';
@@ -165,7 +166,10 @@ export class ProductsService {
     const sql = new SqlParams();
     const where = await this.conditions(query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? [`${P}."created_at" DESC`, `${P}."id" ASC`];
+    const order = uniqueLast(
+      orderingFrom(query, ORDERING) ?? [`${P}."created_at" DESC`, `${P}."id" ASC`],
+      `${P}."id"`,
+    );
     const pageSize = pageSizeFrom(query, STANDARD_PAGINATION);
     const count = Number(
       (

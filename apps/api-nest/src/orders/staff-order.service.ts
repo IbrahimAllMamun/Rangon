@@ -12,6 +12,7 @@ import {
   type FilterField,
   modelFilter,
   orderingFrom,
+  uniqueLast,
 } from '../common/filtering';
 import { lookupDate } from '../common/model-lookups';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
@@ -173,7 +174,7 @@ export class StaffOrders {
     const sql = new SqlParams();
     const where = await this.conditions(user, query, sql);
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const order = orderingFrom(query, ORDERING) ?? ['o."placed_at" DESC'];
+    const order = uniqueLast(orderingFrom(query, ORDERING) ?? ['o."placed_at" DESC'], 'o."id"');
     const count = Number(
       (
         await this.db.one<{ count: string }>(
@@ -252,7 +253,7 @@ export class StaffOrders {
                 AS "created_by_email"
          FROM "orders_order" o
          INNER JOIN "accounts_branch" ON (o."branch_id" = "accounts_branch"."id")
-        WHERE o."customer_id" = $1 ORDER BY o."placed_at" DESC LIMIT 100`,
+        WHERE o."customer_id" = $1 ORDER BY o."placed_at" DESC, o."id" ASC LIMIT 100`,
       [customer.id],
     );
     const counts = new Map(
@@ -456,7 +457,7 @@ export class StaffOrders {
     }>(
       `SELECT e."id", e."event_type", e."message", e."data"::text AS "data", e."actor_id",
               e."is_customer_visible", e."created_at"
-         FROM "orders_orderevent" e WHERE e."order_id" = $1 ORDER BY e."created_at" ASC`,
+         FROM "orders_orderevent" e WHERE e."order_id" = $1 ORDER BY e."created_at" ASC, e."id" ASC`,
       [order.id],
     );
 
