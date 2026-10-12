@@ -24,7 +24,7 @@ export async function jobsConcurrencyChecks(apis: { NEST: URL }): Promise<Check[
   await db.connect();
   const checks: Check[] = [];
   try {
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
       ?.now as string;
     const queued = () => count(db, `SELECT count(*) AS count FROM pgboss.job`);
     // The shelf two units above its reorder point: three sold leaves it at the

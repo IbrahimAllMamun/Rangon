@@ -37,7 +37,7 @@ interface Kept {
 async function main(): Promise<number> {
   const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await db.connect();
-  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
     ?.now as string;
   const results: { name: string; passed: boolean; detail: string }[] = [];
   const check = (name: string, passed: boolean, detail: string) =>

@@ -37,7 +37,7 @@ export async function merchandisingConcurrencyChecks(apis: {
     const exists = await db.query(`SELECT 1 FROM catalog_product WHERE slug = 'parity-rack-1'`);
     if (!exists.rowCount) return [];
     const auth = await staffHeaders(db);
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
       ?.now as string;
     const restore = async () => {
       await restoreTables(db, TABLES);

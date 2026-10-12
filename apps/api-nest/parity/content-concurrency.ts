@@ -40,7 +40,7 @@ export async function contentConcurrencyChecks(apis: { DJANGO: URL; NEST: URL })
     );
     if (!links.has('FACEBOOK')) return [];
     const auth = await staffHeaders(db);
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
       ?.now as string;
     const restore = async () => {
       await restoreTables(db, TABLES);

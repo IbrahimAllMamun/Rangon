@@ -53,7 +53,7 @@ export async function inventoryConcurrencyChecks(apis: {
     const counted = rows.get('DHK1 RGN-LIN-M-WHI');
     if (!shelf || !counted) return [];
     const auth = await staffHeaders(db);
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
       ?.now as string;
     const restore = async () => {
       await restoreTables(db, DOCUMENT_TABLES);

@@ -50,7 +50,8 @@ export async function concurrencyChecks(apis: {
       )
     ).rows[0];
     if (!many) return [];
-    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+    const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
+      ?.now;
 
     // 1. One default address per customer. Twenty "add as the default"
     //    requests at once, half to each API: `add_address` locks the customer
@@ -673,7 +674,8 @@ async function paymentRaces(
 ): Promise<Check[]> {
   const checks: Check[] = [];
   const side = (index: number) => (index % 2 ? apis.NEST : apis.DJANGO);
-  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now;
+  const since = (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
+    ?.now;
   await resetPayments(db);
   const payment = (
     await db.query<{ id: string }>(
@@ -688,7 +690,8 @@ async function paymentRaces(
   ).rows[0]?.balance as string;
   // Audit rows are not undone by resetPayments, so each check counts its own, from its start.
   const mark = async () =>
-    (await db.query<{ now: string }>(`SELECT clock_timestamp() AS now`)).rows[0]?.now as string;
+    (await db.query<{ now: string }>(`SELECT clock_timestamp()::text AS now`)).rows[0]
+      ?.now as string;
   const tally = async (from: string) => {
     const [events, postings, captured, failed, audited] = await Promise.all([
       count(
