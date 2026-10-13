@@ -554,7 +554,7 @@ The races say the locks are there: each forced check asserts the request waited 
 **Not done.** No mutation run: the locks were not taken out of the port to see the checks
 fail, as was done for the coupon lock on 2026-10-09. D164 (a return of a packed order), and
 the lost updates D207 and D222, are the next of the copied defects; D221's rule and D167's
-default wait on the owner. Not pushed; no pull request.
+default wait on the owner.
 
 ### What was red on `main` after PR #92 and PR #93, 2026-10-13
 
@@ -584,7 +584,8 @@ hour earlier from the other side: a recording taken straight after a reset, 109 
 **Not fixed: the image scan** (D242). Moving Django to 5.2 is a framework upgrade and the
 owner's to schedule, or moot once Django goes.
 
-Not pushed; no pull request. `main` stays red on two jobs until this is merged.
+Merged as PR #94 on 2026-10-13, with the secret scan green on it and the parity job still
+running; the image scan stays red until D242 is settled.
 
 ### D243 to D245 ported to the NestJS API: one order for every list, in production's API, 2026-10-13
 
