@@ -1,6 +1,6 @@
 # Django's tests, sorted by what they reach that no parity case does
 
-**Status:** measured 2026-10-13 and 2026-10-14 · step 1.6 of [the removal plan](django-removal-plan.md) ·
+**Status:** measured 2026-10-13 and 2026-10-14; step 1.6 closed 2026-10-14 · step 1.6 of [the removal plan](django-removal-plan.md) ·
 the tools are in `scripts/tests-against-parity/`
 
 The plan's step 1.6 asks that Django's own tests be sorted into three before Django goes:
@@ -51,8 +51,9 @@ be missing:
 
 What was left is the list this was for: **28 functions a request can reach and no case did.**
 Twenty-five have cases now -- 40 new cases over two days -- and **both APIs agreed on every
-one**: branches of the port that nothing had compared before. The other three need a shop
-with nothing in it yet, which the parity database is not.
+one**: branches of the port that nothing had compared before. The other three are reached
+only in a shop with nothing in it yet, which the seeded database cannot be made into; they
+are compared on a database of their own (below).
 
 The first reading put 36 functions on that list. Eight came off it when each was followed to
 its caller: the importer and the serializers always pass a slug, so the models' own fallback
@@ -111,7 +112,7 @@ line with another number in it is the same line. So:
 |---|---|---|
 | `covered` | 1,232 | Every statement and branch it runs is one a parity case runs too |
 | `to-port` | 0 | A request can reach it; no case does yet |
-| `empty-shop` | 33 | Only a shop with nothing in it yet gets there: the parity database is a seeded one |
+| `empty-shop` | 33 | Only a shop with nothing in it yet gets there: compared by `nest-parity.sh empty`, on a database of its own |
 | `case-added` | 80 | A request reaches it, and a case does now |
 | `second-door` | 22 | A service's own check behind a serializer that refuses first: no request reaches it |
 | `race` | 1 | Reached only when two requests really overlap: a race check stands for it |
@@ -128,7 +129,7 @@ line with another number in it is the same line. So:
 | Function | Statements, branches | Tests | Note |
 |---|---|---|---|
 
-**Only a shop with nothing in it yet gets there: the parity database is a seeded one** (3)
+**Only a shop with nothing in it yet gets there: compared by `nest-parity.sh empty`, on a database of its own** (3)
 
 | Function | Statements, branches | Tests | Note |
 |---|---|---|---|
@@ -346,9 +347,9 @@ line with another number in it is the same line. So:
 | `tests/unit/test_site_content_rules.py` | 62 | 59 |  |  | 1 |  |  |  |  | 2 |  |
 | `tests/unit/test_slugs.py` | 19 | 14 |  |  | 5 |  |  |  |  |  |  |
 
-## What is left to port
+## The shop with nothing in it
 
-Three functions, sorted `empty-shop`: each is reached only in a shop with nothing in it yet.
+Three functions are reached only on a new installation's first day:
 
 | Function | What gets there |
 |---|---|
@@ -356,12 +357,42 @@ Three functions, sorted `empty-shop`: each is reached only in a shop with nothin
 | `update_tax_settings` | the VAT changed before any order was priced: no warning to confirm |
 | `importers._attribute_value` | the first import, which makes the Size and Colour attributes |
 
-All three are things a new installation does on its first day, and the port has code for
-each. The parity database is a seeded shop, and no case can empty it: orders and variants
-protect what they refer to. They want a second flavour of the parity stack -- migrated, with
-its roles and one owner, and nothing else -- and a short list of cases run against it. That is
-a piece of work of its own, and it is the last of step 1.6.
+The seeded parity database cannot be emptied -- orders and variants protect what they refer
+to -- so these have a database of their own:
 
-Until then those three branches of the port are compared with nothing.
+```bash
+scripts/nest-parity.sh empty      # about two minutes; `reset` brings the seeded shop back
+```
+
+It follows [the new-store guide](../operations/new-store-from-scratch.md) and compares the
+two APIs at the two moments a new store passes through:
+
+- **unopened**: `migrate` and `createsuperuser`. The roles, one owner, and no organisation,
+  branch, account, product or order.
+- **opened**: `scripts/bootstrap-store.py` run on that. An organisation, its first branch and
+  a cash drawer, and still nothing to sell.
+
+The same 87 requests are sent at each (`parity/empty-shop-cases.ts`): every list a
+back-office screen opens on, what the storefront shows a visitor, and the first things an
+owner does -- settle the VAT, name the shop, add a branch, open an account, import a
+catalogue. Both APIs agree on all 174. Run with Django under coverage, the three functions
+above are reached: checked on 2026-10-14, each by the line it was missing.
+
+The comparison found nothing the port gets wrong. It did put on record what an unopened shop
+does, which nothing had: the storefront's cart and shipping options answer 400 for want of a
+branch, the till 403, a branch added is a 409, and naming the shop creates an organisation
+with no slug -- in both APIs alike.
+
+## What is left
+
+Of step 1.6, nothing: every function of Django's rule code that a request can reach is
+reached by a case. Two things beside it:
+
+- **The empty shop is compared with Django, and not yet recorded.** The proof that needs no
+  Django ([recorded-proof.md](recorded-proof.md)) holds the seeded shop's answers. Before
+  Django stops being compared with, the empty shop's 174 answers want recording too: two
+  snapshots, one per stage.
+- **What this measurement cannot say** (above) is unchanged: the arithmetic rests on compared
+  values; the rate limits were not measured.
 
 The per-test list is [djangos-tests-sorted.tsv](djangos-tests-sorted.tsv).

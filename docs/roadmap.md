@@ -495,6 +495,43 @@ is still open and tracked in
 
 ## Verification log
 
+### A shop with nothing in it: the last of step 1.6, 2026-10-14
+
+Asked for: "do the empty-shop flavour of the parity stack". Three functions of Django's rule
+code are reached only on a new installation's first day, and the seeded parity database
+cannot be emptied ([djangos-tests-sorted.md](architecture/djangos-tests-sorted.md)). Branch
+`feat/parity-empty-shop`.
+
+```text
+scripts/nest-parity.sh empty, unopened (migrate, createsuperuser) ...... 87 of 87 match
+scripts/nest-parity.sh empty, opened (bootstrap-store.py on that) ...... 87 of 87 match
+the same, Django under coverage ........................................ all three functions reached, each by the line it was missing
+the seeded shop's import cases, after a constant was renamed ........... 83 of 83 match
+harness: tsc / eslint / prettier / unit tests .......................... clean; 1761 pass
+```
+
+**What it is.** The new-store guide's own steps, with the two APIs compared after each:
+`migrate` and `createsuperuser`, then `scripts/bootstrap-store.py`. The same 87 requests at
+both moments: every list a back-office screen opens on, the storefront, and what an owner
+does first -- settle the VAT, name the shop, add a branch, open an account, import a
+catalogue. It runs first in CI's parity job, in about two minutes.
+
+**What it found.** Nothing the port gets wrong. The first run showed ten differences, all the
+harness's own: a report's window ending "now", a cart token, ids and moments inside audit
+entries. With those taken out both APIs agree on all 174.
+
+**What it put on record**, which nothing had: an unopened shop's storefront answers 400 for
+the cart and for shipping options, the till 403, a branch added is a 409, and naming the
+shop creates an organisation with no slug. Whether each of those is what an owner should see
+on day one is a question for the owner; the two APIs give the same answer.
+
+**Step 1.6 is done.** Every function of Django's rule code that a request can reach is
+reached by a case. **Not done:** the empty shop is compared with Django and not recorded, so
+the proof that needs no Django does not hold it yet; that wants doing before step 6.
+
+The whole seeded comparison was not rerun for this: the harness gained a branch at its start
+and one constant was renamed, and CI runs all of it.
+
 ### Django's tests sorted by what they reach, and what no case reached ported, 2026-10-14
 
 Asked for: "do item 1 then item 3", then "carry on with the 24 remaining functions" -- item 3

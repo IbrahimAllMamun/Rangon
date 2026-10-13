@@ -6,7 +6,7 @@ Read by sort_tests.py.  A key is `file::function`; a value is (kind, note).
 KINDS = {
     "case-added": "A request reaches it, and a case does now",
     "to-port": "A request can reach it; no case does yet",
-    "empty-shop": "Only a shop with nothing in it yet gets there: the parity database is a seeded one",
+    "empty-shop": "Only a shop with nothing in it yet gets there: compared by `nest-parity.sh empty`, on a database of its own",
     "second-door": "A service's own check behind a serializer that refuses first: no request reaches it",
     "setting": "A setting the comparison runs with one value of",
     "race": "Reached only when two requests really overlap: a race check stands for it",
