@@ -212,6 +212,11 @@ exactly these three rows and nothing else:
 | Branch | The first branch, marked default, with one register. Its code prints on receipts. |
 | Cash drawer | `<CODE> Cash Drawer`, the default cash account counter sales post into, at **৳ 0.00**. |
 
+The NestJS API has the same command, with flags in place of a piped file, so it runs the same
+way in every shell: `run --rm api-nest node dist/cli.js bootstrap-store --shop-name "Rangon
+Fashion" --branch-name "Rangon Panthapath" --branch-code DHK1` ([operator-commands.md](operator-commands.md)). Either does; this is
+Django's.
+
 Set the three names on the command. In **Git Bash**:
 
 ```bash
@@ -244,6 +249,9 @@ Cash drawers: 1
 ---
 
 ## 7. Create the owner account
+
+The NestJS API's `create-owner` does the same without asking questions: it takes the password
+from `OWNER_PASSWORD` in the environment ([operator-commands.md](operator-commands.md)). Either does; this is Django's.
 
 From **PowerShell** or Windows Terminal, because it asks questions:
 

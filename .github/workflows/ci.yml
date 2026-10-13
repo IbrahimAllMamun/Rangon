@@ -168,6 +168,12 @@ jobs:
       - name: The baseline builds the database Django's migrations build
         run: bash scripts/nest-baseline.sh compare
 
+      # The operator's commands (step 4): `create-owner`, `bootstrap-store`,
+      # `verify-inventory` and `verify-accounts`, each run on one database
+      # and Django's own on a copy of it, and what they left compared.
+      - name: The operator's commands do what Django's do
+        run: bash scripts/nest-commands.sh compare
+
       # A shop on its first day, which no case on the seeded one can reach:
       # migrated with one owner, then with the store bootstrapped. First,
       # because it is quick and because `reset` then replaces its database.

@@ -288,6 +288,10 @@ command, with `run --rm api`, and for going back.
 The worker comes with it because whatever the admin queues goes to Celery. Nginx needs no restart
 for this.
 
+**An operator's command in the NestJS API.** `$C run --rm api-nest node dist/cli.js <command>`:
+the owner, the store and the two verifications have one there too
+([operator-commands.md](operator-commands.md)). Migrations do not, yet.
+
 **A management command.** `$C run --rm api python manage.py <command>`. If the command queues
 background jobs, either start the worker first or add `-e CELERY_TASK_ALWAYS_EAGER=1`.
 

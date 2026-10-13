@@ -177,6 +177,16 @@ has just migrated; commit what it changes. The permission catalogue is not cut: 
 change into `src/auth/permission-catalogue.ts`. Both commands replace the parity database.
 
 ```bash
+scripts/nest-commands.sh compare
+```
+
+The operator's commands (`node dist/cli.js create-owner`, `bootstrap-store`,
+`verify-inventory`, `verify-accounts`) each run on one database and Django's own on a copy of
+it, and what they left compared: the rows and the printed lines
+([operator-commands.md](operations/operator-commands.md)). A change to one of Django's four
+wants the same change in `src/cli/`, and this is what says so. It replaces the parity database.
+
+```bash
 scripts/nest-parity.sh up
 ```
 

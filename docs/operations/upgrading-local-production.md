@@ -336,6 +336,10 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm --no-deps -T api python manage.py verify_accounts
 ```
 
+Once the image you upgraded to has them, the NestJS API's own do the same and print the same:
+`run --rm --no-deps -T api-nest node dist/cli.js verify-inventory`, and `verify-accounts`
+([operator-commands.md](operator-commands.md)).
+
 (`run --rm`, not `exec`: these are Django's commands, and Django is not running. Each starts a
 container for the one command and removes it.)
 

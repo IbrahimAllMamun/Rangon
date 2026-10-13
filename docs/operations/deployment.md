@@ -25,6 +25,7 @@ the schema: every migration is Django's.
 | What you want | How |
 |---|---|
 | The shop, as it normally runs | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` -- `db`, `redis`, `api-nest`, `web`, `nginx` |
+| An operator's command in the NestJS API | `... run --rm api-nest node dist/cli.js <command>`: the owner, the store, the two verifications ([operator-commands.md](operator-commands.md)). Not `migrate`: Django migrates until the removal plan's step 6.4 |
 | A migration, `collectstatic`, any management command | `... run --rm api python manage.py <command>`. `run` starts a container of a service `up` leaves alone, and removes it afterwards |
 | The Django admin, `/api/docs/`, `/api/schema/` | Dropped on 2026-10-14 ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md)): nginx answers those three paths 404, whichever API serves |
 | Django for everything again | add `-f docker-compose.django.yml`, then `up -d` and restart nginx: see [Back to Django](#back-to-django) |

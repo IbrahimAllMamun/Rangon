@@ -1,10 +1,11 @@
 # Removing Django: a plan
 
 **Status: accepted 2026-10-08 ([ADR-0020](decisions/0020-django-is-removed-in-steps.md)). Step 0's
-decisions are made; its wait has not begun. Step 1 is built as far as
-[recorded-proof.md](recorded-proof.md) says, which is not all of it: Django's own tests are
-not yet sorted and ported, and three defects it found (D243 to D245) stand between a recording
-and the order of a list. Nothing of Django's has been removed.** It follows
+decisions are made; its wait -- a month of the real shop on the NestJS API -- has not begun.
+Steps 1 to 5 are built (2026-10-09 to 2026-10-14; each step below says what was done and what
+was not). They are the reversible ones: Django still runs, still migrates production and is
+still the way back. What Django alone served, the admin and the API docs, is the one thing
+gone. Steps 6 to 8 are not started, and 6.4 is not authorised.** It follows
 from the cutover ([ADR-0017](decisions/0017-nest-api-serves-production.md)), which left Django out
 of serving requests and in charge of four other things.
 
@@ -197,6 +198,16 @@ equivalent beside it: `new-store-from-scratch.md`, `upgrading-local-production.m
 `deployment.md`, `disaster-recovery.md`, `local-production.md`.
 
 **Size:** medium.
+
+*Done on 2026-10-14, but for `seed-demo`, which decision 3 replaced with a snapshot. The four
+commands are in `apps/api-nest/src/cli/`; `scripts/nest-commands.sh compare` runs each beside
+Django's on copies of one database, in CI: the rows they leave are the same and so are the
+lines they print. The two integrity checks are one implementation each, shared by the command,
+the API's endpoint and the nightly job. The operations pages: one new page,
+[operator-commands.md](../operations/operator-commands.md), has every equivalent and how to
+run it, and the five pages named above each point to it where they give Django's command --
+beside the command for the owner, the store and the two verifications, once per page for the
+rest. `migrate` is listed there as not yet for production.*
 
 ## 5. The Django admin and the API docs
 

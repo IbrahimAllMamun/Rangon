@@ -495,6 +495,58 @@ is still open and tracked in
 
 ## Verification log
 
+### Removing Django, steps 2 to 5: a snapshot, a schema of its own, the operator's commands, and the admin dropped, 2026-10-14
+
+Asked for: "do steps 2 to 5 of the plan". Each leaves Django running and the way back working;
+none changes how production is migrated or who owns the schema
+([ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md)). Branch
+`feat/django-removal-steps-2-to-5`, one commit a step.
+
+```text
+step 5  nginx, both production flavours ...... render and pass `nginx -t`; /django-admin/, /api/docs/, /api/schema/ answer 404 with no upstream running
+step 2  scripts/demo-snapshot.sh ............. make: 12 products, 40 orders, 6 accounts; restore into an empty PostgreSQL; a second restore refused
+        the NestJS API on a restore .......... no Django anywhere: the storefront served, the seeded owner signed in, 40 orders listed
+step 3  scripts/nest-baseline.sh compare ..... schema dumps identical (96 tables, 7,770 lines); the same 909 facts; Django finds nothing to migrate; a Django-built database adopted unchanged
+step 4  scripts/nest-commands.sh compare ..... the owner's account, the store, 6 repair rows and their audit entries the same; every printed line the same; 7 refusals refused
+the whole seeded comparison, after it all .... 12,283 of 12,283 match; 221 races pass
+the shop with nothing in it .................. 87 of 87 match at each of its two moments
+nest unit tests / tsc / eslint / prettier / build ... 1775 passed (14 new) / clean
+```
+
+**Step 5, the admin and the docs: dropped.** nginx answers the three paths 404 in both
+production flavours, whichever API serves, so that going back to Django does not put them on
+the public address. The page that said how to start Django for them is gone. Django's own URLs
+stay until its code does.
+
+**Step 2, a snapshot.** `scripts/demo-snapshot.sh make` has Django migrate and seed a throwaway
+database and dumps it; `restore` wants only Docker and an empty database. CI makes one per run,
+and the browser suite's NestJS leg restores it: that leg has no Python in it now. One thing
+the decision had not foreseen: a snapshot carries its accounts' password past `seed_demo`'s
+refusal to put the README's on a production database. The script records which kind a
+snapshot holds and says so on a restore.
+
+**Step 3, the schema** ([ADR-0022](architecture/decisions/0022-the-baseline-is-djangos-schema-as-dumped.md)).
+The baseline is `pg_dump`'s own output from a database Django had just migrated, because
+Django's 174 deferrable foreign keys are something Drizzle's pulled migration cannot say.
+`node dist/cli.js migrate` runs it on an empty database through Drizzle's migrator and adopts a
+database Django built; `sync-permissions` writes the roles from a catalogue generated from
+Django's. **Django still migrates production.**
+
+**Step 4, the commands.** `create-owner`, `bootstrap-store`, `verify-inventory` and
+`verify-accounts`, each compared with Django's on a copy of one database: the same rows, the
+same printed lines. The two integrity checks are one implementation each now, shared by the
+command, the endpoint and the nightly job. [operator-commands.md](operations/operator-commands.md)
+has every equivalent.
+
+**What only CI can say.** The browser suite on a restored snapshot (this machine cannot hold
+it), and all three new comparison steps on a runner. The recorded proof was not re-recorded
+here: the API's answers did not change, and CI records them.
+
+**What is left of the plan** is what does not leave Django in place: step 6 (development and CI
+on the NestJS API alone, and the first schema change Django does not know), step 7 (the
+rehearsal on the real shop's data), step 8 (delete). Step 6.4 needs the month, the rehearsal
+and the owner's word.
+
 ### The shop with nothing in it, recorded and replayed with no Django, 2026-10-14
 
 Asked for: "record the empty shop's answers for the replay". The gap the entry below left

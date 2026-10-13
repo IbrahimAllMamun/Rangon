@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from '../../src/auth/permission-catalogue';
-import { againstTheBaseline, MIGRATIONS } from '../../src/cli/migrate';
+import { againstTheBaseline, MIGRATIONS, Refusal } from '../../src/cli/migrate';
+import { parseFlags, text } from '../../src/cli/session';
 
 describe('adopting a database Django built', () => {
   const head = [
@@ -83,5 +84,30 @@ describe('the permission catalogue', () => {
   it('files every code under the group its own prefix names', () => {
     for (const [code, [group]] of Object.entries(PERMISSIONS))
       expect(code.startsWith(`${group}.`)).toBe(true);
+  });
+});
+
+describe("a command's flags", () => {
+  const known = ['branch', 'fix', 'reason'];
+
+  it('reads a flag with a value and a flag alone', () => {
+    expect(parseFlags(['--branch', 'DHK1', '--fix'], known)).toEqual({ branch: 'DHK1', fix: true });
+  });
+
+  it('keeps a value that has spaces in it', () => {
+    expect(parseFlags(['--fix', '--reason', 'DR-2026 reconciliation'], known)).toEqual({
+      fix: true,
+      reason: 'DR-2026 reconciliation',
+    });
+  });
+
+  it('refuses a flag the command does not take, and a word that is no flag', () => {
+    expect(() => parseFlags(['--force'], known)).toThrow(Refusal);
+    expect(() => parseFlags(['DHK1'], known)).toThrow(Refusal);
+  });
+
+  it('reads a flag given without a value as no text', () => {
+    expect(text(parseFlags(['--reason'], known), 'reason')).toBe('');
+    expect(text(parseFlags([], known), 'reason')).toBe('');
   });
 });
