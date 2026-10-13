@@ -544,7 +544,7 @@ what the test asserts; the arithmetic rests on compared values, not on this. The
 rate-limit scenarios run on a stack that was not measured. `run.sh tests` and `run.sh diff`
 were run as committed; `run.sh parity` was run from the scratch script it was copied from.
 
-Not pushed; no pull request. No record-and-replay was run for this branch: it adds cases and
+No record-and-replay was run for this branch: it adds cases and
 fixture rows and changes no API, and CI records them.
 
 ### The recorded proof on GitHub, second run: the clock holds, and one more answer that depended on row order, 2026-10-13
