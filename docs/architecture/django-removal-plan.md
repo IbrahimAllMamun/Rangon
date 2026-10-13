@@ -104,7 +104,8 @@ Today "the Nest API is right" means "it answered as Django just did". This step 
    APIs agreed on all 40 of them. Three are reached only in a shop with nothing in it, and are
    compared on a database of their own (`scripts/nest-parity.sh empty`, 174 answers, all
    agreeing). None wanted a Nest test against a database: every one was a parity case.
-   **Done**, but for recording the empty shop's answers before step 6.*
+   **Done**, and the empty shop's answers are recorded and replayed without Django too
+   (`replay-empty`).*
 7. **Run both proofs in CI, side by side**, until step 6. While they agree, the recording is
    known to be faithful.
 

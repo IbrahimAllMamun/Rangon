@@ -11,7 +11,8 @@
 #   scripts/nest-parity.sh empty    DESTRUCTIVE likewise: a shop on its first day instead of the seeded
 #                                   one, compared at two moments -- migrated with one owner, then with
 #                                   `scripts/bootstrap-store.py` run on it (parity/empty-shop-cases.ts).
-#                                   `reset` brings the seeded shop back
+#                                   Keeps a snapshot and the Nest API's answers at each, as `record`
+#                                   does (parity/recorded/empty/). `reset` brings the seeded shop back
 #
 # The proof that needs no Django (docs/architecture/recorded-proof.md):
 #   scripts/nest-parity.sh record   after `reset`: a snapshot of the database and the uploads, then
@@ -25,6 +26,9 @@
 #                                   ones in another order, keep where (once, after `record`).
 #                                   PARITY_HEAP=reversed: every table's rows turned over first, to
 #                                   find what depends on the order rows lie in
+#   scripts/nest-parity.sh replay-empty  after `empty`: the same stack with no Django in it, restored
+#                                   from each of the empty shop's two snapshots in turn, every case
+#                                   against its recorded answer
 #   scripts/nest-parity.sh replay-down   remove that stack and its volumes
 #
 # PARITY_S3=1 before any of them runs the stack with its uploads in a bucket
@@ -56,6 +60,36 @@ export PARITY_RECORDED_DIR="$recorded_dir"
 wait_for() {
   for _ in $(seq 1 120); do curl -sf -o /dev/null "$1" && return 0; sleep 1; done
   echo "timed out waiting for $1" >&2; return 1
+}
+
+# The parity database replaced by a restore of a snapshot, both APIs stopped
+# for it: the same rows, lying in the order a replay will find them in.
+restore_in_place() {
+  "${compose[@]}" --profile jobs stop django nest nest-jobs
+  "${compose[@]}" exec -T db psql -q -U rangon -d postgres \
+    -c 'DROP DATABASE rangon WITH (FORCE)' -c 'CREATE DATABASE rangon OWNER rangon'
+  "${compose[@]}" exec -T db pg_restore --exit-on-error --no-owner -U rangon -d rangon < "$1"
+  "${compose[@]}" --profile jobs start django nest-jobs
+  wait_for "$django_url/api/health/"
+  wait_for "$jobs_url/api/health/"
+}
+
+# One moment of the empty shop (`empty`): the database as it stands kept as a
+# snapshot, then the two APIs compared on a restore of it, the Nest API's
+# answers kept beside it. The Nest side queues in pg-boss, as `record`'s does
+# and as the replay stack's will.
+empty_stage() {
+  local stage="$1" dir="$recorded_dir/empty/$1"
+  mkdir -p "$dir"
+  rm -f "$dir"/snapshot.dump "$dir"/media.tar.gz "$dir"/*.jsonl.gz "$dir"/clock.txt "$dir"/began.txt
+  "${compose[@]}" exec -T db psql -q -U rangon -d rangon -c 'DELETE FROM pgboss.job'
+  "${compose[@]}" exec -T db pg_dump -U rangon -d rangon -Fc --no-owner > "$dir/snapshot.dump"
+  "${compose[@]}" exec -T django tar -czf - -C /app/media . > "$dir/media.tar.gz"
+  restore_in_place "$dir/snapshot.dump"
+  date +%s > "$dir/clock.txt"
+  "${compose[@]}" --profile jobs run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$dir:/recorded" -e PARITY_MODE=record -e PARITY_SHOP="$stage" -e PARITY_RACES=none \
+    -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity-jobs
 }
 
 case "${1:-}" in
@@ -154,13 +188,7 @@ print("bucket", storage.bucket_name, "ready")'
     # database it was taken from: the same rows, lying in the order a replay
     # will find them in. Where an answer leaves rows that tie to the order
     # they lie in, the recording and its replays then start from one order.
-    "${compose[@]}" --profile jobs stop django nest nest-jobs
-    "${compose[@]}" exec -T db psql -q -U rangon -d postgres \
-      -c 'DROP DATABASE rangon WITH (FORCE)' -c 'CREATE DATABASE rangon OWNER rangon'
-    "${compose[@]}" exec -T db pg_restore --exit-on-error --no-owner -U rangon -d rangon < "$recorded_dir/snapshot.dump"
-    "${compose[@]}" --profile jobs start django nest-jobs
-    wait_for "$django_url/api/health/"
-    wait_for "$jobs_url/api/health/"
+    restore_in_place "$recorded_dir/snapshot.dump"
     # The moment the recording begins: a replay sets its clocks by it.
     date +%s > "$recorded_dir/clock.txt"
     # As this user, so that the answers land in a file this user owns.
@@ -240,15 +268,44 @@ print("bucket", storage.bucket_name, "ready")'
     "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle --profile s3 down -v --remove-orphans
     bash "$0" up
     "${compose[@]}" exec -T django sh -c 'mkdir -p /app/media && chmod -R a+rwX /app/media'
+    # The Nest API that queues in pg-boss: its first start makes the `pgboss`
+    # schema, which has to be in the snapshots.
+    "${compose[@]}" --profile jobs up -d --build --force-recreate nest-jobs
+    wait_for "$jobs_url/api/health/"
     # No password: the harness mints its own tokens, and nobody signs in.
     "${compose[@]}" exec -T -e DJANGO_SUPERUSER_EMAIL=owner@rangon.test django python manage.py createsuperuser --noinput
     status=0
-    "${compose[@]}" run --rm -e PARITY_SHOP=unopened -e PARITY_RACES=none \
-      -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity || status=$?
+    empty_stage unopened || status=$?
+    # The store is opened on the unopened snapshot, not on what its cases left.
+    restore_in_place "$recorded_dir/empty/unopened/snapshot.dump"
     "${compose[@]}" exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 \
       -e WEB_REVALIDATE_URL= django python manage.py shell < scripts/bootstrap-store.py
-    "${compose[@]}" run --rm -e PARITY_SHOP=opened -e PARITY_RACES=none \
-      -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity || status=$?
+    empty_stage opened || status=$?
+    ls -l "$recorded_dir"/empty/*
+    exit "$status"
+    ;;
+  replay-empty)
+    # As `replay`, once for each moment of the empty shop: the stack from
+    # nothing, that moment's snapshot, every case against its recorded answer.
+    # No races, worker or rate limits: the seeded shop's replay has those.
+    given="${PARITY_FAKETIME:-}"
+    status=0
+    for stage in unopened opened; do
+      dir="$recorded_dir/empty/$stage"
+      for part in snapshot.dump media.tar.gz answers.jsonl.gz clock.txt; do
+        [ -s "$dir/$part" ] || { echo "no $dir/$part: run \`$0 empty\` first" >&2; exit 2; }
+      done
+      behind=$(( $(date +%s) - $(cat "$dir/clock.txt") + 90 ))
+      export PARITY_FAKETIME="${given:--$behind}"
+      export PARITY_RECORDED_DIR="$dir"
+      echo "the $stage shop: the replay's clocks run ${PARITY_FAKETIME}s from the real one"
+      "${recorded[@]}" --profile restore --profile replay --profile worker --profile throttle down -v --remove-orphans
+      "${recorded[@]}" up -d db redis
+      PARITY_HEAP= "${recorded[@]}" --profile restore run --rm restore
+      "${recorded[@]}" up -d --build nest nest-b
+      wait_for "http://127.0.0.1:${RECORDED_PORT:-8640}/api/health/"
+      PARITY_RACES=none "${recorded[@]}" --profile replay run --rm -e PARITY_SHOP="$stage" replay || status=$?
+    done
     exit "$status"
     ;;
   reset)

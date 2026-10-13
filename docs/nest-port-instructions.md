@@ -155,7 +155,9 @@ reach: migrated with one owner (`createsuperuser`), then with `scripts/bootstrap
 on it, and 87 requests compared at each stage (`parity/empty-shop-cases.ts`). It drops the
 parity database as `reset` does, and `reset` brings the seeded shop back. About two minutes.
 A change to what a new installation sees -- `me`, the organisation, the first import, any
-list on an empty table -- is checked here, not by `run`.
+list on an empty table -- is checked here, not by `run`. It keeps a snapshot and the Nest
+API's answers at each stage, and `scripts/nest-parity.sh replay-empty` then holds the API to
+them on the stack with no Django in it, as `replay` does for the seeded shop.
 
 ```bash
 scripts/nest-parity.sh up

@@ -495,6 +495,37 @@ is still open and tracked in
 
 ## Verification log
 
+### The shop with nothing in it, recorded and replayed with no Django, 2026-10-14
+
+Asked for: "record the empty shop's answers for the replay". The gap the entry below left
+open. Branch `feat/parity-empty-shop-recorded`, on top of `feat/parity-empty-shop`.
+
+```text
+scripts/nest-parity.sh empty ........... 87 of 87 match at each moment; 87 answers and a snapshot kept for each
+scripts/nest-parity.sh replay-empty .... unopened: 87 of 87 as recorded; opened: 87 of 87 as recorded; no Django
+the seeded shop, a filtered record and replay through the refactored script ... 16 of 16 match and are kept; 16 of 16 as recorded
+harness: tsc / eslint / prettier ....... clean
+```
+
+**What changed.** `empty` now does what `record` does, at each of its two moments: the
+database kept as a snapshot, the comparison made on a restore of it with the Nest API
+queuing in pg-boss, the answers kept (`parity/recorded/empty/<moment>/`). The second moment
+is built on a restore of the first's snapshot. `replay-empty` restores each snapshot into the
+stack that has no Django in it and holds the API to its answers. CI runs it after the seeded
+shop's replay. `record` and `empty` share one "restore in place" step now.
+
+**What the first replay found**: nine differences in the opened shop, all one thing. Asking
+for shipping options makes the visitor a cart. A recording asks two APIs and a replay one,
+so the recording held one cart more, and every write case after it counted the carts. The
+visitor reads put their tables back now. It is the same kind of thing as the leftovers of
+two APIs' turns the seeded replay met on 2026-10-09 (tokens, audit rows, search terms); the
+seeded cases never counted carts, so it had not shown there.
+
+**Not done.** No races, worker or rate limits on the empty shop: the seeded shop's replay
+holds those. And the uploads directory is the developer's own, shared by every local parity
+run, so a local empty-shop snapshot carries files no row of it names; on a CI runner there
+are none.
+
 ### A shop with nothing in it: the last of step 1.6, 2026-10-14
 
 Asked for: "do the empty-shop flavour of the parity stack". Three functions of Django's rule
