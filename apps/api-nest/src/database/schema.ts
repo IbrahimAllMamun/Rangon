@@ -1205,6 +1205,7 @@ export const ordersPayment = pgTable("orders_payment", {
 	createdById: uuid("created_by_id"),
 	orderId: uuid("order_id").notNull(),
 	accountId: uuid("account_id"),
+	idempotencyKey: varchar("idempotency_key", { length: 80 }),
 }, (table) => [
 	index("orders_paym_method_e26905_idx").using("btree", table.method.asc().nullsLast().op("text_ops"), table.capturedAt.desc().nullsFirst().op("timestamptz_ops")),
 	index("orders_paym_order_i_8c8d98_idx").using("btree", table.orderId.asc().nullsLast().op("uuid_ops")),
@@ -1212,8 +1213,10 @@ export const ordersPayment = pgTable("orders_payment", {
 	index("orders_payment_account_id_26710b42").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	index("orders_payment_created_at_e6e1591b").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
 	index("orders_payment_created_by_id_5bc37a7a").using("btree", table.createdById.asc().nullsLast().op("uuid_ops")),
+	index("orders_payment_idempotency_key_b0d2abb0_like").using("btree", table.idempotencyKey.asc().nullsLast().op("varchar_pattern_ops")),
 	index("orders_payment_order_id_bdccf250").using("btree", table.orderId.asc().nullsLast().op("uuid_ops")),
 	uniqueIndex("orders_payment_provider_ref_uniq").using("btree", table.provider.asc().nullsLast().op("text_ops"), table.providerReference.asc().nullsLast().op("text_ops")).where(sql`(NOT ((provider_reference)::text = ''::text))`),
+	unique("orders_payment_idempotency_key_key").on(table.idempotencyKey),
 	check("orders_payment_amount_gt_0", sql`amount > 0.00`),
 ]);
 

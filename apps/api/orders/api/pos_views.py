@@ -369,9 +369,9 @@ class PosReturnView(APIView):
     throttle_scope = "pos"
 
     def post(self, request: AuthedRequest) -> Response:
-        from orders.api.serializers import CreateReturnSerializer, ReturnRequestSerializer
+        from orders.api.serializers import PosReturnSerializer, ReturnRequestSerializer
 
-        serializer = CreateReturnSerializer(data=request.data)
+        serializer = PosReturnSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -383,6 +383,6 @@ class PosReturnView(APIView):
                 for line in data["lines"]
             ],
             reason=data["reason"],
-            refund_method=request.data.get("refund_method", "CASH"),
+            refund_method=data["refund_method"],
         )
         return Response(ReturnRequestSerializer(result).data, status=status.HTTP_201_CREATED)

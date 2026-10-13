@@ -274,11 +274,21 @@ def set_user_status(
     return user
 
 
-def _active_owner_count(exclude: User | None = None) -> int:
-    queryset = User.objects.filter(role__code=RoleCode.OWNER, status=Status.ACTIVE)
-    if exclude is not None:
-        queryset = queryset.exclude(pk=exclude.pk)
-    return queryset.count()
+def _other_active_owners(user: User) -> int:
+    """How many active owners there are besides `user` -- with their rows locked.
+
+    The lock is the guard. Counting and then writing is a check-then-act: two
+    requests, each switching off one of the last two owners, both counted the
+    other and both went ahead, and no owner was left (D221). Every caller
+    takes the same rows in the same order and holds them until its own write
+    commits, so the second waits, reads the first's change, and is refused.
+    """
+    owners = (
+        User.objects.select_for_update(of=("self",))
+        .filter(role__code=RoleCode.OWNER, status=Status.ACTIVE)
+        .order_by("pk")
+    )
+    return sum(1 for owner in owners if owner.pk != user.pk)
 
 
 def check_can_lose_access(*, user: User, actor: User | None, what: str) -> None:
@@ -293,17 +303,31 @@ def check_can_lose_access(*, user: User, actor: User | None, what: str) -> None:
     * **The last owner.** Nothing but OWNER holds `users.manage` or
       `settings.manage`, so an organisation with no active owner cannot grant
       anybody those again. There is no recovery path short of the shell.
+
+    Call it inside the transaction that makes the change: it locks the owners'
+    rows, and the lock has to last until the change is committed.
     """
     if actor is not None and getattr(actor, "pk", None) == user.pk:
         raise ValidationError(
             f"You cannot {what} your own account.",
             details={"user": f"Ask another owner to {what} it."},
         )
-    if user.role and user.role.code == RoleCode.OWNER and _active_owner_count(exclude=user) == 0:
+    if user.role and user.role.code == RoleCode.OWNER and _other_active_owners(user) == 0:
         raise ValidationError(
             f"You cannot {what} the last owner.",
             details={"user": "Give another account the owner role first."},
         )
+
+
+@transaction.atomic
+def deactivate_user(*, user: User, actor: User | None = None, reason: str = "") -> User:
+    """Switch a staff account off, behind the same two guards as an edit.
+
+    The guard and the write are one transaction, so the owners the guard
+    locked stay locked until the account is off.
+    """
+    check_can_lose_access(user=user, actor=actor, what="deactivate")
+    return set_user_status(user=user, status=Status.INACTIVE, actor=actor, reason=reason)
 
 
 def mint_refresh_token(user: User) -> RefreshToken:

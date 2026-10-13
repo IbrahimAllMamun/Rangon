@@ -41,7 +41,7 @@ import { Params as SqlParams } from '../database/sql';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
-import { dataGet, pyTruthy } from '../http/request-body';
+import { dataGet } from '../http/request-body';
 import { AfterCommit, StockService } from '../inventory/stock.service';
 import { OrderPayments } from './order-payments.service';
 import { OrderWritesService } from './order-writes.service';
@@ -169,6 +169,8 @@ interface CreateData {
   reason: string;
   lines: { order_item: string; quantity: number | bigint; restock_decision: string }[];
   customer_comment?: string;
+  /** Only where the fields are the counter's (`POS_RETURN_FIELDS`). */
+  refund_method?: string | null;
   [key: string]: unknown;
 }
 
@@ -205,6 +207,19 @@ const CREATE_FIELDS: Fields = {
     ),
   }),
   customer_comment: charField({ required: false, allowBlank: true }),
+};
+
+/**
+ * `PosReturnSerializer`: the same, and how the money goes back -- a choice, as
+ * on a return completed from the back office. Blank is "the way the money came
+ * in"; left out, it is cash.
+ */
+const POS_RETURN_FIELDS: Fields = {
+  ...CREATE_FIELDS,
+  refund_method: withDefault(
+    choiceField(PAYMENT_METHODS, { required: false, allowBlank: true }),
+    () => 'CASH',
+  ),
 };
 
 /** `ReceiveReturnSerializer`: one decision per line, made with the goods in hand. */
@@ -434,8 +449,11 @@ export class ReturnsService {
   }
 
   /** `CreateReturnSerializer(data=request.data).is_valid(raise_exception=True)`. */
-  private async asked(data: unknown): Promise<ReturnAsk> {
-    const validated = await runSerializer<CreateData>(CREATE_FIELDS, data);
+  private async asked(
+    data: unknown,
+    fields: Fields = CREATE_FIELDS,
+  ): Promise<ReturnAsk & { refundMethod?: string | null }> {
+    const validated = await runSerializer<CreateData>(fields, data);
     if (!validated.ok)
       throw new ValidationError('Invalid input.', { details: errorMessages(validated.errors) });
     const values = validated.values;
@@ -454,6 +472,7 @@ export class ReturnsService {
       })),
       reason: values.reason,
       customerComment: values.customer_comment ?? '',
+      refundMethod: values.refund_method,
     };
   }
 
@@ -804,7 +823,6 @@ export class ReturnsService {
     refund: {
       amount?: string | null;
       method?: string | null;
-      auditMethod?: unknown;
       accountId?: string | null;
       idempotencyKey?: string | null;
     },
@@ -829,7 +847,6 @@ export class ReturnsService {
         actor,
         reason: `Return ${locked.number}`,
         method: refund.method ?? null,
-        auditMethod: refund.auditMethod,
         returnRequestId: id,
         idempotencyKey: refund.idempotencyKey || `return:${id}`,
         accountId: refund.accountId ?? null,
@@ -1004,22 +1021,19 @@ export class ReturnsService {
   /**
    * `PosReturnView` and `pos_return`: a return at the counter -- requested,
    * approved, received and refunded in one transaction. The refund's method
-   * is whatever the body's `refund_method` holds, unvalidated: one the
-   * ledger does not know moves no account at all (D158, copied).
+   * is validated with the rest of the request: it was once whatever the body
+   * held, and one the ledger does not know moved no account at all (D158).
    */
   async posReturn(user: RequestUser, data: unknown, context: AuditContext) {
     // `pos_return` takes no comment: one sent is validated and dropped.
-    const ask = { ...(await this.asked(data)), customerComment: '' };
-    const given = dataGet(data, 'refund_method');
-    const method = given === undefined ? 'CASH' : given;
+    const ask = { ...(await this.asked(data, POS_RETURN_FIELDS)), customerComment: '' };
     const actor = { id: user.id, email: user.email };
     const opened = await this.stock.run(async (tx: Queryable, after: AfterCommit) => {
       const request = await this.requestReturn(tx, context, user, ask);
       await this.approveLocked(tx, request.id, actor, '');
       await this.receiveLocked(tx, after, request.id, actor, null);
       await this.completeLocked(tx, context, request.id, actor, {
-        method: pyTruthy(method) ? textValue(method) : null,
-        auditMethod: method,
+        method: ask.refundMethod || null,
       });
       return request;
     });

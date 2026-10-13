@@ -271,8 +271,13 @@ export class CouponsAdminService {
       description: charField({ maxLength: 255, required: false, allowBlank: true }),
       discount_type: choiceField(TYPES),
       value: decimalField(10, 2, { required: false }),
-      minimum_order_value: decimalField(14, 2, { required: false }),
-      maximum_discount: decimalField(14, 2, { required: false, allowNull: true }),
+      // Not below zero: a cap under it raised the price (D204).
+      minimum_order_value: decimalField(14, 2, { required: false, minValue: '0.00' }),
+      maximum_discount: decimalField(14, 2, {
+        required: false,
+        allowNull: true,
+        minValue: '0.00',
+      }),
       starts_at: dateTimeField(tz, { required: false, allowNull: true }),
       ends_at: dateTimeField(tz, { required: false, allowNull: true }),
       usage_limit: integerField({ required: false, allowNull: true, ...COUNT }),

@@ -14,12 +14,18 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core import audit
-from core.exceptions import Conflict, RefundExceedsCaptured, ValidationError
+from core.exceptions import (
+    Conflict,
+    PaymentExceedsOutstanding,
+    RefundExceedsCaptured,
+    ValidationError,
+)
 from core.money import ZERO, quantize
 from orders.models import (
     Order,
     OrderEventType,
     OrderPaymentStatus,
+    OrderStatus,
     Payment,
     PaymentEvent,
     PaymentMethod,
@@ -30,6 +36,10 @@ from orders.models import (
 from orders.services.lifecycle import log_event
 
 CAPTURED_STATES = {PaymentState.CAPTURED, PaymentState.PARTIALLY_REFUNDED, PaymentState.REFUNDED}
+
+#: An order in one of these owes nothing more, whatever its totals say: it was
+#: cancelled, or the goods came back.
+OWES_NOTHING = {OrderStatus.CANCELLED, OrderStatus.RETURNED, OrderStatus.REFUNDED}
 
 
 def _already_posted(reference_type: str, reference_id: Any) -> bool:
@@ -131,6 +141,7 @@ def record_payment(
     tendered_amount: Decimal | None = None,
     payload: dict[str, Any] | None = None,
     account: Any = None,
+    idempotency_key: str | None = None,
 ) -> Payment:
     """Record a payment against an order (cash, card slip, MFS, bank, COD).
 
@@ -168,6 +179,7 @@ def record_payment(
         failed_at=now if status == PaymentState.FAILED else None,
         account=account,
         created_by=actor,
+        idempotency_key=idempotency_key or None,
     )
 
     # Money moves only on capture.  A PENDING or AUTHORIZED payment keeps the
@@ -199,6 +211,105 @@ def record_payment(
         branch=order.branch,
     )
     return payment
+
+
+@transaction.atomic
+def receive_payment(
+    *,
+    order: Order,
+    method: str,
+    amount: Decimal,
+    actor: Any = None,
+    reference: str = "",
+    account: Any = None,
+    idempotency_key: str | None = None,
+) -> Payment:
+    """Staff record money actually received: a courier's remittance, a transfer, cash.
+
+    A payment of this method and amount that was waiting (cash on delivery, a
+    transfer the customer promised) is captured; otherwise a new captured
+    payment is recorded. Either way, under the order's lock:
+
+    * the caller's `Idempotency-Key` names the payment, so the request sent
+      again answers with the payment it made the first time (§5.5);
+    * nothing is taken on an order that owes nothing, or past what it owes.
+      *`DECISION REQUIRED` (business-rules.md §5.5): refuse, or keep the
+      excess as credit. Refused until decided -- there is nowhere to hold a
+      customer's credit, and a refusal loses nothing;*
+    * the account is set here, not before: one the money cannot land in is
+      refused with the waiting payment left as it was.
+
+    Until 2026-10-13 the view did the first half of this itself, outside any
+    transaction, and none of the three held (D167).
+    """
+    order = Order.objects.select_for_update().get(pk=order.pk)
+    amount = quantize(amount)
+    if amount <= ZERO:
+        raise ValidationError("Payment amount must be positive.")
+
+    if idempotency_key:
+        existing = Payment.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return _replayed(existing, order)
+
+    if order.status in OWES_NOTHING:
+        raise Conflict(f"An order in status {order.status} takes no payment.")
+    outstanding = quantize(order.grand_total - order.paid_total)
+    if amount > outstanding:
+        raise PaymentExceedsOutstanding(
+            f"Only {outstanding} is outstanding on {order.number}.",
+            details={
+                "requested": str(amount),
+                "outstanding": str(outstanding),
+                "grand_total": str(order.grand_total),
+                "paid_total": str(order.paid_total),
+            },
+        )
+
+    try:
+        # Savepoint: the key is unique, and the same key on two orders at once
+        # is a loss on the index that the lookup below turns into an answer.
+        with transaction.atomic():
+            pending = (
+                order.payments.select_for_update()
+                .filter(method=method, status=PaymentState.PENDING)
+                .order_by("created_at", "id")
+                .first()
+            )
+            if pending is not None and pending.amount == amount:
+                # The account is chosen at capture, because that is when the
+                # money actually arrives -- a COD order's cash lands when the
+                # courier remits, not when the order was placed.
+                if account is not None:
+                    pending.account = account
+                pending.idempotency_key = idempotency_key or None
+                pending.save(update_fields=["account", "idempotency_key", "updated_at"])
+                return capture_payment(payment=pending, actor=actor)
+            return record_payment(
+                order=order,
+                method=method,
+                amount=amount,
+                actor=actor,
+                reference=reference,
+                account=account,
+                idempotency_key=idempotency_key,
+            )
+    except IntegrityError:
+        existing = (
+            Payment.objects.filter(idempotency_key=idempotency_key).first()
+            if idempotency_key
+            else None
+        )
+        if existing is None:
+            raise
+        return _replayed(existing, order)
+
+
+def _replayed(existing: Payment, order: Order) -> Payment:
+    """The payment a key already names -- if it is this order's."""
+    if existing.order_id != order.pk:
+        raise Conflict("That Idempotency-Key was used for a payment on another order.")
+    return existing
 
 
 def _post_refund_to_cash_book(*, refund: Refund, order: Order, actor: Any = None) -> None:

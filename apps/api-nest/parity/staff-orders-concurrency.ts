@@ -169,31 +169,24 @@ export async function staffOrdersConcurrencyChecks(apis: {
         detail: `statuses ${statuses(run.responses).join(',')}, ${run.queued} queued on the order, now ${after.status}, ${after.sales} sale entry, timeline ${after.events}`,
       });
 
-      // 2. Two requests to record one cash-on-delivery payment: captured once.
+      // 2. Two requests to record one cash-on-delivery payment: captured once,
+      // and the second -- which finds nothing waiting and nothing owed -- refused.
       await restore();
-      const pending = await one<{ id: string }>(
-        `SELECT id FROM orders_payment WHERE order_id = $1 AND status = 'PENDING'`,
-        [cod],
-      );
-      run = await behind(
-        [`SELECT id FROM orders_payment WHERE id = $1 FOR UPDATE`, [pending?.id]],
-        '%orders_payment%',
-        [
-          () => post(a, cod, 'payments', { method: 'COD', amount: '5790.00' }),
-          () => post(b, cod, 'payments', { method: 'COD', amount: '5790.00' }),
-        ],
-      );
+      run = await behind(ORDER_ROW(cod), '%orders_order%', [
+        () => post(a, cod, 'payments', { method: 'COD', amount: '5790.00' }),
+        () => post(b, cod, 'payments', { method: 'COD', amount: '5790.00' }),
+      ]);
       after = await state(cod);
       checks.push({
-        name: `orders: two requests to record one pending payment, ${how}, queue on its row -- captured once, the money entered once`,
+        name: `orders: two requests to record one pending payment, ${how}, queue on the order's row -- captured once, the money entered once, the second refused as past what is owed`,
         passed:
           run.queued === 2 &&
-          statuses(run.responses).join() === '201,201' &&
+          statuses(run.responses).join() === '201,422' &&
           after.payment_status === 'PAID' &&
           after.paid === '5790.00' &&
           after.movements === '1' &&
           after.events === 'PAYMENT_CAPTURED',
-        detail: `statuses ${statuses(run.responses).join(',')}, ${run.queued} queued on the payment, order ${after.payment_status} with ${after.paid} paid, ${after.movements} cash-book entry, timeline ${after.events}`,
+        detail: `statuses ${statuses(run.responses).join(',')}, ${run.queued} queued on the order, order ${after.payment_status} with ${after.paid} paid, ${after.movements} cash-book entry, timeline ${after.events}`,
       });
     }
 
@@ -318,6 +311,51 @@ export async function staffOrdersConcurrencyChecks(apis: {
         end.refunds === '1' &&
         end.movements === '1',
       detail: `statuses ${statuses(clicks).join(',')}, ${ids.size} refund id, refunded ${end.refunded} in ${end.refunds} refund, ${end.movements} cash-book entry`,
+    });
+
+    // 7a. One payment request sent six times with one key: the payment it made, six times.
+    await restore();
+    const sent = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        post(
+          index % 2 ? apis.NEST : apis.DJANGO,
+          cod,
+          'payments',
+          { method: 'CASH', amount: '1000.00' },
+          'race-payment-one-key',
+        ),
+      ),
+    );
+    end = await state(cod);
+    checks.push({
+      name: 'orders: 6 copies of one payment request with one Idempotency-Key, across both APIs -- six 201s, one payment, the money entered once',
+      passed:
+        statuses(sent).join() === '201,201,201,201,201,201' &&
+        end.paid === '1000.00' &&
+        end.movements === '1' &&
+        end.events === 'PAYMENT_RECORDED',
+      detail: `statuses ${statuses(sent).join(',')}, paid ${end.paid}, ${end.movements} cash-book entry, timeline ${end.events}`,
+    });
+
+    // 7b. The same remittance recorded six times with no key: what is owed is the guard.
+    await restore();
+    const remitted = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        post(index % 2 ? apis.NEST : apis.DJANGO, cod, 'payments', {
+          method: 'COD',
+          amount: '5790.00',
+        }),
+      ),
+    );
+    end = await state(cod);
+    checks.push({
+      name: 'orders: 6 recordings of one remittance at once with no key, across both APIs -- captured once, five refused as past what is owed',
+      passed:
+        statuses(remitted).join() === '201,422,422,422,422,422' &&
+        end.paid === '5790.00' &&
+        end.movements === '1' &&
+        end.events === 'PAYMENT_CAPTURED',
+      detail: `statuses ${statuses(remitted).join(',')}, paid ${end.paid}, ${end.movements} cash-book entry, timeline ${end.events}`,
     });
 
     // 8. A request to pack and a request to cancel one order at once: one wins.

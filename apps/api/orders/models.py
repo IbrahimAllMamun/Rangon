@@ -13,7 +13,13 @@ from django.db import models
 from django.utils import timezone
 
 from accounts.models import TaxMode
-from core.models import AppendOnlyModel, BaseModel, money_field, rate_field
+from core.models import (
+    AppendOnlyModel,
+    BaseModel,
+    idempotency_key_field,
+    money_field,
+    rate_field,
+)
 
 
 class Channel(models.TextChoices):
@@ -406,6 +412,11 @@ class Payment(BaseModel):
     created_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
+
+    #: The `Idempotency-Key` of the staff request that recorded or captured
+    #: this money, so the same request sent again is the same payment and not
+    #: a second one (§5.5, D167). Null on every payment taken another way.
+    idempotency_key = idempotency_key_field()
 
     class Meta:
         db_table = "orders_payment"

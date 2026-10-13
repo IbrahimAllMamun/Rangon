@@ -69,7 +69,7 @@ export async function sweepConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
     // 1. Both sweeps at once, over every order past the window.
     await restore();
     const EXPIRED = `o.channel = 'ONLINE' AND o.status = 'PENDING' AND NOT o.stock_committed
-              AND o.placed_at < now() - interval '60 minutes'
+              AND o.placed_at < now() - interval '60 minutes' AND o.paid_total <= o.refunded_total
               AND NOT EXISTS (SELECT 1 FROM orders_payment p WHERE p.order_id = o.id AND p.method = 'COD')`;
     const expired = Number(
       (
@@ -106,13 +106,13 @@ export async function sweepConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
     );
     const counted = both.map((answer) => Number(/released:(\d+)/.exec(answer.body)?.[1] ?? -1));
     checks.push({
-      name: "sweep: Django's task and the Nest handler at once, over every order past the window -- each order is cancelled once and each line's stock given back once, though both sweeps count an order the other got to first (D234, copied)",
+      name: "sweep: Django's task and the Nest handler at once, over every order past the window -- each order is cancelled once, each line's stock given back once, and the two counts come to the orders there were: a sweep counts only what it cancelled",
       passed:
         expired > 0 &&
         Number(shelves.shelves) > 0 &&
         both.every((answer) => answer.status === 200 && answer.body.includes('SUCCESS')) &&
         counted.every((count) => count >= 0 && count <= expired) &&
-        counted.reduce((sum, count) => sum + count, 0) >= expired &&
+        counted.reduce((sum, count) => sum + count, 0) === expired &&
         Number(t.cancelled) === expired &&
         t.cancelled_twice === '0' &&
         t.released_twice === '0' &&
@@ -132,7 +132,7 @@ export async function sweepConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
         await one<{ id: string }>(
           `SELECT o.id FROM orders_order o
             WHERE o.channel = 'ONLINE' AND o.status = 'PENDING' AND NOT o.stock_committed
-              AND o.placed_at < now() - interval '60 minutes'
+              AND o.placed_at < now() - interval '60 minutes' AND o.paid_total <= o.refunded_total
               AND NOT EXISTS (SELECT 1 FROM orders_payment p WHERE p.order_id = o.id AND p.method = 'COD')
               AND EXISTS (SELECT 1 FROM inventory_inventorytransaction t
                            WHERE t.reference_id = o.id::text AND t.transaction_type = 'RESERVATION')
@@ -166,13 +166,14 @@ export async function sweepConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): 
       t = await tally();
       const answer = held.responses[0];
       checks.push({
-        name: `sweep: an order confirmed while the sweep (${side}) waits on its row -- it is cancelled all the same, as paid for too late: the sweep chose it before the lock and the status machine lets a confirmed order be cancelled (D233, copied)`,
+        name: `sweep: an order confirmed while the sweep (${side}) waits on its row -- it is left confirmed, its stock still held: the sweep looks again under the lock`,
         passed:
           held.queued === 1 &&
           answer?.status === 200 &&
-          after.status === 'CANCELLED' &&
-          after.reason === 'PAYMENT_TIMEOUT: reservation expired' &&
-          Number(after.released) > 0 &&
+          answer.body.includes('released:0') &&
+          after.status === 'CONFIRMED' &&
+          after.reason === '' &&
+          Number(after.released) === 0 &&
           t.shelves_off === '0',
         detail: `${answer?.body}, ${held.queued ? 'waited on the order' : 'never waited'}, left ${after.status} "${after.reason}", ${after.released} line(s) released, ${t.shelves_off} shelves off`,
       });

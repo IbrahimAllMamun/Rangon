@@ -60,8 +60,14 @@ export function OrderActions({
   const [refundMethod, setRefundMethod] = useState(() => defaultRefundMethod(order.payments));
 
   const can = (code: string) => permissions.includes("*") || permissions.includes(code);
-  const transitions = NEXT_STATUS[order.status] ?? [];
-  const outstanding = Number(order.grand_total) - Number(order.paid_total);
+  // Cancelling is its own right (business-rules.md §5.2): the status route
+  // refuses it to anyone without `sales.cancel`, so the button is not offered.
+  const transitions = (NEXT_STATUS[order.status] ?? []).filter(
+    (next) => next !== "CANCELLED" || can("sales.cancel"),
+  );
+  // An order that was cancelled, or whose goods came back, owes nothing.
+  const owesNothing = ["CANCELLED", "RETURNED", "REFUNDED"].includes(order.status);
+  const outstanding = owesNothing ? 0 : Number(order.grand_total) - Number(order.paid_total);
   const refundable = Number(order.paid_total) - Number(order.refunded_total);
 
   // Only this order's branch's accounts, of the kind the money is: the API
@@ -105,6 +111,9 @@ export function OrderActions({
     run("capture", () =>
       apiClient(`/orders/${order.id}/payments/`, {
         method: "POST",
+        // The same payment, however many times the button is pressed: the key
+        // changes only once the order's paid total has.
+        idempotencyKey: `payment-${order.id}-${order.paid_total}-${outstanding.toFixed(2)}`,
         body: {
           method: captureMethod,
           amount: outstanding.toFixed(2),
@@ -151,7 +160,10 @@ export function OrderActions({
                 variant={next === "CANCELLED" ? "destructive" : "primary"}
                 loading={busy === next}
                 onClick={() => {
-                  if (next === "CANCELLED" && !confirm("Cancel this order and release its stock?"))
+                  if (
+                    next === "CANCELLED" &&
+                    !confirm("Cancel this order, release its stock and refund what was paid?")
+                  )
                     return;
                   void changeStatus(next);
                 }}

@@ -188,6 +188,34 @@ def _notify_status(order: Order, to_status: str) -> None:
 
 
 @transaction.atomic
+def expire_reservation(*, order: Order) -> bool:
+    """Cancel an online order nobody paid for in time. False if it is no longer one.
+
+    The sweep that calls this chose the order from a list read without a lock,
+    and spends time on the orders ahead of it. So the question is asked again
+    here, with the row locked: an order confirmed in the meantime, or one that
+    now holds somebody's money, is left alone. `transition` asks only whether the move is
+    allowed -- and a confirmed order may be cancelled -- so on its own it
+    cancelled an order paid for while the sweep ran, the stock released, the
+    money taken and nothing refunding it (D233).
+    """
+    current = Order.objects.select_for_update().get(pk=order.pk)
+    if (
+        current.status != OrderStatus.PENDING
+        or current.stock_committed
+        or current.paid_total > current.refunded_total
+    ):
+        return False
+    transition(
+        order=current,
+        to_status=OrderStatus.CANCELLED,
+        reason="PAYMENT_TIMEOUT: reservation expired",
+        notify=False,
+    )
+    return True
+
+
+@transaction.atomic
 def cancel_order(*, order: Order, actor: Any = None, reason: str = "") -> Order:
     """Cancel and, if money was taken, refund it.  Never deletes the order."""
     from orders.services import payments as payment_services

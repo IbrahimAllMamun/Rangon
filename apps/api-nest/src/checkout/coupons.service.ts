@@ -190,6 +190,10 @@ export class CouponsService {
     }
     // Python's `min(discount, subtotal)` answers the first of two equal values.
     if (subtotal.lt(discount)) discount = subtotal;
+    // Never below nothing: a coupon saved with a cap under zero, before the
+    // form refused one, added the cap to the bill (D204). `max(x, ZERO)`
+    // answers `x` when the two are equal.
+    if (discount.lt(ZERO)) discount = ZERO;
     return { coupon, discount, freeShipping, eligibleSubtotal: eligible };
   }
 

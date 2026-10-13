@@ -298,7 +298,9 @@ export class JobHandlers {
   /**
    * `orders.tasks.release_expired_reservations`: cancel the unpaid online
    * orders past the reservation window and give their stock back. Cash on
-   * delivery is exempt -- confirmed when placed, it waits for no payment.
+   * delivery is exempt -- confirmed when placed, it waits for no payment --
+   * and so is an order that holds somebody's money -- paid more than it was
+   * refunded: it waits for staff (D246).
    * Each order is its own transaction, under its row lock; one that will not
    * cancel is logged and the sweep goes on.
    */
@@ -309,6 +311,7 @@ export class JobHandlers {
         WHERE (${O}."channel" = 'ONLINE'
           AND ${O}."placed_at" < clock_timestamp() - make_interval(mins => $1::int)
           AND ${O}."status" = 'PENDING' AND NOT ${O}."stock_committed"
+          AND ${O}."paid_total" <= (${O}."refunded_total")
           AND NOT (EXISTS(SELECT 1 AS "a" FROM "orders_payment" U1
                            WHERE (U1."method" = 'COD' AND U1."order_id" = (${O}."id")) LIMIT 1)))
         ORDER BY ${O}."placed_at" DESC`,
@@ -318,18 +321,12 @@ export class JobHandlers {
     for (const values of expired) {
       const id = values[ORDER_COLUMNS.indexOf('id')] as string;
       try {
-        await this.stock.run((tx, after: AfterCommit) =>
-          this.lifecycle.transition(
-            tx,
-            after,
-            NO_REQUEST,
-            id,
-            'CANCELLED',
-            'PAYMENT_TIMEOUT: reservation expired',
-            null,
-          ),
+        // The list was read without a lock; the service looks again under
+        // one, and says whether the order was still there to expire (D233).
+        const cancelled = await this.stock.run((tx, after: AfterCommit) =>
+          this.lifecycle.expireReservation(tx, after, NO_REQUEST, id),
         );
-        released += 1;
+        if (cancelled) released += 1;
       } catch (error) {
         const number = values[ORDER_COLUMNS.indexOf('number')] as string;
         this.logger.error(`Could not release reservation for order ${number}: ${String(error)}`);

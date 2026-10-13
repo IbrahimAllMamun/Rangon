@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import type { RequestUser } from '../auth/authentication';
+import { RolePermissions } from '../auth/permissions';
 import { NoticesService } from '../checkout/notices.service';
 import type { AuditContext } from '../common/audit';
 import { localIso } from '../common/datetime';
@@ -14,7 +15,7 @@ import {
   pkRelatedField,
   runSerializer,
 } from '../common/drf';
-import { Conflict, ValidationError } from '../common/errors';
+import { Conflict, PermissionDenied, ValidationError } from '../common/errors';
 import type { QueryDict } from '../common/query-dict';
 import { ENV, Env } from '../config/env';
 import { Database, Queryable } from '../database/database.service';
@@ -59,6 +60,7 @@ export class StaffOrderActions {
     private readonly stock: StockService,
     private readonly notices: NoticesService,
     private readonly jobs: Jobs,
+    private readonly permissions: RolePermissions,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -109,6 +111,15 @@ export class StaffOrderActions {
     );
     if (!validated.ok)
       throw new ValidationError('Invalid input.', { details: errorMessages(validated.errors) });
+    if (validated.values.to_status === 'CANCELLED') {
+      // Cancelling is its own right, and it refunds what was captured
+      // (business-rules section 5.2). This route once asked only for
+      // `orders.update_status` and moved the status: somebody who may not
+      // cancel could, and a paid order was left cancelled, the money kept (D166).
+      if (!(await this.permissions.has(user, 'sales.cancel'))) throw new PermissionDenied();
+      const order = await this.staffOrders.find(user, pk, query);
+      return this.cancelFound(order, validated.values.reason ?? '', user, context);
+    }
     const found = await this.staffOrders.find(user, pk, query);
     const moved = await this.stock.run((tx: Queryable, after: AfterCommit) =>
       this.lifecycle.transition(
@@ -141,7 +152,16 @@ export class StaffOrderActions {
   ) {
     const found = await this.staffOrders.find(user, pk, query);
     const given = dataGet(data(), 'reason');
-    const reason = given === undefined ? '' : given;
+    return this.cancelFound(found, given === undefined ? '' : given, user, context);
+  }
+
+  /** `cancel_order`, for the two routes that reach it: `cancel`, and `status` asked for CANCELLED. */
+  private async cancelFound(
+    found: StaffOrderRow,
+    reason: unknown,
+    user: RequestUser,
+    context: AuditContext,
+  ) {
     if (!CANCELLABLE.has(found.status))
       throw new Conflict(`An order in status ${found.status} cannot be cancelled.`);
     const actor = { id: user.id, email: user.email };
@@ -177,16 +197,16 @@ export class StaffOrderActions {
   }
 
   /**
-   * `payments`: money actually received. A pending payment of the same
-   * method and amount is captured -- its account set first, on its own, when
-   * the body names one -- and anything else is recorded as a new captured
-   * payment. Nothing compares it with what the order still owes.
+   * `payments`: money actually received, keyed by the `Idempotency-Key`
+   * header. The whole of it is `receive_payment`, one transaction under the
+   * order's lock.
    */
   async recordPayment(
     user: RequestUser,
     pk: string,
     query: QueryDict,
     data: unknown,
+    idempotencyKey: string | null,
     context: AuditContext,
   ) {
     const validated = await runSerializer<{
@@ -207,55 +227,21 @@ export class StaffOrderActions {
       throw new ValidationError('Invalid input.', { details: errorMessages(validated.errors) });
     const paid = validated.values;
     const found = await this.staffOrders.find(user, pk, query);
-    const actor = { id: user.id, email: user.email };
-
-    const pending = await this.db.one<{ id: string; amount: string }>(
-      `SELECT "id", "amount" FROM "orders_payment"
-        WHERE ("orders_payment"."method" = $2 AND "orders_payment"."order_id" = $1
-               AND "orders_payment"."status" = 'PENDING')
-        ORDER BY "orders_payment"."created_at" ASC LIMIT 1`,
-      [found.id, paid.method],
+    await this.stock.run((tx: Queryable) =>
+      this.payments.receive(
+        tx,
+        context,
+        found.id,
+        {
+          method: paid.method,
+          amount: new Dec(paid.amount),
+          reference: paid.reference ?? '',
+          accountId: paid.account ?? null,
+          idempotencyKey,
+        },
+        { id: user.id, email: user.email },
+      ),
     );
-    if (pending && new Dec(pending.amount).eq(paid.amount)) {
-      // The account is chosen at capture, because that is when the money arrives.
-      if (paid.account !== null && paid.account !== undefined) {
-        await this.db.query(
-          `UPDATE "orders_payment" SET "updated_at" = clock_timestamp(), "account_id" = $2
-            WHERE "orders_payment"."id" = $1`,
-          [pending.id, paid.account],
-        );
-      }
-      await this.stock.run((tx: Queryable) =>
-        this.payments.capture(tx, context, pending.id, { actor }),
-      );
-    } else {
-      const branch = (await this.db.one<{ code: string }>(
-        `SELECT "code" FROM "accounts_branch" WHERE "id" = $1`,
-        [found.branch_id],
-      )) as { code: string };
-      await this.stock.run((tx: Queryable) =>
-        this.payments.recordCaptured(
-          tx,
-          context,
-          {
-            id: found.id,
-            number: found.number,
-            branchId: found.branch_id,
-            currency: found.currency,
-            grandTotal: found.grand_total,
-            branchCode: branch.code,
-          },
-          {
-            method: paid.method,
-            amount: new Dec(paid.amount),
-            tenderedAmount: null,
-            reference: paid.reference ?? '',
-            accountId: paid.account ?? null,
-          },
-          actor,
-        ),
-      );
-    }
     return this.answer(found.id);
   }
 

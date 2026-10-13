@@ -11,6 +11,7 @@ from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
+from django.db.models import F
 from django.utils import timezone
 
 logger = logging.getLogger("rangon.orders")
@@ -24,7 +25,7 @@ def release_expired_reservations() -> str:
     for a payment (docs/business-rules.md §1.5).
     """
     from orders.models import Channel, Order, OrderStatus, PaymentMethod
-    from orders.services.lifecycle import transition
+    from orders.services.lifecycle import expire_reservation
 
     cutoff = timezone.now() - timedelta(minutes=int(settings.RANGON["RESERVATION_MINUTES"]))
     expired = (
@@ -33,6 +34,10 @@ def release_expired_reservations() -> str:
             status=OrderStatus.PENDING,
             placed_at__lt=cutoff,
             stock_committed=False,
+            # "Awaiting prepayment" (§1.5): an order that holds somebody's
+            # money is waiting for staff, not for the customer (D246). One
+            # paid and refunded in full holds nobody's, and does expire.
+            paid_total__lte=F("refunded_total"),
         )
         .exclude(payments__method=PaymentMethod.COD)
         .distinct()
@@ -41,13 +46,10 @@ def release_expired_reservations() -> str:
     released = 0
     for order in expired:
         try:
-            transition(
-                order=order,
-                to_status=OrderStatus.CANCELLED,
-                reason="PAYMENT_TIMEOUT: reservation expired",
-                notify=False,
-            )
-            released += 1
+            # The list was read without a lock; the service looks again under
+            # one, and says whether the order was still there to expire (D233).
+            if expire_reservation(order=order):
+                released += 1
         except Exception:  # one bad order must not stop the sweep
             logger.exception("Could not release reservation for order %s", order.number)
 

@@ -624,6 +624,21 @@ class CreateReturnSerializer(serializers.Serializer):
     customer_comment = serializers.CharField(required=False, allow_blank=True)
 
 
+class PosReturnSerializer(CreateReturnSerializer):
+    """A return taken at the counter: the request, and how the money goes back."""
+
+    #: A choice, as on `CompleteReturnSerializer`. The view passed whatever
+    #: arrived straight to the refund: "BITCOIN" was paid out of no account,
+    #: and a number or a list was stored as Python prints it (D158). Blank
+    #: still means "the way the money came in"; omitted is cash.
+    refund_method = serializers.ChoiceField(
+        choices=PaymentMethod.choices,
+        required=False,
+        allow_blank=True,
+        default=PaymentMethod.CASH,
+    )
+
+
 class RecordPaymentSerializer(serializers.Serializer):
     method = serializers.ChoiceField(choices=PaymentMethod.choices)
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0)

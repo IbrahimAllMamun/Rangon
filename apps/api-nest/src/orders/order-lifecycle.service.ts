@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { CouponsService } from '../checkout/coupons.service';
 import type { AuditActor, AuditContext } from '../common/audit';
+import { Dec } from '../common/decimal';
 import { Conflict } from '../common/errors';
 import { pySlice, pyStr } from '../common/python';
 import type { Queryable } from '../database/database.service';
@@ -49,6 +50,51 @@ export class OrderLifecycle {
     private readonly stock: StockService,
     private readonly coupons: CouponsService,
   ) {}
+
+  /**
+   * `expire_reservation`: cancel an online order nobody paid for in time --
+   * false if it is no longer one. The sweep chose the order from a list read
+   * without a lock, and spends time on the orders ahead of it, so the
+   * question is asked again here with the row locked: an order confirmed in
+   * the meantime, or one that now holds somebody's money, is left alone.
+   * `transition` asks only
+   * whether the move is allowed, and a confirmed order may be cancelled
+   * (D233).
+   */
+  async expireReservation(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    orderId: string,
+  ): Promise<boolean> {
+    type Current = {
+      status: string;
+      stock_committed: boolean;
+      paid_total: string;
+      refunded_total: string;
+    };
+    const current = (await tx.one<Current>(
+      `SELECT "status", "stock_committed", "paid_total", "refunded_total" FROM "orders_order"
+        WHERE "orders_order"."id" = $1 LIMIT 21 FOR UPDATE`,
+      [orderId],
+    )) as Current;
+    if (
+      current.status !== 'PENDING' ||
+      current.stock_committed ||
+      new Dec(current.paid_total).gt(current.refunded_total)
+    )
+      return false;
+    await this.transition(
+      tx,
+      after,
+      context,
+      orderId,
+      'CANCELLED',
+      'PAYMENT_TIMEOUT: reservation expired',
+      null,
+    );
+    return true;
+  }
 
   async transition(
     tx: Queryable,

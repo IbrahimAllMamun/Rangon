@@ -283,7 +283,8 @@ step 1's recording is frozen, sort them into: fix now in both (the comparison st
 in Nest after the recording (the expectation changes with the fix); leave. The ones worth the
 owner's attention first, from `nest-port-instructions.md` §11: D221, D233, D166, D149, D158,
 D164, D167, D204, D207, D222 -- and D238 and D241, which are about configuration rather than
-rules. The sorting is in ADR-0020, "The copied defects".
+rules. The sorting is in ADR-0020, "The copied defects"; its first row -- D166, D167, D149, D233,
+D158, D204 and D221's lock -- was fixed in both APIs on 2026-10-13.
 
 ## Order, and what can be skipped
 

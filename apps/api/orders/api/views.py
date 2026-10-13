@@ -7,6 +7,7 @@ from typing import Any
 from django.db.models import Q
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -29,7 +30,7 @@ from orders.api.serializers import (
     ReturnRequestSerializer,
     StatusChangeSerializer,
 )
-from orders.models import AbandonedCheckout, Order, ReturnRequest
+from orders.models import AbandonedCheckout, Order, OrderStatus, ReturnRequest
 from orders.services import leads
 from orders.services import lifecycle as lifecycle_services
 from orders.services import payments as payment_services
@@ -87,12 +88,22 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
     def status(self, request: AuthedRequest, pk: str | None = None) -> Response:
         serializer = StatusChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        order = lifecycle_services.transition(
-            order=self.get_object(),
-            to_status=serializer.validated_data["to_status"],
-            actor=request.user,
-            reason=serializer.validated_data.get("reason", ""),
-        )
+        to_status = serializer.validated_data["to_status"]
+        reason = serializer.validated_data.get("reason", "")
+        if to_status == OrderStatus.CANCELLED:
+            # Cancelling is its own right, and it refunds what was captured
+            # (§5.2). This route asked only for `orders.update_status` and
+            # moved the status: somebody who may not cancel could, and a paid
+            # order was left cancelled with the money kept (D166).
+            if not request.user.has_perm_code("sales.cancel"):
+                raise PermissionDenied()
+            order = lifecycle_services.cancel_order(
+                order=self.get_object(), actor=request.user, reason=reason
+            )
+        else:
+            order = lifecycle_services.transition(
+                order=self.get_object(), to_status=to_status, actor=request.user, reason=reason
+            )
         return Response(OrderDetailSerializer(order).data)
 
     @action(detail=True, methods=["post"])
@@ -115,26 +126,15 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         serializer = RecordPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        order = self.get_object()
-
-        pending = order.payments.filter(method=data["method"], status="PENDING").first()
-        if pending is not None and pending.amount == data["amount"]:
-            # The account is chosen at capture, because that is when the money
-            # actually arrives — a COD order's cash lands when the courier
-            # remits, not when the order was placed.
-            if data.get("account") is not None:
-                pending.account = data["account"]
-                pending.save(update_fields=["account", "updated_at"])
-            payment = payment_services.capture_payment(payment=pending, actor=request.user)
-        else:
-            payment = payment_services.record_payment(
-                order=order,
-                method=data["method"],
-                amount=data["amount"],
-                actor=request.user,
-                reference=data.get("reference", ""),
-                account=data.get("account"),
-            )
+        payment = payment_services.receive_payment(
+            order=self.get_object(),
+            method=data["method"],
+            amount=data["amount"],
+            actor=request.user,
+            reference=data.get("reference", ""),
+            account=data.get("account"),
+            idempotency_key=request.headers.get("Idempotency-Key"),
+        )
         return Response(OrderDetailSerializer(payment.order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
