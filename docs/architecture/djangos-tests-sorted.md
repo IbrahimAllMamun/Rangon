@@ -388,10 +388,11 @@ with no slug -- in both APIs alike.
 Of step 1.6, nothing: every function of Django's rule code that a request can reach is
 reached by a case. Two things beside it:
 
-- **The empty shop is compared with Django, and not yet recorded.** The proof that needs no
-  Django ([recorded-proof.md](recorded-proof.md)) holds the seeded shop's answers. Before
-  Django stops being compared with, the empty shop's 174 answers want recording too: two
-  snapshots, one per stage.
+- **The empty shop is recorded too** (2026-10-14). `empty` keeps a snapshot and the Nest
+  API's answers at each moment, and `scripts/nest-parity.sh replay-empty` holds the API to all
+  174 on the stack that has no Django in it ([recorded-proof.md](recorded-proof.md)). So the
+  three functions above are held by the proof that outlives Django, not only by the one that
+  needs it.
 - **What this measurement cannot say** (above) is unchanged: the arithmetic rests on compared
   values; the rate limits were not measured.
 

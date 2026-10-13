@@ -190,7 +190,10 @@ export async function emptyShopCases(stage: Stage): Promise<Case[]> {
     authorization: `Bearer ${token(owner, { exp: Math.floor(Date.now() / 1000) + 3600 })}`,
   };
   const json = { 'content-type': 'application/json' };
-  const blank = mintedBlanker(new Set(everyId), Date.now() - 60_000);
+  // What an API mints is told from what was there by being newer than this
+  // run. The owner and the store were made a minute or so ago, by the script:
+  // near enough that the usual minute of margin would take them for minted.
+  const blank = mintedBlanker(new Set(everyId), Date.now() - 2_000);
   const cases: Case[] = [];
   const read = (name: string, path: string, headers: Record<string, string> = {}) =>
     cases.push({ name: `${stage} shop: ${name}`, path, headers, flushCache: true });
@@ -216,8 +219,18 @@ export async function emptyShopCases(stage: Stage): Promise<Case[]> {
   // --- What anyone can ask ---------------------------------------------------------
   read('the health check', '/api/health/');
   read('the readiness probe', '/api/ready/');
-  for (const path of SHOP) read(`a visitor, ${path}`, `/api/v1/shop/${path}`);
-  read('a visitor, a product that is not there', '/api/v1/shop/products/first-day-shirt/');
+  // Put back after each: asking for shipping options makes the visitor a
+  // cart, and a recording, which asks two APIs, would hold one cart more than
+  // its replay, which asks one.
+  for (const path of [...SHOP, 'products/first-day-shirt/']) {
+    cases.push({
+      name: `${stage} shop: a visitor, ${path}`,
+      path: `/api/v1/shop/${path}`,
+      flushCache: true,
+      reset: (client) => restoreTables(client, SHOP_TABLES),
+      effects: SHOP_EFFECTS,
+    });
+  }
   // A cart is made for whoever asks, at the default branch -- if there is one.
   cases.push({
     name: `${stage} shop: a visitor's cart`,

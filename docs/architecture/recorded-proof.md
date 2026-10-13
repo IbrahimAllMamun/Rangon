@@ -62,6 +62,25 @@ What `record` leaves, in `apps/api-nest/parity/recorded/` (untracked):
 | `ties.jsonl.gz` | written by `PARITY_TIES=mark scripts/nest-parity.sh replay`: where tied rows may change places ([Tied rows](#tied-rows)) |
 | `made.txt` | the commit and the moment |
 
+**The shop with nothing in it** is recorded and replayed the same way, by commands of its own,
+because it is another database ([djangos-tests-sorted.md](djangos-tests-sorted.md), "The shop
+with nothing in it"):
+
+```bash
+scripts/nest-parity.sh empty
+```
+
+```bash
+scripts/nest-parity.sh replay-empty
+```
+
+`empty` compares the two APIs on a new installation at its two moments -- migrated with one
+owner, then with the store bootstrapped -- and keeps, for each, a snapshot and the Nest API's
+answers in `recorded/empty/unopened/` and `recorded/empty/opened/`. The second moment is built
+on a restore of the first's snapshot, not on what the first's cases left. `replay-empty`
+restores each snapshot in turn into the stack that has no Django in it and holds the API to
+its 87 answers. It runs no races, worker or rate limits: the seeded shop's replay has those.
+
 ## How it is built
 
 - **One harness, three modes** (`PARITY_MODE`: `compare`, `record`, `replay`;
@@ -332,11 +351,12 @@ on the port's unit tests, not on this.
 
 ## What is not in it yet
 
-1. **The empty shop, recorded.** `scripts/nest-parity.sh empty` compares the two APIs on a
-   shop with nothing in it, at two stages, 174 answers
-   ([djangos-tests-sorted.md](djangos-tests-sorted.md), "The shop with nothing in it"). That
-   comparison needs Django. Before Django stops being compared with, those answers want
-   recording as the seeded shop's are: two snapshots, one per stage.
+1. ~~The empty shop, recorded.~~ Done on 2026-10-14: `empty` keeps a snapshot and the answers
+   at each of its two moments, and `replay-empty` holds the Nest API to all 174 with no
+   Django. One thing it showed: a recording asks two APIs and a replay one, so a *read* that
+   writes -- asking for shipping options makes the visitor a cart -- left one row more in the
+   recording. The empty shop's visitor reads put their tables back now. The seeded shop's
+   cases never counted carts, which is why it had not shown there.
 2. ~~D243 to D245.~~ Fixed in Django on 2026-10-12 and in the NestJS API on 2026-10-13; a
    replay is strict since ([Tied rows](#tied-rows)).
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its
