@@ -35,6 +35,12 @@ class CouponSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "used_count", "created_at"]
+        # A cap below zero raised the price, and a minimum below zero says
+        # nothing (D204). The model takes any decimal; the form does not.
+        extra_kwargs = {
+            "minimum_order_value": {"min_value": Decimal("0.00")},
+            "maximum_discount": {"min_value": Decimal("0.00")},
+        }
 
     def validate_channels(self, value: Any) -> list[str]:
         """Where the coupon can be spent: the online shop, the counter, or both.

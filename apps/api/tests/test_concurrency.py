@@ -882,3 +882,185 @@ def test_two_simultaneous_pos_sales_with_one_key_sell_once(last_unit):
     assert len({order.pk for order in results}) == 1
     assert Order.objects.count() == 1
     assert Inventory.objects.get(branch=branch, variant=variant).on_hand == 0
+
+
+# ---------------------------------------------------------------------------
+# The guards ADR-0020 put first (D167, D221, D233)
+#
+# Each was a check and then a write with nothing held between the two. The
+# sequential tests are in tests/test_guards_before_django_goes.py; these are
+# the same rules with the requests arriving together.
+# ---------------------------------------------------------------------------
+
+
+def _cod_order(shop: dict):
+    """A delivered cash-on-delivery order, 1000.00 waiting on the courier."""
+    factories.account(shop["branch"], kind=AccountKind.CASH, opening_balance="0.00")
+    order = factories.order(shop, status="DELIVERED")
+    payment_services.record_payment(
+        order=order,
+        method=PaymentMethod.COD,
+        amount=Decimal("1000.00"),
+        status=PaymentState.PENDING,
+    )
+    return order
+
+
+def test_one_remittance_recorded_four_times_at_once_is_one_payment():
+    """No key at all: what is owed is the guard, read under the order's lock (D167)."""
+    shop = factories.full_shop()
+    order = _cod_order(shop)
+
+    def remit(index: int):
+        return payment_services.receive_payment(
+            order=Order.objects.get(pk=order.pk),
+            method=PaymentMethod.COD,
+            amount=Decimal("1000.00"),
+            actor=shop["manager"],
+        )
+
+    results, errors = run_together(remit, 4)
+
+    assert len(results) == 1, (results, errors)
+    assert all(isinstance(error, PaymentExceedsOutstanding) for error in errors), errors
+    order.refresh_from_db()
+    assert order.paid_total == Decimal("1000.00")
+    assert order.payments.count() == 1
+
+
+def test_one_payment_request_sent_four_times_at_once_is_answered_four_times():
+    """With a key, every copy of the request gets the payment the first made (D167)."""
+    shop = factories.full_shop()
+    factories.account(shop["branch"], kind=AccountKind.CASH, opening_balance="0.00")
+    order = factories.order(shop, status="CONFIRMED")
+
+    def pay(index: int):
+        return payment_services.receive_payment(
+            order=Order.objects.get(pk=order.pk),
+            method=PaymentMethod.CASH,
+            amount=Decimal("400.00"),
+            actor=shop["manager"],
+            idempotency_key="race-payment",
+        )
+
+    results, errors = run_together(pay, 4)
+
+    assert errors == [], [repr(e) for e in errors]
+    assert len({payment.pk for payment in results}) == 1
+    order.refresh_from_db()
+    assert order.paid_total == Decimal("400.00")
+
+
+def test_the_last_two_owners_cannot_both_be_switched_off_at_once():
+    """Each request counted the other owner, and both went ahead (D221)."""
+    from accounts import services as account_services
+    from accounts.models import RoleCode, Status, User
+    from core.exceptions import ValidationError
+
+    shop = factories.full_shop()
+    owners = [shop["owner"], factories.user(RoleCode.OWNER, branch_obj=shop["branch"])]
+    admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
+
+    def switch_off(index: int):
+        return account_services.deactivate_user(
+            user=User.objects.get(pk=owners[index].pk), actor=admin
+        )
+
+    results, errors = run_together(switch_off, 2)
+
+    assert len(results) == 1, (results, errors)
+    assert len(errors) == 1 and isinstance(errors[0], ValidationError), errors
+    active = User.objects.filter(role__code=RoleCode.OWNER, status=Status.ACTIVE)
+    assert active.count() == 1
+
+
+def test_one_owner_demoted_while_the_other_is_switched_off_leaves_an_owner():
+    """The two routes to losing an owner take the same lock (D221)."""
+    from accounts import services as account_services
+    from accounts.models import RoleCode, Status, User
+
+    shop = factories.full_shop()
+    second = factories.user(RoleCode.OWNER, branch_obj=shop["branch"])
+    admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
+
+    def lose(index: int):
+        if index == 0:
+            return account_services.deactivate_user(
+                user=User.objects.get(pk=shop["owner"].pk), actor=admin
+            )
+        return account_services.update_staff_user(
+            user=User.objects.get(pk=second.pk), actor=admin, role_code=RoleCode.MANAGER
+        )
+
+    results, errors = run_together(lose, 2)
+
+    assert len(results) == 1 and len(errors) == 1, (results, errors)
+    assert User.objects.filter(role__code=RoleCode.OWNER, status=Status.ACTIVE).count() == 1
+
+
+def test_the_sweep_leaves_an_order_confirmed_while_it_waited(monkeypatch):
+    """The sweep lists, then locks; the order is confirmed in between (D233).
+
+    Forced, not hoped for: the confirmation holds the order's row with its
+    write uncommitted until the sweep has listed the order -- still PENDING to
+    every other transaction -- and reached the lock.
+    """
+    from datetime import timedelta
+
+    from orders.models import OrderStatus
+    from orders.services import lifecycle
+    from orders.tasks import release_expired_reservations
+
+    shop = factories.full_shop()
+    order = factories.order(shop, status=OrderStatus.PENDING)
+    Order.objects.filter(pk=order.pk).update(placed_at=shop["now"] - timedelta(hours=3))
+    confirmed = threading.Event()
+    release = threading.Event()
+    real_log_event = lifecycle.log_event
+    outcomes: dict = {}
+
+    def held_log_event(*args, **kwargs):
+        # Only the confirming thread is held; the sweep logs events of its own
+        # if it ever (wrongly) gets as far as cancelling.
+        if threading.current_thread().name == "confirm":
+            confirmed.set()
+            release.wait(timeout=10)
+        return real_log_event(*args, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "log_event", held_log_event)
+
+    def confirm() -> None:
+        try:
+            lifecycle.transition(
+                order=Order.objects.get(pk=order.pk), to_status=OrderStatus.CONFIRMED
+            )
+            outcomes["confirm"] = "ok"
+        except Exception as exc:
+            outcomes["confirm"] = exc
+        finally:
+            connections.close_all()
+
+    def sweep() -> None:
+        confirmed.wait(timeout=10)
+        try:
+            outcomes["sweep"] = release_expired_reservations()
+        except Exception as exc:
+            outcomes["sweep"] = exc
+        finally:
+            connections.close_all()
+
+    threads = [
+        threading.Thread(target=confirm, name="confirm"),
+        threading.Thread(target=sweep, name="sweep"),
+    ]
+    for thread in threads:
+        thread.start()
+    confirmed.wait(timeout=10)
+    time.sleep(0.5)  # the sweep lists the order, then blocks on its row
+    release.set()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert outcomes == {"confirm": "ok", "sweep": "released:0"}, outcomes
+    order.refresh_from_db()
+    assert order.status == OrderStatus.CONFIRMED

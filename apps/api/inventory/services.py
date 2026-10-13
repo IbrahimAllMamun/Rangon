@@ -580,9 +580,15 @@ def _bulk(
     sign = TRANSACTION_SIGN[transaction_type]
     entries: list[InventoryTransaction] = []
 
-    # Validate every line before writing any, so a partial batch is impossible.
+    # Validate before writing any line, so a partial batch is impossible -- and
+    # validate what each *variant* is asked for, not each line. A SKU on two
+    # lines was checked twice against the same shelf and then taken twice: 3
+    # and 3 from a shelf of 5 left -1 on hand (D149).
+    asked: dict[str, int] = {}
     for variant_id, quantity in materialised:
-        inventory = inventories[str(variant_id)]
+        asked[str(variant_id)] = asked.get(str(variant_id), 0) + quantity
+    for key, quantity in asked.items():
+        inventory = inventories[key]
         if transaction_type in RESERVATION_AFFECTING:
             if sign > 0:
                 _check_can_reserve(inventory, quantity, allow_negative=False)

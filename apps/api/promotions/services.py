@@ -109,7 +109,10 @@ def validate_coupon(
     if coupon.maximum_discount is not None and discount > coupon.maximum_discount:
         discount = quantize(coupon.maximum_discount)
 
-    discount = min(discount, subtotal)
+    # Never below nothing. The form refuses a cap under zero now, but a coupon
+    # saved before it did still carries one, and every discount is larger than
+    # a negative cap: capped at -100.00 it added 100.00 to the bill (D204).
+    discount = max(min(discount, subtotal), ZERO)
 
     return CouponResult(
         coupon=coupon,
