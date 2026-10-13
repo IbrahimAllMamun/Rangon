@@ -495,6 +495,54 @@ is still open and tracked in
 
 ## Verification log
 
+### Django's tests sorted by what they reach, and the first of them ported, 2026-10-13
+
+Asked for: "do item 1 then item 3" -- item 3 being step 1.6 of
+[the removal plan](architecture/django-removal-plan.md): sort Django's own tests, and port
+what no parity case reaches. Branch `feat/djangos-tests-sorted-and-ported`, on top of the
+entry below. The result is [djangos-tests-sorted.md](architecture/djangos-tests-sorted.md).
+
+```text
+Django's suite, one coverage context per test ............... 1,812 tests; 10,234 of 10,957 statements of rule code
+a whole comparison with Django under coverage ............... 12,243 cases, 221 races; 10,476 statements
+only the tests reach ........................................ 174 statements, 73 branches, 84 functions
+  a request can reach it ..................................... 36 functions (127 tests)
+  second doors, settings, no caller, Django's own, a race ... 48 functions (453 tests)
+tests that run nothing a case does not ...................... 1,232
+cases added ................................................. 20, in five case files; both APIs agree on all of them
+measured again with them .................................... 12,263 of 12,263 match, 221 races; 144 statements, 62 branches, 73 functions
+harness: tsc / eslint / prettier ............................ clean
+```
+
+**The comparison reaches more of Django than Django's tests do.** That was not known. What
+the tests alone reach is small, and most of it is not something the port could lack: a
+service's own check behind a serializer that has already refused; a setting the parity
+stack runs with one value of; a helper nothing in the API calls.
+
+**What is ported.** Twelve of the 36 functions a request can reach have cases now: a key
+another order's payment holds, the readiness probe, a single version with sizes chosen, a
+value variants carry, an unused attribute that stops defining variants, the rest of the
+Bengali transliteration, and the storefront's fallbacks (the organisation switched off, no
+address, no page published, no banner). All 20 cases agreed.
+
+**What is not.** 24 functions, listed in the document with what each needs: fixture rows,
+the import run twice, writes with prepared state, and `me` for an account with no branch.
+None is known to differ; none is known to agree. Step 1.6 is not finished until they are.
+
+**Found on the way.** A case named "delete value with variants" deleted a value no variant
+carries, so the refusal it was named for was never compared. And `GET /api/ready/` had
+never been asked, only `OPTIONS`.
+
+**Limits, stated in the document.** Coverage says a case runs the line, not that it asserts
+what the test asserts; the arithmetic rests on compared values, not on this. The 17
+rate-limit scenarios run on a stack that was not measured. The second doors were read
+against their serializers for finance, inventory, VAT and the counter's discount, and taken
+from the test's name for the rest. `run.sh tests` and `run.sh diff` were run as committed;
+`run.sh parity` was run from the scratch script it was copied from, not from the file itself.
+
+Not pushed; no pull request. No record-and-replay was run for this branch: it adds cases
+and changes no API, and CI records them.
+
 ### The recorded proof on GitHub, second run: the clock holds, and one more answer that depended on row order, 2026-10-13
 
 Asked for: "do item 1" -- confirm that `main`'s parity job goes green after PR #94 and PR #95.

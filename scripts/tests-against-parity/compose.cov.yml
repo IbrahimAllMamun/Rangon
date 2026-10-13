@@ -1,0 +1,15 @@
+# Overlay for docker-compose.nest.yml: Django under coverage while the parity
+# harness drives it (scripts/tests-against-parity/run.sh). One worker, so one
+# coverage file; a long stop, so the worker can write it.
+services:
+  django:
+    volumes:
+      - ./scripts/tests-against-parity:/cov:ro
+      - ${COVERAGE_DATA:-./apps/api-nest/parity/recorded/coverage}:/covdata
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        exec gunicorn config.wsgi:application -c /cov/gunicorn_cov.py
+    stop_grace_period: 90s

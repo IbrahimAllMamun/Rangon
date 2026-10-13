@@ -325,6 +325,12 @@ export async function productCases(): Promise<Case[]> {
     selections: { size: ['S'] },
   });
   write('generate, no selections', 'POST', generate('parity-empty'), { price: '1' });
+  // Django's test reached this refusal and no case did (recorded-proof.md).
+  write('generate a single version with sizes chosen', 'POST', generate('parity-empty'), {
+    price: '1',
+    single: true,
+    selections: { size: ['S'] },
+  });
   write('generate, an unknown attribute', 'POST', generate('parity-empty'), {
     price: '1',
     selections: { "sh'ape": ['A'] },

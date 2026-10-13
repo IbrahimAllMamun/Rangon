@@ -302,40 +302,38 @@ where the comparison's take ten: Django was the slower half.
 
 ## Django's other tests
 
-The plan's step 1.6 sorts Django's 1,514 tests (87 files) into three: covered by a parity case
-already; a service-level invariant no case reaches, to be ported as a Nest test against a real
-database; and Django-only, which goes with the thing it tests. **This is sorted by file, not
-yet by test, and only the concurrency tests are done.** It is most of what is left of step 1.
+The plan's step 1.6 sorts Django's tests into three: covered by a parity case already; an
+invariant no case reaches, to be ported; and Django-only, which goes with the thing it tests.
+**They are sorted, by test, from a measurement** (2026-10-13):
+[djangos-tests-sorted.md](djangos-tests-sorted.md).
 
-| Kind | Files | Tests | What becomes of them | State |
-|---|---|---|---|---|
-| Concurrency (`tests/test_concurrency.py`) | 1 | 28 | each stood for by a race check, on two Nest processes | **done** (above) |
-| Through the API (`tests/api/`) | 56 | 917 | the port wrote "a case per branch" for each of these areas, compared with Django; a test is covered when a case sends what it sends | to be confirmed test by test |
-| Services called directly (`tests/test_*.py`) | 19 | 454 | the invariants: the ledger, costing, the cash book, VAT, discounts, the party ledger, the reports' arithmetic. Reached over HTTP by cases in most places; where a test arranges what no request can, a Nest test against a real database | not started |
-| Pure logic (`tests/unit/`) | 4 | 73 | pricing, phone numbers, slugs, the site-content rules: the port's unit tests hold values Django printed for the same functions | to be confirmed test by test |
-| Django-only | 7 | 47 | the label-mark migration; `migrate` keeping the roles in step (becomes the test of `sync-permissions`, plan step 4); the seed's guard and its reset (go with the seed, plan step 2); the psycopg adapter; the query budgets, whose idea ports and whose ORM counts do not | go with what they test |
+Django's suite was run with one coverage context per test, a whole parity comparison was run
+with Django under coverage, and the second was subtracted from the first.
 
-The counts are the plan's, of 2026-10-08, but for the concurrency row. Two files have been added
-to the services row since, each written with a fix made in both APIs and each compared case by
-case when it was: `tests/test_one_order.py` (D243 to D245) and
-`tests/test_guards_before_django_goes.py` (the guards ADR-0020 put first). pytest collects 1,811
-today.
+```text
+rule code ................................... 10,957 statements
+reached by Django's tests ................... 10,234
+reached by the comparison ................... 10,476, and 10,508 with the cases added since
+only the tests reach ........................ 174 statements and 73 branches in 84 functions; 144, 62 and 73 after
+tests that run nothing a case does not ...... 1,232 of 1,812
+tests reaching what a request can reach ..... 127: 51 closed by 20 new cases, 76 still to port (24 functions)
+the rest .................................... second doors behind a serializer, settings, helpers nothing calls, Django's own machinery
+```
 
-**How to sort the 1,444 in the middle without reading each against 12,243 cases:** by what
-they execute. Run Django's suite with branch coverage and one context per test
-(`pytest --cov --cov-branch --cov-context=test`); run a whole parity comparison with Django
-under coverage; then every line and branch of the apps' code that the tests reach and the
-comparison never does is, with the tests that reach it, exactly the list of "an invariant no
-case reaches". A test none of whose lines is the tests' alone stands on code a case already
-exercises. Coverage is a coarse sieve -- the same line with another number in it is the same
-line -- so the arithmetic (pricing, VAT, costing) still wants its values compared, as the
-port's unit tests do. The two runs and the script that subtracts them were prepared on
-2026-10-09 and not run: the machine could not hold them beside the replays.
+The comparison reaches more of Django's rule code than Django's own tests do. What is left to
+port is a list of 24 functions with what a case would have to send to each, in that document.
+The 20 cases added agreed in both APIs: branches of the port that nothing had compared.
+
+Coverage is a coarse sieve -- the same line with another number in it is the same line -- so
+the arithmetic (pricing, VAT, costing) still rests on the values the comparison compares and
+on the port's unit tests, not on this.
 
 ## What is not in it yet
 
-1. **Django's tests, sorted and ported** (above). Until it is done, removing Django removes
-   assertions nothing else makes.
+1. **The 24 functions a request can reach and no case does**
+   ([djangos-tests-sorted.md](djangos-tests-sorted.md), "What is left to port"). Django's
+   tests are sorted; 12 such functions were closed with cases on 2026-10-13; these remain.
+   Until they are done, removing Django removes the only thing that exercises them.
 2. ~~D243 to D245.~~ Fixed in Django on 2026-10-12 and in the NestJS API on 2026-10-13; a
    replay is strict since ([Tied rows](#tied-rows)).
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its

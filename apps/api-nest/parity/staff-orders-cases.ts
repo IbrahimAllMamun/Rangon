@@ -633,6 +633,36 @@ export async function staffOrdersCases(): Promise<Case[]> {
       headers: { 'idempotency-key': 'parity-payment-key' },
     },
   );
+  // What a key already names: this order's payment is the answer again, and
+  // another order's is a refusal (`_replayed`). Django's tests reached the
+  // second and no case did (recorded-proof.md, "Django's other tests").
+  write(
+    'payment: with an Idempotency-Key a payment of this order holds',
+    one(S(1), 'payments'),
+    pay('COD', '5790.00'),
+    'manager',
+    {
+      headers: { 'idempotency-key': 'parity-payment-held' },
+      prepare: after(
+        `UPDATE orders_payment SET idempotency_key = 'parity-payment-held'
+          WHERE order_id = (SELECT id FROM orders_order WHERE number = 'RGN-PARITY-S01')`,
+      ),
+    },
+  );
+  write(
+    "payment: with an Idempotency-Key another order's payment holds",
+    one(S(1), 'payments'),
+    pay('COD', '5790.00'),
+    'manager',
+    {
+      headers: { 'idempotency-key': 'parity-payment-elsewhere' },
+      prepare: after(
+        `UPDATE orders_payment SET idempotency_key = 'parity-payment-elsewhere'
+          WHERE id = (SELECT p.id FROM orders_payment p JOIN orders_order o ON o.id = p.order_id
+                       WHERE o.number = 'RGN-PARITY-S02' ORDER BY p.created_at, p.id LIMIT 1)`,
+      ),
+    },
+  );
 
   // === Refunds ===============================================================================
   const back = (amount: unknown, extra: Record<string, unknown> = {}) => ({ amount, ...extra });

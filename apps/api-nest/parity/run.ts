@@ -357,6 +357,8 @@ async function buildCases(): Promise<Case[]> {
     add(`health: ${method}, no CSRF cookie`, '/api/health/', { method });
   }
   add('ready: OPTIONS', '/api/ready/', { method: 'OPTIONS' });
+  // The readiness probe itself: no case had asked it, only Django's own test.
+  add('ready: the database and the cache answer', '/api/ready/');
   add('health: an untrusted Origin', '/api/health/', {
     method: 'POST',
     headers: { origin: 'https://evil.example' },
@@ -788,6 +790,71 @@ async function buildCases(): Promise<Case[]> {
     ],
   });
   add('site', '/api/v1/shop/site/');
+  // With the organisation switched off -- an edit can do it (D225) -- what the
+  // storefront reads from it falls back: the contact details to blanks, the
+  // VAT to the configured default. Django's tests reached those fallbacks on
+  // a database with no organisation at all; no case had. The cache is emptied
+  // before each, and after the last, so no later case reads these answers.
+  for (const [what, path] of [
+    ['home', '/api/v1/shop/home/'],
+    ['navigation', '/api/v1/shop/navigation/'],
+    ['site', '/api/v1/shop/site/'],
+    ['products', '/api/v1/shop/products/?page_size=5'],
+  ] as const) {
+    add(`${what}: the organisation switched off`, path, {
+      flushCache: true,
+      setup: [`UPDATE accounts_organization SET status = 'INACTIVE'`],
+      teardown: [`UPDATE accounts_organization SET status = 'ACTIVE'`],
+    });
+  }
+  // Three more fallbacks of the same kind: no address to make a map link
+  // from, a footer whose pages are all unpublished, a home page with no
+  // banner live.
+  add('site: no address anywhere', '/api/v1/shop/site/', {
+    flushCache: true,
+    setup: [
+      `CREATE TABLE parity_addresses AS
+         SELECT 'o' AS t, id, address, '' AS link FROM accounts_organization
+         UNION ALL SELECT 's', id, address, map_link_url FROM content_sitesettings`,
+      `UPDATE accounts_organization SET address = ''`,
+      `UPDATE content_sitesettings SET address = '', map_link_url = ''`,
+    ],
+    teardown: [
+      `UPDATE accounts_organization o SET address = p.address
+         FROM parity_addresses p WHERE p.t = 'o' AND p.id = o.id`,
+      `UPDATE content_sitesettings s SET address = p.address, map_link_url = p.link
+         FROM parity_addresses p WHERE p.t = 's' AND p.id = s.id`,
+      `DROP TABLE parity_addresses`,
+    ],
+  });
+  for (const [what, path] of [
+    ['site', '/api/v1/shop/site/'],
+    ['navigation', '/api/v1/shop/navigation/'],
+  ] as const) {
+    add(`${what}: every page unpublished`, path, {
+      flushCache: true,
+      setup: [
+        `CREATE TABLE parity_pages_on AS SELECT id FROM content_sitepage WHERE is_published`,
+        `UPDATE content_sitepage SET is_published = false`,
+      ],
+      teardown: [
+        `UPDATE content_sitepage SET is_published = true WHERE id IN (SELECT id FROM parity_pages_on)`,
+        `DROP TABLE parity_pages_on`,
+      ],
+    });
+  }
+  add('home: no banner live', '/api/v1/shop/home/', {
+    flushCache: true,
+    setup: [
+      `CREATE TABLE parity_banners_on AS SELECT id FROM content_storefrontbanner WHERE is_active`,
+      `UPDATE content_storefrontbanner SET is_active = false`,
+    ],
+    teardown: [
+      `UPDATE content_storefrontbanner SET is_active = true WHERE id IN (SELECT id FROM parity_banners_on)`,
+      `DROP TABLE parity_banners_on`,
+    ],
+  });
+  add('site: the organisation back', '/api/v1/shop/site/', { flushCache: true });
   add('pages', '/api/v1/shop/pages/');
   for (const page of await json<{ slug: string }[]>('/api/v1/shop/pages/')) {
     add(`page ${page.slug}`, `/api/v1/shop/pages/${page.slug}/`);
