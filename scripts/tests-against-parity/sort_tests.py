@@ -24,7 +24,17 @@ DJANGO_ONLY_FILES = {
     "tests/unit/test_psycopg_adapters.py": "the psycopg adapter",
     "tests/unit/test_email_timeout.py": "Django's mail backend",
 }
-ORDER = ["to-port", "case-added", "second-door", "race", "setting", "no-caller", "django-only"]
+ORDER = [
+    "to-port",
+    "empty-shop",
+    "case-added",
+    "second-door",
+    "race",
+    "setting",
+    "no-such-row",
+    "no-caller",
+    "django-only",
+]
 rule = {k: v for k, v in before["regions"].items() if v["kind"] == "rule"}
 still = {k for k, v in after["regions"].items() if v["kind"] == "rule"}
 unknown = sorted(set(rule) - set(classes.REGIONS))
@@ -99,7 +109,10 @@ for kind in ORDER:
         note = classes.REGIONS[key][1]
         if kind == "case-added" and key in still:
             left = after["regions"][key]
-            note += f" -- **still open**: {len(left['lines'])} statements, {len(left['branches'])} branches"
+            note += (
+                f" -- {len(left['lines'])} statements and {len(left['branches'])} branches of it"
+                " are still the tests' alone"
+            )
         emit(
             f"| `{key}` | {len(region['lines'])}, {len(region['branches'])} | "
             f"{len(region['tests'])} | {note} |"

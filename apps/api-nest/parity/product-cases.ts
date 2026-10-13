@@ -271,6 +271,11 @@ export async function productCases(): Promise<Case[]> {
     spec_values: [],
     featured: false,
   });
+  // The set a product already has, sent again: nothing to add or take away,
+  // and so no audit entry of its own.
+  write('product specs, none stated and none sent', 'PATCH', P('parity-empty'), {
+    spec_values: [],
+  });
   write('product chart set', 'PATCH', P('classic-oxford-shirt'), {
     size_chart: charts.get("Women's tops"),
   });

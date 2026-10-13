@@ -124,6 +124,16 @@ export async function importCases(): Promise<Case[]> {
     'Parity Linen Shirt,Men > Parity Shirts,,PAR-LIN-XL-WHT,XL,white,1_500,0,,3,1.9,,,,',
   ].join('\r\n');
 
+  // The importer run on what the shop already has, which is what running a
+  // file twice comes to: a product with nothing new to say, and a SKU whose
+  // cost the file states. Django's tests ran one file twice; no case had.
+  const again = [
+    'Product Name,Category,Brand,SKU,Size,Color,Price,Cost,Compare at price,Opening stock,Weight grams,Published,Slug,Description,Extra',
+    'Essential Cotton T-Shirt,,,RGN-ESS-XL-WHI,,,990,455,,0,,,essential-cotton-t-shirt,,',
+  ].join('\r\n');
+  upload('an old product with nothing new, and a cost for an old SKU', again, commit);
+  upload('the same, as a dry run', again, {});
+
   for (const [label, fields] of [
     ['dry run by default', {}],
     ['dry run asked for', { dry_run: 'true' }],

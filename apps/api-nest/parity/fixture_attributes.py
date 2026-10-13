@@ -16,6 +16,9 @@ published product, so no storefront answer changes. What each row is for:
 - "Parity Teal": a colour whose variant has gone, with a photograph still
   grouped under it -- deleting the value clears the image's colour
   (`SET_NULL`) rather than the image.
+- "Parity Plain Size": a Size attribute with no chart, so its kind may change.
+- "Parity Tint": a colour that defines no variants, so no photograph may be
+  grouped under one of its values.
 """
 
 from django.db import transaction
@@ -80,6 +83,24 @@ def apply() -> None:
             "notes": "Measure loosely.",
         },
     )
+
+    Attribute.objects.create(
+        name="Parity Plain Size",
+        code="parity-plain-size",
+        kind="SIZE",
+        is_variant_defining=False,
+        is_filterable=False,
+        position=52,
+    )
+    tint = Attribute.objects.create(
+        name="Parity Tint",
+        code="parity-tint",
+        kind="COLOR",
+        is_variant_defining=False,
+        is_filterable=False,
+        position=53,
+    )
+    AttributeValue.objects.create(attribute=tint, value="Rose", swatch="#FF66AA", position=0)
 
     teal = AttributeValue.objects.create(
         attribute=Attribute.objects.get(code="color"), value="Parity Teal", swatch="#008080", position=20

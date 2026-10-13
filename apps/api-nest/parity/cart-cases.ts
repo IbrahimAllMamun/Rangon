@@ -173,6 +173,10 @@ export async function cartCases(): Promise<Case[]> {
   add('cart: signing in merges the guest cart', 'GET', cart, {
     headers: { ...as(customer), ...holding('guest') },
   });
+  // The token names nobody's cart, or the customer's own: nothing to merge.
+  add('cart: signing in with a token that is no cart', 'GET', cart, {
+    headers: { ...as(customer), 'x-cart-token': 'parity-cart-nobody-has-this' },
+  });
   add('cart: a customer with no cart takes the guest one over', 'GET', cart, {
     headers: { ...as(many), ...holding('attach') },
   });

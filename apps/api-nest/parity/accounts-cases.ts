@@ -61,7 +61,7 @@ export async function accountCases(apis: {
   await db.connect();
   const rows = await db.query<Account>(
     `SELECT id, email, password FROM accounts_user
-      WHERE email LIKE 'parity.%' OR email = 'owner@rangon.test'`,
+      WHERE email LIKE 'parity.%' OR email IN ('owner@rangon.test', 'customer@rangon.test')`,
   );
   const accounts = new Map(rows.rows.map((row) => [row.email.split('@')[0] as string, row]));
   const customer = accounts.get('parity.customer');
@@ -428,6 +428,17 @@ export async function accountCases(apis: {
       headers: { authorization: `Bearer ${token(staff)}` },
     },
     { name: 'me: owner', path: me, headers: { authorization: `Bearer ${token(owner)}` } },
+    // The seed's own customer belongs to no organisation, so `me` falls back
+    // to the shop's: a branch only Django's tests had taken.
+    ...(accounts.has('customer')
+      ? [
+          {
+            name: 'me: a customer in no organisation',
+            path: me,
+            headers: { authorization: `Bearer ${token(accounts.get('customer') as Account)}` },
+          },
+        ]
+      : []),
     { name: 'me: anonymous', path: me },
     {
       name: 'me: POST',

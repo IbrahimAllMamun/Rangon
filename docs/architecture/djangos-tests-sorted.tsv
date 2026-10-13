@@ -54,7 +54,7 @@ tests/api/test_branch_scope.py::TestStockTransfers::test_an_owner_can_send_any_b
 tests/api/test_branch_scope.py::TestStockTransfers::test_staff_can_send_their_own_branchs_stock	covered	
 tests/api/test_branch_scope.py::TestStockTransfers::test_staff_cannot_send_another_branchs_stock	covered	
 tests/api/test_branch_scope.py::TestStockTransfers::test_the_list_shows_each_branch_its_own_transfers_from_either_end	covered	
-tests/api/test_branch_scope.py::test_no_route_shows_one_branch_anothers_rows	to-port	accounts/api/serializers.py::MeSerializer.get_organization; content/selectors.py::_expand
+tests/api/test_branch_scope.py::test_no_route_shows_one_branch_anothers_rows	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
 tests/api/test_client_ip_and_throttling.py::TestAuditTrailIp::test_a_failed_sign_in_records_the_proxys_entry_not_the_callers	setting	core/ip.py::client_ip
 tests/api/test_client_ip_and_throttling.py::TestAuditTrailIp::test_with_no_trusted_proxy_the_header_cannot_reach_the_trail	covered	
 tests/api/test_client_ip_and_throttling.py::TestClientIp::test_a_header_shorter_than_the_trusted_hops_is_not_believed	setting	core/ip.py::client_ip
@@ -93,12 +93,12 @@ tests/api/test_coupons_admin.py::TestWhoMayManageCoupons::test_an_accountant_can
 tests/api/test_coupons_admin.py::TestWhoMayManageCoupons::test_duplicate_codes_are_refused	covered	
 tests/api/test_coupons_admin.py::TestWhoMayManageCoupons::test_the_code_is_normalised_to_upper_case	covered	
 tests/api/test_customer_order_payload.py::TestCheckout::test_the_confirmation_is_customer_shaped	covered	
-tests/api/test_customer_order_payload.py::TestTheSignedInCustomer::test_their_order_is_customer_shaped	to-port	orders/api/serializers.py::customer_event_text
+tests/api/test_customer_order_payload.py::TestTheSignedInCustomer::test_their_order_is_customer_shaped	case-added	orders/api/serializers.py::customer_event_text
 tests/api/test_customer_order_payload.py::TestTheSignedInCustomer::test_their_order_list_names_no_staff	covered	
-tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_link_shows_the_customer_their_order_and_no_staff_record	to-port	orders/api/serializers.py::customer_event_text
+tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_link_shows_the_customer_their_order_and_no_staff_record	case-added	orders/api/serializers.py::customer_event_text
 tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_number_alone_still_opens_nothing	covered	
-tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_page_still_has_everything_it_shows	to-port	orders/api/serializers.py::customer_event_text
-tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_timeline_reads_as_the_customers_story	to-port	orders/api/serializers.py::customer_event_text
+tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_page_still_has_everything_it_shows	case-added	orders/api/serializers.py::customer_event_text
+tests/api/test_customer_order_payload.py::TestTheTrackingLink::test_the_timeline_reads_as_the_customers_story	case-added	orders/api/serializers.py::customer_event_text
 tests/api/test_customers_admin.py::TestDeactivation::test_deleting_a_customer_deactivates_rather_than_removes	covered	
 tests/api/test_customers_admin.py::TestEditingAnAddress::test_an_accountant_cannot_edit_or_delete	covered	
 tests/api/test_customers_admin.py::TestEditingAnAddress::test_an_address_can_be_deleted	covered	
@@ -312,20 +312,20 @@ tests/api/test_named_accounts.py::TestSupplierPayments::test_the_branchs_own_acc
 tests/api/test_named_accounts.py::TestSupplierPayments::test_the_list_shows_each_branch_its_own_payments	covered	
 tests/api/test_named_accounts.py::TestTheCheck::test_a_method_the_ledger_does_not_know_is_refused	second-door	finance/services.py::check_named_account
 tests/api/test_named_accounts.py::TestTheCheck::test_the_refusal_names_the_kind_wanted	covered	
-tests/api/test_navigation.py::TestAnnouncement::test_an_expired_announcement_is_never_serialised	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestAnnouncement::test_no_announcement_configured_is_not_an_error	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestAnnouncement::test_the_highest_priority_live_announcement_wins	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestFallbackToCategories::test_category_hidden_from_navigation_does_not_appear	to-port	content/selectors.py::_expand
+tests/api/test_navigation.py::TestAnnouncement::test_an_expired_announcement_is_never_serialised	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestAnnouncement::test_no_announcement_configured_is_not_an_error	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestAnnouncement::test_the_highest_priority_live_announcement_wins	case-added	content/selectors.py::_expand
+tests/api/test_navigation.py::TestFallbackToCategories::test_category_hidden_from_navigation_does_not_appear	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
 tests/api/test_navigation.py::TestFallbackToCategories::test_empty_override_table_falls_back_to_the_category_tree	case-added	content/api/serializers.py::serialise_banner
-tests/api/test_navigation.py::TestFallbackToCategories::test_inactive_category_does_not_appear	to-port	content/selectors.py::_expand
+tests/api/test_navigation.py::TestFallbackToCategories::test_inactive_category_does_not_appear	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
 tests/api/test_navigation.py::TestFallbackToCategories::test_inactive_child_does_not_appear	case-added	content/api/serializers.py::serialise_banner
 tests/api/test_navigation.py::TestOverrides::test_a_category_override_inherits_the_real_children	case-added	content/api/serializers.py::serialise_banner
-tests/api/test_navigation.py::TestOverrides::test_a_child_of_an_expired_parent_does_not_leak	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestOverrides::test_footer_placement_is_separate_from_the_header	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestOverrides::test_inactive_item_is_not_serialised	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestOverrides::test_item_after_its_window_is_not_serialised	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestOverrides::test_item_before_its_window_is_not_serialised	to-port	content/selectors.py::_expand
-tests/api/test_navigation.py::TestOverrides::test_override_rows_replace_the_category_default	to-port	content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_a_child_of_an_expired_parent_does_not_leak	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_footer_placement_is_separate_from_the_header	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_inactive_item_is_not_serialised	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_item_after_its_window_is_not_serialised	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_item_before_its_window_is_not_serialised	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
+tests/api/test_navigation.py::TestOverrides::test_override_rows_replace_the_category_default	case-added	content/api/serializers.py::serialise_banner; content/selectors.py::_expand
 tests/api/test_navigation.py::TestQueryBudget::test_the_payload_does_not_grow_with_the_catalogue	case-added	content/api/serializers.py::serialise_banner
 tests/api/test_navigation.py::TestReorder::test_an_unknown_direction_is_rejected	setting	content/tasks.py::request_revalidation
 tests/api/test_navigation.py::TestReorder::test_equal_positions_are_renumbered_rather_than_swapped	setting	content/tasks.py::request_revalidation
@@ -338,9 +338,9 @@ tests/api/test_navigation.py::TestWritePermissions::test_a_link_without_a_url_is
 tests/api/test_navigation.py::TestWritePermissions::test_a_manager_can_write_navigation	setting	content/tasks.py::request_revalidation
 tests/api/test_navigation.py::TestWritePermissions::test_a_window_that_ends_before_it_starts_is_rejected	covered	
 tests/api/test_navigation.py::TestWritePermissions::test_anonymous_cannot_write_navigation	covered	
-tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_an_unknown_script_still_gets_a_unique_slug	to-port	catalog/models.py::Product.save
-tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_brands_and_products_too	to-port	catalog/models.py::Brand.save; catalog/models.py::Product.save
-tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_two_bengali_categories_do_not_collide	to-port	catalog/models.py::Category.save
+tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_an_unknown_script_still_gets_a_unique_slug	second-door	catalog/models.py::Product.save
+tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_brands_and_products_too	case-added	core/slugs.py::_spell; core/slugs.py::_units
+tests/api/test_non_latin_slugs.py::TestSavedWithoutASlug::test_two_bengali_categories_do_not_collide	second-door	catalog/models.py::Category.save
 tests/api/test_non_latin_slugs.py::TestThroughTheApi::test_a_bengali_brand	case-added	core/slugs.py::_spell; core/slugs.py::_units
 tests/api/test_non_latin_slugs.py::TestThroughTheApi::test_a_bengali_product	setting	content/tasks.py::request_revalidation
 tests/api/test_non_latin_slugs.py::TestThroughTheApi::test_a_script_with_no_transliteration_falls_back_to_what_it_is	setting	content/tasks.py::request_revalidation
@@ -353,20 +353,20 @@ tests/api/test_order_list_filters.py::TestDateRange::test_an_unreadable_date_is_
 tests/api/test_order_list_filters.py::TestDateRange::test_search_and_dates_combine	covered	
 tests/api/test_order_list_filters.py::TestSearch::test_finds_an_order_by_part_of_its_number	covered	
 tests/api/test_order_list_filters.py::TestSearch::test_finds_an_order_by_the_customers_phone_as_typed_locally	covered	
-tests/api/test_password_self_service.py::TestAnOwnersReset::test_a_reset_signs_the_account_out_everywhere	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestAnOwnersReset::test_editing_anything_else_leaves_the_sessions_alone	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_a_blank_current_password_is_not_recorded_as_a_guess	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_a_wrong_current_password_is_refused_and_recorded	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_every_other_session_is_signed_out_at_once	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_guessing_the_current_password_is_rate_limited	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_it_changes_the_password	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_new_password_must_be_new	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_password_never_reaches_the_log	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_password_rules_apply	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_session_that_changed_it_carries_on	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestRefresh::test_a_deactivated_account_cannot_refresh	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestRefresh::test_a_refresh_token_is_spent_when_used	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/api/test_password_self_service.py::TestRefresh::test_a_token_from_before_the_change_still_refreshes	to-port	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestAnOwnersReset::test_a_reset_signs_the_account_out_everywhere	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestAnOwnersReset::test_editing_anything_else_leaves_the_sessions_alone	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_a_blank_current_password_is_not_recorded_as_a_guess	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_a_wrong_current_password_is_refused_and_recorded	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_every_other_session_is_signed_out_at_once	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_guessing_the_current_password_is_rate_limited	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_it_changes_the_password	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_new_password_must_be_new	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_password_never_reaches_the_log	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_password_rules_apply	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestChangingYourOwnPassword::test_the_session_that_changed_it_carries_on	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestRefresh::test_a_deactivated_account_cannot_refresh	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestRefresh::test_a_refresh_token_is_spent_when_used	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/api/test_password_self_service.py::TestRefresh::test_a_token_from_before_the_change_still_refreshes	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
 tests/api/test_payment_webhooks.py::TestAVerifiedWebhookCapturesOnlyItsOwnPayment::test_it_does_not_capture_a_different_amount	covered	
 tests/api/test_payment_webhooks.py::TestAVerifiedWebhookCapturesOnlyItsOwnPayment::test_it_does_not_capture_another_providers_payment	covered	
 tests/api/test_payment_webhooks.py::TestAVerifiedWebhookCapturesOnlyItsOwnPayment::test_its_own_payment_is_captured_once	covered	
@@ -486,8 +486,8 @@ tests/api/test_product_feed.py::TestGtin::test_a_real_manufacturer_barcode_is_pu
 tests/api/test_product_feed.py::TestGtin::test_a_real_manufacturer_barcode_is_published[96385074]	setting	content/tasks.py::request_revalidation
 tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[-no barcode at all]	setting	content/tasks.py::request_revalidation
 tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[12345-too short to be any GTIN]	setting	content/tasks.py::request_revalidation
-tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[1234567890123-thirteen digits, but not a barcode]	to-port	catalog/feeds.py::_looks_like_gtin
-tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[4006381333930-the check digit is wrong]	to-port	catalog/feeds.py::_looks_like_gtin
+tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[1234567890123-thirteen digits, but not a barcode]	case-added	catalog/feeds.py::_looks_like_gtin
+tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[4006381333930-the check digit is wrong]	case-added	catalog/feeds.py::_looks_like_gtin
 tests/api/test_product_feed.py::TestGtin::test_anything_that_is_not_a_gtin_is_left_blank[KURTI-M-01-a SKU typed into the barcode column]	setting	content/tasks.py::request_revalidation
 tests/api/test_product_feed.py::TestLinks::test_a_trailing_slash_on_the_configured_origin_does_not_double_up	covered	
 tests/api/test_product_feed.py::TestLinks::test_the_feed_refuses_to_render_without_a_public_origin	setting	catalog/feeds.py::public_url
@@ -506,7 +506,7 @@ tests/api/test_product_feed.py::TestTheTwoRenderings::test_the_csv_has_a_header_
 tests/api/test_product_feed.py::TestTheTwoRenderings::test_the_readable_rss_fields_are_unprefixed	covered	
 tests/api/test_product_feed.py::TestTheTwoRenderings::test_the_two_renderings_describe_the_same_catalogue	covered	
 tests/api/test_product_feed.py::TestTheTwoRenderings::test_the_xml_is_rss_with_the_shopping_namespace	covered	
-tests/api/test_product_feed.py::TestTitleClipping::test_a_long_title_is_trimmed_to_the_limit	to-port	catalog/feeds.py::_clip
+tests/api/test_product_feed.py::TestTitleClipping::test_a_long_title_is_trimmed_to_the_limit	case-added	catalog/feeds.py::_clip
 tests/api/test_product_feed.py::TestTitleClipping::test_a_short_title_is_left_exactly_as_it_is	covered	
 tests/api/test_product_feed.py::TestTitleClipping::test_whitespace_is_collapsed_so_the_row_stays_one_line	covered	
 tests/api/test_product_feed.py::TestWhatIsInIt::test_a_row_is_a_variant_not_a_product	covered	
@@ -519,22 +519,22 @@ tests/api/test_product_feed.py::TestWhatItMustNotSay::test_an_archived_variant_i
 tests/api/test_product_feed.py::TestWhatItMustNotSay::test_an_unpublished_product_is_absent	covered	
 tests/api/test_product_feed.py::TestWhatItMustNotSay::test_the_cost_price_never_appears	covered	
 tests/api/test_product_feed.py::test_the_feed_is_public	covered	
-tests/api/test_product_import.py::TestCommitting::test_it_creates_the_product_its_variants_and_their_stock	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestCommitting::test_it_reuses_an_existing_category_rather_than_making_a_second	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestCommitting::test_it_writes_one_audit_entry_for_the_whole_import	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestCommitting::test_matching_ignores_case	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestCommitting::test_opening_stock_goes_through_the_ledger	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestCommitting::test_the_size_and_colour_become_attributes	to-port	catalog/importers.py::_attribute_value
-tests/api/test_product_import.py::TestRunningItTwice::test_the_second_run_does_not_receive_the_stock_again	to-port	catalog/importers.py::_attribute_value; catalog/importers.py::_run; catalog/importers.py::_variant
-tests/api/test_product_import.py::TestRunningItTwice::test_the_second_run_updates_rather_than_duplicating	to-port	catalog/importers.py::_attribute_value; catalog/importers.py::_run; catalog/importers.py::_variant
-tests/api/test_product_import.py::TestThePreviewComesFirst::test_a_preview_of_an_existing_catalogue_shows_updates_not_creations	to-port	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_it_creates_the_product_its_variants_and_their_stock	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_it_reuses_an_existing_category_rather_than_making_a_second	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_it_writes_one_audit_entry_for_the_whole_import	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_matching_ignores_case	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_opening_stock_goes_through_the_ledger	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestCommitting::test_the_size_and_colour_become_attributes	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestRunningItTwice::test_the_second_run_does_not_receive_the_stock_again	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestRunningItTwice::test_the_second_run_updates_rather_than_duplicating	empty-shop	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestThePreviewComesFirst::test_a_preview_of_an_existing_catalogue_shows_updates_not_creations	empty-shop	catalog/importers.py::_attribute_value
 tests/api/test_product_import.py::TestThePreviewComesFirst::test_a_request_without_the_flag_only_previews	covered	
 tests/api/test_product_import.py::TestThePreviewComesFirst::test_the_preview_names_the_categories_it_would_invent	covered	
 tests/api/test_product_import.py::TestThePreviewComesFirst::test_the_preview_names_what_it_would_create	covered	
 tests/api/test_product_import.py::TestWhatItForgives::test_a_blank_line_between_sections_is_not_an_error	covered	
 tests/api/test_product_import.py::TestWhatItForgives::test_a_byte_order_mark_from_excel_does_not_hide_the_first_column	covered	
 tests/api/test_product_import.py::TestWhatItForgives::test_a_column_it_does_not_know_is_reported_rather_than_ignored_silently	covered	
-tests/api/test_product_import.py::TestWhatItForgives::test_a_price_typed_the_way_a_person_types_it	to-port	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestWhatItForgives::test_a_price_typed_the_way_a_person_types_it	empty-shop	catalog/importers.py::_attribute_value
 tests/api/test_product_import.py::TestWhatItRefuses::test_a_duplicate_sku_in_one_file_names_both_lines	covered	
 tests/api/test_product_import.py::TestWhatItRefuses::test_a_file_missing_a_required_column_is_rejected_whole	covered	
 tests/api/test_product_import.py::TestWhatItRefuses::test_a_file_that_is_not_text_is_refused_with_an_instruction	covered	
@@ -544,10 +544,10 @@ tests/api/test_product_import.py::TestWhatItRefuses::test_an_empty_file_is_refus
 tests/api/test_product_import.py::TestWhatItRefuses::test_every_bad_cell_is_reported_not_just_the_first	covered	
 tests/api/test_product_import.py::TestWhoMayDoIt::test_a_cashier_may_not_import_a_catalogue	covered	
 tests/api/test_product_import.py::TestWhoMayDoIt::test_an_anonymous_request_is_refused	covered	
-tests/api/test_product_import.py::TestWhoMayDoIt::test_an_owner_may	to-port	catalog/importers.py::_attribute_value
+tests/api/test_product_import.py::TestWhoMayDoIt::test_an_owner_may	empty-shop	catalog/importers.py::_attribute_value
 tests/api/test_product_media.py::TestAdminApi::test_the_api_accepts_a_colour_the_product_does_use	setting	content/tasks.py::request_revalidation
 tests/api/test_product_media.py::TestAdminApi::test_the_api_refuses_a_colour_the_product_does_not_use	setting	content/tasks.py::request_revalidation
-tests/api/test_product_media.py::TestColourBinding::test_a_non_variant_defining_colour_is_rejected	to-port	catalog/models.py::ProductImage.clean
+tests/api/test_product_media.py::TestColourBinding::test_a_non_variant_defining_colour_is_rejected	case-added	catalog/models.py::ProductImage.clean
 tests/api/test_product_media.py::TestColourBinding::test_a_shared_image_needs_no_colour	setting	content/tasks.py::request_revalidation
 tests/api/test_product_media.py::TestColourBinding::test_an_image_bound_to_a_colour_the_product_does_not_use_is_rejected	setting	content/tasks.py::request_revalidation
 tests/api/test_product_media.py::TestColourBinding::test_an_image_bound_to_a_non_colour_attribute_is_rejected	setting	content/tasks.py::request_revalidation
@@ -566,11 +566,11 @@ tests/api/test_product_media.py::TestUploadValidation::test_an_image_declaring_a
 tests/api/test_product_media.py::TestUploadValidation::test_an_oversized_image_is_refused	setting	content/tasks.py::request_revalidation
 tests/api/test_product_specs.py::TestAVariantAxisIsNotASpecification::test_nothing_is_written_when_one_value_in_the_batch_is_an_axis	covered	
 tests/api/test_product_specs.py::TestAVariantAxisIsNotASpecification::test_the_api_refuses_it_with_a_field_error	covered	
-tests/api/test_product_specs.py::TestAVariantAxisIsNotASpecification::test_the_service_refuses_it_too	to-port	catalog/services.py::set_product_specs
+tests/api/test_product_specs.py::TestAVariantAxisIsNotASpecification::test_the_service_refuses_it_too	case-added	catalog/services.py::set_product_specs
 tests/api/test_product_specs.py::TestAnAttributeCannotChangeSidesUnderneathAProduct::test_it_cannot_start_defining_variants_while_stated_as_a_spec	covered	
 tests/api/test_product_specs.py::TestAnAttributeCannotChangeSidesUnderneathAProduct::test_it_may_start_defining_variants_once_nothing_states_it	covered	
 tests/api/test_product_specs.py::TestAnUnknownValueIsRefused::test_a_missing_id_is_a_field_error_not_a_silent_drop	covered	
-tests/api/test_product_specs.py::TestAnUnknownValueIsRefused::test_the_service_refuses_it_and_names_the_id	to-port	catalog/services.py::set_product_specs
+tests/api/test_product_specs.py::TestAnUnknownValueIsRefused::test_the_service_refuses_it_and_names_the_id	case-added	catalog/services.py::set_product_specs
 tests/api/test_product_specs.py::TestAuthorisation::test_a_reader_cannot_state_a_specification	covered	
 tests/api/test_product_specs.py::TestDeletingAValueThatIsStated::test_a_stated_value_is_refused_in_words	covered	
 tests/api/test_product_specs.py::TestDeletingAValueThatIsStated::test_an_unstated_value_still_deletes	covered	
@@ -578,7 +578,7 @@ tests/api/test_product_specs.py::TestDeletingAValueThatIsStated::test_its_attrib
 tests/api/test_product_specs.py::TestStatingASpecification::test_a_product_can_be_created_with_specs_in_one_call	covered	
 tests/api/test_product_specs.py::TestStatingASpecification::test_a_repeated_id_in_one_payload_stores_one_row	covered	
 tests/api/test_product_specs.py::TestStatingASpecification::test_a_spec_value_is_stored_and_comes_back_grouped	covered	
-tests/api/test_product_specs.py::TestStatingASpecification::test_sending_the_set_again_changes_nothing	to-port	catalog/services.py::set_product_specs
+tests/api/test_product_specs.py::TestStatingASpecification::test_sending_the_set_again_changes_nothing	case-added	catalog/services.py::set_product_specs
 tests/api/test_product_specs.py::TestTheSetIsReplaced::test_a_value_left_out_is_removed	covered	
 tests/api/test_product_specs.py::TestTheSetIsReplaced::test_an_empty_list_clears_them	covered	
 tests/api/test_product_specs.py::TestTheSetIsReplaced::test_omitting_the_key_leaves_them_alone	covered	
@@ -859,7 +859,7 @@ tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_a_chart_in_
 tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_a_size_in_a_chart_cannot_be_deleted	covered	
 tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_an_attribute_with_charts_cannot_be_deleted	covered	
 tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_an_attribute_with_charts_stays_a_size_attribute	covered	
-tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_an_attribute_without_charts_may_change_kind	to-port	catalog/api/serializers.py::AttributeSerializer.validate_kind
+tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_an_attribute_without_charts_may_change_kind	case-added	catalog/api/serializers.py::AttributeSerializer.validate_kind
 tests/api/test_size_charts.py::TestDeletingWhatAChartDependsOn::test_an_unused_chart_is_deleted_and_audited	covered	
 tests/api/test_size_charts.py::TestPermissions::test_a_cashier_can_read_but_not_write	covered	
 tests/api/test_size_charts.py::TestPermissions::test_a_manager_can_write_but_not_delete	covered	
@@ -920,8 +920,8 @@ tests/api/test_stock_documents.py::TestWriteOff::test_a_write_off_without_a_reas
 tests/api/test_stock_documents.py::TestWriteOff::test_damage_reduces_stock_and_writes_a_reasoned_ledger_row	covered	
 tests/api/test_stock_documents.py::TestWriteOff::test_writing_off_more_than_is_held_is_refused	covered	
 tests/api/test_stock_needs_a_receipt.py::TestAStockCount::test_a_count_that_finds_unbought_stock_is_refused_whole	setting	content/tasks.py::request_revalidation
-tests/api/test_stock_needs_a_receipt.py::TestAStockCount::test_counting_an_unbought_line_at_zero_is_not_a_problem	to-port	inventory/services.py::apply_stock_count
-tests/api/test_stock_needs_a_receipt.py::TestAStockCount::test_receiving_the_found_goods_lets_the_same_count_apply	to-port	inventory/services.py::apply_stock_count
+tests/api/test_stock_needs_a_receipt.py::TestAStockCount::test_counting_an_unbought_line_at_zero_is_not_a_problem	case-added	inventory/services.py::apply_stock_count
+tests/api/test_stock_needs_a_receipt.py::TestAStockCount::test_receiving_the_found_goods_lets_the_same_count_apply	case-added	inventory/services.py::apply_stock_count
 tests/api/test_stock_needs_a_receipt.py::TestTheEndpoint::test_each_inventory_row_says_whether_it_was_received	no-caller	inventory/services.py::get_or_create_inventory
 tests/api/test_stock_needs_a_receipt.py::TestTheEndpoint::test_the_product_form_is_told_which_rows_can_be_raised	covered	
 tests/api/test_stock_needs_a_receipt.py::TestTheEndpoint::test_the_refusal_is_a_409_in_the_error_envelope	setting	content/tasks.py::request_revalidation
@@ -1047,7 +1047,7 @@ tests/test_concurrency.py::test_counter_sales_and_checkouts_racing_never_sell_he
 tests/test_concurrency.py::test_double_click_checkout_creates_one_order	covered	
 tests/test_concurrency.py::test_duplicate_payment_webhook_captures_once	covered	
 tests/test_concurrency.py::test_multi_line_sales_in_opposite_order_do_not_deadlock	setting	content/tasks.py::request_revalidation
-tests/test_concurrency.py::test_one_customer_cannot_spend_a_one_per_customer_coupon_twice	to-port	orders/services/checkout.py::_merge_guest_cart
+tests/test_concurrency.py::test_one_customer_cannot_spend_a_one_per_customer_coupon_twice	case-added	orders/services/checkout.py::_merge_guest_cart
 tests/test_concurrency.py::test_one_owner_demoted_while_the_other_is_switched_off_leaves_an_owner	setting	content/tasks.py::request_revalidation
 tests/test_concurrency.py::test_one_payment_request_sent_four_times_at_once_is_answered_four_times	setting	content/tasks.py::request_revalidation
 tests/test_concurrency.py::test_one_remittance_recorded_four_times_at_once_is_one_payment	setting	content/tasks.py::request_revalidation
@@ -1075,7 +1075,7 @@ tests/test_counter_reserved_stock.py::TestReservedStockIsNotForTheCounter::test_
 tests/test_counter_reserved_stock.py::TestReservedStockIsNotForTheCounter::test_the_counter_sells_what_is_not_held	covered	
 tests/test_counter_reserved_stock.py::TestTheOwnerLetsTheCounterTakeThem::test_a_cancelled_order_is_not_flagged	covered	
 tests/test_counter_reserved_stock.py::TestTheOwnerLetsTheCounterTakeThem::test_no_flag_while_the_shelf_still_covers_every_order	covered	
-tests/test_counter_reserved_stock.py::TestTheOwnerLetsTheCounterTakeThem::test_the_newest_order_is_short_first_and_each_unit_is_flagged_once	to-port	orders/services/shortages.py::flag_short_orders
+tests/test_counter_reserved_stock.py::TestTheOwnerLetsTheCounterTakeThem::test_the_newest_order_is_short_first_and_each_unit_is_flagged_once	case-added	orders/services/shortages.py::flag_short_orders
 tests/test_counter_reserved_stock.py::TestTheOwnerLetsTheCounterTakeThem::test_the_sale_goes_through_and_the_order_is_flagged	covered	
 tests/test_expenses.py::TestExpenseCategories::test_a_code_is_normalised_and_derived_from_the_name	covered	
 tests/test_expenses.py::TestExpenseCategories::test_a_nameless_category_is_refused	second-door	finance/services.py::create_expense_category
@@ -1144,7 +1144,7 @@ tests/test_guards_before_django_goes.py::TestACouponNeverRaisesThePrice::test_an
 tests/test_guards_before_django_goes.py::TestACouponNeverRaisesThePrice::test_the_form_refuses_an_amount_below_zero[maximum_discount]	covered	
 tests/test_guards_before_django_goes.py::TestACouponNeverRaisesThePrice::test_the_form_refuses_an_amount_below_zero[minimum_order_value]	covered	
 tests/test_guards_before_django_goes.py::TestACouponNeverRaisesThePrice::test_zero_is_allowed	covered	
-tests/test_guards_before_django_goes.py::TestCancellingThroughTheStatusRoute::test_a_paid_order_cancelled_there_is_refunded	to-port	inventory/services.py::_bulk
+tests/test_guards_before_django_goes.py::TestCancellingThroughTheStatusRoute::test_a_paid_order_cancelled_there_is_refunded	no-such-row	inventory/services.py::_bulk
 tests/test_guards_before_django_goes.py::TestCancellingThroughTheStatusRoute::test_an_order_past_processing_is_not_cancelled_there	covered	
 tests/test_guards_before_django_goes.py::TestCancellingThroughTheStatusRoute::test_the_right_to_change_a_status_is_not_the_right_to_cancel	covered	
 tests/test_guards_before_django_goes.py::TestCancellingThroughTheStatusRoute::test_the_same_person_may_still_move_it_on	covered	
@@ -1179,10 +1179,10 @@ tests/test_guards_before_django_goes.py::TestTheLastOwner::test_a_refused_deacti
 tests/test_guards_before_django_goes.py::TestTheLastOwner::test_one_of_two_owners_can_be_switched_off	covered	
 tests/test_guards_before_django_goes.py::TestTheLastOwner::test_the_only_owner_cannot	covered	
 tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_order_confirmed_since_it_was_listed_is_not_expired	covered	
-tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_order_paid_and_refunded_in_full_holds_nothing_and_expires	to-port	inventory/services.py::_bulk
+tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_order_paid_and_refunded_in_full_holds_nothing_and_expires	no-such-row	inventory/services.py::_bulk
 tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_order_paid_since_it_was_listed_is_not_expired	covered	
 tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_order_that_holds_somebodys_money_is_left_for_staff	covered	
-tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_unpaid_order_past_the_window_is_cancelled	to-port	inventory/services.py::_bulk
+tests/test_guards_before_django_goes.py::TestTheReservationSweep::test_an_unpaid_order_past_the_window_is_cancelled	no-such-row	inventory/services.py::_bulk
 tests/test_inventory.py::TestCosting::test_selling_does_not_change_average_cost	setting	content/tasks.py::request_revalidation
 tests/test_inventory.py::TestCosting::test_weighted_average_cost_blends_receipts	setting	content/tasks.py::request_revalidation
 tests/test_inventory.py::TestIntegrity::test_cached_columns_match_the_ledger_after_mixed_activity	covered	
@@ -1197,7 +1197,7 @@ tests/test_inventory.py::TestLedger::test_selling_reduces_stock	covered
 tests/test_inventory.py::TestLedger::test_write_off_requires_damage_or_loss	second-door	inventory/services.py::write_off
 tests/test_inventory.py::TestOversellConfiguration::test_overselling_is_possible_only_when_deliberately_enabled	covered	
 tests/test_inventory.py::TestReservations::test_cannot_reserve_more_than_available	covered	
-tests/test_inventory.py::TestReservations::test_consuming_a_reservation_deducts_stock_exactly_once	to-port	inventory/services.py::consume_reservation
+tests/test_inventory.py::TestReservations::test_consuming_a_reservation_deducts_stock_exactly_once	no-such-row	inventory/services.py::consume_reservation
 tests/test_inventory.py::TestReservations::test_releasing_more_than_reserved_is_clamped	covered	
 tests/test_inventory.py::TestReservations::test_releasing_returns_stock_to_available	covered	
 tests/test_inventory.py::TestReservations::test_reserving_holds_stock_without_removing_it	covered	
@@ -1363,8 +1363,8 @@ tests/test_permission_sync.py::TestPostMigrate::test_migrate_with_nothing_to_app
 tests/test_permission_sync.py::TestPostMigrate::test_recreates_the_code_and_grants_it_to_the_manager	django-only	`migrate` keeping the roles in step
 tests/test_permissions.py::TestAuthentication::test_anonymous_requests_are_rejected	covered	
 tests/test_permissions.py::TestAuthentication::test_deactivated_users_cannot_log_in	covered	
-tests/test_permissions.py::TestAuthentication::test_login_returns_the_users_permission_codes	to-port	accounts/api/serializers.py::MeSerializer.get_organization
-tests/test_permissions.py::TestAuthentication::test_registration_always_creates_a_customer	to-port	accounts/api/serializers.py::MeSerializer.get_organization
+tests/test_permissions.py::TestAuthentication::test_login_returns_the_users_permission_codes	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
+tests/test_permissions.py::TestAuthentication::test_registration_always_creates_a_customer	empty-shop	accounts/api/serializers.py::MeSerializer.get_organization
 tests/test_permissions.py::TestAuthentication::test_the_public_shop_api_needs_no_login	case-added	accounts/services.py::tax_settings
 tests/test_permissions.py::TestBranchScoping::test_owner_sees_every_branch	covered	
 tests/test_permissions.py::TestBranchScoping::test_staff_cannot_act_on_another_branch	covered	
@@ -1474,7 +1474,7 @@ tests/test_purchasing.py::TestSupplierProduct::test_lead_time_falls_back_to_the_
 tests/test_purchasing.py::TestSupplierProduct::test_one_supplier_cannot_have_two_prices_for_one_variant	covered	
 tests/test_purchasing.py::TestSupplierProduct::test_promoting_a_discontinued_offer_is_refused	covered	
 tests/test_purchasing.py::TestSupplierProduct::test_promoting_a_supplier_demotes_the_incumbent	covered	
-tests/test_purchasing.py::TestSupplierProduct::test_promoting_a_supplier_that_does_not_supply_it_is_refused	to-port	purchasing/services.py::set_preferred_supplier
+tests/test_purchasing.py::TestSupplierProduct::test_promoting_a_supplier_that_does_not_supply_it_is_refused	second-door	purchasing/services.py::set_preferred_supplier
 tests/test_purchasing.py::TestSupplierProduct::test_receiving_again_moves_only_that_suppliers_price	no-caller	purchasing/services.py::supplier_cost_for
 tests/test_purchasing.py::TestSupplierProduct::test_receiving_from_a_discontinued_supplier_reinstates_them	covered	
 tests/test_purchasing.py::TestSupplierProduct::test_receiving_records_who_supplied_it_and_for_how_much	covered	
@@ -1558,17 +1558,17 @@ tests/test_sms.py::TestEveryTemplateFitsOneMessage::test_the_confirmation_carrie
 tests/test_sms.py::TestItIsActuallyWiredUp::test_placing_an_order_texts_the_customer	setting	notifications/sms.py::_may_send_to
 tests/test_sms.py::TestItIsActuallyWiredUp::test_shipping_an_order_texts_the_customer	setting	notifications/sms.py::_may_send_to
 tests/test_sms.py::TestItIsActuallyWiredUp::test_the_order_is_committed_before_any_message_is_attempted	setting	notifications/registry.py::register
-tests/test_sms.py::TestSegments::test_a_brace_costs_two_characters_not_one	to-port	notifications/sms.py::segments
+tests/test_sms.py::TestSegments::test_a_brace_costs_two_characters_not_one	no-caller	notifications/sms.py::segments
 tests/test_sms.py::TestSegments::test_a_curly_quote_pasted_from_a_word_processor_is_the_same_trap	covered	
 tests/test_sms.py::TestSegments::test_a_short_english_message_is_one_part	covered	
-tests/test_sms.py::TestSegments::test_an_empty_body_is_not_billable	to-port	notifications/sms.py::segments
-tests/test_sms.py::TestSegments::test_bengali_splits_at_70	to-port	notifications/sms.py::segments
-tests/test_sms.py::TestSegments::test_english_splits_at_160	to-port	notifications/sms.py::segments
-tests/test_sms.py::TestSegments::test_one_bengali_character_drops_the_limit_to_70	to-port	notifications/sms.py::segments
+tests/test_sms.py::TestSegments::test_an_empty_body_is_not_billable	no-caller	notifications/sms.py::segments
+tests/test_sms.py::TestSegments::test_bengali_splits_at_70	no-caller	notifications/sms.py::segments
+tests/test_sms.py::TestSegments::test_english_splits_at_160	no-caller	notifications/sms.py::segments
+tests/test_sms.py::TestSegments::test_one_bengali_character_drops_the_limit_to_70	no-caller	notifications/sms.py::segments
 tests/test_sms.py::TestSending::test_a_missing_credential_is_recorded_not_raised	setting	notifications/registry.py::register; notifications/sms.py::_may_send_to; notifications/sms.py::send_sms
 tests/test_sms.py::TestSending::test_a_refused_message_is_recorded_with_the_reason	setting	notifications/registry.py::register; notifications/sms.py::_may_send_to
 tests/test_sms.py::TestSending::test_a_sent_message_is_recorded_with_the_provider_reference	setting	notifications/sms.py::_may_send_to
-tests/test_sms.py::TestSending::test_the_billable_size_is_stored_on_the_row	to-port	notifications/sms.py::segments
+tests/test_sms.py::TestSending::test_the_billable_size_is_stored_on_the_row	setting	notifications/sms.py::_may_send_to
 tests/test_sms.py::TestSending::test_the_number_is_canonicalised_before_the_provider_sees_it	setting	notifications/sms.py::_may_send_to
 tests/test_sms.py::TestTheOrderTask::test_a_customer_with_no_phone_is_not_an_error	covered	
 tests/test_sms.py::TestTheOrderTask::test_a_missing_order_is_not_an_error	covered	
@@ -1608,15 +1608,15 @@ tests/test_tax.py::TestTaxEndpoint::test_an_out_of_range_rate_is_a_field_error_n
 tests/test_tax.py::TestTaxEndpoint::test_changing_after_orders_exist_returns_409_with_the_count	covered	
 tests/test_tax.py::TestTaxEndpoint::test_confirm_true_goes_through	setting	content/tasks.py::request_revalidation
 tests/test_tax.py::TestTaxEndpoint::test_owner_can_read_the_current_treatment	covered	
-tests/test_tax.py::TestTaxEndpoint::test_owner_can_settle_it	to-port	accounts/services.py::update_tax_settings
+tests/test_tax.py::TestTaxEndpoint::test_owner_can_settle_it	empty-shop	accounts/services.py::update_tax_settings
 tests/test_tax.py::TestTaxEndpoint::test_the_generic_organization_patch_cannot_change_vat	covered	
-tests/test_tax.py::TestTaxSettingsService::test_a_negative_rate_is_refused	to-port	accounts/services.py::update_tax_settings
-tests/test_tax.py::TestTaxSettingsService::test_an_out_of_range_rate_is_refused	to-port	accounts/services.py::update_tax_settings
-tests/test_tax.py::TestTaxSettingsService::test_an_unknown_mode_is_refused	to-port	accounts/services.py::update_tax_settings
+tests/test_tax.py::TestTaxSettingsService::test_a_negative_rate_is_refused	empty-shop	accounts/services.py::update_tax_settings
+tests/test_tax.py::TestTaxSettingsService::test_an_out_of_range_rate_is_refused	empty-shop	accounts/services.py::update_tax_settings
+tests/test_tax.py::TestTaxSettingsService::test_an_unknown_mode_is_refused	empty-shop	accounts/services.py::update_tax_settings
 tests/test_tax.py::TestTaxSettingsService::test_changing_it_after_orders_exist_needs_confirmation	covered	
 tests/test_tax.py::TestTaxSettingsService::test_confirmation_lets_the_change_through	setting	content/tasks.py::request_revalidation
 tests/test_tax.py::TestTaxSettingsService::test_re_saving_the_same_values_needs_no_confirmation	covered	
-tests/test_tax.py::TestTaxSettingsService::test_settling_records_who_and_when	to-port	accounts/services.py::update_tax_settings
+tests/test_tax.py::TestTaxSettingsService::test_settling_records_who_and_when	empty-shop	accounts/services.py::update_tax_settings
 tests/test_vat_report.py::TestByRate::test_each_rate_is_filed_separately	no-caller	inventory/services.py::get_or_create_inventory
 tests/test_vat_report.py::TestByRate::test_the_rate_split_adds_up_to_the_total	no-caller	inventory/services.py::get_or_create_inventory
 tests/test_vat_report.py::TestCredits::test_a_return_credits_the_tax_it_carried	no-caller	inventory/services.py::get_or_create_inventory
@@ -1740,7 +1740,7 @@ tests/unit/test_site_content_rules.py::TestLinks::test_anything_else_is_refused[
 tests/unit/test_site_content_rules.py::TestLinks::test_anything_else_is_refused[javascript:alert(1)]	covered	
 tests/unit/test_site_content_rules.py::TestLinks::test_anything_else_is_refused[shop]	covered	
 tests/unit/test_site_content_rules.py::TestLinks::test_anything_else_is_refused[vbscript:msgbox(1)]	covered	
-tests/unit/test_site_content_rules.py::TestLinks::test_blank_is_blank	to-port	content/validators.py::validate_link_url
+tests/unit/test_site_content_rules.py::TestLinks::test_blank_is_blank	no-caller	content/validators.py::validate_link_url
 tests/unit/test_site_content_rules.py::TestLinks::test_safe_links_are_kept[/policies/terms#cancellation]	covered	
 tests/unit/test_site_content_rules.py::TestLinks::test_safe_links_are_kept[/shop?sort=newest]	covered	
 tests/unit/test_site_content_rules.py::TestLinks::test_safe_links_are_kept[/shop]	covered	
@@ -1791,7 +1791,7 @@ tests/unit/test_site_content_rules.py::TestSocialProfiles::test_a_whatsapp_numbe
 tests/unit/test_site_content_rules.py::TestSocialProfiles::test_a_whatsapp_number_becomes_a_chat_link[01712345678]	covered	
 tests/unit/test_site_content_rules.py::TestSocialProfiles::test_a_whatsapp_number_becomes_a_chat_link[8801712345678]	covered	
 tests/unit/test_site_content_rules.py::TestSocialProfiles::test_http_is_upgraded	covered	
-tests/unit/test_site_content_rules.py::TestSocialProfiles::test_the_chat_number_is_read_back_from_either_link_form	to-port	content/validators.py::whatsapp_number
+tests/unit/test_site_content_rules.py::TestSocialProfiles::test_the_chat_number_is_read_back_from_either_link_form	case-added	content/validators.py::whatsapp_number
 tests/unit/test_slugs.py::test_a_script_it_does_not_know_gives_nothing	covered	
 tests/unit/test_slugs.py::test_bengali_digits_become_ascii_digits	case-added	core/slugs.py::_spell; core/slugs.py::_units
 tests/unit/test_slugs.py::test_bengali_is_transliterated[\u0988\u09a6 \u09ae\u09cb\u09ac\u09be\u09b0\u0995-id-mobarak]	case-added	core/slugs.py::_spell; core/slugs.py::_units

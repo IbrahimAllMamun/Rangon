@@ -221,6 +221,11 @@ export async function imageCases(): Promise<Case[]> {
     ['alt_text', 'White tee'],
     file('parity-white.jpg', bytes('jpeg')),
   ]);
+  upload('a colour that defines no variants', [
+    ['product', tee],
+    ['attribute_value', values.get('parity-tint:Rose') as string],
+    file('parity-tint.jpg', bytes('jpeg')),
+  ]);
   upload('a size as a colour', [
     ['product', tee],
     ['attribute_value', values.get('size:S') as string],

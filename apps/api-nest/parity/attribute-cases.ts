@@ -172,6 +172,13 @@ export async function attributeCases(): Promise<Case[]> {
       is_filterable: true,
     },
   );
+  // A Size attribute nothing charts may become something else.
+  write(
+    'a Size attribute with no chart becomes text',
+    'PATCH',
+    `/api/v1/attributes/${A('parity-plain-size')}/`,
+    { kind: 'TEXT' },
+  );
   // A variant-defining attribute no variant uses may stop defining them.
   write(
     'an unused attribute stops defining variants',

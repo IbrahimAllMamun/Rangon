@@ -843,6 +843,28 @@ async function buildCases(): Promise<Case[]> {
       ],
     });
   }
+  add('site: the WhatsApp link in its long form', '/api/v1/shop/site/', {
+    flushCache: true,
+    setup: [
+      `UPDATE content_sociallink SET url = 'https://api.whatsapp.com/send?phone=8801712345678'
+        WHERE platform = 'WHATSAPP'`,
+    ],
+    teardown: [
+      `UPDATE content_sociallink SET url = 'https://wa.me/8801712345678' WHERE platform = 'WHATSAPP'`,
+    ],
+  });
+  add('navigation: no category has a child', '/api/v1/shop/navigation/', {
+    flushCache: true,
+    setup: [
+      `CREATE TABLE parity_children_on AS
+         SELECT id FROM catalog_category WHERE parent_id IS NOT NULL AND is_active`,
+      `UPDATE catalog_category SET is_active = false WHERE parent_id IS NOT NULL`,
+    ],
+    teardown: [
+      `UPDATE catalog_category SET is_active = true WHERE id IN (SELECT id FROM parity_children_on)`,
+      `DROP TABLE parity_children_on`,
+    ],
+  });
   add('home: no banner live', '/api/v1/shop/home/', {
     flushCache: true,
     setup: [
@@ -868,6 +890,35 @@ async function buildCases(): Promise<Case[]> {
   // so neither answers from a copy made before the data last changed.
   add('feed.xml', '/api/v1/shop/feed.xml', { flushCache: true });
   add('feed.csv', '/api/v1/shop/feed.csv', { flushCache: true });
+  // What the feed does to a row a merchant's listing would refuse: a title
+  // past the limit is cut on a word, and a barcode whose check digit is wrong
+  // is left out. Django's tests reached both; the seed has neither.
+  for (const format of ['xml', 'csv']) {
+    add(
+      `feed.${format}: a title past the limit, a barcode that is no GTIN`,
+      `/api/v1/shop/feed.${format}`,
+      {
+        flushCache: true,
+        setup: [
+          `CREATE TABLE parity_feed_was AS
+           SELECT p.id AS product, p.name, v.id AS variant, v.barcode
+             FROM catalog_product p JOIN catalog_productvariant v ON v.product_id = p.id
+            WHERE v.sku = 'RGN-ESS-M-OLI'`,
+          `UPDATE catalog_product SET name = 'Parity essential cotton crew-neck essential cotton crew-neck essential cotton crew-neck essential cotton crew-neck essential cotton crew-neck essential cotton crew-neck essential cotton cr'
+          WHERE id = (SELECT product FROM parity_feed_was)`,
+          `UPDATE catalog_productvariant SET barcode = '4006381333930'
+          WHERE id = (SELECT variant FROM parity_feed_was)`,
+        ],
+        teardown: [
+          `UPDATE catalog_product p SET name = w.name FROM parity_feed_was w WHERE w.product = p.id`,
+          `UPDATE catalog_productvariant v SET barcode = w.barcode
+           FROM parity_feed_was w WHERE w.variant = v.id`,
+          `DROP TABLE parity_feed_was`,
+        ],
+      },
+    );
+  }
+  add('feed.csv: the catalogue back as it was', '/api/v1/shop/feed.csv', { flushCache: true });
   add('feed.xml: a trailing slash is another URL', '/api/v1/shop/feed.xml/');
   add('feed ignores a bad token', '/api/v1/shop/feed.csv', {
     flushCache: true,

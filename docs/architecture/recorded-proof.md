@@ -313,16 +313,17 @@ with Django under coverage, and the second was subtracted from the first.
 ```text
 rule code ................................... 10,957 statements
 reached by Django's tests ................... 10,234
-reached by the comparison ................... 10,476, and 10,508 with the cases added since
-only the tests reach ........................ 174 statements and 73 branches in 84 functions; 144, 62 and 73 after
+reached by the comparison ................... 10,476, and 10,523 with the cases added since
+only the tests reach ........................ 174 statements and 73 branches in 84 functions; 129, 47 and 60 after
 tests that run nothing a case does not ...... 1,232 of 1,812
-tests reaching what a request can reach ..... 127: 51 closed by 20 new cases, 76 still to port (24 functions)
+a request can reach it, and no case did ..... 28 functions: 25 closed by 40 new cases, 3 need an empty shop
 the rest .................................... second doors behind a serializer, settings, helpers nothing calls, Django's own machinery
 ```
 
-The comparison reaches more of Django's rule code than Django's own tests do. What is left to
-port is a list of 24 functions with what a case would have to send to each, in that document.
-The 20 cases added agreed in both APIs: branches of the port that nothing had compared.
+The comparison reaches more of Django's rule code than Django's own tests do. The 40 cases
+added agreed in both APIs: branches of the port that nothing had compared. What is left to
+port is three functions that only a shop with nothing in it reaches, which want an empty
+flavour of the parity stack.
 
 Coverage is a coarse sieve -- the same line with another number in it is the same line -- so
 the arithmetic (pricing, VAT, costing) still rests on the values the comparison compares and
@@ -330,10 +331,11 @@ on the port's unit tests, not on this.
 
 ## What is not in it yet
 
-1. **The 24 functions a request can reach and no case does**
-   ([djangos-tests-sorted.md](djangos-tests-sorted.md), "What is left to port"). Django's
-   tests are sorted; 12 such functions were closed with cases on 2026-10-13; these remain.
-   Until they are done, removing Django removes the only thing that exercises them.
+1. **Three functions only an empty shop reaches**
+   ([djangos-tests-sorted.md](djangos-tests-sorted.md), "What is left to port"): `me` with no
+   organisation, the VAT changed before any order, the first import. Django's tests are
+   sorted, and every other function a request can reach has a case. These three want a second,
+   empty flavour of the parity stack.
 2. ~~D243 to D245.~~ Fixed in Django on 2026-10-12 and in the NestJS API on 2026-10-13; a
    replay is strict since ([Tied rows](#tied-rows)).
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its
