@@ -101,6 +101,14 @@ order is `CANCELLED` with reason `PAYMENT_TIMEOUT`. COD orders skip this: they a
 immediately and are not time-limited.
 *`DECISION REQUIRED` — 60 minutes assumed.*
 
+"Awaiting prepayment" is meant: an order that **holds somebody's money** -- paid more than it
+has been refunded -- is not expired, however long it has been `PENDING`. It waits for staff to
+confirm it, or to cancel it with its refund (§5.2). One paid and refunded in full holds nobody's
+money, and expires like any other. Until 2026-10-13 the task chose by status alone, so a transfer recorded against an order
+nobody then confirmed was cancelled with the money kept ([D246](roadmap.md#known-defects)). And
+the task decides **under the order's lock**: it lists the orders first, and one confirmed or paid
+towards while it worked through the list is left alone (D233).
+
 ### 1.6 Stock transfers
 
 A transfer writes `TRANSFER_OUT` at the source and `TRANSFER_IN` at the destination in one atomic
@@ -304,11 +312,15 @@ numbers are in [roadmap.md](roadmap.md).
   goods go back on the shelf and the order can still be shipped (D164). Not a decision: §1.3 has the
   goods leave the shelf at `PACKED` and nothing brings them back but a return of goods that left.
 
-Three things here break rules already written. §2.2 has an override of the window "recorded in the
-audit log", and it is not (D165). §2.4's "the method is stated at the refund, and the account
-follows it" does not hold at the counter, where a method the ledger does not know is accepted and
-moves no account (D158). And §2.2's window can be restarted: rejecting a return stamps the order
-delivered at that moment (D163).
+Two things here break rules already written. §2.2 has an override of the window "recorded in the
+audit log", and it is not (D165). And §2.2's window can be restarted: rejecting a return stamps the
+order delivered at that moment (D163).
+
+A third did until 2026-10-13: §2.4's "the method is stated at the refund, and the account follows
+it" did not hold at the counter, where a method the ledger does not know was accepted and moved
+no account (D158). `POST /pos/returns/` now takes `refund_method` as a choice of the payment
+methods, as a return completed from the back office does. Left out, it is cash; blank, it is the
+way the money came in.
 
 ---
 
@@ -355,6 +367,8 @@ split it was given — its total was always right.
 - **Coupon** (online and in store): validated and computed server-side only. Rules: active window,
   minimum order value, maximum discount cap, total usage limit, per-customer limit, product/category
   scope, and where it may be used (§3.3a). A coupon applies to the sum of eligible lines only.
+  The minimum and the cap are **zero or more**, and a discount is **never below zero**: a cap of
+  -100.00 once added 100.00 to every bill it touched (D204, fixed 2026-10-13).
 - Coupons do not stack. One coupon per order.
   *`DECISION REQUIRED` — assumed.*
 - Coupon usage is counted when the order is **created**, and released if the order is cancelled before
@@ -796,25 +810,33 @@ defect numbers are in [roadmap.md](roadmap.md).
   *`DECISION REQUIRED` -- should a cashier be able to reprint another branch's receipt? Until
   decided, they can.*
 
-One thing here is not a decision but a defect, and breaks §1.4: a counter sale with **one SKU on
-two lines** is checked line by line against the same shelf figure and can take it below zero
-(D149).
+One thing here was not a decision but a defect, and broke §1.4: a counter sale with **one SKU on
+two lines** was checked line by line against the same shelf figure and could take it below zero
+(D149). Fixed 2026-10-13: every stock movement of several lines is checked on what each variant
+is asked for in all, and refused whole if the shelf, or what nobody holds, cannot cover it.
 
 ### 5.7 In the back office: where the code and these rules part
 
 Found while porting the staff order screens to the NestJS API (2026-10-06). The port copies each;
 the defect numbers are in [roadmap.md](roadmap.md).
 
-- **§5.2 is not enforced on the status route.** Changing an order's status to `CANCELLED` asks
-  only for `orders.update_status`, and refunds nothing: an inventory manager, who may not cancel,
-  cancels; a paid order is left cancelled and paid (D166). Not a decision -- the rule is written
-  -- but the fix is a choice: refuse `CANCELLED` there, or send it through the cancel service
-  behind `sales.cancel`.
-- **§5.5 is not honoured when a payment is recorded.** The route takes no `Idempotency-Key`, so
-  the same request twice is the money twice, and nothing stops a payment past what the order
-  owes, or on an order that is cancelled or refunded (D167).
+- **§5.2 was not enforced on the status route** (D166, fixed 2026-10-13). Changing an order's
+  status to `CANCELLED` asked only for `orders.update_status`, and refunded nothing: an inventory
+  manager, who may not cancel, cancelled; a paid order was left cancelled and paid. `CANCELLED` on
+  that route now needs `sales.cancel` as well and goes through the cancel service: the same
+  refusals, the same refund. The back office's Cancel button uses this route, so it was the way
+  most orders were cancelled.
+- **§5.5 was not honoured when a payment is recorded** (D167, fixed 2026-10-13). The route now
+  takes an `Idempotency-Key`: the same request sent again answers with the payment it made the
+  first time, and a key already used for another order's payment is a 409. A payment is refused
+  on an order that is cancelled, returned or refunded (409), and past what the order still owes
+  (422 `PAYMENT_EXCEEDS_OUTSTANDING`) -- what it owes being its total less everything captured,
+  refunded since or not. All of it is decided under the order's lock, and the account is set
+  there too: one the money cannot land in no longer leaves the waiting payment pointing at it.
   *`DECISION REQUIRED` -- should a payment past what is outstanding be refused, or kept as credit
-  owed to the customer? Until decided, it is recorded as paid.*
+  owed to the customer? **Refused until decided** (changed from "recorded as paid" on 2026-10-13):
+  there is nowhere to hold a customer's credit, a refusal loses nothing, and the excess recorded
+  as paid was money in the drawer that no order accounted for.*
 - **The return statuses can be set by hand.** `RETURN_REQUESTED`, `RETURNED` and `REFUNDED` are
   edges of §5.1 that the status route follows like any other: a delivered order can be walked to
   `REFUNDED` with no return raised and no money paid back.
@@ -1311,6 +1333,10 @@ has to keep pointing at a real row. Customers never appear in the staff list.
 > manages staff" and `ADMIN` should lose `users.manage`, or administrators manage staff and the
 > rule should be "only an owner may make, edit or remove an owner". Found while porting the staff
 > screens to the NestJS API on 2026-10-07 and left as it was in both.
+>
+> What was **not** a decision is fixed (2026-10-13): the guard that keeps the last owner now locks
+> the owners' rows for as long as the change takes, on both routes that can lose one. Two
+> requests, each switching off one of the last two owners, used both to go through.
 
 > **DECISION REQUIRED — default: as the code stands.** `PATCH /organization/` accepts `status`, so
 > the organisation can be set `INACTIVE` — after which it cannot be read, and the next edit

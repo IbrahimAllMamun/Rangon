@@ -24,6 +24,7 @@ Base: `/api/v1/`. OpenAPI schema at `/api/schema/`, Swagger UI at `/api/docs/`.
   |---|---|
   | `POST /shop/checkout/`, `POST /pos/sales/` | `Order` |
   | `POST /orders/{id}/refunds/` | `Refund` |
+  | `POST /orders/{id}/payments/` | `Payment` (a key already used for another order's payment is a 409) |
   | `POST /purchase-orders/{id}/payments/`, `.../returns/` | `SupplierPayment`, `PurchaseReturn` |
   | `POST /accounts/record-movement/` | `AccountTransaction` |
   | `POST /account-transfers/`, `POST /expenses/` | `AccountTransfer`, `Expense` |

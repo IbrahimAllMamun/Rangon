@@ -252,10 +252,12 @@ have been refused.
 
 ### Django's own concurrency tests
 
-CLAUDE.md §9 makes `apps/api/tests/test_concurrency.py` mandatory: 23 tests, which call the
+CLAUDE.md §9 makes `apps/api/tests/test_concurrency.py` mandatory: 28 tests, which call the
 services from threads. The port's services are reached over HTTP, so each is stood for by a race
-check that drives the endpoint. Eighteen already were. Five were not, and have checks now, run
-against Django and the Nest API together before they were relied on:
+check that drives the endpoint. Eighteen already were when this was first written, at 23 tests.
+Five were not, and have checks now, run against Django and the Nest API together before they
+were relied on. The last five rows came with the guards ADR-0020 put first (2026-10-13): each
+test was written with its fix, and its check with the port of it:
 
 | Django's test (`tests/test_concurrency.py`) | The race check that stands for it | File |
 |---|---|---|
@@ -282,15 +284,21 @@ against Django and the Nest API together before they were relied on:
 | `test_two_simultaneous_write_offs_with_one_key_deduct_once` | inventory: 6 simultaneous retries of one write-off take one unit, once | `inventory-concurrency.ts` |
 | `test_a_replayed_withdrawal_is_answered_not_refused` | cash book: 6 clicks of one withdrawal of all a drawer holds with one Idempotency-Key **(new)** | `finance-concurrency.ts` |
 | `test_two_simultaneous_pos_sales_with_one_key_sell_once` | counter: 6 clicks with one Idempotency-Key -- one sale, one unit sold | `pos-sale-concurrency.ts` |
+| `test_one_remittance_recorded_four_times_at_once_is_one_payment` | orders: 6 recordings of one remittance at once with no key -- captured once, five refused as past what is owed; and two queued on the order's row | `staff-orders-concurrency.ts` |
+| `test_one_payment_request_sent_four_times_at_once_is_answered_four_times` | orders: 6 copies of one payment request with one Idempotency-Key -- six 201s, one payment | `staff-orders-concurrency.ts` |
+| `test_the_last_two_owners_cannot_both_be_switched_off_at_once` | team: the last two owners switched off at once -- one goes, an owner is left; and the second switched off while the first's deactivation waits on the owners' rows | `team-concurrency.ts` |
+| `test_one_owner_demoted_while_the_other_is_switched_off_leaves_an_owner` | team: one owner switched off while the other is demoted -- an owner is left | `team-concurrency.ts` |
+| `test_the_sweep_leaves_an_order_confirmed_while_it_waited` | sweep: an order confirmed while the sweep waits on its row -- it is left confirmed | `sweep-concurrency.ts` |
 
 Two of the five say less than their names. Every counter sale takes the `order:POS` number
 sequence's row lock before it touches stock, so counter sales already run one after another and
 cannot deadlock on shelves whatever order their lines are in; Django's two tests pass for the
 same reason. The checks are there so that the day the sequence lock goes, something fails.
 
-220 checks in a replay, all passing: the 211 the comparison had, the three of the pg-boss
-queue's own, and the six added here. They take about a minute on two Nest processes, where
-the comparison's take ten: Django was the slower half.
+224 checks in a replay, all passing: the 211 the comparison had, the three of the pg-boss
+queue's own, the six added here, and four with the guards of 2026-10-13 (three older checks
+were rewritten then, to the fixed outcome). They take about a minute on two Nest processes,
+where the comparison's take ten: Django was the slower half.
 
 ## Django's other tests
 
@@ -301,11 +309,17 @@ yet by test, and only the concurrency tests are done.** It is most of what is le
 
 | Kind | Files | Tests | What becomes of them | State |
 |---|---|---|---|---|
-| Concurrency (`tests/test_concurrency.py`) | 1 | 23 | each stood for by a race check, on two Nest processes | **done** (above) |
+| Concurrency (`tests/test_concurrency.py`) | 1 | 28 | each stood for by a race check, on two Nest processes | **done** (above) |
 | Through the API (`tests/api/`) | 56 | 917 | the port wrote "a case per branch" for each of these areas, compared with Django; a test is covered when a case sends what it sends | to be confirmed test by test |
 | Services called directly (`tests/test_*.py`) | 19 | 454 | the invariants: the ledger, costing, the cash book, VAT, discounts, the party ledger, the reports' arithmetic. Reached over HTTP by cases in most places; where a test arranges what no request can, a Nest test against a real database | not started |
 | Pure logic (`tests/unit/`) | 4 | 73 | pricing, phone numbers, slugs, the site-content rules: the port's unit tests hold values Django printed for the same functions | to be confirmed test by test |
 | Django-only | 7 | 47 | the label-mark migration; `migrate` keeping the roles in step (becomes the test of `sync-permissions`, plan step 4); the seed's guard and its reset (go with the seed, plan step 2); the psycopg adapter; the query budgets, whose idea ports and whose ORM counts do not | go with what they test |
+
+The counts are the plan's, of 2026-10-08, but for the concurrency row. Two files have been added
+to the services row since, each written with a fix made in both APIs and each compared case by
+case when it was: `tests/test_one_order.py` (D243 to D245) and
+`tests/test_guards_before_django_goes.py` (the guards ADR-0020 put first). pytest collects 1,811
+today.
 
 **How to sort the 1,444 in the middle without reading each against 12,243 cases:** by what
 they execute. Run Django's suite with branch coverage and one context per test
