@@ -497,6 +497,26 @@ export async function stockDocumentCases(): Promise<Case[]> {
   ] as [string, string, Who][]) {
     write(`apply ${name}`, 'POST', `${path}apply/`, {}, who);
   }
+  // One line counted at what the shelf holds: the count applies, and that
+  // line writes nothing. Set after the reset, before each API's request.
+  write('apply a count with a line that changes nothing', 'POST', `${counting}apply/`, {});
+  (cases.at(-1) as Case).prepare = async () => {
+    const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query(
+        `UPDATE inventory_stockcountitem i SET counted_quantity = inv.on_hand
+           FROM inventory_stockcount c, inventory_inventory inv, catalog_productvariant v
+          WHERE c.id = i.stock_count_id AND inv.branch_id = c.branch_id
+            AND inv.variant_id = i.variant_id AND v.id = i.variant_id
+            AND c.id = $1 AND v.sku = 'RGN-BLO-L-BEI'`,
+        [counts.get('Parity counting')],
+      );
+    } finally {
+      await client.end();
+    }
+    return {};
+  };
 
   return cases;
 }

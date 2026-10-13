@@ -172,6 +172,20 @@ export async function attributeCases(): Promise<Case[]> {
       is_filterable: true,
     },
   );
+  // A Size attribute nothing charts may become something else.
+  write(
+    'a Size attribute with no chart becomes text',
+    'PATCH',
+    `/api/v1/attributes/${A('parity-plain-size')}/`,
+    { kind: 'TEXT' },
+  );
+  // A variant-defining attribute no variant uses may stop defining them.
+  write(
+    'an unused attribute stops defining variants',
+    'PATCH',
+    `/api/v1/attributes/${A('parity-fit-size')}/`,
+    { is_variant_defining: false },
+  );
   write('attribute keeps its own name', 'PATCH', size, { name: 'Size', code: 'size' });
   write('attribute takes another name', 'PATCH', size, { name: 'Shoe size' });
   write('replace attribute', 'PUT', `/api/v1/attributes/${A('parity-order')}/`, {
@@ -267,6 +281,15 @@ export async function attributeCases(): Promise<Case[]> {
   );
   write('replace value, no attribute', 'PUT', xs, { value: 'XS' });
   write('delete value with variants', 'DELETE', xs, undefined, 'admin');
+  // XS is on no variant in the seed, so the case above deletes it. M is on
+  // fifteen: the refusal in words, which Django's tests reached and no case did.
+  write(
+    'delete a value variants carry',
+    'DELETE',
+    `/api/v1/attribute-values/${V('size:M')}/`,
+    undefined,
+    'admin',
+  );
   write(
     'delete stated value',
     'DELETE',

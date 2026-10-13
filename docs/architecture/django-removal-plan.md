@@ -99,6 +99,11 @@ Today "the Nest API is right" means "it answered as Django just did". This step 
    as a Nest test against a real database); Django-only (migrations, the seed's guard, the
    admin: drop with the thing it tests). `tests/test_concurrency.py` is ported whole: CLAUDE.md §9
    makes those tests mandatory.
+   *Sorted on 2026-10-13 and 14, by coverage: [djangos-tests-sorted.md](djangos-tests-sorted.md).
+   What a request can reach and no case did came to 28 functions; 25 have cases now, and both
+   APIs agreed on all 40 of them. Three are reached only in a shop with nothing in it, and
+   want an empty flavour of the parity stack. None wanted a Nest test against a database:
+   every one was a parity case.*
 7. **Run both proofs in CI, side by side**, until step 6. While they agree, the recording is
    known to be faithful.
 

@@ -198,6 +198,17 @@ export async function catalogAdminCases(): Promise<Case[]> {
     logo: null,
   });
   write('create brand, Bengali name', 'POST', '/api/v1/brands/', { name: 'শাড়ি ঘর' });
+  // The rest of the transliteration, which Django's slug tests reached and no
+  // case did: a vowel standing alone, a sign, digits, and ঙ before a velar.
+  for (const [what, name] of [
+    ['a vowel standing alone', 'আড়ং ঐতিহ্য'],
+    ['a sign after a vowel', 'রং মহল দুঃসাহস'],
+    ['digits', 'স্টাইল ২৪'],
+    ['a nasal before a velar', 'লুঙ্গি ঘর'],
+    ['a vowel sign with nothing before it', 'ি ঘর'],
+  ] as const) {
+    write(`create brand, Bengali name with ${what}`, 'POST', '/api/v1/brands/', { name });
+  }
   write('create brand, name that spells nothing', 'POST', '/api/v1/brands/', { name: '!!!' });
   write('create brand, slug taken by another case', 'POST', '/api/v1/brands/', { name: 'RANGON' });
   write('create brand, name taken', 'POST', '/api/v1/brands/', { name: 'Rangon' });

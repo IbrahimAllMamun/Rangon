@@ -736,6 +736,32 @@ export async function posSaleCases(): Promise<Case[]> {
     sale(`reserved stock, allowed: ${name}`, { lines, payments: card }, 'cashier', reservedForSale);
     sale(`reserved stock, not allowed: ${name}`, { lines, payments: card });
   }
+  // A shelf already one short from an earlier counter sale: the newest order
+  // was flagged then, so this sale passes over it and flags the next. Set
+  // after the reset, before each API's request.
+  sale(
+    'reserved stock, allowed: one more unit from a shelf already one short',
+    { lines: [{ variant: TWA, quantity: 1 }], payments: card },
+    'cashier',
+    {
+      ...reservedForSale,
+      prepare: async () => {
+        const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+        await client.connect();
+        try {
+          await client.query(
+            `UPDATE inventory_inventory i SET on_hand = i.reserved - 1
+               FROM accounts_branch b
+              WHERE b.id = i.branch_id AND b.code = 'DHK1' AND i.variant_id = $1`,
+            [TWA],
+          );
+        } finally {
+          await client.end();
+        }
+        return {};
+      },
+    },
+  );
   // What is not for sale (D146).
   sale('stock: an archived SKU with units on the shelf', paid, 'cashier', {
     setup: [`UPDATE catalog_productvariant SET status = 'ARCHIVED' WHERE sku = 'RGN-ESS-XL-WHI'`],

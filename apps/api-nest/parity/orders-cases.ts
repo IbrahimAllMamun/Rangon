@@ -138,6 +138,12 @@ export async function orderCases(): Promise<Case[]> {
     add(`account order ${number}`, `${orders}${number}/`, { headers: as(customer) });
   }
   add("account order: another customer's", `${orders}RGN-PARITY-0009/`, { headers: as(customer) });
+  // A seeded order whose payment was captured after it was placed: its
+  // timeline tells the customer "Payment received", which no case had read.
+  add('account orders: the demo customer', orders, { headers: as(demo) });
+  add('account order: one whose payment was captured', `${orders}RGN-WEB-000015/`, {
+    headers: as(demo),
+  });
   add('account order: unknown', `${orders}RGN-NOPE/`, { headers: as(customer) });
   add('account order: no customer record', `${orders}RGN-PARITY-0001/`, { headers: as(bare) });
   add('account order: an encoded space', `${orders}RGN%20PARITY/`, { headers: as(customer) });
@@ -167,6 +173,9 @@ export async function orderCases(): Promise<Case[]> {
     headers: as(customer),
   });
   add('tracking: another customer, signed in', `${track}RGN-PARITY-0001/`, { headers: as(many) });
+  add('tracking: its customer, an order whose payment was captured', `${track}RGN-WEB-000015/`, {
+    headers: as(demo),
+  });
   add('tracking: staff with the token', `${track}RGN-PARITY-0001/?token=parity-token-0001`, {
     headers: as(staff),
   });

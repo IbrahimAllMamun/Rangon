@@ -271,6 +271,11 @@ export async function productCases(): Promise<Case[]> {
     spec_values: [],
     featured: false,
   });
+  // The set a product already has, sent again: nothing to add or take away,
+  // and so no audit entry of its own.
+  write('product specs, none stated and none sent', 'PATCH', P('parity-empty'), {
+    spec_values: [],
+  });
   write('product chart set', 'PATCH', P('classic-oxford-shirt'), {
     size_chart: charts.get("Women's tops"),
   });
@@ -325,6 +330,12 @@ export async function productCases(): Promise<Case[]> {
     selections: { size: ['S'] },
   });
   write('generate, no selections', 'POST', generate('parity-empty'), { price: '1' });
+  // Django's test reached this refusal and no case did (recorded-proof.md).
+  write('generate a single version with sizes chosen', 'POST', generate('parity-empty'), {
+    price: '1',
+    single: true,
+    selections: { size: ['S'] },
+  });
   write('generate, an unknown attribute', 'POST', generate('parity-empty'), {
     price: '1',
     selections: { "sh'ape": ['A'] },
