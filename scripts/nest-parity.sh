@@ -141,7 +141,7 @@ print("bucket", storage.bucket_name, "ready")'
     "${compose[@]}" --profile jobs up -d --build --force-recreate nest-jobs
     wait_for "$jobs_url/api/health/"
     mkdir -p "$recorded_dir"
-    rm -f "$recorded_dir"/snapshot.dump "$recorded_dir"/media.tar.gz "$recorded_dir"/*.jsonl.gz "$recorded_dir"/made.txt "$recorded_dir"/clock.txt
+    rm -f "$recorded_dir"/snapshot.dump "$recorded_dir"/media.tar.gz "$recorded_dir"/*.jsonl.gz "$recorded_dir"/made.txt "$recorded_dir"/clock.txt "$recorded_dir"/began.txt
     "${compose[@]}" exec -T db psql -q -U rangon -d rangon -c 'DELETE FROM pgboss.job'
     "${compose[@]}" exec -T db pg_dump -U rangon -d rangon -Fc --no-owner > "$recorded_dir/snapshot.dump"
     # Through the Django container, which can read every file whoever wrote it.

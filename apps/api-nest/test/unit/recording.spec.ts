@@ -12,6 +12,7 @@ import {
   settled,
   type Tie,
   tiesBetween,
+  untilBegan,
 } from '../../parity/recording';
 
 const json = (body: unknown, effects: unknown[][] = []): Answered => ({
@@ -208,5 +209,17 @@ describe('keeping in step with the recording', () => {
     const pace = new Pace(dated);
     expect(pace.wait(at(4), at(6))).toBe(0);
     expect(pace.ahead).toBe(1);
+  });
+});
+
+describe('beginning where the recording began', () => {
+  it('waits out the time a replay is behind its recording', () => {
+    expect(untilBegan(1_000_000, 940_000)).toBe(60_000);
+  });
+
+  it("does not wait once the recording's instant has passed, or is not known", () => {
+    expect(untilBegan(1_000_000, 1_000_000)).toBe(0);
+    expect(untilBegan(1_000_000, 1_030_000)).toBe(0);
+    expect(untilBegan(Number.NaN, 1_000_000)).toBe(0);
   });
 });

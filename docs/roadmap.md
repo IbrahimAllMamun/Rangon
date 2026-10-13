@@ -495,6 +495,36 @@ is still open and tracked in
 
 ## Verification log
 
+### What was red on `main` after PR #92 and PR #93, 2026-10-13
+
+Asked for: "do item 1" -- read the CI run on merged `main` (run 38316757658) and fix what is
+red. Three jobs were. Branch `fix/main-ci-secret-scan-and-replay-clock`.
+
+```text
+Secret scan (gitleaks) ............. 1 finding: `.gitleaksignore` line 16, commit b4ae871 -- the file's own comment
+NestJS API parity with Django ...... comparison 12,243 of 12,243; replay 12,239 as recorded, 4 differ (the audit log)
+Build & scan images ................ Django 5.1.15, CVE-2026-15307: D242, known, not this change's
+after the fix, locally ............. gitleaks, every commit of the branch: no leaks; replay: 12,243 of 12,243, having waited 67.2 s for the recording's start
+```
+
+**The secret scan read its own ignore file.** The comment explaining why an image tag in a
+runbook is not a key quoted the tag, and the rule matched the quotation as it had matched the
+runbook. The comment describes the tag now, and the commit that quoted it is listed.
+
+**The first run of the recorded proof on GitHub failed, on a defect of the proof** (D247).
+A replay's clocks are set a minute and a half further back than the recording's age, for the
+stack to come up in, so its harness began earlier than the recording's had -- and the cases
+are built from the clock. The comparison CI runs before it records had written audit rows up
+to the moment the recording began; the recording's harness saw them as rows that were there,
+the replay's as rows of its own. A recording keeps the instant its harness began now
+(`began.txt`), and a replay waits for it before it builds a case. The same thing was found an
+hour earlier from the other side: a recording taken straight after a reset, 109 cases.
+
+**Not fixed: the image scan** (D242). Moving Django to 5.2 is a framework upgrade and the
+owner's to schedule, or moot once Django goes.
+
+Not pushed; no pull request. `main` stays red on two jobs until this is merged.
+
 ### D243 to D245 ported to the NestJS API: one order for every list, in production's API, 2026-10-13
 
 Asked for: "port D243 to D245 to the NestJS API". The rules were fixed in Django on
@@ -5238,6 +5268,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D243 | **A variant's label depends on the order its rows lie in.** `ProductVariant.label` joins the variant's attribute values in the order `self.attribute_values.all()` returns them, and `VariantAttributeValue` has no `Meta.ordering`: PostgreSQL returns them as they lie in the table. Measured on 2026-10-09 by restoring a database and putting every table's rows back in reverse order -- the same rows, the same ids -- in the NestJS API, whose statement is Django's: a variant that read "M / White" reads "White / M". The label is the product feed's title, the cart line, the counter's grid, the inventory list, and it is **copied onto the order line when the order is placed** (`variant_label`), so the receipt keeps whichever it was that day. Nothing has to be restored for it to happen: any update of a `catalog_variantattributevalue` row moves it in the table. Both APIs. *Found by replaying the recorded proof on a turned-over database ([recorded-proof.md](architecture/recorded-proof.md)); the comparison of the two APIs could never see it, because both read the same table.* | Medium | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13.** `VariantAttributeValue.Meta.ordering` is the attributes' own order, `attribute__position, attribute__name`, as `ProductAttributeValue`'s is; every `.all()` and every prefetch follows it ([business-rules.md](business-rules.md) §5a, rule 4, with the decision it takes). Narrower than first written: a variant made on the product screen stores its label in `name` and was never affected -- it is the variants with no name of their own (the importer's, and any made through the API without one) whose label moved, and the `attributes` list of every variant. `apps/api/catalog/models.py`, `tests/test_one_order.py` |
 | D244 | **The dashboard's top expense category is whichever of the largest comes first.** `_dashboard` reads `expenses["by_category"][0]`, and the categories are ordered by their total alone: where two tie, the table decides. Measured the same way: "Transport", then "Rent", for the same quarter and the same expenses. Both APIs. *Found as D243 was.* | Low | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13.** `expense_totals` orders by the total, then the category's name. `apps/api/finance/selectors.py`, `tests/test_one_order.py` |
 | D245 | **A list ordered by a column that ties can show a row twice across its pages, or not at all.** Wherever a list's ordering does not tell two rows apart -- `?ordering=on_hand` on the inventory, a supplier's offers by `-is_preferred, last_cost`, the notifications newest first when several were made in one instant, the dashboard's ten best sellers by units sold, the home page's featured products -- PostgreSQL returns the tied rows as they lie, and that changes with every update of one of them. A page that ends inside the tie then shows a different row from one request to the next. D161 is one instance; this is the class. Measured on 2026-10-09: of 12,243 parity cases, **546** answer with tied rows in another order once every table is turned over, and a further handful are pages cut through a tie. Both APIs: the port's statements are Django's. *Found as D243 was.* | Medium | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13** (`uniqueLast` in `common/filtering.ts`, at the 43 places an ordering is built; the statements' own last keys elsewhere). `core.ordering.unique_last` ends whatever a queryset is ordered by with its primary key. `core.filters.OrderingFilter` (now the default backend, and the one the three view modules that name their own import) applies it to every list, `core.pagination.StandardPagination` to every page, and the reports' breakdowns and "first ten" name a last key of their own. The lists inside a row (D161's kind: a return's lines, a transfer's, a stock count's, a purchase order's and a delivery's) had no ordering at all and now come in the order they were entered, `created_at, id`; order events, shipping methods and zones end theirs with the id; and every "first so many" -- the home page's rows, a customer's newest orders, the counter's grid, suggestions, the two digests -- is cut through an order that ends with the key. **Measured on Django itself**, asked twice on one restored database, the second time with every table's rows turned over: 0 of 12,243 cases answer with tied rows in another order, where 546 did. `apps/api/core/ordering.py`, `core/filters.py`, `core/pagination.py`, `reports/services.py`, `tests/test_one_order.py` |
+| D247 | **A recording taken straight after anything had written to its database did not replay.** The replay's clocks are set a minute and a half behind the recording's age, for the stack to come up in, so its harness began up to that much earlier than the recording's had; and the cases are built from the clock -- what an API mints is told from what was there by being newer than the harness. A row made in the two minutes before the recording was older than one harness and newer than the other. Straight after a reset, 109 cases differed, each by a timestamp read as "now" on one side; and **the first run of the recorded proof on GitHub failed on it** (`main`, 2026-10-12): four cases of the audit log, whose rows the comparison's races had written seconds before the recording began. *Found replaying a recording of merged `main` on 2026-10-13, an hour before that run's log could be read.* | Low | **Fixed 2026-10-13.** A recording keeps the instant its harness began (`began.txt`); a replay waits for it before it builds a case. `apps/api-nest/parity/recording.ts`, `run.ts` |
 
 ## Still API-only (no UI)
 
