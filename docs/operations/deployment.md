@@ -25,8 +25,9 @@ the schema: every migration is Django's.
 | What you want | How |
 |---|---|
 | The shop, as it normally runs | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` -- `db`, `redis`, `api-nest`, `web`, `nginx` |
+| An operator's command in the NestJS API | `... run --rm api-nest node dist/cli.js <command>`: the owner, the store, the two verifications ([operator-commands.md](operator-commands.md)). Not `migrate`: Django migrates until the removal plan's step 6.4 |
 | A migration, `collectstatic`, any management command | `... run --rm api python manage.py <command>`. `run` starts a container of a service `up` leaves alone, and removes it afterwards |
-| The Django admin, `/api/docs/`, `/api/schema/` | `... --profile django up -d api worker`, and `... --profile django stop api worker` when done. Until then nginx answers those three paths 503 and says so |
+| The Django admin, `/api/docs/`, `/api/schema/` | Dropped on 2026-10-14 ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md)): nginx answers those three paths 404, whichever API serves |
 | Django for everything again | add `-f docker-compose.django.yml`, then `up -d` and restart nginx: see [Back to Django](#back-to-django) |
 
 One thing the NestJS API does not do:
@@ -282,7 +283,7 @@ one.
 Nginx terminates TLS, redirects HTTP→HTTPS, sets security headers (HSTS, `X-Content-Type-Options`,
 `Referrer-Policy`, CSP), gzip/brotli, request size limits, and routes `/api/*` and `/media/*` → the
 API that serves (`RANGON_API_UPSTREAM`, set by the compose files), `/django-admin/`, `/api/docs/` and
-`/api/schema/` → Django when it is running, everything else → web. Most API traffic does not pass
+`/api/schema/` → 404 (dropped, ADR-0020), everything else → web. Most API traffic does not pass
 through it at all: the web app calls the API over the private network (`API_INTERNAL_URL`), which
 is why the compose files set the two together. If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service
 and record that decision here rather than running two proxies.

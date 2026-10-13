@@ -41,7 +41,7 @@ description or an ADR.
 over the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md),
 [plan](docs/architecture/nest-port.md)). Since [ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)
 the production compose files run it -- the API, the background jobs and their schedule -- and start Django
-only on demand: for migrations, the Django admin and the API docs, and to go back
+only on demand: for migrations and to go back
 (`docker-compose.django.yml`). **Django still owns the schema and every business rule**, and the development
 stack and the commands in this file are Django's: never run Drizzle migrations, and change a rule in Django
 first, with its tests, then port it. The one exception is the `pgboss` schema, which the Nest API's job queue

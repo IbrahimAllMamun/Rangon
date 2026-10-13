@@ -24,6 +24,7 @@ import { ENV, Env } from '../../config/env';
 import { Database } from '../../database/database.service';
 import { Params as SqlParams } from '../../database/sql';
 import { dataGet, isDict, pyIntOf, pythonTypeName, pyTruthy } from '../../http/request-body';
+import { stockDrift } from '../integrity';
 import { StockService } from '../stock.service';
 import { LedgerEntries } from './ledger-entries.service';
 
@@ -157,10 +158,6 @@ const SELECT = [
   RECEIVED,
   ...related.flatMap(([table, prefix, names]) => names.map((name) => column(table, prefix, name))),
 ].join(', ');
-
-const INTEGRITY_SELECT = COLUMNS.slice(0, 3)
-  .flatMap(([table, prefix, names]) => names.map((name) => column(table, prefix, name)))
-  .join(', ');
 
 const FROM = `FROM ${I}
   INNER JOIN "accounts_branch" ON (${I}."branch_id" = "accounts_branch"."id")
@@ -592,56 +589,15 @@ export class InventoryAdminService {
     const branch = pyTruthy(requested)
       ? await this.permissions.resolveBranch(user, dataGet(data, 'branch'))
       : null;
-    const ledger = await this.db.query<{
-      branch_id: string;
-      variant_id: string;
-      on_hand: string | null;
-      reserved: string | null;
-    }>(
-      `SELECT "inventory_inventorytransaction"."branch_id", "inventory_inventorytransaction"."variant_id",
-              SUM("inventory_inventorytransaction"."quantity") FILTER (WHERE NOT ("inventory_inventorytransaction"."transaction_type" IN ('RESERVATION_RELEASE', 'RESERVATION'))) AS "on_hand",
-              SUM("inventory_inventorytransaction"."quantity") FILTER (WHERE "inventory_inventorytransaction"."transaction_type" IN ('RESERVATION_RELEASE', 'RESERVATION')) AS "reserved"
-         FROM "inventory_inventorytransaction"
-        ${branch ? 'WHERE "inventory_inventorytransaction"."branch_id" = $1::uuid' : ''}
-        GROUP BY "inventory_inventorytransaction"."branch_id", "inventory_inventorytransaction"."variant_id"`,
-      branch ? [branch.id] : [],
-    );
-    const totals = new Map(
-      ledger.map((row) => [
-        `${row.branch_id} ${row.variant_id}`,
-        [pgInt(row.on_hand) ?? 0, pgInt(row.reserved) ?? 0] as const,
-      ]),
-    );
-    // Django's statement, every column of the three tables, in one order
-    // since D245: by branch, SKU and then the row's id.
-    const inventories = await this.db.query<InventoryRow>(
-      `SELECT ${INTEGRITY_SELECT} FROM ${I}
-         INNER JOIN "accounts_branch" ON (${I}."branch_id" = "accounts_branch"."id")
-         INNER JOIN "catalog_productvariant" ON (${I}."variant_id" = "catalog_productvariant"."id")
-        ${branch ? `WHERE ${I}."branch_id" = $1::uuid` : ''}
-        ORDER BY "accounts_branch"."code" ASC, "catalog_productvariant"."sku" ASC, ${I}."id" ASC`,
-      branch ? [branch.id] : [],
-    );
-    const issues: Record<string, unknown>[] = [];
-    for (const inventory of inventories) {
-      const [onHand, reserved] = totals.get(`${inventory.branch_id} ${inventory.variant_id}`) ?? [
-        0, 0,
-      ];
-      // Python compares ints exactly, a bigint sum included.
-      if (
-        BigInt(inventory.on_hand) !== BigInt(onHand) ||
-        BigInt(inventory.reserved) !== BigInt(reserved)
-      ) {
-        issues.push({
-          sku: inventory.v_sku,
-          branch: inventory.b_code,
-          cached_on_hand: inventory.on_hand,
-          ledger_on_hand: onHand,
-          cached_reserved: inventory.reserved,
-          ledger_reserved: reserved,
-        });
-      }
-    }
+    // The check itself is shared with the nightly job and `verify-inventory`.
+    const issues = (await stockDrift(this.db, branch?.id ?? null)).map((drift) => ({
+      sku: drift.sku,
+      branch: drift.branchCode,
+      cached_on_hand: drift.cachedOnHand,
+      ledger_on_hand: drift.ledgerOnHand,
+      cached_reserved: drift.cachedReserved,
+      ledger_reserved: drift.ledgerReserved,
+    }));
     return { clean: !issues.length, issue_count: issues.length, issues };
   }
 }

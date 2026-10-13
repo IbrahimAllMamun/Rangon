@@ -26,8 +26,8 @@ Next's `/api/proxy/` all arrive on one hostname, exactly as they would deployed.
 **The API is the NestJS one** (`api-nest`), as in production since 2026-10-08
 ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). It serves every
 request, sends the emails and fires the scheduled jobs. Django is not running day to day: it
-migrates and seeds through one-off containers (step 5), and is started when you want the Django
-admin or the API docs, or want the whole stack on Django again
+migrates and seeds through one-off containers (step 5), and is started when you want the whole
+stack on Django again
 ([§ 9a](#9a-django-on-demand-and-back-to-django)).
 
 Three deliberate differences from a real deployment:
@@ -176,6 +176,26 @@ the seed with a new password also replaces the README one on any account an olde
 `scripts/rebuild-local-prod.sh` reads `DJANGO_DEMO_SEED_PASSWORD` from the environment or from
 `.env.prod.local`, and stops before its teardown if it is missing.
 
+**A demo shop without Django** (since 2026-10-14). The same seeded shop can be restored from a
+snapshot, with no Django container at any point -- which is how it will have to be done once
+Django is gone ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md),
+decision 3). Make the snapshot once, on any machine with this checkout, **with a password of
+your own**; then restore it into this stack's database while that is still empty, in place of
+the migrate and seed above:
+
+```bash
+DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' scripts/demo-snapshot.sh make
+```
+
+```bash
+scripts/demo-snapshot.sh restore "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
+```
+
+The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore
+refuses a database that already has tables in it, so it cannot land on a shop. A snapshot made
+without `DJANGO_DEMO_SEED_PASSWORD` carries the password printed in the README, and says so when
+it is restored: that one is for test stacks, never for this one.
+
 ---
 
 ## 6. Start the stack
@@ -258,19 +278,19 @@ Every command below starts with the same words; `C` stands for them:
 C="docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml"
 ```
 
-**The Django admin and the API docs.** `http://localhost:4100/django-admin/`, `/api/docs/` and
-`/api/schema/` answer 503, with a line saying why, until Django is started:
-
-```bash
-$C --profile django up -d api worker
-```
-
-```bash
-$C --profile django stop api worker
-```
+**The Django admin and the API docs are gone.** `http://localhost:4100/django-admin/`,
+`/api/docs/` and `/api/schema/` answer 404 since 2026-10-14, whichever API serves
+([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md), decision 2): the
+admin showed nothing of the shop, and the schema was generated from Django's serializers. The
+back office is `/admin`. Django is still started on demand for a migration or a management
+command, with `run --rm api`, and for going back.
 
 The worker comes with it because whatever the admin queues goes to Celery. Nginx needs no restart
 for this.
+
+**An operator's command in the NestJS API.** `$C run --rm api-nest node dist/cli.js <command>`:
+the owner, the store and the two verifications have one there too
+([operator-commands.md](operator-commands.md)). Migrations do not, yet.
 
 **A management command.** `$C run --rm api python manage.py <command>`. If the command queues
 background jobs, either start the worker first or add `-e CELERY_TASK_ALWAYS_EAGER=1`.
@@ -435,8 +455,9 @@ forwards `Host $host`, which drops the port. So an image built for the tunnel's 
 used at `http://localhost:4100` refuses writes with **403 `CROSS_ORIGIN_REFUSED`** — build it for the
 address you use (§4), or browse through the tunnel.
 
-Nginx already treats any `*.trycloudflare.com` host as public and returns **403** for
-`/django-admin/`. That is deliberate: the Django admin is the last thing that should face the world.
+Nginx answers **404** for `/django-admin/`, `/api/docs/` and `/api/schema/` on every address,
+public or not: they were dropped (ADR-0020). It still knows a public host from a local one
+(`$via_public_tunnel`), for a guard on `/admin` or `/pos` if you want one.
 
 Before leaving anything exposed for more than an hour, read
 [cloudflare-local-setup.md §12](cloudflare-local-setup.md) and

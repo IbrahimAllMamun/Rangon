@@ -74,7 +74,9 @@ Each asserts both the API outcome **and** ledger integrity via `verify_integrity
 
 Since the cutover ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)) the
 E2E job in CI is a matrix of two: the web app on the NestJS API, which is what production runs,
-and on Django, which is what it goes back to. In both, Django migrates and seeds. A flow that
+and on Django, which is what it goes back to. On the Django leg, Django migrates and seeds. The
+NestJS leg has no Django in it since 2026-10-14: a job before it has Django seed a throwaway
+database and dump it (`scripts/demo-snapshot.sh`), and the leg restores that snapshot. A flow that
 passes on one and fails on the other is a difference the parity harness missed, or a difference
 in speed the suite was leaning on -- the first run on the NestJS API found one of those: eleven
 sign-ins inside a minute against a limit of ten.

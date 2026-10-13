@@ -22,6 +22,8 @@ coverage.xml
 /apps/api/media/
 # The recorded proof's snapshot and answers: made from the commit they sit beside.
 /apps/api-nest/parity/recorded/
+# The demo shop's snapshot (scripts/demo-snapshot.sh): likewise.
+/infrastructure/snapshots/
 /apps/api/logs/
 
 # --- node / next ---

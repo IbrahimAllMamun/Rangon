@@ -1,10 +1,11 @@
 # Removing Django: a plan
 
 **Status: accepted 2026-10-08 ([ADR-0020](decisions/0020-django-is-removed-in-steps.md)). Step 0's
-decisions are made; its wait has not begun. Step 1 is built as far as
-[recorded-proof.md](recorded-proof.md) says, which is not all of it: Django's own tests are
-not yet sorted and ported, and three defects it found (D243 to D245) stand between a recording
-and the order of a list. Nothing of Django's has been removed.** It follows
+decisions are made; its wait -- a month of the real shop on the NestJS API -- has not begun.
+Steps 1 to 5 are built (2026-10-09 to 2026-10-14; each step below says what was done and what
+was not). They are the reversible ones: Django still runs, still migrates production and is
+still the way back. What Django alone served, the admin and the API docs, is the one thing
+gone. Steps 6 to 8 are not started, and 6.4 is not authorised.** It follows
 from the cutover ([ADR-0017](decisions/0017-nest-api-serves-production.md)), which left Django out
 of serving requests and in charge of four other things.
 
@@ -134,6 +135,14 @@ browser suite, a local production stack -- cannot start without Django.
 Django container.
 **Size:** medium with the snapshot alone; large with the ported seed.
 
+*Done on 2026-10-14, the snapshot alone (2.2 is skipped by decision 3). `scripts/demo-snapshot.sh
+make` has Django migrate and seed a throwaway database and dumps it; `restore` puts it into an
+empty PostgreSQL with nothing but Docker. CI makes one per run, and the browser suite's NestJS
+leg restores it and has no Python in it. The parity stack already started from a snapshot with
+no Django: that is step 1's `replay`. Checked locally: the NestJS API on a restore, no Django
+anywhere, serves the storefront and signs the seeded owner in. **The browser suite itself on a
+restore runs in CI only** -- this machine cannot hold it. 2.3 waits on step 3.*
+
 ## 3. The Nest API can migrate the schema
 
 Drizzle is already the Nest API's view of the schema; it becomes the owner.
@@ -163,6 +172,13 @@ Drizzle is already the Nest API's view of the schema; it becomes the owner.
 exercised in CI only.
 **Size:** medium.
 
+*Done on 2026-10-14: [ADR-0022](decisions/0022-the-baseline-is-djangos-schema-as-dumped.md).
+The baseline is `pg_dump`'s own output, cut by `scripts/nest-baseline.sh cut`; `node
+dist/cli.js migrate` runs it on an empty database and adopts one Django built; `sync-permissions`
+writes the roles. `scripts/nest-baseline.sh compare` is the proof and runs in CI: identical
+schema dumps, the same rows, Django content to take such a database over. 3.6's check was not
+added (the ADR says why), and 3.5's contract migration waits for step 8 as planned.*
+
 ## 4. The operator commands, in Nest
 
 One entry point (`node dist/cli.js <command>`), each command with a test and compared with
@@ -182,6 +198,16 @@ equivalent beside it: `new-store-from-scratch.md`, `upgrading-local-production.m
 `deployment.md`, `disaster-recovery.md`, `local-production.md`.
 
 **Size:** medium.
+
+*Done on 2026-10-14, but for `seed-demo`, which decision 3 replaced with a snapshot. The four
+commands are in `apps/api-nest/src/cli/`; `scripts/nest-commands.sh compare` runs each beside
+Django's on copies of one database, in CI: the rows they leave are the same and so are the
+lines they print. The two integrity checks are one implementation each, shared by the command,
+the API's endpoint and the nightly job. The operations pages: one new page,
+[operator-commands.md](../operations/operator-commands.md), has every equivalent and how to
+run it, and the five pages named above each point to it where they give Django's command --
+beside the command for the owner, the store and the two verifications, once per page for the
+rest. `migrate` is listed there as not yet for production.*
 
 ## 5. The Django admin and the API docs
 

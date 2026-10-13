@@ -101,26 +101,14 @@ server {
         proxy_pass http://rangon_web;
     }
 
-    # --- Django, on demand -------------------------------------------------
-    # The Django admin, the OpenAPI schema and its Swagger page are Django's
-    # alone: the NestJS API has none of them. Django is not started with the
-    # stack (`--profile django up -d api worker` starts it), so these resolve
-    # its name per request -- a `proxy_pass` to a variable -- where an
-    # `upstream` block would stop nginx from starting at all while the
-    # container is down. Docker's embedded DNS is at 127.0.0.11.
-    location @django_off {
-        default_type text/plain;
-        return 503 "Django is not running. The admin and the API docs are served on demand:\n  docker compose ... --profile django up -d api worker\n";
-    }
-
-    location ~ ^/(django-admin|api/schema|api/docs)/ {
-        # Restrict to the office network before go-live.
-        # allow 203.0.113.0/24; deny all;
-        resolver 127.0.0.11 valid=10s ipv6=off;
-        set $rangon_django http://api:8000;
-        proxy_pass $rangon_django;
-        proxy_connect_timeout 3s;
-        error_page 502 504 = @django_off;
+    # --- What Django alone served --------------------------------------------
+    # The Django admin, the OpenAPI schema and its Swagger page were dropped,
+    # not replaced (ADR-0020, decision 2): the admin showed nothing of the
+    # shop, and the schema was generated from Django's serializers. Refused
+    # here whichever API serves, so that going back to Django
+    # (docker-compose.django.yml) does not put them on the public address.
+    location ~ ^/(django-admin|api/schema|api/docs)(/|$) {
+        return 404;
     }
 
     # --- The API ------------------------------------------------------------

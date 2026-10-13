@@ -130,6 +130,9 @@ database user's password is changed, or the app fails between the two steps.
 
 ## 7. Corrupted inventory data
 
+Either API's command does this; the NestJS API's is `run --rm api-nest node dist/cli.js
+verify-inventory`, with the same flags ([operator-commands.md](operator-commands.md)).
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm api python manage.py verify_inventory --branch <code>   # report drift
 docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm api python manage.py verify_inventory --fix --reason "DR-<date> reconciliation"

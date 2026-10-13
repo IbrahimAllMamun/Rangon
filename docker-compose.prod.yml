@@ -153,8 +153,9 @@ services:
     image: nginx:1.27-alpine
     depends_on: !override [api-nest, web]
     environment:
-      # Where `/api/` and `/media/` go. `/django-admin/`, `/api/docs/` and
-      # `/api/schema/` always go to Django, and say so when it is not running.
+      # Where `/api/` and `/media/` go. The Django admin and the API docs
+      # (`/django-admin/`, `/api/docs/`, `/api/schema/`) are refused by nginx
+      # whichever API this names: dropped, ADR-0020.
       RANGON_API_UPSTREAM: api-nest:3000
       # Substituted into default.conf.template. No default: a blank server_name
       # would match nothing and the certificate path would not exist, which is

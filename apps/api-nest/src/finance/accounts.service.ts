@@ -45,6 +45,7 @@ import { Database, Queryable } from '../database/database.service';
 import { Params as SqlParams } from '../database/sql';
 import { dataGet, pyTruthy } from '../http/request-body';
 import { CashBookService } from './cash-book.service';
+import { balanceDrift } from './integrity';
 
 /**
  * `finance.api.views`: accounts and the cash book. An account's balance is a
@@ -776,36 +777,18 @@ export class AccountsService {
     const branchId = pyTruthy(asked)
       ? (await this.permissions.resolveBranch(user, asked)).id
       : null;
-    const rows = await this.db.query<{
-      id: string;
-      name: string;
-      branch_code: string;
-      balance: string;
-      ledger: string | null;
-    }>(
-      `SELECT ${A}."id", ${A}."name", "accounts_branch"."code" AS "branch_code", ${A}."balance",
-              (SELECT SUM(t."amount") FROM ${T} t WHERE t."account_id" = ${A}."id") AS "ledger"
-         ${ACCOUNT_FROM} ${branchId ? `WHERE ${A}."branch_id" = $1` : ''}
-        ORDER BY ${ACCOUNT_ORDER.join(', ')}`,
-      branchId ? [branchId] : [],
-    );
-    const issues = rows
-      .map((row) => ({
-        cached: quantize(row.balance),
-        ledger: quantize(row.ledger ?? ZERO),
-        row,
-      }))
-      .filter((issue) => !issue.cached.eq(issue.ledger));
+    // The check itself is shared with `verify-accounts`.
+    const issues = await balanceDrift(this.db, branchId);
     return {
       clean: issues.length === 0,
       issue_count: issues.length,
-      issues: issues.map(({ row, cached, ledger }) => ({
-        account_id: row.id,
-        account: row.name,
-        branch: row.branch_code,
-        cached_balance: money(cached),
-        ledger_balance: money(ledger),
-        drift: money(quantize(cached.minus(ledger))),
+      issues: issues.map((drift) => ({
+        account_id: drift.accountId,
+        account: drift.name,
+        branch: drift.branchCode,
+        cached_balance: money(drift.cached),
+        ledger_balance: money(drift.ledger),
+        drift: money(quantize(drift.cached.minus(drift.ledger))),
       })),
     };
   }

@@ -16,8 +16,9 @@ export const KNOWN_DIFFERENCES: KnownDifference[] = [
     reason:
       "Django's own pages (ADR-0017): the router's index (`/api/v1/`, `/api/v1/pos/`), the OpenAPI " +
       'schema and its Swagger page (`/api/schema/`, `/api/docs/`) and the Django admin are not in the ' +
-      'Nest API, which answers each 404. Nothing in the web app calls them; Django serves the last ' +
-      'three on demand.',
+      'Nest API, which answers each 404. Nothing in the web app calls them, and production no ' +
+      'longer serves the last three at all (ADR-0020): Django answers them here because the ' +
+      'harness asks it directly.',
     appliesTo: (testCase) => testCase.name.startsWith('django only: '),
   },
   {
