@@ -101,9 +101,10 @@ Today "the Nest API is right" means "it answered as Django just did". This step 
    makes those tests mandatory.
    *Sorted on 2026-10-13 and 14, by coverage: [djangos-tests-sorted.md](djangos-tests-sorted.md).
    What a request can reach and no case did came to 28 functions; 25 have cases now, and both
-   APIs agreed on all 40 of them. Three are reached only in a shop with nothing in it, and
-   want an empty flavour of the parity stack. None wanted a Nest test against a database:
-   every one was a parity case.*
+   APIs agreed on all 40 of them. Three are reached only in a shop with nothing in it, and are
+   compared on a database of their own (`scripts/nest-parity.sh empty`, 174 answers, all
+   agreeing). None wanted a Nest test against a database: every one was a parity case.
+   **Done**, but for recording the empty shop's answers before step 6.*
 7. **Run both proofs in CI, side by side**, until step 6. While they agree, the recording is
    known to be faithful.
 

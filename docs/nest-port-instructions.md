@@ -147,6 +147,17 @@ Drops the parity database, starts both APIs, seeds the demo data and applies eve
 it before a run you will report, and after any manual probe that wrote to the database.
 
 ```bash
+scripts/nest-parity.sh empty
+```
+
+The same two APIs on **a shop with nothing in it**, which no case on the seeded shop can
+reach: migrated with one owner (`createsuperuser`), then with `scripts/bootstrap-store.py` run
+on it, and 87 requests compared at each stage (`parity/empty-shop-cases.ts`). It drops the
+parity database as `reset` does, and `reset` brings the seeded shop back. About two minutes.
+A change to what a new installation sees -- `me`, the organisation, the first import, any
+list on an empty table -- is checked here, not by `run`.
+
+```bash
 scripts/nest-parity.sh up
 ```
 

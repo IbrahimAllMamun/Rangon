@@ -8,6 +8,10 @@
 #                                   then `worker`
 #   scripts/nest-parity.sh worker   the Nest worker on what the API queues: run, retried, closed
 #   scripts/nest-parity.sh reset    DESTRUCTIVE to the parity database only: drop it, then up + seed
+#   scripts/nest-parity.sh empty    DESTRUCTIVE likewise: a shop on its first day instead of the seeded
+#                                   one, compared at two moments -- migrated with one owner, then with
+#                                   `scripts/bootstrap-store.py` run on it (parity/empty-shop-cases.ts).
+#                                   `reset` brings the seeded shop back
 #
 # The proof that needs no Django (docs/architecture/recorded-proof.md):
 #   scripts/nest-parity.sh record   after `reset`: a snapshot of the database and the uploads, then
@@ -227,6 +231,25 @@ print("bucket", storage.bucket_name, "ready")'
     ;;
   replay-down)
     "${recorded[@]}" --profile restore --profile replay --profile worker --profile throttle down -v --remove-orphans
+    ;;
+  empty)
+    # What a new installation is, and no case on the seeded shop can reach:
+    # nothing can empty that one. The same steps as the new-store guide
+    # (docs/operations/new-store-from-scratch.md), with the cases run after
+    # each. Both stages run whatever the first finds.
+    "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle --profile s3 down -v --remove-orphans
+    bash "$0" up
+    "${compose[@]}" exec -T django sh -c 'mkdir -p /app/media && chmod -R a+rwX /app/media'
+    # No password: the harness mints its own tokens, and nobody signs in.
+    "${compose[@]}" exec -T -e DJANGO_SUPERUSER_EMAIL=owner@rangon.test django python manage.py createsuperuser --noinput
+    status=0
+    "${compose[@]}" run --rm -e PARITY_SHOP=unopened -e PARITY_RACES=none \
+      -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity || status=$?
+    "${compose[@]}" exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 \
+      -e WEB_REVALIDATE_URL= django python manage.py shell < scripts/bootstrap-store.py
+    "${compose[@]}" run --rm -e PARITY_SHOP=opened -e PARITY_RACES=none \
+      -e PARITY_ONLY="${PARITY_ONLY:-}" -e PARITY_VERBOSE="${PARITY_VERBOSE:-}" parity || status=$?
+    exit "$status"
     ;;
   reset)
     # Every profile: a container left from one of them still names the network

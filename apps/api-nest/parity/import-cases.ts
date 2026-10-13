@@ -17,7 +17,7 @@ import { STOCK_EFFECTS } from './inventory-cases.ts';
 import { restoreSequences, restoreTables } from './restore.ts';
 import type { Case } from './run.ts';
 
-const TABLES = [
+export const IMPORT_TABLES = [
   'catalog_product',
   'catalog_productvariant',
   'catalog_variantattributevalue',
@@ -29,7 +29,7 @@ const TABLES = [
   'inventory_inventorytransaction',
 ];
 
-const EFFECTS = [
+export const IMPORT_EFFECTS = [
   ...STOCK_EFFECTS,
   `SELECT p.name, p.slug, c.slug AS category, b.slug AS brand, p.short_description, p.description,
           p.material, p.care_instructions, p.status, p.published, u.email AS created_by,
@@ -55,7 +55,7 @@ const EFFECTS = [
 ];
 
 async function reset(client: pg.Client): Promise<void> {
-  await restoreTables(client, TABLES);
+  await restoreTables(client, IMPORT_TABLES);
   await restoreSequences(client);
 }
 
@@ -107,7 +107,7 @@ export async function importCases(): Promise<Case[]> {
       headers: { ...auth(who), 'content-type': `multipart/form-data; boundary=${boundary}` },
       body: multipart(parts, boundary),
       reset,
-      effects: EFFECTS,
+      effects: IMPORT_EFFECTS,
       jobs: true,
     });
   };
@@ -281,7 +281,7 @@ export async function importCases(): Promise<Case[]> {
     headers: { ...auth('owner'), 'content-type': 'application/json' },
     body: JSON.stringify({ file: 'x', dry_run: true }),
     reset,
-    effects: EFFECTS,
+    effects: IMPORT_EFFECTS,
     jobs: true,
   });
   cases.push({
@@ -291,7 +291,7 @@ export async function importCases(): Promise<Case[]> {
     headers: { ...auth('owner'), 'content-type': 'application/x-www-form-urlencoded' },
     body: 'file=x&dry_run=true',
     reset,
-    effects: EFFECTS,
+    effects: IMPORT_EFFECTS,
     jobs: true,
   });
   cases.push({

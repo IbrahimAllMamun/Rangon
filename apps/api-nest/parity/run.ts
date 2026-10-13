@@ -62,6 +62,7 @@ import { posVoidCases } from './pos-void-cases.ts';
 import { reportsCases } from './reports-cases.ts';
 import { returnsCases } from './returns-cases.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
+import { emptyShopCases, type Stage } from './empty-shop-cases.ts';
 import { expensesCases } from './expenses-cases.ts';
 import { purchaseOrderCases } from './purchase-order-cases.ts';
 import { purchaseOrderConcurrencyChecks } from './purchase-order-concurrency.ts';
@@ -1174,7 +1175,12 @@ async function main(): Promise<void> {
   // recording began (recording.ts, "The clock").
   const began = await beginWhereRecorded(mode);
   if (began) console.log(`the replay ${began}`);
-  const cases = await buildCases();
+  // PARITY_SHOP: a shop on its first day instead of the seeded one, and its
+  // own cases (empty-shop-cases.ts; `scripts/nest-parity.sh empty`).
+  const stage = (process.env.PARITY_SHOP || undefined) as Stage | undefined;
+  if (stage && !['unopened', 'opened'].includes(stage))
+    throw new Error(`PARITY_SHOP is "unopened" or "opened", not "${stage}".`);
+  const cases = stage ? await emptyShopCases(stage) : await buildCases();
   let failed = 0;
   let known = 0;
   const knownReasons = new Map<string, number>();

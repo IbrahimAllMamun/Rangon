@@ -160,6 +160,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A shop on its first day, which no case on the seeded one can reach:
+      # migrated with one owner, then with the store bootstrapped. First,
+      # because it is quick and because `reset` then replaces its database.
+      - name: Compare both APIs on a shop with nothing in it yet
+        run: bash scripts/nest-parity.sh empty
+
       - name: Start both APIs, migrate, seed, apply the parity fixtures
         run: bash scripts/nest-parity.sh reset
 
