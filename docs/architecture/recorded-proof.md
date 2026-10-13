@@ -341,8 +341,10 @@ port's unit tests do. The two runs and the script that subtracts them were prepa
 3. **A replay of a recording more than a day old.** Every replay so far was within hours of its
    recording. ADR-0021 says why the set clock should hold at any distance; the first replay at
    a distance is what shows it.
-4. **The workflow has not run on GitHub.** `ci.yml` now records and replays in the parity job.
-   That is verified when that job has run on a pull request, not before.
+4. ~~The workflow has not run on GitHub.~~ It has, three times, and each of the first two runs
+   found something no local run had: the clock (D247, four audit-log cases), then a grouped
+   query with no order (D248, one case). A runner is another machine, and that is what it is
+   for. A green run is still owed.
 5. **Uploads in a bucket.** The recording is of the stack with its uploads on disk; the
    `PARITY_S3=1` comparison has no recorded counterpart.
 6. **Where a recording lives once Django cannot make another.** Today it is made from the

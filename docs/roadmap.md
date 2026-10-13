@@ -495,6 +495,27 @@ is still open and tracked in
 
 ## Verification log
 
+### The recorded proof on GitHub, second run: the clock holds, and one more answer that depended on row order, 2026-10-13
+
+Asked for: "do item 1" -- confirm that `main`'s parity job goes green after PR #94 and PR #95.
+It did not, quite (run 38335166774). Branch `fix/valuation-branches-in-one-order`.
+
+```text
+comparison with Django ............. 12,243 of 12,243; 224 races
+replay, no Django .................. began 48.5 s behind the recording, and waited for it (D247's fix, working)
+                                     12,242 of 12,243 as recorded; 1 differs: the stock valuation's `by_branch`
+after the fix, locally ............. the 376 inventory cases, both APIs, fresh database: 376 match; Django's test_one_order.py 35 pass (1 new)
+```
+
+**D248.** The valuation groups stock by branch and asked for no order; on GitHub the two
+branches came back the other way round in the replay. Ordered by code, then name, in Django
+and in the port. The other grouped queries in Django were read again: each has an order or is
+read into a dictionary, where order does not show.
+
+**Not rerun in full.** The whole comparison and replay were not repeated for a one-line
+ordering in each API; the inventory cases were. The proof of the fix is the next run of the
+parity job on GitHub.
+
 ### The guards ADR-0020 put first, fixed in both APIs: D149, D158, D166, D167, D204, D221's lock, D233, 2026-10-13
 
 Asked for: "do item 1 then item 4" -- item 4 being the first row of
@@ -5332,6 +5353,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D245 | **A list ordered by a column that ties can show a row twice across its pages, or not at all.** Wherever a list's ordering does not tell two rows apart -- `?ordering=on_hand` on the inventory, a supplier's offers by `-is_preferred, last_cost`, the notifications newest first when several were made in one instant, the dashboard's ten best sellers by units sold, the home page's featured products -- PostgreSQL returns the tied rows as they lie, and that changes with every update of one of them. A page that ends inside the tie then shows a different row from one request to the next. D161 is one instance; this is the class. Measured on 2026-10-09: of 12,243 parity cases, **546** answer with tied rows in another order once every table is turned over, and a further handful are pages cut through a tie. Both APIs: the port's statements are Django's. *Found as D243 was.* | Medium | **Fixed in Django 2026-10-12 and in the NestJS API 2026-10-13** (`uniqueLast` in `common/filtering.ts`, at the 43 places an ordering is built; the statements' own last keys elsewhere). `core.ordering.unique_last` ends whatever a queryset is ordered by with its primary key. `core.filters.OrderingFilter` (now the default backend, and the one the three view modules that name their own import) applies it to every list, `core.pagination.StandardPagination` to every page, and the reports' breakdowns and "first ten" name a last key of their own. The lists inside a row (D161's kind: a return's lines, a transfer's, a stock count's, a purchase order's and a delivery's) had no ordering at all and now come in the order they were entered, `created_at, id`; order events, shipping methods and zones end theirs with the id; and every "first so many" -- the home page's rows, a customer's newest orders, the counter's grid, suggestions, the two digests -- is cut through an order that ends with the key. **Measured on Django itself**, asked twice on one restored database, the second time with every table's rows turned over: 0 of 12,243 cases answer with tied rows in another order, where 546 did. `apps/api/core/ordering.py`, `core/filters.py`, `core/pagination.py`, `reports/services.py`, `tests/test_one_order.py` |
 | D246 | **The reservation sweep cancels an order somebody has paid towards.** `release_expired_reservations` chose by status alone: `PENDING`, online, past the window, no cash-on-delivery payment. Capturing a payment does not confirm an order -- staff do -- so a transfer recorded against an order nobody then confirmed within the hour was cancelled as `PAYMENT_TIMEOUT`, its stock released, the money kept and nothing refunding it. §1.5 says "awaiting prepayment". *Found fixing D233, whose title says "paid for" and whose measurement was a confirmation.* | High | **Fixed in Django and in the NestJS API, 2026-10-13**, with D233: the sweep lists only orders that hold nobody's money (paid no more than refunded, so one paid and refunded in full still expires), and `expire_reservation` asks the same under the lock. Such an order now waits for staff: to be confirmed, or cancelled with its refund. `orders/tasks.py`, `job-handlers.service.ts` |
 | D247 | **A recording taken straight after anything had written to its database did not replay.** The replay's clocks are set a minute and a half behind the recording's age, for the stack to come up in, so its harness began up to that much earlier than the recording's had; and the cases are built from the clock -- what an API mints is told from what was there by being newer than the harness. A row made in the two minutes before the recording was older than one harness and newer than the other. Straight after a reset, 109 cases differed, each by a timestamp read as "now" on one side; and **the first run of the recorded proof on GitHub failed on it** (`main`, 2026-10-12): four cases of the audit log, whose rows the comparison's races had written seconds before the recording began. *Found replaying a recording of merged `main` on 2026-10-13, an hour before that run's log could be read.* | Low | **Fixed 2026-10-13.** A recording keeps the instant its harness began (`began.txt`); a replay waits for it before it builds a case. `apps/api-nest/parity/recording.ts`, `run.ts` |
+| D248 | **The stock valuation lists its branches in no stated order.** `GET /inventory/valuation/` groups the stock by branch and asks for no order, so `by_branch` comes back as the planner hashed the groups. The sweep for D245 looked for orderings that tie and missed a grouped query with none at all; the other grouped queries were read again, and each is ordered or is read into a dictionary. *Found by the recorded proof's second run on GitHub (`main`, 2026-10-13): one case of 12,243, the two branches having changed places between the recording and its replay on one database. It never did locally.* | Low | **Fixed in Django and in the NestJS API, 2026-10-13.** Ordered by the branch's code, then its name. `inventory/api/views.py`, `inventory-admin.service.ts`, `tests/test_one_order.py` |
 
 ## Still API-only (no UI)
 
