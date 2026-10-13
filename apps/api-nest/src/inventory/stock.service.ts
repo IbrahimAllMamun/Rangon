@@ -461,8 +461,12 @@ export class StockService {
       materialised.map(([variantId]) => variantId),
     );
 
-    // `_check_can_reserve`, every line before any is written.
-    for (const [variantId, quantity] of materialised) {
+    // `_check_can_reserve`, before any line is written, on what each variant
+    // is asked for in all: a SKU on two lines is one question (D149).
+    const asked = new Map<string, number>();
+    for (const [variantId, quantity] of materialised)
+      asked.set(variantId, (asked.get(variantId) ?? 0) + quantity);
+    for (const [variantId, quantity] of asked) {
       const inventory = inventories.get(variantId) as LockedInventory;
       const available = inventory.on_hand - inventory.reserved;
       if (quantity > 0 && available < quantity && !this.env.RANGON_ALLOW_OVERSELL) {
@@ -543,9 +547,10 @@ export class StockService {
 
   /**
    * `_bulk` for a movement of stock on hand (a sale out, a return in): the
-   * rows locked, every line checked against the shelf as locked -- a SKU on
-   * two lines is checked twice against the same figure -- and then each line
-   * written at the row's average cost.
+   * rows locked, what each variant is asked for in all checked against the
+   * shelf as locked, and then each line written at the row's average cost.
+   * A SKU on two lines was once checked twice against the same figure and
+   * taken twice: 3 and 3 from a shelf of 5 left -1 on hand (D149).
    */
   private async bulk(
     tx: Queryable,
@@ -569,10 +574,14 @@ export class StockService {
       materialised.map(([variantId]) => variantId),
     );
     const sign = BigInt(SIGN[movement.type] as number);
-    for (const [variantId, quantity] of materialised) {
+    const asked = new Map<string, bigint>();
+    for (const [variantId, quantity] of materialised)
+      asked.set(variantId, (asked.get(variantId) ?? 0n) + BigInt(quantity));
+    for (const [variantId, quantity] of asked) {
       const inventory = inventories.get(variantId) as LockedInventory;
-      this.checkCanReduce(inventory, exact(sign * BigInt(quantity)));
-      if (movement.respectReservations) await this.checkCounterCanTake(tx, inventory, quantity);
+      this.checkCanReduce(inventory, exact(sign * quantity));
+      if (movement.respectReservations)
+        await this.checkCounterCanTake(tx, inventory, exact(quantity));
     }
     const entries: LedgerEntry[] = [];
     for (const [variantId, quantity] of materialised) {

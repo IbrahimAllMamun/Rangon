@@ -124,6 +124,7 @@ export class OrdersController {
       lookupParam(pk),
       query,
       requestData(request),
+      idempotencyKey(request),
       auditContext(request, this.env),
     );
   }

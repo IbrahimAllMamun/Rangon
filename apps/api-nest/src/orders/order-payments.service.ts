@@ -5,13 +5,20 @@ import { Injectable } from '@nestjs/common';
 import { money, quantize, ZERO } from '../checkout/pricing';
 import { AuditActor, AuditContext, recordAudit } from '../common/audit';
 import { Dec } from '../common/decimal';
-import { Conflict, RefundExceedsCaptured, ValidationError } from '../common/errors';
+import {
+  Conflict,
+  PaymentExceedsOutstanding,
+  RefundExceedsCaptured,
+  ValidationError,
+} from '../common/errors';
 import { pySlice } from '../common/python';
 import { Queryable } from '../database/database.service';
 import { CashBookService } from '../finance/cash-book.service';
 import { OrderRef, OrderWritesService } from './order-writes.service';
 
 const CAPTURED_STATES = new Set(['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED']);
+/** `OWES_NOTHING`: cancelled, or the goods came back -- whatever the totals say. */
+const OWES_NOTHING = new Set(['CANCELLED', 'RETURNED', 'REFUNDED']);
 
 /** A payment taken by a member of staff, as `record_payment` takes it. */
 export interface TakenPayment {
@@ -22,6 +29,8 @@ export interface TakenPayment {
   reference: string;
   /** The account the cashier named; else the branch's own for the method. */
   accountId: string | null;
+  /** The request's `Idempotency-Key`, where the payment is recorded on its own. */
+  idempotencyKey?: string | null;
 }
 
 /**
@@ -71,9 +80,10 @@ export class OrderPayments {
       `INSERT INTO orders_payment
          (id, created_at, updated_at, order_id, method, status, amount, tendered_amount, change_amount,
           currency, provider, provider_reference, reference, payload, authorized_at, captured_at,
-          failed_at, refunded_total, account_id, created_by_id)
+          failed_at, refunded_total, account_id, created_by_id, idempotency_key)
        VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3, 'CAPTURED', $4, $5, $6, $7,
-               'manual', '', $8, '{}'::jsonb, NULL, $9::timestamptz, NULL, 0.00, $10::uuid, $11::uuid)`,
+               'manual', '', $8, '{}'::jsonb, NULL, $9::timestamptz, NULL, 0.00, $10::uuid, $11::uuid,
+               $12)`,
       [
         paymentId,
         order.id,
@@ -86,6 +96,7 @@ export class OrderPayments {
         now,
         payment.accountId,
         actor.id,
+        payment.idempotencyKey || null,
       ],
     );
 
@@ -144,6 +155,136 @@ export class OrderPayments {
       branchId: order.branchId,
     });
     return paymentId;
+  }
+
+  /**
+   * `receive_payment`: staff record money actually received -- a courier's
+   * remittance, a transfer, cash. A payment of this method and amount that
+   * was waiting is captured; otherwise a new captured payment is recorded.
+   * Either way, under the order's lock: the request's `Idempotency-Key` names
+   * the payment, so the request sent again is answered with the payment it
+   * made the first time; nothing is taken on an order that owes nothing, or
+   * past what it owes; and the account is set here, so one the money cannot
+   * land in is refused with the waiting payment left as it was (D167).
+   */
+  async receive(
+    tx: Queryable,
+    context: AuditContext,
+    orderId: string,
+    payment: {
+      method: string;
+      amount: Dec;
+      reference: string;
+      accountId: string | null;
+      idempotencyKey: string | null;
+    },
+    actor: AuditActor,
+  ): Promise<void> {
+    type Locked = {
+      id: string;
+      number: string;
+      status: string;
+      branch_id: string;
+      branch_code: string;
+      currency: string;
+      grand_total: string;
+      paid_total: string;
+    };
+    const order = (await tx.one<Locked>(
+      `SELECT o."id", o."number", o."status", o."branch_id", b."code" AS "branch_code",
+              o."currency", o."grand_total", o."paid_total"
+         FROM "orders_order" o JOIN "accounts_branch" b ON b."id" = o."branch_id"
+        WHERE o."id" = $1 LIMIT 21 FOR UPDATE OF o`,
+      [orderId],
+    )) as Locked;
+    const amount = quantize(payment.amount);
+    if (amount.lte(ZERO)) throw new ValidationError('Payment amount must be positive.');
+
+    const key = payment.idempotencyKey || null;
+    /** The payment a key already names -- if it is this order's. */
+    const replayed = async (): Promise<boolean> => {
+      if (key === null) return false;
+      const existing = await tx.one<{ order_id: string }>(
+        `SELECT "order_id" FROM "orders_payment" WHERE "orders_payment"."idempotency_key" = $1
+          ORDER BY "orders_payment"."created_at" ASC LIMIT 1`,
+        [key],
+      );
+      if (!existing) return false;
+      if (existing.order_id !== order.id)
+        throw new Conflict('That Idempotency-Key was used for a payment on another order.');
+      return true;
+    };
+    if (await replayed()) return;
+
+    if (OWES_NOTHING.has(order.status))
+      throw new Conflict(`An order in status ${order.status} takes no payment.`);
+    const outstanding = quantize(new Dec(order.grand_total).minus(order.paid_total));
+    if (amount.gt(outstanding)) {
+      throw new PaymentExceedsOutstanding(
+        `Only ${money(outstanding)} is outstanding on ${order.number}.`,
+        {
+          details: {
+            requested: money(amount),
+            outstanding: money(outstanding),
+            grand_total: order.grand_total,
+            paid_total: order.paid_total,
+          },
+        },
+      );
+    }
+
+    // The key is unique: the same key on two orders at once is a loss on the
+    // index, which the lookup after it turns into an answer.
+    await tx.query('SAVEPOINT receive_payment');
+    try {
+      const pending = await tx.one<{ id: string; amount: string }>(
+        `SELECT "id", "amount" FROM "orders_payment"
+          WHERE ("orders_payment"."order_id" = $1 AND "orders_payment"."method" = $2
+                 AND "orders_payment"."status" = 'PENDING')
+          ORDER BY "orders_payment"."created_at" ASC, "orders_payment"."id" ASC
+          LIMIT 1 FOR UPDATE`,
+        [order.id, payment.method],
+      );
+      if (pending && new Dec(pending.amount).eq(amount)) {
+        // The account is chosen at capture, because that is when the money arrives.
+        await tx.query(
+          `UPDATE "orders_payment"
+              SET "updated_at" = clock_timestamp(),
+                  "account_id" = CASE WHEN $2::uuid IS NULL THEN "account_id" ELSE $2::uuid END,
+                  "idempotency_key" = $3
+            WHERE "orders_payment"."id" = $1`,
+          [pending.id, payment.accountId, key],
+        );
+        await this.capture(tx, context, pending.id, { actor });
+      } else {
+        await this.recordCaptured(
+          tx,
+          context,
+          {
+            id: order.id,
+            number: order.number,
+            branchId: order.branch_id,
+            currency: order.currency,
+            grandTotal: order.grand_total,
+            branchCode: order.branch_code,
+          },
+          {
+            method: payment.method,
+            amount,
+            tenderedAmount: null,
+            reference: payment.reference,
+            accountId: payment.accountId,
+            idempotencyKey: key,
+          },
+          actor,
+        );
+      }
+      await tx.query('RELEASE SAVEPOINT receive_payment');
+    } catch (error) {
+      if (!String((error as { code?: string }).code).startsWith('23')) throw error;
+      await tx.query('ROLLBACK TO SAVEPOINT receive_payment');
+      if (!(await replayed())) throw error;
+    }
   }
 
   /**
@@ -286,8 +427,6 @@ export class OrderPayments {
       actor: AuditActor;
       reason: string;
       method?: string | null;
-      /** The method as the caller sent it, where a view passes it on unvalidated (D158). */
-      auditMethod?: unknown;
       /** The reason as the caller holds it, where it is not a string: the timeline keeps it so. */
       reasonData?: unknown;
       accountId?: string | null;
@@ -467,7 +606,7 @@ export class OrderPayments {
       newValues: {
         order: order.number,
         amount: money(amount),
-        method: refund.method && refund.auditMethod !== undefined ? refund.auditMethod : method,
+        method,
       },
       reason: refund.reason,
       branchId: order.branch_id,

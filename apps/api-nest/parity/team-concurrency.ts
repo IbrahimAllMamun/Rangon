@@ -145,14 +145,19 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
       detail: `statuses ${statuses(profiles).join(',')}, ${made?.count} profile`,
     });
 
-    // 3. The second owner switched off while the first's deactivation waits to write.
+    // 3. The second owner switched off while the first's deactivation waits for
+    // the owners' rows. Both are held, in the order the guard takes them: one
+    // held alone could be waited for with the other already taken.
     for (const [side, api] of SIDES) {
       await restore();
       await twoOwners();
       const held = await behind(
         db,
-        [`SELECT id FROM accounts_user WHERE id = $1 FOR UPDATE`, [ids.owner]],
-        '%UPDATE%accounts_user%',
+        [
+          `SELECT id FROM accounts_user WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+          [[ids.owner, ids.owner2]],
+        ],
+        '%accounts_user%FOR UPDATE%',
         [() => request(api, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {})],
         async (holder) => {
           await holder.query(
@@ -164,11 +169,41 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
       const answer = held.responses[0];
       const left = await activeOwners();
       checks.push({
-        name: `team: the second owner switched off while the first's deactivation (${side}) waits to write -- it was judged with two owners and goes through: no active owner is left (copied: the guard takes no lock)`,
-        passed: held.queued === 1 && answer?.status === 200 && left === 0,
-        detail: `${answer?.status}, ${held.queued ? 'its write waited' : 'never waited'}, ${left} active owners left`,
+        name: `team: the second owner switched off while the first's deactivation (${side}) waits on the owners' rows -- it is judged with one owner and refused: the guard's lock holds`,
+        passed: held.queued === 1 && answer?.status === 400 && left === 1,
+        detail: `${answer?.status}, ${held.queued ? 'waited on the owners' : 'never waited'}, ${left} active owner(s) left`,
       });
     }
+
+    // 3a. The last two owners switched off at once, one through each API.
+    await restore();
+    await twoOwners();
+    const lastTwo = await Promise.all([
+      request(apis.DJANGO, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
+      request(apis.NEST, 'admin', 'POST', `/api/v1/users/${ids.owner2}/deactivate/`, {}),
+    ]);
+    const kept = await activeOwners();
+    checks.push({
+      name: 'team: the last two owners switched off at once, one through each API -- one goes, the other is refused, an owner is left',
+      passed: statuses(lastTwo).join() === '200,400' && kept === 1,
+      detail: `statuses ${statuses(lastTwo).join(',')}, ${kept} active owner(s) left`,
+    });
+
+    // 3b. One owner switched off while the other is demoted, at once.
+    await restore();
+    await twoOwners();
+    const offAndDown = await Promise.all([
+      request(apis.NEST, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
+      request(apis.DJANGO, 'admin', 'PATCH', `/api/v1/users/${ids.owner2}/`, {
+        role_code: 'MANAGER',
+      }),
+    ]);
+    const stillOwner = await activeOwners();
+    checks.push({
+      name: 'team: one owner switched off while the other is demoted, one through each API -- one goes through, the other is refused, an owner is left',
+      passed: statuses(offAndDown).join() === '200,400' && stillOwner === 1,
+      detail: `statuses ${statuses(offAndDown).join(',')}, ${stillOwner} active owner(s) left`,
+    });
 
     // 4. A password changed while an edit of the account's name waits to write.
     for (const [side, api] of SIDES) {

@@ -621,16 +621,26 @@ export class StaffUsersService {
     return this.serialise(await this.byId(id), await this.seesProfiles(user));
   }
 
+  /**
+   * `_other_active_owners`: how many active owners there are besides this
+   * one -- with their rows locked. The lock is the guard: counting and then
+   * writing let two requests, each switching off one of the last two owners,
+   * both count the other and both go ahead (D221). Every caller takes the
+   * same rows in the same order and holds them until its own write commits.
+   */
   private async activeOwnersBeside(tx: Queryable, userId: string): Promise<number> {
-    const row = await tx.one<{ count: string }>(
-      `SELECT COUNT(*) AS "count" FROM ${U} INNER JOIN ${R} ON (${U}."role_id" = ${R}."id")
-        WHERE (${R}."code" = 'OWNER' AND ${U}."status" = 'ACTIVE' AND NOT (${U}."id" = $1))`,
-      [userId],
+    const owners = await tx.query<{ id: string }>(
+      `SELECT ${U}."id" FROM ${U} INNER JOIN ${R} ON (${U}."role_id" = ${R}."id")
+        WHERE (${R}."code" = 'OWNER' AND ${U}."status" = 'ACTIVE')
+        ORDER BY ${U}."id" ASC FOR UPDATE OF ${U}`,
     );
-    return Number(row?.count ?? 0);
+    return owners.filter((owner) => owner.id !== userId).length;
   }
 
-  /** `check_can_lose_access`: not yourself, and not the last owner. */
+  /**
+   * `check_can_lose_access`: not yourself, and not the last owner. Called in
+   * the transaction that makes the change, which is what its lock is held for.
+   */
   private async checkCanLoseAccess(tx: Queryable, user: UserRow, actor: Actor, what: string) {
     if (actor.id === user.id) throw cannot(what, 'own');
     if (user.role_code === 'OWNER' && (await this.activeOwnersBeside(tx, user.id)) === 0)
@@ -745,8 +755,11 @@ export class StaffUsersService {
     actor: Actor,
     reason: unknown,
     context: AuditContext,
+    /** `deactivate_user`: the guards first, in the transaction that writes. */
+    guarded = false,
   ) {
     await this.db.transaction(async (tx) => {
+      if (guarded) await this.checkCanLoseAccess(tx, target, actor, 'deactivate');
       await tx.query(
         `UPDATE ${U} SET "status" = $2, "is_active" = $3, "updated_at" = clock_timestamp()
           WHERE ${U}."id" = $1`,
@@ -768,8 +781,9 @@ export class StaffUsersService {
 
   /**
    * `deactivate`, and `destroy`, which is the same thing: staff are never
-   * deleted, as their audit trail must survive. The account is found, then
-   * the guards, then the body's `reason` is read.
+   * deleted, as their audit trail must survive. The account is found, the
+   * body's `reason` is read, and then the guards and the write are one
+   * transaction (`deactivate_user`).
    */
   async deactivate(
     user: RequestUser,
@@ -780,9 +794,15 @@ export class StaffUsersService {
   ) {
     const target = await this.find(pk, query);
     const actor = { id: user.id, email: user.email };
-    await this.checkCanLoseAccess(this.db, target, actor, 'deactivate');
     const given = dataGet(data(), 'reason');
-    return this.setStatus(target, 'INACTIVE', actor, given === undefined ? '' : given, context);
+    return this.setStatus(
+      target,
+      'INACTIVE',
+      actor,
+      given === undefined ? '' : given,
+      context,
+      true,
+    );
   }
 
   /** `activate`: no guard, and no reason but the default. */
