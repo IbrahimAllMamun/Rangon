@@ -344,7 +344,8 @@ on the port's unit tests, not on this.
 4. ~~The workflow has not run on GitHub.~~ It has, three times, and each of the first two runs
    found something no local run had: the clock (D247, four audit-log cases), then a grouped
    query with no order (D248, one case). A runner is another machine, and that is what it is
-   for. A green run is still owed.
+   for. The third run was green, on PR #96 and then on `main` (run 38410466689, 2026-10-13):
+   12,243 of 12,243 against Django and 12,243 of 12,243 replayed without it.
 5. **Uploads in a bucket.** The recording is of the stack with its uploads on disk; the
    `PARITY_S3=1` comparison has no recorded counterpart.
 6. **Where a recording lives once Django cannot make another.** Today it is made from the
