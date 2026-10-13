@@ -567,7 +567,8 @@ export class InventoryAdminService {
               SUM((${I}."on_hand" * ${I}."average_cost")) AS "value"
          FROM ${I} INNER JOIN "accounts_branch" ON (${I}."branch_id" = "accounts_branch"."id")
         ${whereSql}
-        GROUP BY "accounts_branch"."code", "accounts_branch"."name"`,
+        GROUP BY "accounts_branch"."code", "accounts_branch"."name"
+        ORDER BY "accounts_branch"."code" ASC, "accounts_branch"."name" ASC`,
       sql.values,
     );
     return {

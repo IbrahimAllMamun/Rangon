@@ -358,3 +358,22 @@ class TestTheLinesOfADocument:
         ]
 
         assert offered == _in_id_order([str(method.pk) for method in made])
+
+
+class TestAGroupedAnswer:
+    """Rows of a GROUP BY come back as the planner hashed them, unless asked."""
+
+    def test_the_stock_valuation_lists_its_branches_by_code(self, shop, auth_client) -> None:
+        """Found by the recorded proof on GitHub: two branches changed places
+        between a recording and its replay, on one database (D248)."""
+        variant = shop["variants"][0]
+        for code in ["ZED", "MID", "ABC", "QRS", "DEF", "XYZ"]:
+            other = factories.branch(shop["organization"], code=code, name=f"Branch {code}")
+            factories.stock(variant, other, 3)
+
+        response = auth_client(shop["owner"]).get("/api/v1/inventory/valuation/")
+
+        assert response.status_code == 200, response.data
+        codes = [row["branch__code"] for row in response.data["by_branch"]]
+        assert len(codes) == 7
+        assert codes == sorted(codes)

@@ -184,7 +184,8 @@ class InventoryViewSet(
             ),
         )
         by_branch = list(
-            queryset.values("branch__code", "branch__name").annotate(
+            queryset.values("branch__code", "branch__name")
+            .annotate(
                 units=Sum("on_hand"),
                 value=Sum(
                     ExpressionWrapper(
@@ -193,6 +194,9 @@ class InventoryViewSet(
                     )
                 ),
             )
+            # Grouped rows come back as the planner hashed them: the branches
+            # changed places between two runs on one database (D248).
+            .order_by("branch__code", "branch__name")
         )
         return Response({"totals": totals, "by_branch": by_branch})
 
