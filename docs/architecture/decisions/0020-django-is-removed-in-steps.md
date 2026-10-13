@@ -34,7 +34,12 @@ They were put to the owner on 2026-10-08.
    them stay until its code goes.*
 3. **The demo seed is replaced by a database snapshot**, not ported. One seeded,
    fixture-loaded database, dumped, made by Django while Django exists and brought forward by
-   migrations afterwards. It serves the test stacks and a demo shop.
+   migrations afterwards. It serves the test stacks and a demo shop. *Built on 2026-10-14:
+   `scripts/demo-snapshot.sh`. One thing the decision did not foresee: a snapshot carries its
+   accounts' password, and `seed_demo`'s refusal to put the README's on a production-settings
+   database does not travel with it. The script records which password a snapshot holds and
+   says so on a restore; a demo shop on a reachable stack wants one made with a password of
+   the maker's own.*
 4. **The names stay.** The `DJANGO_*` settings and `DJANGO_SETTINGS_MODULE=config.settings.prod`
    keep their names, and the service stays `api-nest`. Every deployed `.env` uses the first;
    nginx, the compose files and every operations page use the second.

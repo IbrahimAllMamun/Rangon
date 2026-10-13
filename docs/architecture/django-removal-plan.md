@@ -134,6 +134,14 @@ browser suite, a local production stack -- cannot start without Django.
 Django container.
 **Size:** medium with the snapshot alone; large with the ported seed.
 
+*Done on 2026-10-14, the snapshot alone (2.2 is skipped by decision 3). `scripts/demo-snapshot.sh
+make` has Django migrate and seed a throwaway database and dumps it; `restore` puts it into an
+empty PostgreSQL with nothing but Docker. CI makes one per run, and the browser suite's NestJS
+leg restores it and has no Python in it. The parity stack already started from a snapshot with
+no Django: that is step 1's `replay`. Checked locally: the NestJS API on a restore, no Django
+anywhere, serves the storefront and signs the seeded owner in. **The browser suite itself on a
+restore runs in CI only** -- this machine cannot hold it. 2.3 waits on step 3.*
+
 ## 3. The Nest API can migrate the schema
 
 Drizzle is already the Nest API's view of the schema; it becomes the owner.

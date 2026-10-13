@@ -176,6 +176,26 @@ the seed with a new password also replaces the README one on any account an olde
 `scripts/rebuild-local-prod.sh` reads `DJANGO_DEMO_SEED_PASSWORD` from the environment or from
 `.env.prod.local`, and stops before its teardown if it is missing.
 
+**A demo shop without Django** (since 2026-10-14). The same seeded shop can be restored from a
+snapshot, with no Django container at any point -- which is how it will have to be done once
+Django is gone ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md),
+decision 3). Make the snapshot once, on any machine with this checkout, **with a password of
+your own**; then restore it into this stack's database while that is still empty, in place of
+the migrate and seed above:
+
+```bash
+DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' scripts/demo-snapshot.sh make
+```
+
+```bash
+scripts/demo-snapshot.sh restore "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
+```
+
+The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore
+refuses a database that already has tables in it, so it cannot land on a shop. A snapshot made
+without `DJANGO_DEMO_SEED_PASSWORD` carries the password printed in the README, and says so when
+it is restored: that one is for test stacks, never for this one.
+
 ---
 
 ## 6. Start the stack

@@ -256,9 +256,31 @@ jobs:
   # production runs, and against Django, which is what it goes back to. The
   # Django leg keeps the name this job always had. In both, Django migrates
   # and seeds -- it owns the schema.
+  # The demo shop as a database snapshot (django-removal-plan.md, step 2):
+  # Django migrates and seeds a throwaway database, and what it holds is
+  # dumped. It is the one job the browser suite's NestJS leg needs Django
+  # for, and it is not in that leg: that leg restores the dump.
+  demo-snapshot:
+    name: Demo snapshot (made by Django, for stacks that have none)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Migrate, seed, dump
+        run: bash scripts/demo-snapshot.sh make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-snapshot
+          path: infrastructure/snapshots/demo
+          retention-days: 7
+          if-no-files-found: error
+
   e2e:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    # Only the NestJS leg uses the snapshot; a matrix has one `needs`.
+    needs: [demo-snapshot]
     strategy:
       fail-fast: false
       matrix:
@@ -315,6 +337,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        if: matrix.api == 'django'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -327,14 +350,33 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
 
       - name: Install the API
+        if: matrix.api == 'django'
         working-directory: apps/api
         run: pip install -r requirements/dev.txt
 
       - name: Migrate and seed
+        if: matrix.api == 'django'
         working-directory: apps/api
         run: |
           python manage.py migrate --noinput
           python manage.py seed_demo --reset
+
+      # The NestJS leg has no Python and no Django in it: its database is the
+      # snapshot the job above made, restored into the empty service
+      # database, and its uploads are unpacked where the API reads them.
+      - uses: actions/download-artifact@v4
+        if: matrix.api == 'nest'
+        with:
+          name: demo-snapshot
+          path: infrastructure/snapshots/demo
+
+      - name: Restore the demo snapshot
+        if: matrix.api == 'nest'
+        env:
+          MEDIA_DIR: ${{ github.workspace }}/apps/api/media
+        run: |
+          cat infrastructure/snapshots/demo/made.txt
+          bash scripts/demo-snapshot.sh restore "${{ job.services.postgres.id }}" rangon rangon
 
       - name: Start the API (Django)
         if: matrix.api == 'django'
@@ -356,7 +398,7 @@ jobs:
 
       # The NestJS API as production starts it: the built `dist/main.js`, its
       # jobs in PostgreSQL, worked and scheduled by the same process. It
-      # reads uploads from where Django's seed wrote them.
+      # reads uploads from where the snapshot's were unpacked.
       - name: Start the API (NestJS)
         if: matrix.api == 'nest'
         working-directory: apps/api-nest
@@ -455,8 +497,9 @@ jobs:
       # that cache.
       #
       # The database is already pristine: "Migrate and seed" above runs the
-      # same `seed_demo --reset` a few steps earlier, and it runs *before* the
-      # storefront starts, which is the ordering that matters. This job runs
+      # same `seed_demo --reset` a few steps earlier (on the NestJS leg, the
+      # snapshot of one is restored), and it runs *before* the storefront
+      # starts, which is the ordering that matters. This job runs
       # the suite exactly once against a fresh container, so the repeatability
       # that `E2E_SEED_CMD` buys is not needed here.
       - name: Run the suite
