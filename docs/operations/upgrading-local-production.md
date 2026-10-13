@@ -411,7 +411,7 @@ live one. `scripts/restore-db.sh` asks you to type the database name before it w
 |---|---|---|
 | A command dies with exit **137**, or finishes suspiciously fast and silent | Out of memory | `docker ps` to see what is missing; run the step again with nothing else building or testing |
 | `/api/` answers **502**, storefront fine | nginx kept the old containers' addresses | Step 6c |
-| `/django-admin/` or `/api/docs/` answers **503** with a line of text | Django is not running, by design | `--profile django up -d api worker` ([local-production.md § 9a](local-production.md#9a-django-on-demand-and-back-to-django)) |
+| `/django-admin/` or `/api/docs/` answers **404** | Dropped, by design, since 2026-10-14 ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md)) | Nothing to start: the back office is `/admin` |
 | A scheduled job ran twice (two digests at 08:00) | beat and `api-nest` are both up | Stop beat: 6-once, step b |
 | `migrate --plan` lists something step 1 did not expect | The checkout is not what you think, or someone added a migration | Stop. `git log` and read it |
 | The storefront calls the wrong host, or images and links say `localhost` on the public site | Web image built with the wrong `NEXT_PUBLIC_*` | Step 4's origin check, rebuild `web`, step 6b and 6c |

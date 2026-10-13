@@ -85,8 +85,8 @@ docker compose exec api python manage.py seed_demo --reset
 | Admin                  | http://localhost:3000/admin                                        |
 | POS                    | http://localhost:3000/pos                                          |
 | API                    | http://localhost:8000/api/v1/                                      |
-| API schema (Swagger)   | http://localhost:8000/api/docs/                                    |
-| Django admin           | http://localhost:8000/django-admin/                                |
+| API schema (Swagger)   | http://localhost:8000/api/docs/ (this stack only; not in production) |
+| Django admin           | http://localhost:8000/django-admin/ (this stack only; not in production) |
 | Mailpit (dev email)    | http://localhost:8025                                              |
 | MinIO console (dev S3) | http://localhost:9001                                              |
 

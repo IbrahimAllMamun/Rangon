@@ -5,6 +5,9 @@
 # Everything arrives through Docker's NAT, so the source IP is the bridge
 # gateway whether it came from this laptop, the LAN, or the public tunnel — IP
 # rules cannot tell them apart. The Host header can.
+# Nothing below uses this since the Django admin was dropped (ADR-0020); it is
+# kept as the guard to put on /admin and /pos for a shop that only uses them
+# on-site (docs/operations/self-hosting-with-a-domain.md, section 4).
 map $host $via_public_tunnel {
     default                              0;
     "~^(www\.)?rangonfashion\.com$"       1;
@@ -112,27 +115,14 @@ server {
         proxy_pass http://rangon_api;
     }
 
-    # --- Django, on demand -------------------------------------------------
-    # The Django admin, its static files, the OpenAPI schema and its Swagger
-    # page are Django's alone, and Django is not started with the stack
-    # (`--profile django up -d api worker` starts it). A `proxy_pass` to a
-    # variable resolves the name per request, through Docker's DNS, where an
-    # `upstream` block would stop nginx from starting while the container is
-    # down.
-    location @django_off {
-        default_type text/plain;
-        return 503 "Django is not running. The admin and the API docs are served on demand:\n  docker compose ... --profile django up -d api worker\n";
-    }
-
-    location ~ ^/(django-admin|static|api/schema|api/docs)/ {
-        # Reachable from this laptop and the LAN, never from the public tunnel.
-        # The Django admin is the last thing that should face the world.
-        if ($via_public_tunnel) { return 403; }
-        resolver 127.0.0.11 valid=10s ipv6=off;
-        set $rangon_django http://api:8000;
-        proxy_pass $rangon_django;
-        proxy_connect_timeout 3s;
-        error_page 502 504 = @django_off;
+    # --- What Django alone served --------------------------------------------
+    # The Django admin, the OpenAPI schema and its Swagger page were dropped,
+    # not replaced (ADR-0020, decision 2): the admin showed nothing of the
+    # shop, and the schema was generated from Django's serializers. Refused
+    # here whichever API serves, so that going back to Django
+    # (docker-compose.django.yml) does not put them on the public address.
+    location ~ ^/(django-admin|api/schema|api/docs)(/|$) {
+        return 404;
     }
 
     # Receipts are staff-only: they are served by

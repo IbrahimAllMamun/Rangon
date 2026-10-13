@@ -28,7 +28,10 @@ They were put to the owner on 2026-10-08.
    return and the cash book closing on the new API.
 2. **The Django admin and the API docs are dropped** at step 5, not replaced. The admin
    registers none of this project's models; the OpenAPI schema is generated from Django's
-   serializers and has no counterpart.
+   serializers and has no counterpart. *Done on 2026-10-14: nginx answers `/django-admin/`,
+   `/api/docs/` and `/api/schema/` 404 in both production flavours, whichever API serves, so
+   that going back to Django does not put them on the public address. Django's own URLs for
+   them stay until its code goes.*
 3. **The demo seed is replaced by a database snapshot**, not ported. One seeded,
    fixture-loaded database, dumped, made by Django while Django exists and brought forward by
    migrations afterwards. It serves the test stacks and a demo shop.

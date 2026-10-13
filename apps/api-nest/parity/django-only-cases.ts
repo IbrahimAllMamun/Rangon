@@ -5,8 +5,10 @@
  * each is here so that the difference is measured rather than remembered: a
  * page ported later stops matching its entry, and the run says so.
  *
- * In production nginx sends the last three to Django whichever API serves,
- * and they answer 503 while Django is not running.
+ * In production nginx answers the last three 404 whichever API serves: they
+ * were dropped, not replaced (ADR-0020, decision 2). Django still has them,
+ * and the harness asks Django directly, so the difference stays measured
+ * until Django's code goes.
  */
 import type { Case } from './run.ts';
 

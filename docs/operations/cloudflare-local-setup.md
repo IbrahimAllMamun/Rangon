@@ -130,8 +130,9 @@ Know what you are getting:
   to be repeated.
 - `NEXT_PUBLIC_SITE_URL` is compiled into the JS bundle (§7.1), so canonical URLs, OG tags and
   `sitemap.xml` will still say `localhost`. Fine for a demo, wrong for anything indexed.
-- Nginx's `$via_public_tunnel` map already treats any `*.trycloudflare.com` host as public and returns
-  403 for `/django-admin/`. That is deliberate.
+- Nginx's `$via_public_tunnel` map already treats any `*.trycloudflare.com` host as public. Since
+  2026-10-14 nothing is guarded by it: the Django admin it kept off the tunnel is gone, and
+  `/django-admin/` answers 404 on every address.
 
 ---
 
@@ -381,8 +382,8 @@ Seven checks; all seven must pass. Then in a real browser — pages rendering is
 2. Add something to the cart and open the cart drawer. If this does nothing, it is §8's `/api/proxy/`
    rule.
 3. Sign in. If it bounces, it is `DJANGO_CSRF_TRUSTED_ORIGINS`.
-4. Confirm `/django-admin/` returns **403** through the tunnel and still works on
-   `http://localhost:4100`.
+4. Confirm `/django-admin/` and `/api/docs/` return **404**, through the tunnel and on
+   `http://localhost:4100` alike.
 
 Tunnel-side health:
 
@@ -445,7 +446,7 @@ The moment this is reachable from the internet it is a public web application, n
       production settings and seeds with your `DJANGO_DEMO_SEED_PASSWORD` instead — but a database
       seeded before then still carries it. Reseed or rotate before exposing. Rotation snippet:
       [self-hosting-with-a-domain.md §5.4](self-hosting-with-a-domain.md).
-- [ ] `/django-admin/` returns 403 through the tunnel (§9, step 4).
+- [ ] `/django-admin/` and `/api/docs/` return 404 (§9, step 4).
 - [ ] `DJANGO_DEBUG=0` and a real `DJANGO_SECRET_KEY` in `.env.prod.local`.
 - [ ] Backups running **from the `db` container** — `pg_dump` in the API image is 15.19 against a 16.15
       server and aborts on the mismatch. [backups.md](backups.md).

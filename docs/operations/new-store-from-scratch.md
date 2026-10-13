@@ -373,6 +373,6 @@ Use the same build arguments every time. Back the database up on a schedule: [ba
 | Sign-in shows "An unexpected error occurred" | Usually Redis is not running: the login throttle needs it, and answers 500 without it ([.claude/environment.md](../../.claude/environment.md), "The stack runs without Docker"). `docker ps` should list `rangon-prod-redis-1`. |
 | Sign-in refused with `403 CROSS_ORIGIN_REFUSED` | The web image was built for a different `NEXT_PUBLIC_SITE_URL` than the address in the browser (step 3). |
 | `/api/...` answers 502 while pages render | nginx kept an old address. Step 8. |
-| `/django-admin/` answers 503 with a line of text | Django is not running, by design. Start it when you want the Django admin: [local-production.md §9a](local-production.md#9a-django-on-demand-and-back-to-django). |
+| `/django-admin/` or `/api/docs/` answers 404 | By design since 2026-10-14: the Django admin and the API docs were dropped ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md)). The back office is `/admin`. |
 | The API cannot reach the database after changing `POSTGRES_PASSWORD` | Postgres kept the password it was created with (step 1). Put the old one back, or start from step 2. |
 | A command dies with exit 137, or finishes suspiciously fast and silent | Out of memory. Stop the other stacks and run it again ([local-production.md §2](local-production.md#2-before-you-start)). |

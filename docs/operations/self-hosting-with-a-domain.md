@@ -184,9 +184,10 @@ pages render but the cart does nothing, read §5.2 — that exact failure has al
 
 ## 4. Restrict the admin surfaces to your own network
 
-Once the domain is public, the back office should not be. `infrastructure/docker/nginx/local-prod/`
-already blocks `/django-admin/` for any request arriving on a `trycloudflare.com` host; change that
-guard to your own domain:
+Once the domain is public, the back office should not be. The Django admin is gone
+(`/django-admin/` answers 404 everywhere since 2026-10-14, ADR-0020), and what is left to guard is
+the product's own `/admin` and `/pos`. `infrastructure/docker/nginx/local-prod/` already tells a
+public host from a local one; name your own domain in it:
 
 ```nginx
 map $host $via_public_tunnel {
@@ -200,7 +201,8 @@ from your laptop, the LAN or the internet — **IP rules cannot tell them apart.
 This was found by testing: an `allow 172.16.0.0/12` rule intended to permit the LAN silently permitted
 the whole internet, because tunnel traffic arrives on exactly that range.
 
-Consider extending the same guard to `/admin` and `/pos` if the shop only ever uses them on-site.
+Nothing uses that variable until you do: add `if ($via_public_tunnel) { return 403; }` to a
+`location` for `/admin` and `/pos` if the shop only ever uses them on-site.
 
 ---
 

@@ -1,6 +1,8 @@
 # API Conventions
 
-Base: `/api/v1/`. OpenAPI schema at `/api/schema/`, Swagger UI at `/api/docs/`.
+Base: `/api/v1/`. The OpenAPI schema (`/api/schema/`) and Swagger UI (`/api/docs/`) are Django's and
+are served by the development stack only: production dropped them on 2026-10-14 (ADR-0020), and
+they go with Django. [endpoints.md](endpoints.md) is the map that stays.
 
 ## Namespaces
 

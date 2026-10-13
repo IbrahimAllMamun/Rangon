@@ -1,6 +1,7 @@
 # Endpoints
 
-Authoritative machine-readable version: `/api/schema/` (drf-spectacular). This is the human map.
+This is the map of the API. A machine-readable one, `/api/schema/` (drf-spectacular), exists on the
+development stack while Django does; production does not serve it (ADR-0020).
 `P:` = required permission code.
 
 ## Auth — `/api/v1/auth/`

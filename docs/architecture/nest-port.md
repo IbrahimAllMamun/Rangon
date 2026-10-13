@@ -1048,7 +1048,7 @@ routes. What Django has beyond them is not the API:
 |---|---|---|
 | `/media/<path>` (with `USE_S3=0`) | serves it, since this part | below |
 | `/api/v1/`, `/api/v1/pos/`: the router's index pages | 404 | declared; nothing calls them |
-| `/api/schema/`, `/api/docs/` | 404 | declared; nginx sends them to Django, on demand |
+| `/api/schema/`, `/api/docs/` | 404 | declared; dropped in production too since 2026-10-14 (ADR-0020): nginx answers them 404 whichever API serves |
 | `/django-admin/` | 404 | declared; the same |
 
 **`/media/`** (`media/media.ts`). `core.media.serve_media` over `django.views.static.serve`: a
@@ -1081,7 +1081,7 @@ either API.
 | 96 media cases, 6 for Django's own pages | each answer the same, or declared |
 | The local production stack, rebuilt from nothing with the new files (`scripts/rebuild-local-prod.sh`) | Django migrates and seeds in one-off containers; six containers start, none of them Django's; the smoke test passes; a sign-in, a product photograph uploaded and fetched back through nginx byte for byte, and a guest order whose confirmation email arrives -- the job queued in the order's transaction, run by the same process |
 | The schedule, there | `pgboss.schedule` holds the five lines under `Asia/Dhaka`; the sweep ran at each fifth minute, once |
-| Django on demand | `/django-admin/`, `/api/docs/`, `/api/schema/` answer 503 with a line saying how to start it; with `--profile django up -d api worker` they answer, and nginx needs no restart either way |
+| What Django alone served | `/django-admin/`, `/api/docs/`, `/api/schema/` answered 503 with a line saying how to start Django, until 2026-10-14; they answer 404 now, from nginx, whichever API serves (ADR-0020, decision 2) |
 | Back to Django, and forward | with `docker-compose.django.yml`: `/api/v1/` answers Django's 401, the same owner signs in, the next order takes the next number in the sequence, its email goes out through Celery, and `api-nest` logs that the schedule is left to another process. Without the file again, `up` alone leaves beat running beside `api-nest` -- so the documented order stops Django first |
 | The browser suite against the web app on the Nest API (`scripts/e2e-local.sh nest`; CI runs it on both) | 50 of 50, as on Django. The first run was 49: eleven tests sign in from one address, the limit is ten a minute, and the faster API fitted all eleven inside the minute -- the eleventh was refused, correctly. The suite now keeps one session per account |
 
@@ -1260,7 +1260,7 @@ Each is also listed in `apps/api-nest/parity/known-differences.ts` where the har
 | The browsable API: `?format=api`, or an `Accept` of `text/html` (or `text/*`), under any settings but production's | DRF's HTML page | the JSON answer | The port has no HTML pages. Under production's settings Django has no such renderer either and both refuse: 404 and 406 |
 | `Accept: application/json; indent=4` | the JSON indented, as `JSONRenderer` honours the parameter | compact | The same document; the harness compares parsed bodies and sees no difference |
 | A path Django resolves to no view (a converter refuses a segment: `/shop/products/not a slug/`) with a `format` no renderer has, or an `Accept` none satisfies | the resolver's HTML 404, before any view negotiates | the JSON 404 (or 406): the port checks a segment in its handler, after the negotiation | A request wrong twice over; a 404 either way for a format |
-| `GET /api/v1/`, `GET /api/v1/pos/` (the router's index), `/api/schema/`, `/api/docs/`, `/django-admin/` | Django's pages | 404 | [ADR-0017](decisions/0017-nest-api-serves-production.md): none is the API, and nothing in the web app calls them. Nginx sends the last three to Django, started on demand |
+| `GET /api/v1/`, `GET /api/v1/pos/` (the router's index), `/api/schema/`, `/api/docs/`, `/django-admin/` | Django's pages | 404 | [ADR-0017](decisions/0017-nest-api-serves-production.md): none is the API, and nothing in the web app calls them. Nginx sent the last three to Django, started on demand, until they were dropped on 2026-10-14 (ADR-0020) |
 | `HEAD /media/<path>` | under gunicorn, the headers and then the body all the same -- the 404 page, for a file that is not there | the headers alone | What HTTP asks for. Nginx strips the body in front of either; the harness cannot send the case, as no HTTP client reads Django's answer |
 | A courier's tracking page that reads an attribute of the number (`{tracking_number.upper}`) | the Python object found is printed, a method with its memory address, different at every request | every attribute is one a string does not have: the parcel is answered without `tracking_url`, as Django answers `{tracking_number.real}` | An address in memory cannot be matched, and no tracking page is written that way |
 
