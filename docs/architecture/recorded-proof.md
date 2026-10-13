@@ -226,6 +226,17 @@ The largest thing a recording cannot hold is the date, and it is not held: it is
   (`moments.jsonl.gz`) and when each case was asked. A replay gets through its cases about
   twice as fast as a recording, which asked two APIs; before a case it waits for any such
   moment the recording had already passed. It says at the end how long it waited.
+- And a recording keeps the instant its harness began (`began.txt`), which a replay waits for
+  before it builds a case. The replay's clocks are set a minute and a half further back than
+  the recording's age, for the stack to come up in, so a replay began up to that much earlier
+  than its recording had -- and the cases are built from the clock: what an API mints is told
+  from what was there by being newer than the harness. A row a `reset` had made two minutes
+  before a recording was older than the recording's harness and newer than the replay's.
+  Found on 2026-10-13, twice in one night. Replaying a recording taken straight after a reset,
+  109 cases differed, each by one timestamp read as "now" on one side. And the first run of
+  this proof on GitHub failed on four cases of the audit log: the comparison CI runs before it
+  records had written audit rows up to the moment the recording began, and the replay took
+  them for rows of its own.
 
 ## Races
 

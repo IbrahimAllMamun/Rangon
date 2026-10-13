@@ -399,3 +399,41 @@ export class Pace {
     return until - now;
   }
 }
+
+// And it does not settle the second at which the harness itself begins. The
+// replay's clocks are set a minute and a half behind the recording's age, for
+// the stack to come up in, so a replay begins up to that much "earlier" than
+// its recording did -- and the cases are built from the clock: what an API
+// mints is told from what was there by being newer than the harness
+// (`mintedBlanker`), and a row a `reset` made two minutes before a recording
+// was older than the recording's harness and newer than the replay's. 109
+// cases differed so, on 2026-10-13, in a recording taken straight after a
+// reset. So a recording keeps the instant its harness began, and a replay
+// waits for it before it builds a case.
+
+const BEGAN = `${RECORDING_DIR}/began.txt`;
+
+/** How long a replay waits to begin where its recording began at `began`, it being `now`. */
+export const untilBegan = (began: number, now: number): number =>
+  Number.isFinite(began) ? Math.max(began - now, 0) : 0;
+
+/**
+ * Before any case is built: a recording keeps this instant, and a replay
+ * waits until its own clock has reached the one its recording kept. Answers
+ * what was done, for the log. A recording from before this was kept has no
+ * instant, and its replay begins when it begins.
+ */
+export async function beginWhereRecorded(mode: Mode): Promise<string> {
+  if (mode === 'record') {
+    writeFileSync(BEGAN, `${Date.now()}\n`);
+    return '';
+  }
+  if (mode !== 'replay' || !existsSync(BEGAN)) return '';
+  const began = Number(readFileSync(BEGAN, 'utf8').trim());
+  const now = Date.now();
+  const wait = untilBegan(began, now);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  return wait > 0
+    ? `began ${(wait / 1000).toFixed(1)}s behind the recording, and waited for it`
+    : `began ${((now - began) / 1000).toFixed(1)}s after the recording did: its clock cannot be put back`;
+}

@@ -74,6 +74,7 @@ import {
   Pace,
   parityMode,
   plain,
+  beginWhereRecorded,
   readRecording,
   readTies,
   Recorder,
@@ -1051,6 +1052,10 @@ async function main(): Promise<void> {
   // In a replay `DJANGO_BASE` names a second Nest process: the cases that
   // carry a token from one API to the other, and every race, still have two.
   const mode = parityMode();
+  // The cases are built from the clock, so a replay begins where its
+  // recording began (recording.ts, "The clock").
+  const began = await beginWhereRecorded(mode);
+  if (began) console.log(`the replay ${began}`);
   const cases = await buildCases();
   let failed = 0;
   let known = 0;
