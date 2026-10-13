@@ -238,6 +238,10 @@ Branch:       Rangon Panthapath (DHK1), default=True
 Cash drawers: 1
 ```
 
+Django's shell puts a line of its own above those, `88 objects imported automatically (use -v 2 for
+details).` (the number varies): since Django 5.2 it imports every model before it runs a script. It
+is not an error and says nothing about the shop.
+
 - **The names apply on the first run only.** Running it again is harmless, but it reuses what exists
   and ignores new names. The app is single-tenant and only ever reads the oldest organization, so a
   second one would be invisible. Rename both later in **Settings**.
