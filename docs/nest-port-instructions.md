@@ -160,6 +160,23 @@ API's answers at each stage, and `scripts/nest-parity.sh replay-empty` then hold
 them on the stack with no Django in it, as `replay` does for the seeded shop.
 
 ```bash
+scripts/nest-baseline.sh compare
+```
+
+Builds one database with Django's migrations and one with `node dist/cli.js migrate` and
+`sync-permissions`, and compares them: the schema dumps, the rows migrations seed, the roles
+([ADR-0022](architecture/decisions/0022-the-baseline-is-djangos-schema-as-dumped.md)). **After
+adding a Django migration, or changing `accounts/permissions.py`, this fails until you run:**
+
+```bash
+scripts/nest-baseline.sh cut
+```
+
+which re-makes `apps/api-nest/drizzle/` and `src/database/schema.ts` from a database Django
+has just migrated; commit what it changes. The permission catalogue is not cut: copy the
+change into `src/auth/permission-catalogue.ts`. Both commands replace the parity database.
+
+```bash
 scripts/nest-parity.sh up
 ```
 

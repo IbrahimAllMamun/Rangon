@@ -160,6 +160,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The NestJS API's own schema (django-removal-plan.md, step 3): one
+      # database built by Django's migrations and one by `node dist/cli.js
+      # migrate` and `sync-permissions`, and the two compared -- the schema
+      # dumps, the rows migrations seed, the roles. It is what fails when a
+      # Django migration is added and the baseline is not cut again.
+      - name: The baseline builds the database Django's migrations build
+        run: bash scripts/nest-baseline.sh compare
+
       # A shop on its first day, which no case on the seeded one can reach:
       # migrated with one owner, then with the store bootstrapped. First,
       # because it is quick and because `reset` then replaces its database.

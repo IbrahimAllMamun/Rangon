@@ -171,6 +171,13 @@ Drizzle is already the Nest API's view of the schema; it becomes the owner.
 exercised in CI only.
 **Size:** medium.
 
+*Done on 2026-10-14: [ADR-0022](decisions/0022-the-baseline-is-djangos-schema-as-dumped.md).
+The baseline is `pg_dump`'s own output, cut by `scripts/nest-baseline.sh cut`; `node
+dist/cli.js migrate` runs it on an empty database and adopts one Django built; `sync-permissions`
+writes the roles. `scripts/nest-baseline.sh compare` is the proof and runs in CI: identical
+schema dumps, the same rows, Django content to take such a database over. 3.6's check was not
+added (the ADR says why), and 3.5's contract migration waits for step 8 as planned.*
+
 ## 4. The operator commands, in Nest
 
 One entry point (`node dist/cli.js <command>`), each command with a test and compared with
