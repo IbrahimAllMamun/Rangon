@@ -6,14 +6,14 @@
 #   -h, --help     this text
 #
 # DESTRUCTIVE, and unconditionally so. It runs `compose down -v`, which removes
-# this project's volumes -- so the database goes with them and the reseed that
-# follows is not optional, it is how the stack gets a database at all. There is
-# deliberately no `--no-seed`: there would be nothing left to keep.
+# this project's volumes -- so the database goes with them and the demo shop
+# that follows is not optional, it is how the stack gets a database at all.
+# There is deliberately no `--no-seed`: there would be nothing left to keep.
 #
-# The seeded accounts get DJANGO_DEMO_SEED_PASSWORD, taken from the environment
-# or from the env file, and never the README's `rangon12345`: this stack runs
-# production settings and has been published through a tunnel. Without one the
-# script stops before anything is torn down.
+# The demo shop's accounts get DJANGO_DEMO_SEED_PASSWORD, taken from the
+# environment or from the env file, and never the README's `rangon12345`: this
+# stack runs production settings and has been published through a tunnel.
+# Without one the script stops before anything is torn down.
 #
 # ---------------------------------------------------------------------------
 # Why each step is here, because three of them look redundant and are not
@@ -24,13 +24,19 @@
 #    builds *nothing* and then fails on a missing image. The three
 #    `docker build` calls below are not a convenience; they are the only thing
 #    that produces `rangon-api:prod`, `rangon-api-nest:prod` and
-#    `rangon-web:prod`.
+#    `rangon-web:prod`. Nothing here runs the first: it is the way back
+#    (`-f docker-compose.django.yml`), and is built so that the way back
+#    exists for this commit.
 #
-#  - **Django migrates and seeds, and is not left running.** The NestJS API
-#    serves this stack (ADR-0017); Django still owns the schema. Both steps are
-#    `compose run --rm api ...`, which works on a service `up` does not start,
-#    and they happen *before* `up`: the NestJS API works the job queue and
-#    fires the schedule from the moment it starts, and should find its tables.
+#  - **The database is the demo snapshot, and the NestJS API's commands check
+#    it** (django-removal-plan.md, step 6.3). `scripts/demo-snapshot.sh make`
+#    has Django migrate and seed a throwaway database in a stack of its own,
+#    with this stack's password; it is restored into this stack's empty one,
+#    and then `node dist/cli.js migrate` adopts it -- what the plan's step 7
+#    does to the real shop -- and `sync-permissions` writes the roles. No
+#    Django container of this stack's runs. All of it happens *before* `up`:
+#    the NestJS API works the job queue and fires the schedule from the
+#    moment it starts, and should find its tables.
 #
 #  - **nginx is restarted last.** `local-prod/default.conf.template` names its
 #    upstreams as `server api-nest:3000` / `server web:3000`, and nginx resolves
@@ -75,13 +81,15 @@ compose() {
         -f docker-compose.yml -f docker-compose.prodlocal.yml "$@"
 }
 
+# The NestJS API's own commands (docs/operations/operator-commands.md), one
+# each: `run --rm` starts a container of the service beside nothing, runs the
+# command and removes it. `-T`: there is no terminal when this runs from CI or
+# a scheduler.
+nest() { compose run --rm -T api-nest node dist/cli.js "$@"; }
 
-
-# Django, for one command: `run --rm` starts a container of the `api` service
-# (and the database it depends on), runs the command and removes it. `-T`:
-# there is no terminal when this runs from CI or a scheduler, and without it
-# Django's output is mangled rather than failing outright.
-django() { compose run --rm -T "$@"; }
+# Where this stack's demo snapshot is made: its own, with this stack's
+# password, so that the test stacks' snapshot (the README's) is left alone.
+SNAPSHOT_DIR="${SNAPSHOT_DIR:-$PWD/infrastructure/snapshots/local-prod}"
 
 step() { printf '\n==> %s\n' "$*"; }
 
@@ -95,9 +103,10 @@ require_file() {
 require_file "$ENV_FILE"
 
 # ------------------------------------------------------ 0. demo password ------
-# Checked before `down -v`, not at the seed step: seed_demo refuses a missing or
-# README password (config.settings.prod), and refusing *after* the teardown
-# would leave a stack with no database at all.
+# Checked before `down -v`, not at the snapshot step: refusing *after* the
+# teardown would leave a stack with no database at all. A snapshot carries its
+# accounts' password past seed_demo's own refusal (ADR-0020, decision 3), so
+# this check is the one that stands.
 if [ -z "${DJANGO_DEMO_SEED_PASSWORD:-}" ]; then
     DJANGO_DEMO_SEED_PASSWORD="$(sed -n 's/^DJANGO_DEMO_SEED_PASSWORD=//p' "$ENV_FILE" |
         tail -n 1 | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
@@ -140,30 +149,35 @@ step "building rangon-api-nest:prod"
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
 
 
-# -------------------------------------------------------------- 3. migrate ---
-# Before anything else is up. `run` waits for the database's healthcheck
-# (the service depends on it), so there is no gap to migrate into.
-step "migrating"
-django api python manage.py migrate --noinput
+# ------------------------------------------------------------- 3. snapshot ---
+# Django, in a throwaway stack of its own (`rangon-snapshot`), migrates and
+# seeds with this stack's password; what it made is dumped. Every run makes a
+# new one: the stack is rebuilt from this commit, and so is its shop.
+step "making the demo snapshot (Django, in a throwaway stack)"
+DJANGO_DEMO_SEED_PASSWORD="$DJANGO_DEMO_SEED_PASSWORD" DEMO_SNAPSHOT_DIR="$SNAPSHOT_DIR" \
+    bash scripts/demo-snapshot.sh make | sed -n '/^commit/,/^rows/p'
 
-# ----------------------------------------------------------------- 4. seed ---
-step "reseeding demo data"
-# Opted in for this one command only: no running container carries
-# DJANGO_ALLOW_DEMO_SEED, so a later `seed_demo` is still refused.
-#
-# The seed saves categories and navigation items, whose signals queue a
-# storefront revalidation for Celery -- and no Celery worker runs in this
-# stack. Run inline instead, with nowhere to send them: nothing is listening
-# yet, and nothing is cached yet either.
-django \
-    -e DJANGO_ALLOW_DEMO_SEED=1 \
-    -e "DJANGO_DEMO_SEED_PASSWORD=${DJANGO_DEMO_SEED_PASSWORD}" \
-    -e CELERY_TASK_ALWAYS_EAGER=1 \
-    -e WEB_REVALIDATE_URL= \
-    api python manage.py seed_demo --reset
+# -------------------------------------------------------------- 4. restore ---
+# Into the database `down -v` has just emptied, under the names the env file
+# gave the server. The uploads go into the API's volume through the API's own
+# image, so that they are written as the user it runs as.
+step "restoring it"
+compose up -d --wait db
+db="$(compose ps -q db)"
+DEMO_SNAPSHOT_DIR="$SNAPSHOT_DIR" bash scripts/demo-snapshot.sh restore "$db" \
+    "$(docker exec "$db" printenv POSTGRES_DB)" "$(docker exec "$db" printenv POSTGRES_USER)"
+compose run --rm --no-deps -T api-nest sh -c 'tar -xzf - -C /app/media' < "$SNAPSHOT_DIR/media.tar.gz"
+
+# -------------------------------------------------------------- 5. migrate ---
+# Nothing to apply: the snapshot is this commit's schema. `migrate` records
+# the baseline as applied to a database Django built, and refuses one that is
+# older or newer than the build; `sync-permissions` makes the roles match it.
+step "the NestJS API's migrate and sync-permissions"
+nest migrate
+nest sync-permissions
 
 
-# ------------------------------------------------------------------- 5. up ---
+# ------------------------------------------------------------------- 6. up ---
 step "starting the stack"
 compose up -d
 
@@ -182,13 +196,13 @@ done
 echo "    healthy after ~$((attempt * 2))s"
 
 
-# ---------------------------------------------------------------- 6. nginx ---
+# ---------------------------------------------------------------- 7. nginx ---
 # Last, and always: api-nest and web have just been replaced, so nginx is
 # holding addresses that no longer exist. See the header.
 step "restarting nginx so it re-resolves api-nest and web"
 compose restart nginx
 
-# ---------------------------------------------------------------- 7. check ---
+# ---------------------------------------------------------------- 8. check ---
 # nginx is listening within a second of the restart, but `web` is a Next
 # standalone server that is not. Smoke testing straight away failed all seven
 # checks against a stack that was healthy thirty seconds later, so wait for the
@@ -216,6 +230,18 @@ if ! ./scripts/smoke-test.sh "$PUBLIC_URL"; then
     echo "!! ${PUBLIC_URL} answered, but not with what was expected -- check:" >&2
     echo "!!   docker compose -p ${COMPOSE_PROJECT} --env-file ${ENV_FILE} \\" >&2
     echo "!!     -f docker-compose.yml -f docker-compose.prodlocal.yml logs --tail 50 api-nest web nginx" >&2
+    exit 1
+fi
+
+# And the two integrity checks, on what the stack now holds. They print and
+# exit 0 whatever they find, as Django's do; it is the line that says.
+step "checking the stock ledger and the cash book"
+inventory="$(nest verify-inventory)"
+accounts="$(nest verify-accounts)"
+printf '%s\n%s\n' "$inventory" "$accounts" | sed 's/^/    /'
+if ! grep -q '^Inventory is consistent with the ledger\.$' <<<"$inventory" ||
+    ! grep -q '^Accounts are consistent with the cash book\.$' <<<"$accounts"; then
+    echo "!! the demo shop's stock or cash book does not agree with its ledger." >&2
     exit 1
 fi
 

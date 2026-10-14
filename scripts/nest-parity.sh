@@ -9,10 +9,12 @@
 #   scripts/nest-parity.sh worker   the Nest worker on what the API queues: run, retried, closed
 #   scripts/nest-parity.sh reset    DESTRUCTIVE to the parity database only: drop it, then up + seed
 #   scripts/nest-parity.sh empty    DESTRUCTIVE likewise: a shop on its first day instead of the seeded
-#                                   one, compared at two moments -- migrated with one owner, then with
-#                                   `scripts/bootstrap-store.py` run on it (parity/empty-shop-cases.ts).
-#                                   Keeps a snapshot and the Nest API's answers at each, as `record`
-#                                   does (parity/recorded/empty/). `reset` brings the seeded shop back
+#                                   one, made by the NestJS API's own commands as a new installation
+#                                   is (`migrate`, `sync-permissions`, `create-owner`), and compared at
+#                                   two moments -- with one owner, then with `bootstrap-store` run on
+#                                   it (parity/empty-shop-cases.ts). Keeps a snapshot and the Nest
+#                                   API's answers at each, as `record` does (parity/recorded/empty/).
+#                                   `reset` brings the seeded shop back
 #
 # The proof that needs no Django (docs/architecture/recorded-proof.md):
 #   scripts/nest-parity.sh record   after `reset`: a snapshot of the database and the uploads, then
@@ -262,24 +264,39 @@ print("bucket", storage.bucket_name, "ready")'
     ;;
   empty)
     # What a new installation is, and no case on the seeded shop can reach:
-    # nothing can empty that one. The same steps as the new-store guide
-    # (docs/operations/new-store-from-scratch.md), with the cases run after
-    # each. Both stages run whatever the first finds.
+    # nothing can empty that one. The steps of the new-store guide
+    # (docs/operations/new-store-from-scratch.md) in the NestJS API's own
+    # commands (docs/operations/operator-commands.md), as a shop will be made
+    # once Django is gone (django-removal-plan.md, step 6.3), with the cases
+    # run after each. Both stages run whatever the first finds.
     "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle --profile s3 down -v --remove-orphans
     bash "$0" up
     "${compose[@]}" exec -T django sh -c 'mkdir -p /app/media && chmod -R a+rwX /app/media'
+    # `up` had Django migrate it; this database is the NestJS API's instead,
+    # from nothing. Django, started on it again, finds nothing to migrate
+    # (scripts/nest-baseline.sh compare proves that in CI).
+    "${compose[@]}" stop django nest
+    "${compose[@]}" exec -T db psql -q -U rangon -d postgres \
+      -c 'DROP DATABASE rangon WITH (FORCE)' -c 'CREATE DATABASE rangon OWNER rangon'
+    "${compose[@]}" run --rm --no-deps -T nest node dist/cli.js migrate
+    "${compose[@]}" run --rm --no-deps -T nest node dist/cli.js sync-permissions
+    # A password, which `create-owner` will not do without; the harness mints
+    # its own tokens, and nobody signs in with it.
+    "${compose[@]}" run --rm --no-deps -T -e OWNER_PASSWORD="Pa-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')-ty" \
+      nest node dist/cli.js create-owner --email owner@rangon.test
+    "${compose[@]}" start django nest
+    wait_for "$django_url/api/health/"
+    wait_for "$nest_url/api/health/"
     # The Nest API that queues in pg-boss: its first start makes the `pgboss`
     # schema, which has to be in the snapshots.
     "${compose[@]}" --profile jobs up -d --build --force-recreate nest-jobs
     wait_for "$jobs_url/api/health/"
-    # No password: the harness mints its own tokens, and nobody signs in.
-    "${compose[@]}" exec -T -e DJANGO_SUPERUSER_EMAIL=owner@rangon.test django python manage.py createsuperuser --noinput
     status=0
     empty_stage unopened || status=$?
     # The store is opened on the unopened snapshot, not on what its cases left.
     restore_in_place "$recorded_dir/empty/unopened/snapshot.dump"
-    "${compose[@]}" exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 \
-      -e WEB_REVALIDATE_URL= django python manage.py shell < scripts/bootstrap-store.py
+    "${compose[@]}" run --rm --no-deps -T nest node dist/cli.js bootstrap-store \
+      --shop-name "Rangon Fashion" --branch-name "Rangon Panthapath" --branch-code DHK1
     empty_stage opened || status=$?
     ls -l "$recorded_dir"/empty/*
     exit "$status"
@@ -322,6 +339,6 @@ print("bucket", storage.bucket_name, "ready")'
     "${compose[@]}" --profile parity --profile jobs --profile worker --profile throttle down
     ;;
   *)
-    sed -n '2,31p' "$0"; exit 2
+    sed -n '2,33p' "$0"; exit 2
     ;;
 esac

@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# The browser suite (apps/web/e2e), run here as CI runs it, against either API.
+# The browser suite (apps/web/e2e), run here as CI runs it.
 #
-#   scripts/e2e-local.sh nest      the web app on the NestJS API (what production runs)
-#   scripts/e2e-local.sh django    the web app on the Django API
+#   scripts/e2e-local.sh nest      the web app on the NestJS API (what production runs, and CI)
+#   scripts/e2e-local.sh django    the web app on the Django API (the way back, until it goes)
 #   scripts/e2e-local.sh down      remove the containers it left
 #
-# It is the `e2e` job of .github/workflows/ci.yml in containers, for a machine
-# with Docker and no Node or Python of its own: a fresh database, migrated and
-# seeded by Django; one API; the storefront's production build; Playwright in
-# its own image. Nothing is published to the host and nothing of the
-# development stack is touched -- every container is named `rangon-e2e-*`.
+# `nest` is the `e2e` job of .github/workflows/ci.yml in containers, for a
+# machine with Docker and no Node or Python of its own: a fresh database
+# restored from the demo snapshot (scripts/demo-snapshot.sh); the NestJS API;
+# the storefront's production build; Playwright in its own image. No Django
+# runs beside the suite. The snapshot is made first when there is none, or
+# when apps/api has changed since the commit it was made at -- that one step
+# is Django's, in a throwaway stack of its own, until Django goes
+# (django-removal-plan.md, step 6.3).
+#
+# `django` is what CI ran too until step 6.2: Django migrates and seeds, and
+# serves. Nothing is published to the host and nothing of the development
+# stack is touched -- every container is named `rangon-e2e-*`.
 #
 # The containers share one network namespace, so each finds the others on
 # 127.0.0.1 exactly as the CI runner does. That matters: the web image is built
@@ -67,9 +74,27 @@ nest | django) ;;
     ;;
 esac
 
+# The demo snapshot, made from the commit it sits beside: a snapshot from
+# before a change under apps/api may hold another schema or other rows. And
+# one with the README's password, which is the one the suite signs in with.
+snapshot="${DEMO_SNAPSHOT_DIR:-$PWD/infrastructure/snapshots/demo}"
+if [ "$API" = nest ]; then
+    made="$(sed -n 's/^commit *\([0-9a-f]*\).*/\1/p' "$snapshot/made.txt" 2>/dev/null || true)"
+    if [ ! -s "$snapshot/demo.dump" ] || [ -z "$made" ] ||
+        grep -q -e 'with uncommitted changes' -e "maker's own" "$snapshot/made.txt" ||
+        ! git diff --quiet "$made" -- apps/api 2>/dev/null; then
+        echo "==> making the demo snapshot (Django, in a throwaway stack: none here, or not this commit's)"
+        DJANGO_DEMO_SEED_PASSWORD='' bash scripts/demo-snapshot.sh make >/dev/null
+    fi
+    grep '^commit' "$snapshot/made.txt" | sed 's/^/    snapshot /'
+fi
+
 echo "==> building the images (cached after the first run)"
-docker build -q -t rangon-api:e2e -f apps/api/Dockerfile.dev apps/api >/dev/null
-[ "$API" = nest ] && docker build -q -t rangon-api-nest:e2e -f apps/api-nest/Dockerfile apps/api-nest >/dev/null
+if [ "$API" = nest ]; then
+    docker build -q -t rangon-api-nest:e2e -f apps/api-nest/Dockerfile apps/api-nest >/dev/null
+else
+    docker build -q -t rangon-api:e2e -f apps/api/Dockerfile.dev apps/api >/dev/null
+fi
 # NEXT_PUBLIC_* are compiled into the bundle: they are build arguments.
 docker build -q -t rangon-web:e2e -f apps/web/Dockerfile apps/web \
     --build-arg NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api/v1 \
@@ -87,18 +112,30 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 
-echo "==> migrating and seeding (Django, whichever API serves: it owns the schema)"
-# Uploads go to apps/api/media, which both APIs read; the NestJS image runs
-# as another user, so what the seed wrote is opened to it.
-docker run --rm "${NET[@]}" "${ENVS[@]}" -v "$PWD/apps/api:/app" -w /app rangon-api:e2e sh -c \
-    'python manage.py migrate --noinput >/dev/null && python manage.py seed_demo --reset >/dev/null \
-     && mkdir -p /app/media && chmod -R a+rwX /app/media'
+if [ "$API" = nest ]; then
+    echo "==> restoring the demo snapshot"
+    # The uploads into a directory of their own, under the working copy
+    # because Docker Desktop mounts nothing from outside the home directory,
+    # and emptied first from inside a container: the last run's API wrote
+    # there as its own user. Then opened to that user.
+    media="$PWD/infrastructure/snapshots/e2e-media"
+    mkdir -p "$media"
+    docker run --rm -v "$media:/media" postgres:16-alpine sh -c 'rm -rf /media/* /media/.[!.]*' >/dev/null
+    MEDIA_DIR="$media" bash scripts/demo-snapshot.sh restore rangon-e2e-db rangon rangon | sed 's/^/    /'
+    chmod -R a+rwX "$media"
+else
+    echo "==> migrating and seeding (Django)"
+    # Uploads go to apps/api/media, which the API reads.
+    docker run --rm "${NET[@]}" "${ENVS[@]}" -v "$PWD/apps/api:/app" -w /app rangon-api:e2e sh -c \
+        'python manage.py migrate --noinput >/dev/null && python manage.py seed_demo --reset >/dev/null \
+         && mkdir -p /app/media && chmod -R a+rwX /app/media'
+fi
 
 echo "==> starting the API ($API)"
 if [ "$API" = nest ]; then
     # As production starts it: the built image, its jobs in PostgreSQL.
     docker run -d --name rangon-e2e-api "${NET[@]}" "${ENVS[@]}" -e PORT=8000 \
-        -e RANGON_JOBS_BACKEND=pgboss -v "$PWD/apps/api/media:/app/media" rangon-api-nest:e2e >/dev/null
+        -e RANGON_JOBS_BACKEND=pgboss -v "$media:/app/media" rangon-api-nest:e2e >/dev/null
 else
     docker run -d --name rangon-e2e-api "${NET[@]}" "${ENVS[@]}" -v "$PWD/apps/api:/app" -w /app \
         rangon-api:e2e python manage.py runserver 0.0.0.0:8000 --noreload >/dev/null
