@@ -139,55 +139,6 @@ jobs:
         if: failure()
         run: docker compose -p rangon-recorded -f docker-compose.recorded.yml --profile worker --profile throttle logs --tail 200 nest nest-b nest-worker nest-throttled
 
-  # TEMPORARY, once: the recording and the demo snapshot, made where Django
-  # still is (baf87da, the last commit that has it) and committed to this
-  # pull request's branch, because nothing can make either after this branch
-  # removes Django (ADR-0023). Asked for by the owner on 2026-10-14; the next
-  # commit removes this job. A push by this token starts no workflow run.
-  record-once:
-    name: Record once, with Django (temporary)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      BRANCH: ${{ github.head_ref }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: baf87dae6d9489ddf3d9e8d5ffb4b18974e5548f
-
-      # As the parity job there ran them: the empty shop first (its own
-      # database), then the seeded one compared and recorded. Each refuses
-      # to record if any case differs.
-      - name: The empty shop, compared and recorded
-        run: bash scripts/nest-parity.sh empty
-
-      - name: The seeded shop, migrated, seeded and fixtured
-        run: bash scripts/nest-parity.sh reset
-
-      - name: Every case compared, the jobs in pg-boss, the rate limits; recorded
-        run: bash scripts/nest-parity.sh record
-
-      - name: The demo snapshot, made by Django
-        run: bash scripts/demo-snapshot.sh make
-
-      - name: Commit both to the branch
-        run: |
-          git fetch --no-tags origin "$BRANCH"
-          git checkout -B "$BRANCH" "origin/$BRANCH"
-          rm -f apps/api-nest/parity/recorded/ties.jsonl.gz
-          git add -f apps/api-nest/parity/recorded infrastructure/snapshots/demo
-          git status --short | head -40
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "chore(parity): the recording and the demo snapshot, taken while Django ran" \
-            -m "Made by CI run ${{ github.run_id }} on baf87da, the last commit with Django: every case compared with Django and recorded where the two agreed (all of them), the empty shop likewise, and the demo shop seeded by Django and dumped. Committed at the owner's request (ADR-0023)."
-          git push origin "HEAD:refs/heads/$BRANCH"
-
-      - name: Logs on failure
-        if: failure()
-        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs logs --tail 200 django nest nest-jobs
-
   # ------------------------------------------------------------------- e2e --
   # The four critical flows, driven in a real browser against a real API and a
   # real database (docs/testing/strategy.md).
