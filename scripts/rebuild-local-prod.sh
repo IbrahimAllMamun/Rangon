@@ -21,22 +21,17 @@
 #
 #  - **The images are built by hand.** `docker-compose.prodlocal.yml` sets
 #    `build: !reset null` on every application service, so `up -d --build`
-#    builds *nothing* and then fails on a missing image. The three
+#    builds *nothing* and then fails on a missing image. The two
 #    `docker build` calls below are not a convenience; they are the only thing
-#    that produces `rangon-api:prod`, `rangon-api-nest:prod` and
-#    `rangon-web:prod`. Nothing here runs the first: it is the way back
-#    (`-f docker-compose.django.yml`), and is built so that the way back
-#    exists for this commit.
+#    that produces `rangon-api-nest:prod` and `rangon-web:prod`.
 #
-#  - **The database is the demo snapshot, and the NestJS API's commands check
-#    it** (django-removal-plan.md, step 6.3). `scripts/demo-snapshot.sh make`
-#    has Django migrate and seed a throwaway database in a stack of its own,
-#    with this stack's password; it is restored into this stack's empty one,
-#    and then `node dist/cli.js migrate` adopts it -- what the plan's step 7
-#    does to the real shop -- and `sync-permissions` writes the roles. No
-#    Django container of this stack's runs. All of it happens *before* `up`:
-#    the NestJS API works the job queue and fires the schedule from the
-#    moment it starts, and should find its tables.
+#  - **The database is the committed demo snapshot, brought forward by the
+#    API's own commands.** It is restored into this stack's empty database;
+#    `node dist/cli.js migrate` brings it to this build's schema and
+#    `sync-permissions` writes the roles; then `set-password` gives every
+#    account this stack's password in place of the README's. All of it happens
+#    *before* `up`: the API works the job queue and fires the schedule from
+#    the moment it starts, and should find its tables.
 #
 #  - **nginx is restarted last.** `local-prod/default.conf.template` names its
 #    upstreams as `server api-nest:3000` / `server web:3000`, and nginx resolves
@@ -87,9 +82,8 @@ compose() {
 # a scheduler.
 nest() { compose run --rm -T api-nest node dist/cli.js "$@"; }
 
-# Where this stack's demo snapshot is made: its own, with this stack's
-# password, so that the test stacks' snapshot (the README's) is left alone.
-SNAPSHOT_DIR="${SNAPSHOT_DIR:-$PWD/infrastructure/snapshots/local-prod}"
+# The committed demo snapshot (scripts/demo-snapshot.sh).
+SNAPSHOT_DIR="${SNAPSHOT_DIR:-$PWD/infrastructure/snapshots/demo}"
 
 step() { printf '\n==> %s\n' "$*"; }
 
@@ -103,10 +97,10 @@ require_file() {
 require_file "$ENV_FILE"
 
 # ------------------------------------------------------ 0. demo password ------
-# Checked before `down -v`, not at the snapshot step: refusing *after* the
-# teardown would leave a stack with no database at all. A snapshot carries its
-# accounts' password past seed_demo's own refusal (ADR-0020, decision 3), so
-# this check is the one that stands.
+# Checked before `down -v`, not at the password step: refusing *after* the
+# teardown would leave a stack with no database at all. The snapshot carries
+# the README's password, so this check, and `set-password`'s own rules, are
+# what stand between it and a stack published through a tunnel.
 if [ -z "${DJANGO_DEMO_SEED_PASSWORD:-}" ]; then
     DJANGO_DEMO_SEED_PASSWORD="$(sed -n 's/^DJANGO_DEMO_SEED_PASSWORD=//p' "$ENV_FILE" |
         tail -n 1 | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
@@ -133,9 +127,6 @@ compose down -v
 
 # ---------------------------------------------------------------- 2. build ---
 
-step "building rangon-api:prod"
-docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
-
 step "building rangon-web:prod"
 # NEXT_PUBLIC_* are compiled into the bundle, so they are build args and
 # not environment. Changing the origin means rebuilding, not restarting.
@@ -150,12 +141,8 @@ docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
 
 
 # ------------------------------------------------------------- 3. snapshot ---
-# Django, in a throwaway stack of its own (`rangon-snapshot`), migrates and
-# seeds with this stack's password; what it made is dumped. Every run makes a
-# new one: the stack is rebuilt from this commit, and so is its shop.
-step "making the demo snapshot (Django, in a throwaway stack)"
-DJANGO_DEMO_SEED_PASSWORD="$DJANGO_DEMO_SEED_PASSWORD" DEMO_SNAPSHOT_DIR="$SNAPSHOT_DIR" \
-    bash scripts/demo-snapshot.sh make | sed -n '/^commit/,/^rows/p'
+step "the demo snapshot"
+sed -n '/^commit/,/^rows/p' "$SNAPSHOT_DIR/made.txt" | sed 's/^/    /'
 
 # -------------------------------------------------------------- 4. restore ---
 # Into the database `down -v` has just emptied, under the names the env file
@@ -169,12 +156,19 @@ DEMO_SNAPSHOT_DIR="$SNAPSHOT_DIR" bash scripts/demo-snapshot.sh restore "$db" \
 compose run --rm --no-deps -T api-nest sh -c 'tar -xzf - -C /app/media' < "$SNAPSHOT_DIR/media.tar.gz"
 
 # -------------------------------------------------------------- 5. migrate ---
-# Nothing to apply: the snapshot is this commit's schema. `migrate` records
-# the baseline as applied to a database Django built, and refuses one that is
-# older or newer than the build; `sync-permissions` makes the roles match it.
-step "the NestJS API's migrate and sync-permissions"
+# `migrate` adopts a database Django built and applies what is newer than the
+# snapshot; `sync-permissions` makes the roles match the build. Then every
+# account gets this stack's password: the snapshot carries the README's.
+step "the API's migrate, sync-permissions and set-password"
 nest migrate
 nest sync-permissions
+for email in $(docker exec "$db" psql -U "$(docker exec "$db" printenv POSTGRES_USER)" \
+    -d "$(docker exec "$db" printenv POSTGRES_DB)" -Atc "SELECT email FROM accounts_user ORDER BY email"); do
+    # `-e NEW_PASSWORD` with no value: passed from this process's environment,
+    # not written on a command line every process can read.
+    NEW_PASSWORD="$DJANGO_DEMO_SEED_PASSWORD" compose run --rm -T -e NEW_PASSWORD api-nest \
+        node dist/cli.js set-password --email "$email" | sed 's/^/    /'
+done
 
 
 # ------------------------------------------------------------------- 6. up ---

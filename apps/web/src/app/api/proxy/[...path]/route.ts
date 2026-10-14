@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ACCESS_COOKIE, CART_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
 import { refuseCrossOrigin } from "@/lib/api/same-origin";
 
-const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
+const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api-nest:3000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
 const FORWARD_HEADERS = ["content-type", "x-cart-token", "idempotency-key", "accept"];
 const PASS_BACK_HEADERS = ["content-disposition", "cache-control", "x-content-type-options"];

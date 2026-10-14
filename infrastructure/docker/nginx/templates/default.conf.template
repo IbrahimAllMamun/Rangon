@@ -32,10 +32,8 @@
 # resolve, line 36 or so, and has checked nothing below it.)
 # ---------------------------------------------------------------------------
 
-# Which API serves: `api-nest:3000` (the NestJS API, the default since
-# ADR-0017) or `api:8000` (Django, with docker-compose.django.yml). Set by the
-# compose file, never by hand, because the web app's own server-side calls
-# have to move with it.
+# The API: `api-nest:3000`, set by the compose file. A variable since the
+# cutover (ADR-0017), when two APIs could serve; one has since Django went.
 upstream rangon_api { server ${RANGON_API_UPSTREAM}; keepalive 32; }
 upstream rangon_web { server web:3000; keepalive 32; }
 
@@ -87,7 +85,7 @@ server {
     # --- Next.js owns part of /api/ -----------------------------------------
     # `/api/proxy/*` attaches the httpOnly token to browser calls (ADR-0005) and
     # `/api/auth/*` sets those cookies at login. They are route handlers in the
-    # web app, NOT Django. Sending them to the API returns 404 and every
+    # web app, NOT the API. Sending them to the API returns 404 and every
     # interactive feature dies — cart, checkout, POS sales, admin actions, login
     # — while the pages still render, so it looks like the app is simply broken.
     # Longest-prefix wins in nginx, so these override the /api/ rule below.
@@ -103,10 +101,8 @@ server {
 
     # --- What Django alone served --------------------------------------------
     # The Django admin, the OpenAPI schema and its Swagger page were dropped,
-    # not replaced (ADR-0020, decision 2): the admin showed nothing of the
-    # shop, and the schema was generated from Django's serializers. Refused
-    # here whichever API serves, so that going back to Django
-    # (docker-compose.django.yml) does not put them on the public address.
+    # not replaced (ADR-0020, decision 2), and Django has since gone. Still
+    # refused here, plainly, for an old bookmark or a scanner.
     location ~ ^/(django-admin|api/schema|api/docs)(/|$) {
         return 404;
     }
@@ -125,28 +121,20 @@ server {
 
     # Receipts are staff-only: they are served by
     # GET /api/v1/expenses/{id}/attachment/, which checks who is asking.
-    # Both APIs refuse this prefix on /media/ as well (core.media.PRIVATE_PREFIXES
-    # and media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
+    # The API refuses this prefix on /media/ as well (media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
     # switched to an `alias` for speed. Longest-prefix `^~` wins over /media/.
     location ^~ /media/expenses/ {
         return 404;
     }
 
     # Uploaded product photography. The API owns these bytes (USE_S3=0 keeps them
-    # on its disk, a volume both APIs mount); the app returns them as
+    # on its disk, a volume); the app returns them as
     # origin-relative paths, so they must be routed here rather than falling
     # through to Next.
     location /media/ {
         proxy_pass http://rangon_api;
         expires 7d;
         access_log off;
-    }
-
-    location /static/ {
-        alias /var/www/static/;
-        expires 30d;
-        access_log off;
-        add_header Cache-Control "public, immutable";
     }
 
     # --- Web app -----------------------------------------------------------

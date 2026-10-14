@@ -2,12 +2,10 @@
 # answer recorded for it, and every race across two Nest processes
 # (docs/architecture/recorded-proof.md; step 1 of django-removal-plan.md).
 #
-#   scripts/nest-parity.sh record     with the parity stack up and seeded: a
-#                                     snapshot of its database, and the answers
-#   scripts/nest-parity.sh replay     this stack, from that snapshot
+#   scripts/nest-parity.sh replay     this stack, from the committed recording
 #
-# No service here is built from apps/api, runs Python, or migrates anything:
-# the database is restored from the snapshot, schema and rows together.
+# The database is restored from the recording's snapshot, schema and rows
+# together, then brought to this build's schema by the API's own `migrate`.
 #
 # **Always pass `-p rangon-recorded`** (the script does): `.env` sets
 # `COMPOSE_PROJECT_NAME=rangon`, which beats the `name:` below.
@@ -70,8 +68,9 @@ x-nest-env: &nest-env
 
 x-harness-env: &harness-env
   <<: *clock
-  # Two Nest processes. The second stands where Django stood: a token one
-  # issues is used on the other, and each race is split between them.
+  # Two API processes. The second stands where Django stood when the
+  # recording was taken: a token one issues is used on the other, and each
+  # race is split between them.
   DJANGO_BASE: http://nest-b:3000
   NEST_BASE: http://nest:3000
   PARITY_NEST_JOBS: pgboss

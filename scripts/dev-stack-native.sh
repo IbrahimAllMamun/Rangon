@@ -3,21 +3,19 @@
 # Run the whole stack without Docker.
 #
 # Docker is how the README documents running Rangon; it is not what running it
-# requires. Any Linux box with PostgreSQL, Redis, Python and Node can do it, and
+# requires. Any Linux box with PostgreSQL, Redis and Node can do it, and
 # this script is what proved the admin screens work (docs/roadmap.md, "The
 # screens were finally used"). It exists so a browser pass does not depend on
 # Docker Desktop being healthy.
 #
-#   scripts/dev-stack-native.sh up     # start everything, seed, wait for health
-#   scripts/dev-stack-native.sh down   # stop everything
+#   scripts/dev-stack-native.sh up       # start everything, seed, wait for health
+#   scripts/dev-stack-native.sh reseed   # the demo snapshot again, under the running stack
+#   scripts/dev-stack-native.sh down     # stop everything
 #   scripts/dev-stack-native.sh status
 #
-# The API is the NestJS one, in watch mode, as in the Docker development stack
-# (django-removal-plan.md, step 6.1). Django still makes the demo data -- its
-# `migrate` and `seed_demo`, which are what `scripts/demo-snapshot.sh make`
-# runs too -- and is not left running; the NestJS API's `migrate` then adopts
-# the database and `sync-permissions` writes the roles. `API=django` serves
-# Django instead, for a rule that changes there first (ADR-0020, decision 5).
+# The API in watch mode, as in the Docker development stack. The database is
+# the committed demo snapshot, restored afresh on every `up` unless SEED=0, and
+# brought to this build's schema by the API's `migrate`.
 #
 # The two traps this script exists to avoid, both of which cost real time:
 #
@@ -33,15 +31,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="${RANGON_RUN_DIR:-/tmp/rangon-native}"
 PGDATA="${RANGON_PGDATA:-$RUN_DIR/pg}"
-VENV="${RANGON_VENV:-$RUN_DIR/venv}"
 API_PORT="${RANGON_API_PORT:-8000}"
 WEB_PORT="${RANGON_WEB_PORT:-4000}"
 PG_BIN="${RANGON_PG_BIN:-/usr/lib/postgresql/16/bin}"
 DB_URL="postgresql://rangon:rangon@127.0.0.1:5432/rangon"
-API="${API:-nest}"
 SECRET="${DJANGO_SECRET_KEY:-dev-only-not-a-real-secret-0123456789}"
-# Both APIs keep uploads where Django's development settings put them.
-MEDIA="$ROOT/apps/api/media"
+MEDIA="$RUN_DIR/media"
+SNAPSHOT="$ROOT/infrastructure/snapshots/demo"
 
 mkdir -p "$RUN_DIR"
 
@@ -83,66 +79,42 @@ start_redis() {
   redis-cli ping >/dev/null && log "redis up"
 }
 
-ensure_venv() {
-  if [[ ! -x $VENV/bin/python ]]; then
-    python3 -m venv "$VENV"
-    "$VENV/bin/pip" install -q -r "$ROOT/apps/api/requirements/dev.txt"
-    log "venv built at $VENV"
-  fi
-}
-
-# The demo data, by Django: `migrate`, and `seed_demo --reset` unless SEED=0.
+# The demo data: the snapshot into an emptied database, its uploads into
+# MEDIA. SEED=0 keeps what is there.
 make_data() {
-  cd "$ROOT/apps/api"
-  DATABASE_URL="$DB_URL" DJANGO_SECRET_KEY="$SECRET" \
-    "$VENV/bin/python" manage.py migrate --noinput >"$RUN_DIR/migrate.log" 2>&1
-  if [[ ${SEED:-1} == 1 ]]; then
-    DATABASE_URL="$DB_URL" DJANGO_SECRET_KEY="$SECRET" \
-      "$VENV/bin/python" manage.py seed_demo --reset >"$RUN_DIR/seed.log" 2>&1
-    log "database seeded"
-  fi
+  [[ ${SEED:-1} == 1 ]] || return 0
+  psql -q -h 127.0.0.1 -U postgres -c "DROP DATABASE IF EXISTS rangon WITH (FORCE);" \
+    -c "CREATE DATABASE rangon OWNER rangon;" >/dev/null
+  pg_restore --exit-on-error --no-owner -d "$DB_URL" "$SNAPSHOT/demo.dump"
+  rm -rf "$MEDIA" && mkdir -p "$MEDIA" && tar -xzf "$SNAPSHOT/media.tar.gz" -C "$MEDIA"
+  log "database restored from the demo snapshot"
 }
 
-# Whichever API was serving, stopped: the NestJS one by its process group,
-# the Django one by name (from this file, never from a command line that
-# carries the pattern -- .claude/environment.md §16).
+# The API by its process group, so that the compiler stops with it.
 stop_api() {
   if [[ -f $RUN_DIR/api.pid ]]; then
     kill -- "-$(cat "$RUN_DIR/api.pid")" 2>/dev/null || true
     rm -f "$RUN_DIR/api.pid"
   fi
-  pkill -f "manage.py runserver $API_PORT" 2>/dev/null || true
   sleep 1
 }
 
 start_api() {
   stop_api
   make_data
-  if [[ $API == django ]]; then
-    cd "$ROOT/apps/api"
-    DATABASE_URL="$DB_URL" DJANGO_SECRET_KEY="$SECRET" \
-      DJANGO_DEBUG=1 DJANGO_ALLOWED_HOSTS='*' \
-      nohup "$VENV/bin/python" manage.py runserver "$API_PORT" --noreload >"$RUN_DIR/api.log" 2>&1 &
-    # 401 is the correct answer for an unauthenticated API root.
-    wait_for "api (django)" "http://127.0.0.1:$API_PORT/api/v1/" '^(200|401)$'
-    return
-  fi
   cd "$ROOT/apps/api-nest"
   [[ -d node_modules ]] || npm ci --no-audit --no-fund >"$RUN_DIR/npm-api.log" 2>&1
   npm run -s build >"$RUN_DIR/build-api.log" 2>&1
   local vars=(DATABASE_URL="$DB_URL" REDIS_URL=redis://127.0.0.1:6379/0 DJANGO_SECRET_KEY="$SECRET"
     DJANGO_SETTINGS_MODULE=config.settings.dev DJANGO_DEBUG=1 MEDIA_ROOT="$MEDIA")
-  env "${vars[@]}" node dist/cli.js migrate >"$RUN_DIR/migrate-nest.log" 2>&1
-  env "${vars[@]}" node dist/cli.js sync-permissions >>"$RUN_DIR/migrate-nest.log" 2>&1
-  log "$(head -n 1 "$RUN_DIR/migrate-nest.log")"
+  env "${vars[@]}" node dist/cli.js migrate >"$RUN_DIR/migrate.log" 2>&1
+  env "${vars[@]}" node dist/cli.js sync-permissions >>"$RUN_DIR/migrate.log" 2>&1
+  log "$(head -n 2 "$RUN_DIR/migrate.log" | tail -n 1)"
   # Its own process group, so that `down` stops the compiler with the API.
-  # The jobs in PostgreSQL, worked and scheduled by this process, as in
-  # production; no Celery.
-  env "${vars[@]}" PORT="$API_PORT" RANGON_JOBS_BACKEND=pgboss \
-    setsid nohup npm run -s dev >"$RUN_DIR/api.log" 2>&1 &
+  # The jobs in PostgreSQL, worked and scheduled by this process.
+  env "${vars[@]}" PORT="$API_PORT" setsid nohup npm run -s dev >"$RUN_DIR/api.log" 2>&1 &
   echo $! >"$RUN_DIR/api.pid"
-  # The NestJS API answers its router's index 404, where Django's says 401.
-  wait_for "api (nest)" "http://127.0.0.1:$API_PORT/api/ready/" '^200$'
+  wait_for "api" "http://127.0.0.1:$API_PORT/api/ready/" '^200$'
 }
 
 start_web() {
@@ -159,16 +131,23 @@ start_web() {
 
 case "${1:-up}" in
   up)
-    start_postgres; start_redis; ensure_venv; start_api; start_web
+    start_postgres; start_redis; start_api; start_web
     echo
     log "storefront  http://127.0.0.1:$WEB_PORT"
     log "admin       http://127.0.0.1:$WEB_PORT/admin"
-    log "api         http://127.0.0.1:$API_PORT/api/v1/ ($API)"
+    log "api         http://127.0.0.1:$API_PORT/api/v1/"
     log "logins      owner@rangon.test … / rangon12345"
     log "logs        $RUN_DIR"
     log "e2e         PW_CHROMIUM_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome \\"
     log "              E2E_BASE_URL=http://127.0.0.1:$WEB_PORT REVALIDATE_SECRET=dev-revalidate-secret \\"
-    log "              E2E_SEED_CWD=$ROOT/apps/api E2E_SEED_CMD=... npx playwright test"
+    log "              E2E_SEED_CMD='scripts/dev-stack-native.sh reseed' npx playwright test"
+    ;;
+  reseed)
+    # What the browser suite runs before it starts (apps/web/e2e/global-setup.ts):
+    # the API's connections are cut by the drop and it opens new ones.
+    SEED=1 make_data
+    (cd "$ROOT/apps/api-nest" && DATABASE_URL="$DB_URL" node dist/cli.js migrate >/dev/null &&
+      DATABASE_URL="$DB_URL" node dist/cli.js sync-permissions >/dev/null)
     ;;
   down)
     pkill -f "next dev --port $WEB_PORT" 2>/dev/null || true
@@ -184,5 +163,5 @@ case "${1:-up}" in
     log "web  $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$WEB_PORT/" || echo down)"
     ;;
   *)
-    echo "usage: $0 {up|down|status}" >&2; exit 2 ;;
+    echo "usage: $0 {up|reseed|down|status}" >&2; exit 2 ;;
 esac

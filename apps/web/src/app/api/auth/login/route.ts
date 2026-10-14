@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
 import { ACCESS_COOKIE, REFRESH_COOKIE } from "@/lib/api/client";
 import { refuseCrossOrigin } from "@/lib/api/same-origin";
 
-const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
+const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api-nest:3000/api/v1";
 const SECURE = process.env.NODE_ENV === "production";
 
 export async function POST(request: Request) {
