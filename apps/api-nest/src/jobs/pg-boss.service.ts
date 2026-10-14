@@ -18,10 +18,9 @@ export const JOBS_SCHEMA = 'pgboss';
  * The pg-boss queue (ADR-0016): a job is a row, and a row can be written in
  * the transaction that decides it.
  *
- * Started only when `RANGON_JOBS_BACKEND=pgboss` -- the default backend
- * creates no schema and opens no second pool. Starting it creates or
- * migrates the `pgboss` schema and makes sure every queue is there, with the
- * retry policy its Celery task had.
+ * Started with the application. Starting it creates or migrates the
+ * `pgboss` schema and makes sure every queue is there, with the retry policy
+ * its Celery task had.
  */
 @Injectable()
 export class PgBossTransport implements OnApplicationBootstrap, OnModuleDestroy {
@@ -30,12 +29,8 @@ export class PgBossTransport implements OnApplicationBootstrap, OnModuleDestroy 
 
   constructor(@Inject(ENV) private readonly env: Env) {}
 
-  get enabled(): boolean {
-    return this.env.RANGON_JOBS_BACKEND === 'pgboss';
-  }
-
   async onApplicationBootstrap(): Promise<void> {
-    if (this.enabled) await this.start();
+    await this.start();
   }
 
   /** The started instance; `start()` first. */

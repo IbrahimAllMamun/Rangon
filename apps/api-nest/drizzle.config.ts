@@ -1,16 +1,18 @@
 import { defineConfig } from 'drizzle-kit';
 
 /**
- * Django owns the schema until the removal plan's step 6.4, and until then
- * this is used for one thing: `scripts/nest-baseline.sh cut` reads the tables
- * Django created (`drizzle-kit pull`) into `drizzle/`, beside the baseline
- * migration cut from the same database. Never run `drizzle-kit push`, and
- * never `generate`, against a Rangon database before that step: a schema
- * change is a Django migration, then a new cut.
+ * The schema's owner since the removal plan's step 6.4. A change is made in
+ * `drizzle/schema.ts` (and `drizzle/relations.ts` for a join), then:
  *
- * `schema` is the whole schema, foreign keys included: what the first
- * migration written here will be a difference from. The API reads a copy
- * without them (`scripts/pull-schema.mjs`).
+ *   npm run db:generate -- --name <what-it-does>   writes drizzle/NNNN_*.sql
+ *   npm run db:copy                                 the API's copy, src/database/
+ *
+ * Read the SQL it wrote before committing it: `generate` also emits identity
+ * limits rounded past bigint's range, which PostgreSQL refuses, and a new
+ * foreign key is not DEFERRABLE INITIALLY DEFERRED unless finished by hand,
+ * as every older one is (docs/database/migrations.md). It needs no database.
+ * Never `drizzle-kit push`: a schema changes by a migration, applied by
+ * `node dist/cli.js migrate` as a release step.
  */
 export default defineConfig({
   dialect: 'postgresql',

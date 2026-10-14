@@ -8471,3 +8471,9 @@ SELECT pg_catalog.setval('public.django_migrations_id_seq', 111, true);
 --
 
 
+
+-- Added at the removal plan's step 6.4, when a second migration first ran
+-- after this one in the same session: put back the search path the dump's
+-- header emptied, or the migrations that follow on a new database, which name
+-- their tables without a schema, find none of them.
+SELECT pg_catalog.set_config('search_path', '"$user", public', false);

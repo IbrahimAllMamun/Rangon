@@ -12,13 +12,10 @@ const SWEEP = 'orders.tasks.release_expired_reservations';
 
 describe('the worker settings', () => {
   it('fires the schedule in a worker unless told not to, and never outside one', () => {
-    expect(loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss' }).jobsSchedule).toBe(true);
-    expect(
-      loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', RANGON_JOBS_SCHEDULE: '0' }).jobsSchedule,
-    ).toBe(false);
-    const apiOnly = loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', RANGON_JOBS_WORKER: '0' });
+    expect(loadEnv(BASE).jobsSchedule).toBe(true);
+    expect(loadEnv({ ...BASE, RANGON_JOBS_SCHEDULE: '0' }).jobsSchedule).toBe(false);
+    const apiOnly = loadEnv({ ...BASE, RANGON_JOBS_WORKER: '0' });
     expect(apiOnly.jobsSchedule).toBe(false);
-    expect(loadEnv(BASE).jobsSchedule).toBe(false);
   });
 });
 
@@ -36,7 +33,7 @@ describe('JobWorker', () => {
       { run } as unknown as JobHandlers,
       pgBoss as unknown as PgBossTransport,
       reports as unknown as ErrorReports,
-      loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', ...settings }),
+      loadEnv({ ...BASE, ...settings }),
     );
     // Its failures are logged; a test need not print them.
     jest.spyOn(worker['logger'], 'error').mockImplementation(() => undefined);

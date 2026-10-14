@@ -79,16 +79,11 @@ const schema = z.object({
   // the provider recorded on an online payment.
   RANGON_LOW_STOCK_THRESHOLD: z.coerce.number().int().default(5),
   PAYMENT_DEFAULT_PROVIDER: z.string().default('manual'),
-  // Django's Celery broker: jobs this API queues are run by Django's worker.
-  CELERY_BROKER_URL: z.string().default('redis://localhost:6379/1'),
-  // Where this API queues its background jobs (ADR-0016): `celery`, for
-  // Django's worker, until the cutover; `pgboss`, in PostgreSQL, after it.
-  RANGON_JOBS_BACKEND: z.enum(['celery', 'pgboss']).default('celery'),
-  // Whether this process works the queue and fires the schedule. Unset, it
-  // does when the backend is pg-boss; `0` leaves that to a separate worker.
+  // Whether this process works the job queue (pg-boss, ADR-0016) and fires the
+  // schedule. Unset, it does; `0` leaves that to a separate worker.
   RANGON_JOBS_WORKER: z.string().optional(),
   // Whether a worker also fires the schedule. On by default; `0` for a worker
-  // started while Celery's beat still does, so nothing is fired twice.
+  // beside another that already does, so nothing is fired twice.
   RANGON_JOBS_SCHEDULE: flag(true),
   // What the jobs themselves read, each as `config/settings/base.py` reads it.
   // Mail (`EMAIL_*`): SMTP, with a timeout so a stalled server cannot hold a job.
@@ -209,14 +204,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
 
   const workerSetting = (env.RANGON_JOBS_WORKER ?? '').trim().toLowerCase();
-  const jobsWorker =
-    workerSetting === ''
-      ? env.RANGON_JOBS_BACKEND === 'pgboss'
-      : ['1', 'true', 'yes', 'on'].includes(workerSetting);
-  if (jobsWorker && env.RANGON_JOBS_BACKEND !== 'pgboss') {
-    // Celery's own worker runs what is queued for Celery; two would run it twice.
-    throw new Error('RANGON_JOBS_WORKER needs RANGON_JOBS_BACKEND=pgboss.');
-  }
+  const jobsWorker = workerSetting === '' || ['1', 'true', 'yes', 'on'].includes(workerSetting);
 
   return {
     ...env,

@@ -52,8 +52,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 # Django's common-password list, read by accounts/passwords.ts from ../../assets.
 COPY assets ./assets
-# What `node dist/cli.js migrate` runs: the SQL, and Drizzle's journal of it.
-COPY drizzle/0000_baseline.sql ./drizzle/
+# What `node dist/cli.js migrate` runs: the SQL, Drizzle's journal of it, and
+# the Django migrations a database Django built must be at to be adopted.
+COPY drizzle/*.sql drizzle/django-head.json ./drizzle/
 COPY drizzle/meta ./drizzle/meta
 COPY package.json ./
 

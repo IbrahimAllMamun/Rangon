@@ -44,8 +44,8 @@ export function againstTheBaseline(
  * Anything else -- tables, and nobody's record of how they came -- is refused.
  *
  * A release step of its own, never run as the API starts
- * (docs/architecture/django-removal-plan.md, step 3). Until that plan's step
- * 6.4 Django migrates production and this is exercised in CI alone.
+ * (docs/architecture/django-removal-plan.md, step 3), and since that plan's
+ * step 6.4 the only way any database's schema changes.
  */
 export async function migrate(databaseUrl: string, log: (line: string) => void): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
@@ -70,9 +70,10 @@ export async function migrate(databaseUrl: string, log: (line: string) => void):
     const before = await recorded();
 
     if (before === 0 && (await exists('public.django_migrations'))) {
-      const head = JSON.parse(
-        readFileSync(join(MIGRATIONS, 'meta', 'django-head.json'), 'utf8'),
-      ) as [string, string][];
+      const head = JSON.parse(readFileSync(join(MIGRATIONS, 'django-head.json'), 'utf8')) as [
+        string,
+        string,
+      ][];
       const applied = (
         await client.query<{ app: string; name: string }>(
           `SELECT app, name FROM public.django_migrations`,
@@ -82,13 +83,14 @@ export async function migrate(databaseUrl: string, log: (line: string) => void):
       if (missing.length) {
         throw new Refusal(
           `This database is behind the baseline: Django has not applied ${missing.join(', ')}. ` +
-            `Run Django's migrate first; nothing was changed.`,
+            `Upgrade it with the last release that had Django first ` +
+            `(docs/operations/upgrading-local-production.md); nothing was changed.`,
         );
       }
       if (unknown.length) {
         throw new Refusal(
           `This database is ahead of the baseline: it has ${unknown.join(', ')}, which the ` +
-            `baseline was not cut from (scripts/nest-baseline.sh cut). Nothing was changed.`,
+            `baseline was not cut from. Nothing was changed.`,
         );
       }
       // The table as Drizzle's migrator makes it, and the row it would have written.

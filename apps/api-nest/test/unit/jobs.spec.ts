@@ -1,6 +1,5 @@
 import { loadEnv } from '../../src/config/env';
 import type { Queryable } from '../../src/database/database.service';
-import type { CeleryService } from '../../src/jobs/celery.service';
 import { Jobs } from '../../src/jobs/jobs.service';
 import type { PgBossTransport } from '../../src/jobs/pg-boss.service';
 import { JOB_QUEUES, JOB_SCHEDULE, JOB_TIME_LIMIT_SECONDS } from '../../src/jobs/queues';
@@ -48,90 +47,43 @@ describe('the background jobs', () => {
   });
 });
 
-describe('where jobs are queued and worked', () => {
-  it('queues for Celery, and works nothing, unless told otherwise', () => {
-    const env = loadEnv(BASE);
-    expect(env.RANGON_JOBS_BACKEND).toBe('celery');
-    expect(env.jobsWorker).toBe(false);
-  });
-
+describe('where jobs are worked', () => {
   it('works its own queue with pg-boss, unless a separate worker does', () => {
-    expect(loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss' }).jobsWorker).toBe(true);
-    expect(
-      loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', RANGON_JOBS_WORKER: '0' }).jobsWorker,
-    ).toBe(false);
-    expect(
-      loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'pgboss', RANGON_JOBS_WORKER: ' ' }).jobsWorker,
-    ).toBe(true);
-  });
-
-  it("refuses to work Celery's queue, and a backend it does not know", () => {
-    expect(() => loadEnv({ ...BASE, RANGON_JOBS_WORKER: '1' })).toThrow(
-      'RANGON_JOBS_BACKEND=pgboss',
-    );
-    expect(() => loadEnv({ ...BASE, RANGON_JOBS_BACKEND: 'bullmq' })).toThrow(
-      'RANGON_JOBS_BACKEND',
-    );
+    expect(loadEnv(BASE).jobsWorker).toBe(true);
+    expect(loadEnv({ ...BASE, RANGON_JOBS_WORKER: '0' }).jobsWorker).toBe(false);
+    expect(loadEnv({ ...BASE, RANGON_JOBS_WORKER: ' ' }).jobsWorker).toBe(true);
+    expect(loadEnv({ ...BASE, RANGON_JOBS_WORKER: '1' }).jobsWorker).toBe(true);
   });
 });
 
 describe('Jobs', () => {
   const tx = { query: jest.fn(), one: jest.fn() } as unknown as Queryable;
-  const make = (backend: 'celery' | 'pgboss') => {
-    const celery = { delay: jest.fn().mockResolvedValue(undefined) };
+  const make = () => {
     const pgBoss = { send: jest.fn().mockResolvedValue(undefined) };
-    const jobs = new Jobs(
-      celery as unknown as CeleryService,
-      pgBoss as unknown as PgBossTransport,
-      loadEnv({ ...BASE, RANGON_JOBS_BACKEND: backend, RANGON_JOBS_WORKER: '0' }),
-    );
-    return { jobs, celery, pgBoss };
+    const jobs = new Jobs(pgBoss as unknown as PgBossTransport);
+    return { jobs, pgBoss };
   };
 
-  it('with Celery, holds a job decided in a transaction until the caller has committed', async () => {
-    const { jobs, celery, pgBoss } = make('celery');
-    const afterCommit: (() => Promise<void>)[] = [];
-    await jobs.delayIn(tx, afterCommit, 'inventory.tasks.notify_low_stock', ['row-1']);
-    expect(celery.delay).not.toHaveBeenCalled();
-    expect(afterCommit).toHaveLength(1);
-    await (afterCommit[0] as () => Promise<void>)();
-    expect(celery.delay).toHaveBeenCalledWith('inventory.tasks.notify_low_stock', ['row-1']);
-    expect(pgBoss.send).not.toHaveBeenCalled();
-    expect(jobs.transactional).toBe(false);
-  });
-
-  it('with pg-boss, writes it in that transaction and leaves nothing for afterwards', async () => {
-    const { jobs, celery, pgBoss } = make('pgboss');
-    const afterCommit: (() => Promise<void>)[] = [];
-    await jobs.delayIn(tx, afterCommit, 'inventory.tasks.notify_low_stock', ['row-1']);
+  it('writes a job decided in a transaction in that transaction', async () => {
+    const { jobs, pgBoss } = make();
+    await jobs.delayIn(tx, 'inventory.tasks.notify_low_stock', ['row-1']);
     expect(pgBoss.send).toHaveBeenCalledWith('inventory.tasks.notify_low_stock', ['row-1'], tx);
-    expect(afterCommit).toHaveLength(0);
-    expect(celery.delay).not.toHaveBeenCalled();
-    expect(jobs.transactional).toBe(true);
   });
 
-  it('with pg-boss, a job that cannot be written fails the transaction it belongs to', async () => {
-    const { jobs, pgBoss } = make('pgboss');
+  it('a job that cannot be written fails the transaction it belongs to', async () => {
+    const { jobs, pgBoss } = make();
     pgBoss.send.mockRejectedValueOnce(new Error('relation "pgboss.job" does not exist'));
-    await expect(
-      jobs.delayIn(tx, [], 'inventory.tasks.notify_low_stock', ['row-1']),
-    ).rejects.toThrow('pgboss.job');
+    await expect(jobs.delayIn(tx, 'inventory.tasks.notify_low_stock', ['row-1'])).rejects.toThrow(
+      'pgboss.job',
+    );
   });
 
   it('outside a transaction, queues at once and never raises', async () => {
-    const celeryBacked = make('celery');
-    await celeryBacked.jobs.delay('content.tasks.revalidate_storefront', [['site']]);
-    expect(celeryBacked.celery.delay).toHaveBeenCalledWith('content.tasks.revalidate_storefront', [
-      ['site'],
-    ]);
-
-    const pgBacked = make('pgboss');
-    pgBacked.pgBoss.send.mockRejectedValueOnce(new Error('connection refused'));
+    const { jobs, pgBoss } = make();
+    pgBoss.send.mockRejectedValueOnce(new Error('connection refused'));
     await expect(
-      pgBacked.jobs.delay('content.tasks.revalidate_storefront', [['site']]),
+      jobs.delay('content.tasks.revalidate_storefront', [['site']]),
     ).resolves.toBeUndefined();
-    expect(pgBacked.pgBoss.send).toHaveBeenCalledWith('content.tasks.revalidate_storefront', [
-      ['site'],
-    ]);
+    expect(pgBoss.send).toHaveBeenCalledWith('content.tasks.revalidate_storefront', [['site']]);
   });
 });

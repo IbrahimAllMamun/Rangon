@@ -5,7 +5,6 @@
  */
 import { decimalField, dictField, EMPTY, Invalid, SKIP, uuidField } from '../../src/common/drf';
 import { PyFloat } from '../../src/common/python';
-import { celeryMessage } from '../../src/jobs/celery.service';
 
 function run(field: { run(data: unknown, partial: boolean): unknown }, value: unknown): unknown {
   try {
@@ -63,56 +62,5 @@ describe('DictField', () => {
     [{ a: 1 }, { a: 1 }],
   ])('%p', (value, expected) => {
     expect(run(field, value)).toEqual(expected);
-  });
-});
-
-describe('the Celery task message', () => {
-  it('is the envelope Celery 5.4 writes, protocol 2', () => {
-    const message = celeryMessage(
-      'notifications.tasks.send_order_email',
-      ['11111111-1111-1111-1111-111111111111', 'ORDER_CONFIRMED'],
-      {
-        id: '6601d495-aedd-41d1-9581-3547921b7b8e',
-        origin: 'gen3140@d2d1ba4d4570',
-        replyTo: '2e5a09f9-dce7-34af-9cc0-9eb82616abf0',
-        deliveryTag: 'cd2c4681-d604-4ed1-b031-100cdee475c1',
-      },
-    ) as { body: string; headers: Record<string, unknown>; properties: Record<string, unknown> };
-    // Captured from Redis after `send_order_email.delay(...)` in the Django API.
-    expect(JSON.parse(Buffer.from(message.body, 'base64').toString('utf8'))).toEqual([
-      ['11111111-1111-1111-1111-111111111111', 'ORDER_CONFIRMED'],
-      {},
-      { callbacks: null, errbacks: null, chain: null, chord: null },
-    ]);
-    expect(message.headers).toMatchObject({
-      lang: 'py',
-      task: 'notifications.tasks.send_order_email',
-      id: '6601d495-aedd-41d1-9581-3547921b7b8e',
-      root_id: '6601d495-aedd-41d1-9581-3547921b7b8e',
-      argsrepr: "('11111111-1111-1111-1111-111111111111', 'ORDER_CONFIRMED')",
-      kwargsrepr: '{}',
-      retries: 0,
-      timelimit: [null, null],
-    });
-    expect(message.properties).toMatchObject({
-      delivery_mode: 2,
-      delivery_info: { exchange: '', routing_key: 'celery' },
-      body_encoding: 'base64',
-      priority: 0,
-    });
-  });
-
-  it("writes a lone argument's repr with Python's trailing comma", () => {
-    const message = celeryMessage(
-      'inventory.tasks.notify_low_stock',
-      ['22222222-2222-2222-2222-222222222222'],
-      {
-        id: 'x',
-        origin: 'o',
-        replyTo: 'r',
-        deliveryTag: 'd',
-      },
-    ) as { headers: { argsrepr: string } };
-    expect(message.headers.argsrepr).toBe("('22222222-2222-2222-2222-222222222222',)");
   });
 });
