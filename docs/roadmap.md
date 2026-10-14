@@ -495,6 +495,48 @@ is still open and tracked in
 
 ## Verification log
 
+### Removing Django, steps 6.4, 7 and 8: the NestJS API alone, 2026-10-14
+
+Asked for: "no need to rehearse. do everything so that it works fine", after the plan's 6.1 to 6.3
+merged. Put to the owner: all the way, Django deleted; the real shop is upgraded to `c5f4e81`, the
+last release with Django, before this one. [ADR-0023](architecture/decisions/0023-django-is-gone.md)
+records it: ADR-0020's month and rehearsal waived, a rule changes in the API from now.
+
+```text
+the API: jobs on pg-boss alone .......... the Celery transport, RANGON_JOBS_BACKEND, CELERY_BROKER_URL gone;
+                                          1784 unit tests, tsc, eslint, prettier clean
+0001_drop_django_framework_tables ....... on a new database: 2 migrations, 82 tables; again: nothing to apply
+                                          on a Django-built, seeded database: adopted (111 of its migrations),
+                                          then 0001; both ledger checks clean; the API served on it
+                                          the two schemas, built and adopted .... identical (pg_dump, less its tokens)
+                                          on a database the previous build had adopted ....... 0001 applied
+set-password ............................ sets a hash the API verifies; refuses a weak password and an unknown address
+the web app ............................. tsc, eslint, 498 Vitest tests clean
+the compose files ....................... dev: db redis api-nest mailpit minio web; prod: db redis api-nest web nginx;
+                                          local production: the same with mailpit
+shellcheck .............................. no finding the scripts did not already have
+```
+
+**What went.** `apps/api`, the worker and beat, `docker-compose.django.yml`, `.nest.yml` and
+`.test.yml`, the 28 Python fixtures and Django's payment gateway, `nest-baseline.sh`,
+`nest-commands.sh`, `bootstrap-store.py`, the tests-against-parity tools; in CI, Django's suite, both
+comparisons, the demo snapshot job, the Django image and the Python audit. Django's framework
+tables went in `0001`.
+
+**What stands in for it.** The recorded proof, committed, replayed in CI on a stack migrated to the
+build first; `PARITY_ACCEPT` to take a deliberate new answer into the recording
+([recorded-proof.md](architecture/recorded-proof.md), "Changing an answer"). The demo snapshot,
+committed. `migrate` checked in CI on a new database and on the demo snapshot.
+[migrations.md](database/migrations.md) is how a schema change is made now.
+
+**What could not be done here.** The recording and the demo snapshot are made by CI, in the last
+run in which Django and the NestJS API were compared (on `baf87da`); this container cannot fetch
+an artifact (the session's network policy refuses GitHub's artifact storage), and having CI commit
+them to the branch needs a write permission that was not given. Until they are committed, the
+replay and the migration check in CI have nothing to run against. As before, no Docker image could
+be built here, so the dev image, the replay stack, `rebuild-local-prod.sh` and `e2e-local.sh` were
+not run as wholes.
+
 ### Removing Django, steps 6.1 to 6.3: development, the browser suite and the scripts on the NestJS API, 2026-10-14
 
 Asked for: "do steps 6.1 to 6.3" of [the plan](architecture/django-removal-plan.md). The plan's 6.2

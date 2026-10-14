@@ -3,6 +3,12 @@
 Windows 11 + Docker Desktop + Git Bash. Every item below cost real time in the
 session that produced this file. None are hypothetical.
 
+**Django is gone since 2026-10-14** (docs/architecture/decisions/0023-django-is-gone.md).
+Where a section below names `api`, `worker`, `beat`, `seed_demo`, `pytest`, `manage.py` or a
+Python interpreter, it describes the stack as it was; the trap it records may still hold for the
+API (`api-nest`) and the web app, which is why it stays. The commands in "Commands that actually
+work here" are current.
+
 ---
 
 ## 1. The home directory is a git repository
@@ -531,19 +537,20 @@ fuser -k -n tcp 4000    # then check `ps -eo lstart,args | grep next-server`
 ## Commands that actually work here
 
 ```bash
-# Full stack: the NestJS API in watch mode; Django only with --profile django
-# (since 2026-10-14, removal plan step 6.1)
+# Full stack: the API in watch mode
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api-nest
 # Demo data, into the empty development database (down -v first to start again)
-scripts/demo-snapshot.sh make && scripts/demo-snapshot.sh restore rangon-db-1
+scripts/demo-snapshot.sh restore rangon-db-1
+docker compose exec api-nest node dist/cli.js migrate
 docker compose exec api-nest node dist/cli.js verify-inventory
 
-# Backend, Django (fast, reliable): `run` starts the profiled service for the one command
-MSYS_NO_PATHCONV=1 docker compose -f docker-compose.yml -f docker-compose.dev.yml \
-  run --rm -T -e DJANGO_SETTINGS_MODULE=config.settings.test api pytest -q
-docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm -T api python manage.py migrate
-docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm -T api sh -c 'ruff check . && ruff format .'
+# The API's checks, inside its dev container
+docker compose exec api-nest npm test
+docker compose exec api-nest npm run typecheck
+docker compose exec api-nest sh -c 'npm run lint && npm run format:check'
+# The recorded proof: its own stack, from nothing
+bash scripts/nest-parity.sh replay
 
 # Frontend
 MSYS_NO_PATHCONV=1 docker exec rangon-web-1 npx tsc --noEmit      # ~10 min

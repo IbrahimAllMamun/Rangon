@@ -6,104 +6,50 @@ Testing is mandatory (plan §34). A failing test is never deleted or skipped to 
 
 | Layer | Tool | Location | What it proves |
 |---|---|---|---|
-| Unit | pytest | `apps/api/tests/unit/` | pricing maths, rounding, coupon rules, costing, status machine |
-| Model | pytest-django | `apps/api/tests/` | constraints, append-only behaviour, invariants |
-| Service | pytest-django | `apps/api/tests/` | inventory ledger, POS sale, checkout, returns, payments |
-| API | DRF `APIClient` | `apps/api/tests/api/` | status codes, error envelope, permissions, serialisation |
-| Permission | pytest | `apps/api/tests/test_permissions.py` | every role × endpoint matrix |
-| Concurrency | pytest + threads | `apps/api/tests/test_concurrency.py` | oversell, double submit, replay |
-| Performance | `assertNumQueries` | `apps/api/tests/test_performance.py` | query budgets from `docs/database/indexing.md` |
+| Unit | Jest | `apps/api-nest/test/unit/` | pricing maths, rounding, coupon rules, costing, parsers, permissions, the job settings |
+| API, with its effects | the recorded proof (`scripts/nest-parity.sh replay`) | `apps/api-nest/parity/*-cases.ts` | status, body and headers of some 12,000 requests; every row each wrote and every job it queued; error envelope; permissions by role |
+| Concurrency | the race checks, across two API processes | `apps/api-nest/parity/*-concurrency.ts` | oversell, double submit, duplicate webhooks, drawer movements; each proven by removing its lock |
+| Migrations | `node dist/cli.js migrate`, in CI | `.github/workflows/ci.yml` | a new database and one Django built reach the same schema |
 | Component | Vitest + Testing Library | `apps/web/src/**/*.test.tsx` | non-trivial component logic, form validation |
 | E2E | Playwright | `apps/web/e2e/` | the four critical flows below |
 
-Concurrency and performance tests need real PostgreSQL — they never run against SQLite. The whole suite
-runs against the containerised database (`docker-compose.test.yml`), which is what CI uses.
+The recorded proof needs real PostgreSQL and runs in containers (`docker-compose.recorded.yml`),
+as CI does. Until 2026-10-14 the API layer was also Django's own suite -- 1,514 pytest tests, the
+concurrency ones in `tests/test_concurrency.py` -- and a comparison of every case with Django. The
+tests a case did not already cover were ported as cases before Django went
+([djangos-tests-sorted.md](../architecture/djangos-tests-sorted.md)). What is lost is the
+comparison: a recording finds a regression, not a rule that was already wrong when it was recorded
+([ADR-0023](../architecture/decisions/0023-django-is-gone.md)).
 
-### What of that table actually exists (2026-08-18)
+Each write case asserts both the API outcome **and** every row it wrote, the ledger's included.
 
-The backend rows are real: **167 tests pass**, concurrency included. Three rows are aspirational and
-should not be read as coverage that exists:
+## The browser suite
 
-| Row | Reality |
-|---|---|
-| Performance | `apps/api/tests/test_performance.py` now exists and asserts the storefront listing's query budget. It was written after that listing was found issuing **363 queries** for one page. Other endpoints in `docs/database/indexing.md` still have no assertions, and there is no load test |
-| Component | Frontend tests are all pure-logic: `lib/format`, `lib/api/server`, `lib/use-debounced-callback` and `lib/commerce/variant-matrix` — 39 tests. Still no component or form-validation tests; the product form's rendering is covered only by the browser walk |
-| E2E | **`e2e/csp.spec.ts` has been executed — 20 passed** (desktop + mobile), against a production build on 2026-09-17, and verified to fail 10/10 against the build that carried [D74](../roadmap.md#known-defects). It is self-contained: it consumes no seeded fixtures, so it runs without `E2E_SEED_CMD`. **`critical-flows.spec.ts` still has never been executed** — it needs a seeded stack. Neither can run in the dev image (`node:22-alpine` has no Playwright browsers); run them from an image that has one, pointing `PW_CHROMIUM_PATH` at it when the build does not match the pinned `@playwright/test`. `apps/web/e2e/browser-walk.mjs` remains the scripted alternative — see the command in its header. Set `E2E_BASE_URL`; the config default is port 3000, which is not where the storefront runs on Windows |
+From the cutover ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)) to
+2026-10-14 the E2E job in CI was a matrix of two: the web app on the NestJS API and on Django. The
+first run on the NestJS API found a difference in speed the suite was leaning on: eleven sign-ins
+inside a minute against a limit of ten. **It is one job now**, on the API, whose database is the
+committed demo snapshot, restored and migrated.
 
-CI runs the backend suite on every push. It runs **neither** frontend suite — the frontend job stops
-at `npm ci` → lint → typecheck → build.
-
-## Coverage expectations
-
-Not a percentage target — a list. These **must** have tests:
-
-`inventory/services.py`, `orders/services/*`, `promotions/services.py` (coupon maths),
-`purchasing/services.py`, `accounts/permissions.py`, `core/money.py`, `core/services.py` (sequences).
-
-## Critical E2E flows
-
-```text
-POS      login → scan barcode → add to cart → cash payment → sale completed
-         → receipt renders → inventory decreased by exactly the sold quantity
-
-Online   browse → product → select variant → add to cart → checkout (COD)
-         → order created → stock reserved → order PACKED → stock deducted
-
-Return   delivered order → request return → approve → receive (RESTOCK)
-         → refund issued → stock increased → order REFUNDED
-
-Purchase draft PO → send → receive partially → inventory increased
-         → average cost recalculated → receive remainder → PO RECEIVED
-```
-
-## Concurrency scenarios (all implemented)
-
-| Scenario | Expected |
-|---|---|
-| stock = 1, two simultaneous online checkouts | exactly one order, one `INSUFFICIENT_STOCK` |
-| stock = 1, POS sale and online checkout at once | exactly one succeeds |
-| double-clicked checkout with the same `Idempotency-Key` | one order, second call returns the first |
-| duplicate payment webhook | one capture, second event recorded and ignored |
-| reservation expiring while checkout completes | no double release, ledger stays consistent |
-| return processed twice | one refund, one restock |
-| concurrent receipt of the same purchase receipt | stock added once |
-
-Each asserts both the API outcome **and** ledger integrity via `verify_integrity()`.
-
-## The browser suite runs against both APIs
-
-Since the cutover ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)) the
-E2E job in CI was a matrix of two: the web app on the NestJS API, which is what production runs,
-and on Django, which is what it goes back to. The first run on the NestJS API found a difference
-in speed the suite was leaning on: eleven sign-ins inside a minute against a limit of ten.
-**Since the removal plan's step 6.2 it is one job, on the NestJS API**, with no Django in it: a
-job before it has Django seed a throwaway database and dump it (`scripts/demo-snapshot.sh`), and
-the suite's database is a restore of that snapshot. Until step 6.4 the way back is still proven
-in CI by Django's own suite and by the comparison of the two APIs, which drive the same requests
-the browser does.
-
-`scripts/e2e-local.sh nest` is that job in containers, for a machine with Docker and nothing else:
-a fresh database restored from the snapshot each time (made first, by Django in a stack of its
-own, when there is none or `apps/api` has changed since), the storefront's production build,
-Playwright in its own image. `scripts/e2e-local.sh django` is the Django leg that left CI. 50 of
-50 on each, 2026-10-08; 50 of 50 on the NestJS API in watch mode on the native development stack,
+`scripts/e2e-local.sh run` is that job in containers, for a machine with Docker and nothing else:
+a fresh database restored from the snapshot each time, the storefront's production build,
+Playwright in its own image. 50 of 50, 2026-10-08; 50 of 50 on the native development stack,
 2026-10-14.
 
 ## Commands
 
 ```bash
-docker compose exec api pytest                      # everything (Django on demand: --profile django, README)
-docker compose exec api pytest -m "not slow"        # skips concurrency/perf
-docker compose exec api pytest --cov=. --cov-report=term-missing
-docker compose exec web npm run test                # Vitest (17 tests, ~25 s)
+docker compose exec api-nest npm test               # the API's unit tests
+scripts/nest-parity.sh replay                       # every case against its recorded answer, and the races
+scripts/nest-parity.sh replay-empty                 # the shop on its first day
+docker compose exec web npm run test                # Vitest
 docker compose exec web npm run test:e2e            # Playwright — DOES NOT WORK, see above
-scripts/e2e-local.sh nest                           # Playwright, as CI runs it, on the NestJS API
-scripts/e2e-local.sh django                         # the same, on the Django API (the way back)
-docker compose -f docker-compose.test.yml run --rm api-test    # what CI runs
+scripts/e2e-local.sh run                            # Playwright, as CI runs it
 ```
 
 ## Test data
 
-`tests/factories.py` (factory-boy) builds organisations, branches, users per role, categories,
-attributes, products with variants, inventory positions, suppliers and orders. Tests never depend on
-`seed_demo`, which is for humans, not assertions.
+The recorded proof's database is its own snapshot (`apps/api-nest/parity/recorded/snapshot.dump`):
+the demo shop with the parity fixtures on top, as they stood when it was recorded. A case that
+needs rows nobody made arranges them in its `setup` and takes them away in its `teardown`. The
+browser suite starts from the demo snapshot (`infrastructure/snapshots/demo/`).

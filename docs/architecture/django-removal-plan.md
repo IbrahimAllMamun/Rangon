@@ -1,13 +1,11 @@
 # Removing Django: a plan
 
-**Status: accepted 2026-10-08 ([ADR-0020](decisions/0020-django-is-removed-in-steps.md)). Step 0's
-decisions are made; its wait -- a month of the real shop on the NestJS API -- has not begun.
-Steps 1 to 5 are built (2026-10-09 to 2026-10-14; each step below says what was done and what
-was not). They are the reversible ones: Django still runs, still migrates production and is
-still the way back. What Django alone served, the admin and the API docs, is the one thing
-gone. Steps 6.1 to 6.3 are built (2026-10-14): development, the browser suite and the scripts
-run on the NestJS API, and CI keeps Django's own checks until 6.4 (below). Steps 6.4 to 8 are
-not started, and 6.4 is not authorised.** It follows
+**Status: done 2026-10-14.** Steps 1 to 5 were built from 2026-10-09 to 2026-10-14 and steps 6.1 to
+6.3 on 2026-10-14 (PR #100, PR #105). On the same day the owner gave the word for the rest, waiving
+the month and the rehearsal ([ADR-0023](decisions/0023-django-is-gone.md)): 6.4's first Drizzle
+migration, and step 8's deletion. Step 7's upgrade of the real shop is the owner's to run, in two
+deploys ([upgrading-local-production.md](../operations/upgrading-local-production.md)). **What
+follows is the plan as it was written and carried out; it is history, not instruction.** It follows
 from the cutover ([ADR-0017](decisions/0017-nest-api-serves-production.md)), which left Django out
 of serving requests and in charge of four other things.
 
@@ -270,6 +268,11 @@ drf-spectacular from Django's serializers and has no counterpart.
   comparison stays Django-made: its 28 fixtures are Django's ORM, `nest-baseline.sh` and
   `nest-commands.sh` compare against a database Django migrated, and its replay already runs
   from a snapshot with no Django. All of it goes with the comparison at 6.4.*
+
+*6.4, 7 and 8 on 2026-10-14, at the owner's word, without the month or a rehearsal of the
+release itself ([ADR-0023](decisions/0023-django-is-gone.md)). 6.4 is `0001`, which also does
+step 8's contract; the recording and the demo snapshot are committed; the copied defects remain,
+ordinary bugs now. Step 7.4 -- the shop itself -- is the owner's to run.*
 
 > **The point of no return is step 6.4**, not the deletion in step 8. Until a migration exists
 > that Django's models do not describe, `docker-compose.django.yml` still works. After it,

@@ -2,9 +2,11 @@
 
 Step 1 of [the plan to remove Django](django-removal-plan.md): a proof that the NestJS API is
 right which does not need Django to be running. Decided in
-[ADR-0020](decisions/0020-django-is-removed-in-steps.md). **It removes nothing.** The comparison
-with Django ([nest-port.md](nest-port.md)) is unchanged and still the proof; this one runs
-beside it until the plan's step 6.4 (the comparison stays in CI until then: the plan, step 6.2).
+[ADR-0020](decisions/0020-django-is-removed-in-steps.md). **Since 2026-10-14 it is the proof**:
+Django is gone ([ADR-0023](decisions/0023-django-is-gone.md)), and the recording -- taken by CI from
+the last comparison, in which the two APIs agreed on every case -- is committed in
+`apps/api-nest/parity/recorded/`. Nothing can take another whole one; what changes it is
+[Changing an answer](#changing-an-answer), below.
 
 ## What it is
 
@@ -30,27 +32,18 @@ where what is kept is the Nest API's side, and nothing excuses a departure from 
 ## Commands
 
 ```bash
-scripts/nest-parity.sh reset
-```
-
-```bash
-scripts/nest-parity.sh record
-```
-
-```bash
 scripts/nest-parity.sh replay
 ```
 
-`record` needs the parity stack up and seeded (`reset`). It is the `run-jobs` comparison -- the
-Nest API queuing its jobs in pg-boss, as production does -- with the answers kept, and it fails
-without recording if any case differs. `replay` starts another compose project
-(`docker-compose.recorded.yml`, `-p rangon-recorded`, port 8640) from nothing each time, and
-takes `PARITY_ONLY`, `PARITY_RACES` and `PARITY_VERBOSE` as `run` does.
+`replay` starts a compose project of its own (`docker-compose.recorded.yml`, `-p rangon-recorded`,
+port 8640) from nothing each time, restores the recording's snapshot, brings it to the build's
+schema with the API's own `migrate`, and takes `PARITY_ONLY`, `PARITY_RACES` and `PARITY_VERBOSE`.
+`record`, `reset` and the comparison went with Django.
 `scripts/nest-parity.sh replay-down` removes it. A replay is strict, and CI's is that one;
 `PARITY_TIES=mark` and `PARITY_HEAP=reversed` are for looking for what depends on the order
 rows lie in ([Tied rows](#tied-rows)).
 
-What `record` leaves, in `apps/api-nest/parity/recorded/` (untracked):
+What is there, in `apps/api-nest/parity/recorded/` (committed):
 
 | File | What |
 |---|---|
@@ -61,6 +54,21 @@ What `record` leaves, in `apps/api-nest/parity/recorded/` (untracked):
 | `moments.jsonl.gz`, `clock.txt` | every moment the database holds in the hours ahead, and when the recording began ([The clock](#the-clock)) |
 | `ties.jsonl.gz` | written by `PARITY_TIES=mark scripts/nest-parity.sh replay`: where tied rows may change places ([Tied rows](#tied-rows)) |
 | `made.txt` | the commit and the moment |
+
+## Changing an answer
+
+A deliberate change -- a copied Django defect fixed, a rule the owner changed -- changes what the
+API answers, and the replay then says `DIFF` for the cases it touches. Read each difference; if it
+is the change and nothing else, take the new answers:
+
+```bash
+PARITY_ACCEPT='<a regular expression over the case names>' scripts/nest-parity.sh replay
+```
+
+Each case it names that differs prints `TAKEN` with its differences, and the new answer replaces
+the recorded one in `answers.jsonl.gz`. The file is rewritten only when every other case answered
+as recorded. Commit it with the change that made it; the reviewer reads the `TAKEN` lines in the
+pull request. A new case is taken the same way: it has no recorded answer until it is accepted.
 
 **The shop with nothing in it** is recorded and replayed the same way, by commands of its own,
 because it is another database ([djangos-tests-sorted.md](djangos-tests-sorted.md), "The shop

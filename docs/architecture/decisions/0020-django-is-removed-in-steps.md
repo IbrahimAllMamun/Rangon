@@ -1,6 +1,6 @@
 # ADR-0020 — Django is removed in steps; the rule changes hands at the first Drizzle migration
 
-**Status:** Accepted · 2026-10-08 · step 0 of [the removal plan](../django-removal-plan.md); sets the date on which decision 4 of [ADR-0017](0017-nest-api-serves-production.md) is reversed
+**Status:** Accepted · 2026-10-08 · step 0 of [the removal plan](../django-removal-plan.md); sets the date on which decision 4 of [ADR-0017](0017-nest-api-serves-production.md) is reversed · **amended by [ADR-0023](0023-django-is-gone.md) on 2026-10-14**: the month and the rehearsal waived, Django removed
 
 ## Context
 
