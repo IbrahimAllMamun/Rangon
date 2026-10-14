@@ -83,6 +83,18 @@ USER appuser
 
 
 # ---------------------------------------------------------------------------
+# The development stack's image and nothing else's (`--target dev`,
+# docker-compose.dev.yml): every dependency, development ones included, and no
+# source -- the working copy is mounted over /app. One compile first, so that
+# there is a `dist/main.js` to start; then the compiler and the API each
+# watching, the API restarting on what the compiler writes.
+FROM deps AS dev
+ENV NODE_ENV=development
+EXPOSE 3000
+CMD ["sh", "-c", "npm run -s build && exec npm run -s dev"]
+
+
+# ---------------------------------------------------------------------------
 # Last, so that it is what a build with no target makes: the image production
 # runs and the scan reads. Nothing above this line but `runtime` is in it.
 FROM runtime
