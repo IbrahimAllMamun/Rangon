@@ -308,9 +308,16 @@ numbers are in [roadmap.md](roadmap.md).
   *`DECISION REQUIRED` -- may a branch take back another branch's sale? Shops often do. If so the
   refund should leave the till of the branch handing the money over, and the return should be
   visible there. Until decided, it is allowed and the money leaves the selling branch's till.*
-- **A return before the goods have left.** An online order that is `PACKED` can be returned: the
-  goods go back on the shelf and the order can still be shipped (D164). Not a decision: §1.3 has the
-  goods leave the shelf at `PACKED` and nothing brings them back but a return of goods that left.
+- **A return before the goods have left** is refused (D164, fixed 2026-10-14): a return is opened
+  only on an order that is `SHIPPED`, `DELIVERED`, `RETURN_REQUESTED` or `RETURNED`, from the back
+  office and at the counter alike. An order that was `PACKED` could be returned -- the goods went
+  back on the shelf and the order could still be shipped, leaving the shelf one too many. §1.3 has
+  the goods leave the shelf at `PACKED`, and nothing brings them back but a return of goods that
+  left.
+  *`DECISION REQUIRED` -- what happens to an order that is packed and then not wanted. It cannot
+  be cancelled (§5.1 has no edge from `PACKED` but to `SHIPPED` and `DELIVERED`) and now cannot be
+  returned, so nothing in the app puts its goods back on the shelf: "unpacking" does not exist.
+  Until decided, a packed order is shipped or delivered, and what comes back is returned then.*
 
 Two things here break rules already written. §2.2 has an override of the window "recorded in the
 audit log", and it is not (D165). And §2.2's window can be restarted: rejecting a return stamps the

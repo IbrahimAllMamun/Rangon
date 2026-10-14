@@ -765,10 +765,11 @@ After the port:
 4. **The owner's standing question**: whether Django stays the place a rule changes first once
    the Nest API has run in production for a while. Until that is answered, do not remove
    Django code, and do not let the parity harness rot.
-5. The owner should still see D221's rule first (may an administrator manage owners), then
-   D164, D207 and D222, and the decisions listed in §2. D233, D166, D149, D158, D167, D204 and
-   D221's missing lock were fixed in both APIs on 2026-10-13 (ADR-0020's first row); D167's fix
-   took a default the owner may change -- a payment past what an order owes is refused.
+5. The owner should still see D207 and D222, and the decisions listed in §2. D233, D166, D149,
+   D158, D167, D204 and D221's missing lock were fixed in both APIs on 2026-10-13 (ADR-0020's
+   first row). On 2026-10-14 the owner decided two rules -- an administrator may not manage
+   owner accounts (the rest of D221), and a payment past what an order owes stays refused
+   (D167) -- and D164 was fixed in both: a return is refused before the goods have left.
 
 ### Checklist for a part
 

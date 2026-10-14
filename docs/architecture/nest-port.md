@@ -1380,8 +1380,8 @@ the port):
   for `null`, a 500 for a body that is not an object (D162).
 - Rejecting a return sends its order to DELIVERED and stamps `delivered_at` now, whatever other
   returns the order has and whatever status it came from (D163).
-- A return is taken on a PACKED order: the goods go back on the shelf and the order can still be
-  shipped (D164).
+- ~~A return is taken on a PACKED order: the goods go back on the shelf and the order can still
+  be shipped (D164)~~: refused in both APIs since 2026-10-14.
 - A return past the window that the override lets through writes no audit entry of its own
   (D165).
 - ~~The status route cancels an order for anyone who may change a status, with no `sales.cancel`

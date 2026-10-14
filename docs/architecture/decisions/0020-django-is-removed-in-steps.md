@@ -75,7 +75,7 @@ only what must be done **before Django stops being compared with**:
 |---|---|---|
 | **Fix in both, before step 6** | A defect that loses money or stock, or lets someone do what their role does not allow. Django is the way back for at least a month more, and a rollback must not bring the defect back | D166, D167, D149, D233, D158, D204, and the missing lock of D221 -- *fixed in both on 2026-10-13, with D234 and D246, which the same change found and closed* |
 | **Fix in both, before step 6, for the proof's own sake** | An answer that depends on the order rows lie in. Found by step 1 on 2026-10-09: while a list can tie, a recording holds its rows and not their order ([recorded-proof.md](../recorded-proof.md), "Tied rows") | D243, D244, D245, D161 -- *fixed in Django on 2026-10-12 and in the NestJS API on 2026-10-13* |
-| **The owner's rule first, then as above** | The fix states a business rule that is still `DECISION REQUIRED` | D221 (may an administrator manage owners, §7.1), D164 (a return before the order has shipped) |
+| **The owner's rule first, then as above** | The fix states a business rule that is still `DECISION REQUIRED` | D221 (may an administrator manage owners, §7.1) -- *decided, no, and fixed in both on 2026-10-14*; D164 (a return before the order has shipped) -- *not a decision after all (§1.3 already says it), fixed in both on 2026-10-14* |
 | **Fix in the NestJS API after step 6** | Everything else: a 500 for a malformed body, a lost update between two staff edits (D207, D222 and their shape: D184, D200, D203, D215), an unordered list. The recorded answer changes with the fix, in the same commit | the rest of the list |
 | **Django only** | Nothing to port. Fixed in Django if it is cheap and the rollback is worth more with it, otherwise moot at step 8 | D241 (no Sentry on Django: one requirement), and the Django image's failing scan (the 5.1 line's CVE) |
 | **Configuration** | Not a rule; fixed in both whenever a deployment needs it | D238 (`S3_PUBLIC_ENDPOINT`) |
@@ -83,8 +83,8 @@ only what must be done **before Django stops being compared with**:
 None of them was fixed by this ADR or by step 1. The first row is the order the owner was
 already asked to look at them in (`nest-port-instructions.md` §11), and was done on 2026-10-13
 ([roadmap.md](../../roadmap.md), "The guards ADR-0020 put first"). One of its fixes took a
-default where the rule is still the owner's: a payment past what an order owes is refused
-(business-rules.md §5.7), not kept as credit.
+default where the rule was the owner's: a payment past what an order owes is refused
+(business-rules.md §5.7), not kept as credit. The owner confirmed it on 2026-10-14.
 
 ## Consequences
 
