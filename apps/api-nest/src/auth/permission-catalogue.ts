@@ -3,11 +3,9 @@
  * writes to `accounts_permission`, `accounts_role` and the grants between
  * them (cli/sync-permissions.ts).
  *
- * A copy of Django's `accounts/permissions.py`, which is still the place a
- * code is added or a grant changed (CLAUDE.md, section 2): change it there,
- * then here. `scripts/nest-baseline.sh compare` fails while the two differ --
- * it runs Django's sync on one database and this one on another and compares
- * the three tables. docs/architecture/permissions.md is the account of both.
+ * Copied from Django's `accounts/permissions.py` and, since Django went
+ * (removal plan, step 8), the only place a code is added or a grant changed.
+ * docs/architecture/permissions.md is the account of it.
  */
 
 /** code -> [group, the name a person reads]. In Django's order. */

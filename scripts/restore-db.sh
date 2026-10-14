@@ -69,4 +69,4 @@ run psql --host="$HOST" --port="$PORT" --username="$POSTGRES_USER" \
                (select max(created_at) from orders_order)            as latest_order;"
 
 echo "==> restored into ${TARGET}."
-echo "    Point DATABASE_URL at it, run migrate, then 'manage.py verify_inventory'."
+echo "    Point DATABASE_URL at it, run 'node dist/cli.js migrate', then 'node dist/cli.js verify-inventory'."

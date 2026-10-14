@@ -26,7 +26,7 @@ async function globalSetup() {
       "\n  [e2e] E2E_SEED_CMD is not set, so the database will not be reseeded.\n" +
         "  [e2e] The suite consumes seeded fixtures and is only repeatable once.\n" +
         "  [e2e] If the returns spec times out, that is why — reseed and re-run:\n" +
-        "  [e2e]   E2E_SEED_CMD='python manage.py seed_demo --reset' npx playwright test\n",
+        "  [e2e]   E2E_SEED_CMD='scripts/dev-stack-native.sh reseed' npx playwright test\n",
     );
     return;
   }
@@ -34,7 +34,7 @@ async function globalSetup() {
   console.log(`  [e2e] reseeding: ${command}`);
   try {
     execSync(command, {
-      cwd: process.env.E2E_SEED_CWD ?? "../api",
+      cwd: process.env.E2E_SEED_CWD ?? "../..",
       stdio: "pipe",
       env: process.env,
     });

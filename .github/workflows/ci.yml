@@ -10,76 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
 
 jobs:
-  # --------------------------------------------------------------- backend --
-  backend:
-    name: Backend (lint, types, tests)
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: rangon_test
-          POSTGRES_USER: rangon
-          POSTGRES_PASSWORD: rangon_test_password
-        options: >-
-          --health-cmd "pg_isready -U rangon" --health-interval 5s
-          --health-timeout 5s --health-retries 20
-        ports: ["5432:5432"]
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 5s
-          --health-timeout 3s --health-retries 10
-        ports: ["6379:6379"]
-
-    env:
-      DJANGO_SETTINGS_MODULE: config.settings.test
-      DJANGO_SECRET_KEY: ci-only-key
-      DATABASE_URL: postgresql://rangon:rangon_test_password@localhost:5432/rangon_test
-      REDIS_URL: redis://localhost:6379/0
-      CELERY_TASK_ALWAYS_EAGER: "1"
-
-    defaults:
-      run:
-        working-directory: apps/api
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: apps/api/requirements/*.txt
-
-      - run: pip install -r requirements/dev.txt
-
-      - name: Lint
-        run: ruff check .
-
-      - name: Format check
-        run: ruff format --check .
-
-      - name: Missing migrations?
-        run: python manage.py makemigrations --check --dry-run
-
-      - name: Type check
-        run: mypy .
-
-      - name: Tests (incl. concurrency)
-        run: pytest --cov=. --cov-report=term-missing --cov-report=xml
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: backend-coverage
-          path: apps/api/coverage.xml
-
   # -------------------------------------------------------------- frontend --
   frontend:
     name: Frontend (lint, types, build)
@@ -115,14 +48,27 @@ jobs:
           NEXT_PUBLIC_SITE_URL: http://localhost:4000
 
   # -------------------------------------------------------------- api-nest --
-  # The NestJS port (ADR-0013): its own checks, then the proof that it answers
-  # as the Django API does.
+  # The API: its own checks, then its migrations on the two databases a
+  # release meets -- a new one, and the demo snapshot, which is one Django
+  # built (the real shop is another).
   api-nest:
-    name: NestJS API (lint, types, unit tests)
+    name: NestJS API (lint, types, unit tests, migrations)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/api-nest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: rangon
+          POSTGRES_USER: rangon
+          POSTGRES_PASSWORD: rangon_ci_password
+        options: >-
+          --health-cmd "pg_isready -U rangon" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+        ports: ["5432:5432"]
 
     steps:
       - uses: actions/checkout@v4
@@ -150,102 +96,48 @@ jobs:
       - name: Build
         run: npm run build
 
-  # Both APIs on one freshly migrated and seeded database; every parity case to
-  # both. A difference not listed in parity/known-differences.ts fails the job,
-  # so a change to either API that breaks the other's answer cannot merge.
-  api-nest-parity:
-    name: NestJS API parity with Django
+      # Every migration on an empty database, then again: nothing the second
+      # time. Then the demo snapshot, a database Django migrated: adopted, and
+      # what is newer than it applied. The two schemas must be the same.
+      - name: Migrations, on a new database and on one Django built
+        env:
+          DB: postgresql://rangon:rangon_ci_password@localhost:5432
+        run: |
+          psql "$DB/rangon" -qc 'CREATE DATABASE fresh' -c 'CREATE DATABASE adopted'
+          DATABASE_URL="$DB/fresh" node dist/cli.js migrate
+          DATABASE_URL="$DB/fresh" node dist/cli.js sync-permissions
+          DATABASE_URL="$DB/fresh" node dist/cli.js migrate | tee /tmp/again
+          grep -q '^nothing to apply' /tmp/again
+          pg_restore --exit-on-error --no-owner -d "$DB/adopted" ../../infrastructure/snapshots/demo/demo.dump
+          DATABASE_URL="$DB/adopted" node dist/cli.js migrate
+          DATABASE_URL="$DB/adopted" node dist/cli.js sync-permissions
+          schema() { pg_dump --schema-only --no-owner --no-privileges --schema=public "$DB/$1" | grep -v -e '^--' -e '^\\'; }
+          diff <(schema fresh) <(schema adopted)
+          echo "the same schema, built and adopted"
+
+  # The API held to its recorded answers (docs/architecture/recorded-proof.md):
+  # every case, the races across two API processes, the worker and the rate
+  # limits, on a stack restored from the committed recording and migrated to
+  # this build. Then the shop with nothing in it, the same way. The recording
+  # was taken while Django ran, from the cases on which the two APIs agreed;
+  # a change to an answer is a change to the recording, in the same commit.
+  api-nest-replay:
+    name: NestJS API against its recorded answers
     runs-on: ubuntu-latest
     needs: [api-nest]
     steps:
       - uses: actions/checkout@v4
 
-      # The NestJS API's own schema (django-removal-plan.md, step 3): one
-      # database built by Django's migrations and one by `node dist/cli.js
-      # migrate` and `sync-permissions`, and the two compared -- the schema
-      # dumps, the rows migrations seed, the roles. It is what fails when a
-      # Django migration is added and the baseline is not cut again.
-      - name: The baseline builds the database Django's migrations build
-        run: bash scripts/nest-baseline.sh compare
-
-      # The operator's commands (step 4): `create-owner`, `bootstrap-store`,
-      # `verify-inventory` and `verify-accounts`, each run on one database
-      # and Django's own on a copy of it, and what they left compared.
-      - name: The operator's commands do what Django's do
-        run: bash scripts/nest-commands.sh compare
-
-      # A shop on its first day, which no case on the seeded one can reach:
-      # migrated with one owner, then with the store bootstrapped. First,
-      # because it is quick and because `reset` then replaces its database.
-      - name: Compare both APIs on a shop with nothing in it yet; keep the NestJS API's answers
-        run: bash scripts/nest-parity.sh empty
-
-      - name: Start both APIs, migrate, seed, apply the parity fixtures
-        run: bash scripts/nest-parity.sh reset
-
-      - name: Compare every case
-        run: bash scripts/nest-parity.sh run
-
-      # What production runs since the cutover (ADR-0017): the NestJS API
-      # queuing its jobs in PostgreSQL. Every case again, against that, and
-      # the rate limits with both APIs throttled -- `record` is `run-jobs`
-      # and the throttle check with the NestJS API's answers kept, beside a
-      # snapshot of the database they were given from
-      # (docs/architecture/recorded-proof.md).
-      - name: Compare every case again, with the jobs in pg-boss, and the rate limits; keep the NestJS API's answers
-        run: bash scripts/nest-parity.sh record
-
-      # The worker itself on what the API queues (ADR-0016).
-      - name: The worker on what the API queues
-        run: bash scripts/nest-parity.sh worker
-
-      # The proof that needs no Django, run beside the one that does until
-      # Django goes (django-removal-plan.md, step 1): every container of the
-      # comparison is stopped, and a second stack that has no Django in it is
-      # restored from the snapshot. Every case against its recorded answer;
-      # every race across two NestJS processes; the worker; the rate limits.
-      - name: Stop Django and both APIs
-        run: bash scripts/nest-parity.sh down
-
       # Strictly: an answer that is the recorded rows in another order fails.
-      # Every list has one order since D245, so there is nothing to allow for.
-      - name: With no Django -- every case against its recorded answer, the races, the worker, the rate limits
+      - name: Every case against its recorded answer, the races, the worker, the rate limits
         run: bash scripts/nest-parity.sh replay
 
-      # And the shop with nothing in it, whose two snapshots and answers the
-      # first step kept: the same stack, restored from each in turn.
-      - name: With no Django -- the shop with nothing in it, against its recorded answers
+      - name: The shop with nothing in it, against its recorded answers
         run: bash scripts/nest-parity.sh replay-empty
 
       - name: Logs on failure
         if: failure()
-        run: |
-          docker compose -p rangon-nest -f docker-compose.nest.yml --profile jobs --profile worker logs --tail 200 django nest nest-jobs nest-worker
-          docker compose -p rangon-recorded -f docker-compose.recorded.yml --profile worker --profile throttle logs --tail 200 nest nest-b nest-worker nest-throttled
-
-  # The comparison a third time, with both APIs' uploads in an S3 server
-  # instead of on disk (`USE_S3=1`, ADR-0018): every case, and for every write
-  # the object each API stored -- its name, bytes, type and encoding. A job of
-  # its own, beside the one above: it needs its own database, seeded through
-  # the bucket, and nothing waits for it.
-  api-nest-parity-s3:
-    name: NestJS API parity with Django, uploads in S3
-    runs-on: ubuntu-latest
-    needs: [api-nest]
-    env:
-      PARITY_S3: "1"
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Start both APIs and the S3 server, migrate, seed, apply the parity fixtures
-        run: bash scripts/nest-parity.sh reset
-
-      - name: Compare every case, and every stored object
-        run: bash scripts/nest-parity.sh run
-
-      - name: Logs on failure
-        if: failure()
-        run: docker compose -p rangon-nest -f docker-compose.nest.yml --profile s3 logs --tail 200 django nest s3
+        run: docker compose -p rangon-recorded -f docker-compose.recorded.yml --profile worker --profile throttle logs --tail 200 nest nest-b nest-worker nest-throttled
 
   # ------------------------------------------------------------------- e2e --
   # The four critical flows, driven in a real browser against a real API and a
@@ -261,41 +153,16 @@ jobs:
   #
   # The suite consumes seeded fixtures -- the returns spec approves the one
   # seeded REQUESTED return -- so it is repeatable only once against a given
-  # database (D18). That is exactly what this job does: "Migrate and seed"
+  # database (D18). That is exactly what this job does: "Restore the demo snapshot"
   # leaves it pristine, the storefront starts after that, and the suite runs
   # once. `E2E_SEED_CMD` would reseed *underneath* the running server, which is
   # a different and worse problem -- see the note on "Run the suite".
   #
-  # Against the NestJS API alone since the removal plan's step 6.2: it is what
-  # production runs, and its database is the demo snapshot, so the job has no
-  # Python and no Django in it. From the cutover (ADR-0017) to step 6 it ran a
-  # second time against Django, the way back; the way back is still proven
-  # here until step 6.4 by Django's own suite and by the comparison, which
-  # drive the same API the browser does.
-  # The demo shop as a database snapshot (django-removal-plan.md, step 2):
-  # Django migrates and seeds a throwaway database, and what it holds is
-  # dumped. It is the one job the browser suite needs Django for, and it is
-  # not in that job: the browser suite restores the dump.
-  demo-snapshot:
-    name: Demo snapshot (made by Django, for stacks that have none)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Migrate, seed, dump
-        run: bash scripts/demo-snapshot.sh make
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: demo-snapshot
-          path: infrastructure/snapshots/demo
-          retention-days: 7
-          if-no-files-found: error
-
+  # The database is the committed demo snapshot, restored and migrated by the
+  # API, so the job has no Python in it.
   e2e:
     name: E2E (Playwright, four critical flows)
     runs-on: ubuntu-latest
-    needs: [demo-snapshot]
 
     services:
       postgres:
@@ -349,33 +216,29 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      # No Python and no Django: the database is the snapshot the job above
-      # made, restored into the empty service database, and its uploads are
-      # unpacked where the API reads them.
-      - uses: actions/download-artifact@v4
-        with:
-          name: demo-snapshot
-          path: infrastructure/snapshots/demo
-
+      # The committed snapshot, restored into the empty service database, and
+      # its uploads unpacked where the API reads them; migrated by the API
+      # once it is built, below.
       - name: Restore the demo snapshot
         env:
-          MEDIA_DIR: ${{ github.workspace }}/apps/api/media
+          MEDIA_DIR: ${{ github.workspace }}/media
         run: |
           cat infrastructure/snapshots/demo/made.txt
           bash scripts/demo-snapshot.sh restore "${{ job.services.postgres.id }}" rangon rangon
 
-      # The NestJS API as production starts it: the built `dist/main.js`, its
-      # jobs in PostgreSQL, worked and scheduled by the same process. It
-      # reads uploads from where the snapshot's were unpacked.
-      - name: Start the API (NestJS)
+      # The API as production starts it: `migrate` as the release step, then
+      # the built `dist/main.js`, its jobs in PostgreSQL, worked and scheduled
+      # by the same process. It reads uploads from where the snapshot's were
+      # unpacked.
+      - name: Migrate and start the API
         working-directory: apps/api-nest
         env:
           PORT: "8000"
-          RANGON_JOBS_BACKEND: pgboss
-          MEDIA_ROOT: ${{ github.workspace }}/apps/api/media
+          MEDIA_ROOT: ${{ github.workspace }}/media
         run: |
           npm ci --no-audit --no-fund
           npm run build
+          node dist/cli.js migrate
           nohup node dist/main.js > /tmp/api.log 2>&1 &
           for _ in $(seq 1 40); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/ready/ || true)
@@ -487,17 +350,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Python dependency audit
-        working-directory: apps/api
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements/base.txt --strict || \
-            echo "::warning::pip-audit found advisories — review before release"
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -543,7 +395,7 @@ jobs:
   images:
     name: Build & scan images
     runs-on: ubuntu-latest
-    needs: [backend, frontend, api-nest]
+    needs: [frontend, api-nest]
     permissions:
       contents: read
       packages: write
@@ -553,16 +405,6 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       # Immutable tags only: `latest` is never what production references.
-      - name: Build API image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./apps/api
-          file: ./apps/api/Dockerfile
-          tags: rangon-api:${{ github.sha }}
-          load: true
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
-
       - name: Build web image
         uses: docker/build-push-action@v6
         with:
@@ -576,8 +418,7 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
-      # What production serves since the cutover (ADR-0017).
-      - name: Build NestJS API image
+      - name: Build API image
         uses: docker/build-push-action@v6
         with:
           context: ./apps/api-nest
@@ -587,18 +428,10 @@ jobs:
           cache-from: type=gha,scope=api-nest
           cache-to: type=gha,mode=max,scope=api-nest
 
-      - name: Scan NestJS API image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: rangon-api-nest:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-
       - name: Scan API image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: rangon-api:${{ github.sha }}
+          image-ref: rangon-api-nest:${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"

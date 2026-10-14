@@ -138,7 +138,7 @@ export default async function FinancePage() {
                   where the money went. Open an account and every payment from then on lands
                   somewhere nameable. Run{" "}
                   <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-caption">
-                    manage.py verify_accounts
+                    node dist/cli.js verify-accounts
                   </code>{" "}
                   to see how many payments have posted nowhere so far.
                 </p>

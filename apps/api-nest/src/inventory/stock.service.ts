@@ -178,14 +178,11 @@ export class StockService {
    */
   async run<T>(work: (tx: Queryable, after: AfterCommit) => Promise<T>): Promise<T> {
     const after = new AfterCommit();
-    const afterCommit: (() => Promise<void>)[] = [];
-    const result = await this.db.transaction(async (tx) => {
+    return this.db.transaction(async (tx) => {
       const done = await work(tx, after);
-      for (const [task, args] of after.jobs) await this.jobs.delayIn(tx, afterCommit, task, args);
+      for (const [task, args] of after.jobs) await this.jobs.delayIn(tx, task, args);
       return done;
     });
-    for (const queue of afterCommit) await queue();
-    return result;
   }
 
   /**

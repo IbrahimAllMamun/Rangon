@@ -158,7 +158,7 @@ export function readRecording<T extends { name: string } = Recorded>(kind: strin
   try {
     text = gunzipSync(readFileSync(path)).toString('utf8');
   } catch (error) {
-    throw new Error(`No recording at ${path}. Take one with scripts/nest-parity.sh record.`, {
+    throw new Error(`No recording at ${path}: it is committed (apps/api-nest/parity/recorded/).`, {
       cause: error,
     });
   }

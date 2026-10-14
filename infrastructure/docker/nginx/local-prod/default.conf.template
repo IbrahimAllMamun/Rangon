@@ -1,5 +1,5 @@
 # When another proxy sits in front (a Cloudflare tunnel, a Webuzo vhost), the
-# browser's scheme is https but ours is http, so $scheme would tell Django the
+# browser's scheme is https but ours is http, so $scheme would tell the API the
 # request was insecure. With SECURE_SSL_REDIRECT on that is an infinite redirect
 # loop. Prefer the upstream proxy's value and fall back to our own.
 # Everything arrives through Docker's NAT, so the source IP is the bridge
@@ -37,9 +37,8 @@ map $http_x_forwarded_proto $client_proto {
 # compose file keeps every `$nginx_variable` below as it is written. It was a
 # plain conf.d file until the cutover (ADR-0017) gave it something to vary.
 
-# Which API serves: `api-nest:3000` (the NestJS API, the default) or
-# `api:8000` (Django, with docker-compose.django.yml). Set by the compose
-# file, never by hand: the web app's own server-side calls move with it.
+# The API: `api-nest:3000`, set by the compose file. A variable since the
+# cutover (ADR-0017), when two APIs could serve; one has since Django went.
 upstream rangon_api { server ${RANGON_API_UPSTREAM}; keepalive 32; }
 upstream rangon_web { server web:3000; keepalive 32; }
 
@@ -82,13 +81,13 @@ server {
 
     # --- Next.js owns part of /api/ -----------------------------------------
     #
-    # These two prefixes are NOT Django. `/api/proxy/*` is the route handler
+    # These two prefixes are NOT the API. `/api/proxy/*` is the route handler
     # that attaches the httpOnly access token to browser calls (ADR-0005), and
     # `/api/auth/*` is where login/logout set those cookies. Every interactive
     # thing in the app goes through them: cart, checkout, POS sales, admin
     # actions, signing in.
     #
-    # The shipped conf.d/rangon.conf sends all of /api/ to Django, so under it
+    # The shipped conf.d/rangon.conf sends all of /api/ to the API, so under it
     # each of those returns 404 and the app looks completely dead while the
     # pages themselves still render. Verified here by clicking "Add to cart" and
     # watching /api/proxy/shop/cart 404. Longest-prefix wins in nginx, so these
@@ -103,7 +102,7 @@ server {
         proxy_pass http://rangon_web;
     }
 
-    # --- Django API ---------------------------------------------------------
+    # --- The API ------------------------------------------------------------
     location /api/ {
         limit_req zone=general burst=60 nodelay;
         proxy_pass http://rangon_api;
@@ -117,25 +116,22 @@ server {
 
     # --- What Django alone served --------------------------------------------
     # The Django admin, the OpenAPI schema and its Swagger page were dropped,
-    # not replaced (ADR-0020, decision 2): the admin showed nothing of the
-    # shop, and the schema was generated from Django's serializers. Refused
-    # here whichever API serves, so that going back to Django
-    # (docker-compose.django.yml) does not put them on the public address.
+    # not replaced (ADR-0020, decision 2), and Django has since gone. Still
+    # refused here, plainly, for an old bookmark or a scanner.
     location ~ ^/(django-admin|api/schema|api/docs)(/|$) {
         return 404;
     }
 
     # Receipts are staff-only: they are served by
     # GET /api/v1/expenses/{id}/attachment/, which checks who is asking.
-    # Both APIs refuse this prefix on /media/ as well (core.media.PRIVATE_PREFIXES
-    # and media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
+    # The API refuses this prefix on /media/ as well (media/media.ts, D91); this is the second lock, and it keeps holding if /media/ is ever
     # switched to an `alias` for speed. Longest-prefix `^~` wins over /media/.
     location ^~ /media/expenses/ {
         return 404;
     }
 
     # Uploaded product photography. The API owns these bytes (USE_S3=0 keeps them
-    # on its disk, a volume both APIs mount); the app returns them as
+    # on its disk, a volume); the app returns them as
     # origin-relative paths, so they must be routed here rather than falling
     # through to Next.
     location /media/ {

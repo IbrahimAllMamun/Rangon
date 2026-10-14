@@ -5,18 +5,11 @@
 #   * images are pulled by immutable tag, never built on the host
 #   * db/redis publish no ports and stay on the private network
 #   * nothing runs as root where the base image allows otherwise
-#   * migrations are a separate `run --rm api ... migrate` step, not a start hook
+#   * migrations are a separate release step, not a start hook:
+#     `run --rm api-nest node dist/cli.js migrate`, then `sync-permissions`
 #
-# Which API serves (ADR-0017): the NestJS one, `api-nest`. It answers every
-# request, works the background jobs and fires the schedule. Django -- `api`,
-# `worker`, `beat` -- is not started by `up`:
-#
-#   * migrations, collectstatic and management commands: `run --rm api ...`,
-#     which works on a service whose profile is off;
-#   * the Django admin and the API docs: `--profile django up -d api worker`;
-#   * back to Django for everything: add `-f docker-compose.django.yml`.
-#
-# docs/operations/deployment.md has each as a procedure.
+# The API, `api-nest`, answers every request, works the background jobs and
+# fires the schedule. docs/operations/deployment.md has the procedures.
 
 services:
   db:
@@ -40,15 +33,18 @@ services:
       - ${REDIS_DATA_PATH:-/var/lib/rangon/redis}:/data
 
   api-nest:
-    profiles: !reset []
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api-nest:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
-      # One settings module name drives both APIs' profiles: `prod` is HTTPS
+      # The settings module's name picks the profile: `prod` is HTTPS
       # redirects, strict hosts and no debug output (src/config/env.ts).
       DJANGO_SETTINGS_MODULE: config.settings.prod
       DJANGO_DEBUG: "0"
-      # As for Django below: one proxy in front, the nginx of this file.
+      # One proxy in front of the API -- the nginx below, which is the only
+      # service that publishes a port, so nothing reaches the API around it.
+      # Without this the rate limits key on the whole client-supplied
+      # `X-Forwarded-For` and a caller varying one header is never throttled.
+      # Put a CDN or load balancer in front of nginx and this becomes 2.
       DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
       # The image's own tag, unless told otherwise: an error reported to Sentry
       # names the release it came from (ADR-0019).
@@ -66,81 +62,13 @@ services:
       resources:
         limits: {memory: 1G}
 
-  # Django, on demand (see the header). `worker` shares the profile: anything
-  # the Django admin queues goes to Celery, and without a worker would wait in
-  # Redis until one next started.
-  api:
-    profiles: [django]
-    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
-    build: !reset null
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-      DJANGO_DEBUG: "0"
-      # One proxy in front of Django -- the nginx below, which is the only
-      # service that publishes a port, so nothing reaches the API around it.
-      # Without this the rate limits key on the whole client-supplied
-      # `X-Forwarded-For` and a caller varying one header is never throttled.
-      # Put a CDN or load balancer in front of nginx and this becomes 2.
-      DJANGO_TRUSTED_PROXY_HOPS: ${DJANGO_TRUSTED_PROXY_HOPS:-1}
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    volumes:
-      - api_logs:/app/logs
-      # Nginx serves /static/ from this volume, and nothing used to put anything
-      # in it: the image collects static at build time into /app/staticfiles,
-      # which nginx cannot see, so every Django-admin and DRF asset 404ed
-      # (D15 in docs/roadmap.md). Mounting it here seeds the volume from the
-      # image the first time -- and only the first time, which is why
-      # `collectstatic` is a step in the release procedure rather than a
-      # property of the image.
-      - api_static:/app/staticfiles
-    # One replica is 2 gunicorn workers x 4 threads (apps/api/Dockerfile) --
-    # enough for one shop on one host. Raise this first when the API is the
-    # bottleneck (docs/operations/deployment.md, "Scaling order"); each replica
-    # costs ~235 MB.
-    deploy:
-      replicas: 1
-      resources:
-        limits: {memory: 1G}
-
-  worker:
-    profiles: [django]
-    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
-    build: !reset null
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    # One replica runs 4 task threads (docker-compose.yml) -- the same 4 slots
-    # two prefork replicas at --concurrency=2 gave, in ~100 MB instead of ~440.
-    deploy:
-      replicas: 1
-
-  # Only ever through docker-compose.django.yml. The schedule fires in one
-  # place: here, or in `api-nest`. Both at once is every job twice.
-  beat:
-    profiles: [django-schedule]
-    image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-api:${TAG:?set TAG to the git sha}
-    build: !reset null
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    deploy:
-      replicas: 1        # never raise this
-
   web:
     image: ${REGISTRY:-ghcr.io/ibrahimallmamun}/rangon-web:${TAG:?set TAG to the git sha}
     build: !reset null
     environment:
       # Server-side calls go straight to the API on the private network, not
-      # through nginx: this is half of "which API serves". The other half is
-      # nginx's RANGON_API_UPSTREAM below.
+      # through nginx.
       API_INTERNAL_URL: http://api-nest:3000/api/v1
-    depends_on: !override [api-nest]
     read_only: true
     tmpfs:
       - /tmp
@@ -151,11 +79,9 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    depends_on: !override [api-nest, web]
+    depends_on: [api-nest, web]
     environment:
-      # Where `/api/` and `/media/` go. The Django admin and the API docs
-      # (`/django-admin/`, `/api/docs/`, `/api/schema/`) are refused by nginx
-      # whichever API this names: dropped, ADR-0020.
+      # Where `/api/` and `/media/` go.
       RANGON_API_UPSTREAM: api-nest:3000
       # Substituted into default.conf.template. No default: a blank server_name
       # would match nothing and the certificate path would not exist, which is
@@ -174,7 +100,6 @@ services:
       # header of default.conf.template.
       - ./infrastructure/docker/nginx/templates:/etc/nginx/templates:ro
       - ${TLS_CERT_PATH:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - api_static:/var/www/static:ro
     networks: [frontend]
     restart: unless-stopped
     healthcheck:
@@ -183,6 +108,3 @@ services:
       timeout: 5s
       retries: 3
 
-volumes:
-  api_logs:
-  api_static:

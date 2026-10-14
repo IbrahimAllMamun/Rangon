@@ -48,10 +48,22 @@ describe('the migrations the image carries', () => {
     expect(baseline).not.toMatch(/^COPY /m);
     // Django's foreign keys, as Django makes them.
     expect(baseline.match(/DEFERRABLE INITIALLY DEFERRED/g)?.length).toBeGreaterThan(100);
+    // And it hands the session back with the search path its header emptied,
+    // or a migration after it on a new database finds no tables.
+    expect(baseline.trimEnd()).toMatch(/set_config\('search_path', '"\$user", public', false\);$/);
+  });
+
+  it("carries none of drizzle-kit's identity limits rounded past bigint's range", () => {
+    // `generate` writes `SET MAXVALUE 9223372036854776000` for every bigint
+    // identity, a value PostgreSQL refuses: a later migration is hand-finished.
+    for (const entry of journal.entries.slice(1)) {
+      const sql = readFileSync(join(MIGRATIONS, `${entry.tag}.sql`), 'utf8');
+      expect(sql).not.toMatch(/MAXVALUE 9223372036854776000/);
+    }
   });
 
   it('says which Django migrations the baseline stands for', () => {
-    const head = JSON.parse(readFileSync(join(MIGRATIONS, 'meta', 'django-head.json'), 'utf8')) as [
+    const head = JSON.parse(readFileSync(join(MIGRATIONS, 'django-head.json'), 'utf8')) as [
       string,
       string,
     ][];

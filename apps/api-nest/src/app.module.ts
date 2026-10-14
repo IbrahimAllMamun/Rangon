@@ -10,7 +10,6 @@ import { EnvelopeFilter } from './common/envelope.filter';
 import { ENV, Env } from './config/env';
 import { Database } from './database/database.service';
 import { HealthController } from './health/health.controller';
-import { CeleryService } from './jobs/celery.service';
 import { JobWorkerModule } from './jobs/job-worker.module';
 import { Jobs } from './jobs/jobs.service';
 import { PgBossTransport } from './jobs/pg-boss.service';
@@ -46,7 +45,6 @@ export class CoreModule {
         RedisService,
         Authenticator,
         RolePermissions,
-        CeleryService,
         PgBossTransport,
         Jobs,
         Revalidation,
@@ -61,7 +59,6 @@ export class CoreModule {
         RedisService,
         Authenticator,
         RolePermissions,
-        CeleryService,
         PgBossTransport,
         Jobs,
         Revalidation,

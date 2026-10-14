@@ -302,7 +302,7 @@ export class CheckoutService {
         orderId,
       );
       for (const inventoryId of lowStock) {
-        await this.jobs.delayIn(tx, afterCommit, 'inventory.tasks.notify_low_stock', [inventoryId]);
+        await this.jobs.delayIn(tx, 'inventory.tasks.notify_low_stock', [inventoryId]);
       }
       await this.orders.logEvent(tx, orderId, 'STOCK_RESERVED', 'Stock reserved', {
         customerVisible: false,
@@ -395,7 +395,7 @@ export class CheckoutService {
         'ORDER_CONFIRMED',
         `We have your order ${number}`,
       );
-      for (const job of jobs) await this.jobs.delayIn(tx, afterCommit, job.task, job.args);
+      for (const job of jobs) await this.jobs.delayIn(tx, job.task, job.args);
       return { orderId, guestToken };
     });
 

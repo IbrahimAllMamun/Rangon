@@ -1,6 +1,6 @@
 # Running the production build on your own machine
 
-> The production images, the production Django settings and the deployed nginx topology — on
+> The production images, the production settings and the deployed nginx topology — on
 > `localhost`, over plain HTTP. Use it to see what a shopper will actually get before anything is
 > deployed, and as the origin behind a [Cloudflare tunnel](cloudflare-local-setup.md).
 >
@@ -23,12 +23,9 @@
 nginx as a single origin on **4100** — the storefront, `/admin`, `/pos`, the API's `/api/v1/` and
 Next's `/api/proxy/` all arrive on one hostname, exactly as they would deployed.
 
-**The API is the NestJS one** (`api-nest`), as in production since 2026-10-08
-([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). It serves every
-request, sends the emails and fires the scheduled jobs. Django is not running day to day: it
-migrates and seeds through one-off containers (step 5), and is started when you want the whole
-stack on Django again
-([§ 9a](#9a-django-on-demand-and-back-to-django)).
+**The API** (`api-nest`) serves every request, sends the emails and fires the scheduled jobs. Its
+operator's commands -- `migrate` among them -- run in one-off containers of the same image (step 5,
+[operator-commands.md](operator-commands.md)).
 
 Three deliberate differences from a real deployment:
 
@@ -54,12 +51,11 @@ Sections 3–8 are one script:
 ./scripts/rebuild-local-prod.sh
 ```
 
-It tears the stack down with `compose down -v`, builds the three images, restores a new demo
-snapshot into the empty database, has the NestJS API's `migrate` adopt it, brings the stack up,
-waits for the API to report healthy, restarts nginx, smoke-tests the result and runs both ledger
-checks — so it fails loudly rather than exiting `0` on a stack that is not serving. No Django
-container of this stack runs; Django makes the snapshot, in a throwaway stack of its own
-([removal plan](../architecture/django-removal-plan.md), step 6.3).
+It tears the stack down with `compose down -v`, builds the two images, restores the committed demo
+snapshot into the empty database, has the API's `migrate` bring it to this build's schema, gives
+every demo account your password, brings the stack up, waits for the API to report healthy,
+restarts nginx, smoke-tests the result and runs both ledger checks — so it fails loudly rather than
+exiting `0` on a stack that is not serving.
 
 **It is destructive and unconditionally so.** `down -v` removes this project's volumes, which takes
 the database with them, so the reseed is not a step you can skip — it is how the stack gets a
@@ -102,23 +98,16 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 
 ---
 
-## 4. Build the three images by hand
+## 4. Build the images by hand
 
 **This is the step that is skipped, and the failure is confusing.** `docker-compose.prodlocal.yml`
 sets `build: !reset null` on every application service, so `up -d --build` builds **nothing** — it
-looks for `rangon-api-nest:prod`, `rangon-api:prod` and `rangon-web:prod` and fails if they are
-missing. Unlike the `:latest` tags the two web Dockerfiles fight over, these collide with nothing.
+looks for `rangon-api-nest:prod` and `rangon-web:prod` and fails if they are missing. Unlike the `:latest` tags the two web Dockerfiles fight over, these collide with nothing.
 
-The API that serves:
+The API:
 
 ```bash
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
-```
-
-Django, there to go back to (§9a) and for §5's second way; the demo snapshot does not need it:
-
-```bash
-docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
 ```
 
 The web image is the slow one, and most of that time is `npm ci`. There is no way around it: the
@@ -152,64 +141,34 @@ Before anything is started. The database is a separate volume from the developme
 starts empty every time it is recreated; and the API works the job queue and fires the schedule
 from the moment it is up, so it should find its tables there.
 
-**The demo snapshot** (since 2026-10-14; what `scripts/rebuild-local-prod.sh` does). Django
-migrates and seeds a throwaway database in a stack of its own, and it is dumped; the dump is
-restored here, with no Django container of this stack's at any point -- which is how it will
-have to be done once Django is gone ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md),
-decision 3). Make it **with a password of your own**: this stack has been published through a
-tunnel before, and the README's `rangon12345` is public. A directory of its own keeps it apart
-from the test stacks' snapshot, which carries the README's:
-
-```bash
-DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod \
-  scripts/demo-snapshot.sh make
-```
-
-Then the database, the uploads, and the NestJS API's two commands -- `migrate` records its
-baseline as applied to a database Django built (it runs nothing), `sync-permissions` makes the
-roles match the build:
+**The demo snapshot** is committed (`infrastructure/snapshots/demo/`, [demo-snapshot.sh](../../scripts/demo-snapshot.sh)):
+a seeded shop, dumped while Django still made it. Restored into this stack's empty database, with
+its uploads, then brought to this build's schema and given its roles by the API:
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --wait db
-DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod scripts/demo-snapshot.sh restore \
-  "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
+scripts/demo-snapshot.sh restore "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm --no-deps -T \
-  api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/local-prod/media.tar.gz
+  api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/demo/media.tar.gz
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js migrate
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js sync-permissions
 ```
 
-The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore
-refuses a database that already has tables in it, so it cannot land on a shop. A snapshot made
-without `DJANGO_DEMO_SEED_PASSWORD` carries the password printed in the README, and says so when
-it is restored: that one is for test stacks, never for this one. The password must pass Django's
-validators (10+ characters, not common, not all digits). `scripts/rebuild-local-prod.sh` reads
-`DJANGO_DEMO_SEED_PASSWORD` from the environment or from `.env.prod.local`, and stops before its
-teardown if it is missing.
+The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore refuses
+a database that already has tables in it, so it cannot land on a shop.
 
-**Or Django, in this stack** -- the way it was done until step 6.3, and still the way back. In a
-container that exists for the one command (`run --rm`; it starts the database it depends on and
-waits for it):
+**Then give every account a password of your own.** The snapshot's accounts carry the password
+printed in the README, and this stack has been published through a tunnel before. For each address
+in the table in step 9, with `NEW_PASSWORD` set in your shell (PowerShell's way to ask for it is in
+[new-store-from-scratch.md § 7](new-store-from-scratch.md#7-create-the-owner-account)):
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e NEW_PASSWORD api-nest node dist/cli.js set-password --email owner@rangon.test
 ```
 
-This stack runs `config.settings.prod`, where `seed_demo` is **refused** unless you opt in for the one
-command and bring a password of your own, and the README's is refused too:
-
-```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm \
-  -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' \
-  -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= \
-  api python manage.py seed_demo --reset
-```
-
-The last two variables are for this stack as it now runs: the seed saves categories and navigation
-items, each of which queues a storefront revalidation *for Celery*, and no Celery worker is
-running. They make those jobs run inline, with nowhere to send them — nothing is cached yet.
-Re-running the seed with a new password also replaces the README one on any account an older seed
-left with it.
+`scripts/rebuild-local-prod.sh` does all of this, for every account, with `DJANGO_DEMO_SEED_PASSWORD`
+from the environment or from `.env.prod.local`, and stops before its teardown if that is missing or
+is the README's. The password must pass the API's rules (10+ characters, not common, not all digits).
 
 ---
 
@@ -219,8 +178,7 @@ left with it.
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
 ```
 
-Six containers: `db`, `redis`, `api-nest`, `web`, `nginx`, `mailpit`. No `api`, `worker` or `beat`:
-that is Django, and it is not part of what `up` starts.
+Six containers: `db`, `redis`, `api-nest`, `web`, `nginx`, `mailpit`.
 
 ---
 
@@ -240,8 +198,7 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 ```
 
 **Repeat this every time you recreate `api-nest` or `web` later**, including after the
-`--force-recreate` in the Cloudflare runbook. (The three Django-only paths are the exception:
-nginx looks Django up on each request, so starting and stopping it needs no restart.)
+`--force-recreate` in the Cloudflare runbook.
 
 ---
 
@@ -270,10 +227,9 @@ curl.exe -s -o /dev/null -w "%{http_code}\n" http://localhost:4100/
 | --- | --- |
 | `http://localhost:4100` | The app — one origin, exactly like the deployed topology |
 | `http://localhost:8100` | The API directly, for poking it without going through nginx |
-| `http://localhost:8101` | Django directly, when it is started ([§ 9a](#9a-django-on-demand-and-back-to-django)) |
 | `http://localhost:${MAILPIT_PORT:-8125}` | Mailpit — where order confirmation emails land |
 
-Seeded logins are printed by `seed_demo`; all use the `DJANGO_DEMO_SEED_PASSWORD` you gave it.
+The demo accounts, all with the password you gave them in step 5:
 
 | Role | Email |
 | --- | --- |
@@ -285,7 +241,7 @@ Seeded logins are printed by `seed_demo`; all use the `DJANGO_DEMO_SEED_PASSWORD
 
 ---
 
-## 9a. Django on demand, and back to Django
+## 9a. Operator commands
 
 Every command below starts with the same words; `C` stands for them:
 
@@ -293,59 +249,14 @@ Every command below starts with the same words; `C` stands for them:
 C="docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml"
 ```
 
-**The Django admin and the API docs are gone.** `http://localhost:4100/django-admin/`,
-`/api/docs/` and `/api/schema/` answer 404 since 2026-10-14, whichever API serves
-([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md), decision 2): the
-admin showed nothing of the shop, and the schema was generated from Django's serializers. The
-back office is `/admin`. Django is still started on demand for a migration or a management
-command, with `run --rm api`, and for going back.
-
-The worker comes with it because whatever the admin queues goes to Celery. Nginx needs no restart
-for this.
-
-**An operator's command in the NestJS API.** `$C run --rm api-nest node dist/cli.js <command>`:
-the owner, the store and the two verifications have one there too
-([operator-commands.md](operator-commands.md)). Migrations do not, yet.
-
-**A management command.** `$C run --rm api python manage.py <command>`. If the command queues
-background jobs, either start the worker first or add `-e CELERY_TASK_ALWAYS_EAGER=1`.
-
-**The whole stack on Django again.** One more file, laid last:
-
-```bash
-$C -f docker-compose.django.yml up -d
-```
-
-```bash
-$C -f docker-compose.django.yml restart nginx
-```
-
-`http://localhost:4100/api/v1/` tells you which API is answering: Django says 401 there, the NestJS
-API 404. Orders, accounts, uploads and sign-ins carry over in both directions — it is one database
-and one media volume. To come back, **stop Django before leaving the file out**, or beat and the
-NestJS API will both fire the scheduled jobs:
-
-```bash
-$C -f docker-compose.django.yml stop beat worker api
-```
-
-```bash
-$C up -d
-```
-
-```bash
-$C restart nginx
-```
-
-[deployment.md](deployment.md#back-to-django) has the reasons.
+`$C run --rm api-nest node dist/cli.js <command>`: the migrations, the roles, an owner, a password,
+the store and the two verifications ([operator-commands.md](operator-commands.md)). Django's admin
+and API docs, `/django-admin/`, `/api/docs/` and `/api/schema/`, answer 404: they went with Django.
+The back office is `/admin`.
 
 ---
 
-## 10. Three things that look broken and are not
-
-**`worker` and `beat` report `unhealthy`**, when Django is running. They run Celery from the *api* image, so they inherit its
-`HEALTHCHECK`, which curls `localhost:8000`. Nothing listens on 8000 in a Celery container and nothing
-ever will. Ignore it. Do not "fix" it by weakening the api healthcheck.
+## 10. Two things that look broken and are not
 
 **`web` reports `unhealthy`, and this one is a real bug.** Next.js standalone `server.js` binds
 `process.env.HOSTNAME`, and Docker sets `HOSTNAME` to the container ID, so the server listens only on
@@ -377,7 +288,8 @@ curl http://localhost:4100/api/health/ -> 200
 The web app renders its navigation server-side, and that fetch has a 5-second timeout. So:
 
 1. `db` is not running — it was recreated and never started, or it was OOM-killed;
-2. Django answers **500** on `/api/v1/shop/navigation/` in about 4.7 s, because it has no database;
+2. the API answers **500** on `/api/v1/shop/navigation/` in about 4.7 s, because it has no database
+   (it was Django when this was seen; the chain is the same);
 3. the web app's 5 s server-side fetch times out and logs `UPSTREAM_TIMEOUT`;
 4. nginx returns **504** for `/`, while `/api/health/` still answers 200 because it touches nothing.
 
@@ -471,7 +383,7 @@ used at `http://localhost:4100` refuses writes with **403 `CROSS_ORIGIN_REFUSED`
 address you use (§4), or browse through the tunnel.
 
 Nginx answers **404** for `/django-admin/`, `/api/docs/` and `/api/schema/` on every address,
-public or not: they were dropped (ADR-0020). It still knows a public host from a local one
+public or not: they were Django's, and went with it. It still knows a public host from a local one
 (`$via_public_tunnel`), for a guard on `/admin` or `/pos` if you want one.
 
 Before leaving anything exposed for more than an hour, read

@@ -1,15 +1,15 @@
 import type { NextConfig } from "next";
 
 /**
- * Origin of the Django API as seen from *this container* — `http://api:8000`,
+ * Origin of the API as seen from *this container* — `http://api-nest:3000`,
  * not the public one. `API_INTERNAL_URL` points at the versioned root, so the
  * `/api/v1` suffix is dropped.
  */
 const apiOrigin = (() => {
   try {
-    return new URL(process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1").origin;
+    return new URL(process.env.API_INTERNAL_URL ?? "http://api-nest:3000/api/v1").origin;
   } catch {
-    return "http://api:8000";
+    return "http://api-nest:3000";
   }
 })();
 

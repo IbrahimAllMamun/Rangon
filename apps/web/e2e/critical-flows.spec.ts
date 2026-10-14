@@ -2,8 +2,7 @@
  * The four flows the business cannot ship without (docs/testing/strategy.md).
  *
  * These run against a seeded, running stack:
- *   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
- *   docker compose exec api python manage.py seed_demo --reset
+ *   scripts/dev-stack-native.sh up        (or the Docker stack, the demo snapshot restored)
  *   npm run test:e2e
  */
 import { expect, test } from "@playwright/test";

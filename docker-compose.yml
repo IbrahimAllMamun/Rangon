@@ -5,6 +5,9 @@
 name: rangon
 
 x-api-env: &api-env
+  # The names are Django's, kept when it went (ADR-0020, decision 4): every
+  # deployed .env uses them. The settings module's name picks the API's
+  # profile -- `config.settings.prod` is production (src/config/env.ts).
   DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.dev}
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
   DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
@@ -15,14 +18,12 @@ x-api-env: &api-env
   DJANGO_LOG_LEVEL: ${DJANGO_LOG_LEVEL:-INFO}
   DATABASE_URL: ${DATABASE_URL:-postgresql://rangon:rangon_dev_password@db:5432/rangon}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
-  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
   USE_S3: ${USE_S3:-0}
   S3_ENDPOINT: ${S3_ENDPOINT:-}
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
   S3_BUCKET: ${S3_BUCKET:-}
-  # The bucket's region, which every request's signature names. Django's boto
-  # follows S3's redirect when it is wrong; the NestJS API does not (ADR-0018).
+  # The bucket's region, which every request's signature names. The API does
+  # not follow S3's redirect when it is wrong (ADR-0018).
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-}
@@ -88,33 +89,13 @@ services:
     networks: [backend]
     restart: unless-stopped
 
-  api:
-    # Explicit tags on every built service. Without them Compose derives the tag
-    # from project + service, so `docker compose build web` (this file) and the
-    # dev overlay's build both wrote `rangon-web:latest` and the second silently
-    # replaced the first -- a production image started with `npm run dev`, which
-    # fails, because the production runtime deletes npm (D8 in docs/roadmap.md).
-    image: rangon-api:latest
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
-    environment: *api-env
-    # Uploaded product photography with USE_S3=0. Without this the files live in
-    # the container's writable layer and every rebuild silently destroys them.
-    volumes:
-      - api_media:/app/media
-    depends_on:
-      db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-    networks: [backend, frontend]
-    restart: unless-stopped
-
-  # The NestJS API (ADR-0013): the same endpoints over the same database, and
-  # since the cutover (ADR-0017) the API production runs -- and development,
-  # since the removal plan's step 6.1. Behind a profile in this file, which
-  # every overlay switches on: the development one, the production ones.
+  # The API (apps/api-nest): every request, the uploads, and the background
+  # jobs with their schedule, queued in PostgreSQL (ADR-0016) -- so Redis is
+  # cache and rate limits only. Explicit tags on every built service: without
+  # them Compose derives the tag from project + service, and the development
+  # overlay's build would replace the production image under one name (D8 in
+  # docs/roadmap.md).
   api-nest:
-    profiles: [nest]
     image: rangon-api-nest:latest
     build:
       context: ./apps/api-nest
@@ -124,59 +105,19 @@ services:
       # The web app reaches this service by its own name. Appended rather than
       # put in the default, so a deployment that sets DJANGO_ALLOWED_HOSTS
       # (every real one) is not refused with a 400 on every request.
-      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,api},api-nest
-      # Background jobs in PostgreSQL, worked and scheduled by this process
-      # (ADR-0016). `celery` hands them to Django's worker instead.
-      RANGON_JOBS_BACKEND: ${RANGON_JOBS_BACKEND:-pgboss}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1},api-nest
       RANGON_JOBS_SCHEDULE: ${RANGON_JOBS_SCHEDULE:-1}
       # Blank: this process works the queue. `0` leaves that to a separate
       # `node dist/worker.js` of the same image.
       RANGON_JOBS_WORKER: ${RANGON_JOBS_WORKER:-}
-    # Uploads, on the volume Django's image created: both run as uid 1001.
+    # Uploaded product photography with USE_S3=0. Without this the files live in
+    # the container's writable layer and every rebuild silently destroys them.
     volumes:
       - api_media:/app/media
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
     networks: [backend, frontend]
-    restart: unless-stopped
-
-  worker:
-    image: rangon-api:latest
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
-    # Threads, not the default prefork: one ~100 MB process instead of a parent
-    # plus one child per slot. Every task waits on SMTP, HTTP or Postgres, so
-    # the GIL costs nothing here. The thread pool does NOT enforce
-    # CELERY_TASK_TIME_LIMIT -- network calls carry their own timeouts instead
-    # (EMAIL_TIMEOUT, content.tasks.TIMEOUT_SECONDS). Keep it that way.
-    command: ["celery", "-A", "config", "worker", "--loglevel=info",
-              "--pool=threads", "--concurrency=4"]
-    environment: *api-env
-    # Same volume as the API: a task that generates a thumbnail must write it
-    # where the API will serve it from.
-    volumes:
-      - api_media:/app/media
-    depends_on:
-      db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-    networks: [backend]
-    restart: unless-stopped
-
-  beat:
-    # Exactly one replica, ever — two schedulers fire every job twice.
-    image: rangon-api:latest
-    build:
-      context: ./apps/api
-      dockerfile: Dockerfile
-    command: ["celery", "-A", "config", "beat", "--loglevel=info",
-              "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
-    environment: *api-env
-    depends_on:
-      db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-    networks: [backend]
     restart: unless-stopped
 
   web:
@@ -189,7 +130,7 @@ services:
         NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     environment:
       NODE_ENV: production
-      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8000/api/v1}
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api-nest:3000/api/v1}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
       NEXT_PUBLIC_CURRENCY: ${NEXT_PUBLIC_CURRENCY:-BDT}
@@ -199,7 +140,7 @@ services:
       NEXT_PUBLIC_WHATSAPP_GREETING: ${NEXT_PUBLIC_WHATSAPP_GREETING:-}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
     depends_on:
-      - api
+      - api-nest
     networks: [frontend]
     restart: unless-stopped
 

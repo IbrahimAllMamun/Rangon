@@ -17,7 +17,8 @@
     "format:check": "prettier --check \"{src,test,parity}/**/*.ts\"",
     "test": "jest",
     "parity": "node parity/run.ts",
-    "db:pull": "drizzle-kit pull && node scripts/pull-schema.mjs"
+    "db:copy": "node scripts/pull-schema.mjs",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@nestjs/common": "11.2.6",

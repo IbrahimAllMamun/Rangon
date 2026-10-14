@@ -12,7 +12,7 @@ import { cookies } from "next/headers";
 
 import { ACCESS_COOKIE, ApiError, parseApiResponse } from "./client";
 
-const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api:8000/api/v1";
+const INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://api-nest:3000/api/v1";
 
 /**
  * Deadline for reads that go through Next's data cache.

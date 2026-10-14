@@ -2,8 +2,8 @@
 
 ## 1. Shape of the system
 
-A **modular monolith** Django API with a single Next.js frontend that hosts three route groups. One
-database, one inventory ledger, one order table.
+A **modular monolith** API (NestJS, `apps/api-nest/`) with a single Next.js frontend that hosts three
+route groups. One database, one inventory ledger, one order table.
 
 ```text
                     ┌──────────────────────────────────────────┐
@@ -14,37 +14,34 @@ database, one inventory ledger, one order table.
                             │  client components fetch via TanStack Query
                             ▼
                     ┌──────────────────────────────────────────┐
-                    │        Django + DRF  (apps/api)          │
+                    │      NestJS on Fastify  (apps/api-nest)  │
                     │  /api/v1/{auth,catalog,inventory,        │
                     │   purchasing,orders,pos,shop,reports}    │
                     │                                          │
-                    │  api/ → services/ → models/              │
+                    │  controllers → services → database       │
+                    │  + the job worker and its schedule       │
                     └───────┬──────────────────┬───────────────┘
                             │                  │
                   ┌─────────▼───────┐   ┌──────▼──────┐
                   │   PostgreSQL 16 │   │   Redis 7   │
-                  │  source of truth│   │ cache/queue │
-                  └─────────────────┘   └──────┬──────┘
-                                               │
-                                    ┌──────────▼──────────┐
-                                    │ Celery worker + beat│
-                                    └─────────────────────┘
+                  │ source of truth │   │ cache and   │
+                  │ + the job queue │   │ rate limits │
+                  └─────────────────┘   └─────────────┘
 ```
 
-**That is Django's shape.** In production since 2026-10-08, and in the development stack since
-2026-10-14 (with Django one profile away), the box marked as the API is the NestJS port of it (`apps/api-nest/`), answering the same endpoints over
-the same PostgreSQL; the background jobs are rows in that database, run and scheduled by the API
-process itself, so there is no Celery worker or beat and Redis is cache and rate limits only.
-Django still owns the schema and the rules, and can serve the whole stack again with one compose
-file. [ADR-0013](decisions/0013-nestjs-api-alongside-django.md),
+The API was a Django project until 2026-10-14. The NestJS port answered the same endpoints over the
+same PostgreSQL, served production from 2026-10-08, and Django was then removed
+([ADR-0013](decisions/0013-nestjs-api-alongside-django.md),
 [ADR-0016](decisions/0016-nest-jobs-on-pg-boss.md),
-[ADR-0017](decisions/0017-nest-api-serves-production.md).
+[ADR-0017](decisions/0017-nest-api-serves-production.md),
+[ADR-0023](decisions/0023-django-is-gone.md)). The domains below are still Django's apps, by name and
+by table: `orders_order`, `inventory_inventorytransaction`.
 
 ## 2. Backend module map
 
-| App | Owns | Depends on |
+| Domain (`src/<domain>/`, tables `<domain>_*`) | Owns | Depends on |
 |---|---|---|
-| `core` | base model, money, errors, sequences, audit log, health, storage | — |
+| `common`, `http`, `health`, `media` (Django's `core`) | money, errors, sequences, audit log, health, storage | — |
 | `accounts` | organization, branch, user, role, permission, JWT auth | core |
 | `catalog` | category, brand, product, variant, attribute, image | core, accounts |
 | `inventory` | inventory record, ledger, reservations, transfers, costing | core, catalog, accounts |
@@ -55,25 +52,25 @@ file. [ADR-0013](decisions/0013-nestjs-api-alongside-django.md),
 | `promotions` | coupon, usage | catalog, customers |
 | `engagement` | wishlist, review | catalog, customers, orders |
 | `reports` | dashboard + report aggregation (no models) | everything (read-only) |
-| `notifications` | notification model, dispatch tasks | core, accounts |
+| `notifications`, `jobs` | notifications; the background jobs on pg-boss (mail, SMS, the sweeps and digests) | core, accounts |
 | `content` | the storefront's navbar overrides, banners, footer (settings, social links, link columns) and site pages; HTML sanitising for page bodies; cache revalidation pings to the web app — [navigation.md](navigation.md), [ADR-0012](decisions/0012-storefront-footer-and-site-pages.md) | core, catalog (categories drive the navbar and the footer's "Top categories"), accounts (the organisation's contact details are the footer's fallback) |
 
 Dependency direction is one-way: `orders` may import from `inventory`; `inventory` must never import
-from `orders`. Cross-domain coupling that would create a cycle goes through a service argument or a
-signal payload instead.
+from `orders`. Cross-domain coupling that would create a cycle goes through a service argument
+instead.
 
 ## 3. Request lifecycle
 
 ```text
-Nginx → Gunicorn → RequestIDMiddleware → AuthenticationMiddleware (JWT)
-      → DRF view (permission classes: IsAuthenticated + HasPermission("sales.create") + branch scope)
-      → serializer.validate()          (shape + type + basic rules)
-      → service function               (transaction.atomic + select_for_update + invariants)
-      → model save + ledger writes + audit entry + OrderEvent
-      → serializer output → JSON
+Nginx → Fastify → the request id → JWT authentication (auth/authentication.ts)
+      → the route's permission check (auth/permissions.ts: role permission codes + branch scope)
+      → controller: the body parsed and validated (shape + type + basic rules)
+      → service: one transaction, SELECT … FOR UPDATE on the protected rows, the invariants
+      → row writes + ledger writes + audit entry + order event + jobs queued, in that transaction
+      → the serialised answer → JSON
 ```
 
-Failures raise `core.exceptions.BusinessError`, which the custom exception handler renders as
+Failures throw a `BusinessError` (`common/errors.ts`), which the envelope filter renders as
 `{"error": {"code", "message", "details"}}` with an appropriate status code.
 
 ## 4. Concurrency strategy

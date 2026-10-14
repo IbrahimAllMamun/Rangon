@@ -2,12 +2,10 @@
 # answer recorded for it, and every race across two Nest processes
 # (docs/architecture/recorded-proof.md; step 1 of django-removal-plan.md).
 #
-#   scripts/nest-parity.sh record     with the parity stack up and seeded: a
-#                                     snapshot of its database, and the answers
-#   scripts/nest-parity.sh replay     this stack, from that snapshot
+#   scripts/nest-parity.sh replay     this stack, from the committed recording
 #
-# No service here is built from apps/api, runs Python, or migrates anything:
-# the database is restored from the snapshot, schema and rows together.
+# The database is restored from the recording's snapshot, schema and rows
+# together, then brought to this build's schema by the API's own `migrate`.
 #
 # **Always pass `-p rangon-recorded`** (the script does): `.env` sets
 # `COMPOSE_PROJECT_NAME=rangon`, which beats the `name:` below.
@@ -70,8 +68,9 @@ x-nest-env: &nest-env
 
 x-harness-env: &harness-env
   <<: *clock
-  # Two Nest processes. The second stands where Django stood: a token one
-  # issues is used on the other, and each race is split between them.
+  # Two API processes. The second stands where Django stood when the
+  # recording was taken: a token one issues is used on the other, and each
+  # race is split between them.
   DJANGO_BASE: http://nest-b:3000
   NEST_BASE: http://nest:3000
   PARITY_NEST_JOBS: pgboss
@@ -178,7 +177,8 @@ services:
     profiles: [replay]
     working_dir: /app
     # /recorded is read, but for a replay that marks tied rows
-    # (`PARITY_TIES=mark`), which the script runs as the user who owns it.
+    # (`PARITY_TIES=mark`) or takes new answers (`PARITY_ACCEPT`), which the
+    # script runs as the user who owns it.
     volumes:
       - ./apps/api-nest/parity:/app/parity:ro
       - ${PARITY_RECORDED_DIR:-./apps/api-nest/parity/recorded}:/recorded
@@ -186,6 +186,7 @@ services:
       <<: *harness-env
       PARITY_MODE: replay
       PARITY_TIES: ${PARITY_TIES:-}
+      PARITY_ACCEPT: ${PARITY_ACCEPT:-}
       PARITY_ONLY: ${PARITY_ONLY:-}
       PARITY_VERBOSE: ${PARITY_VERBOSE:-}
       PARITY_RACES: ${PARITY_RACES:-}

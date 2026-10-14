@@ -1,23 +1,12 @@
 # Development overlay: source mounts, autoreload, published ports, dev extras.
 # docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 #
-# The API is the NestJS one, in watch mode (django-removal-plan.md, step 6.1),
-# on http://localhost:8000 as Django's was. Django is on demand, as in
-# production -- `--profile django`: until the plan's step 6.4 a rule still
-# changes in Django first (ADR-0020, decision 5), with its tests:
+# The API (apps/api-nest) in watch mode, on http://localhost:8000. Its jobs are
+# queued and worked in PostgreSQL by the same process; there is no Celery.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile django up -d api
-#   docker compose exec api pytest
-#
-# It is published on ${DJANGO_PORT:-8001}; the web app keeps calling the
-# NestJS API. Celery's worker comes with it; its scheduler, `beat`, only with
-# `--profile django-schedule`, because the NestJS API fires the schedule here
-# already and both at once is every job twice.
-#
-# The database starts empty. The demo shop is a snapshot Django makes in a
-# throwaway stack of its own, restored here (README, "Quick start"); a shop
-# with nothing in it is the NestJS API's own commands
-# (docs/operations/operator-commands.md).
+# The database starts empty. The demo shop is the committed snapshot,
+# restored (README, "Quick start"); a shop with nothing in it is the API's
+# own commands (docs/operations/operator-commands.md).
 
 services:
   db:
@@ -26,13 +15,11 @@ services:
   redis:
     ports: ["6379:6379"]
 
-  # The NestJS API: the working copy mounted over the image's, compiled and
-  # restarted on every save. Its jobs in PostgreSQL, worked and scheduled by
-  # this process (ADR-0016), as in production -- which is why the stack has
-  # no Celery in it.
+  # The API: the working copy mounted over the image's, compiled and
+  # restarted on every save.
   api-nest:
-    profiles: !reset []
-    # A tag of its own, for the reason `api` has one below (D8).
+    # A tag of its own: the base file's is `:latest`, the production image's
+    # name (D8 in docs/roadmap.md).
     image: rangon-api-nest:dev
     build:
       target: dev
@@ -48,54 +35,9 @@ services:
       - /app/node_modules
       - /app/dist
       - api_media:/app/media
-    # Inside, 3000, as in production; outside, where Django's was.
+    # Inside, 3000, as in production; outside, the port the web app's
+    # NEXT_PUBLIC_API_URL names.
     ports: ["8000:3000"]
-
-  # Django, on demand: see the header.
-  api:
-    profiles: [django]
-    # A tag of its own. The base file's services are tagged `:latest`, and
-    # without overriding it here the dev build would overwrite the production
-    # image under that name (D8 in docs/roadmap.md).
-    image: rangon-api:dev
-    build:
-      dockerfile: Dockerfile.dev
-    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DJANGO_DEBUG: "1"
-    volumes:
-      - ./apps/api:/app
-      - api_media:/app/media
-    ports: ["${DJANGO_PORT:-8001}:8000"]
-    stdin_open: true
-    tty: true
-
-  worker:
-    profiles: [django]
-    image: rangon-api:dev
-    build:
-      dockerfile: Dockerfile.dev
-    command: ["watchmedo", "auto-restart", "--directory=/app", "--pattern=*.py", "--recursive",
-              "--", "celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DJANGO_DEBUG: "1"
-    volumes:
-      - ./apps/api:/app
-      - api_media:/app/media
-
-  # Only with `--profile django-schedule`: the schedule fires in one place.
-  beat:
-    profiles: [django-schedule]
-    image: rangon-api:dev
-    build:
-      dockerfile: Dockerfile.dev
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DJANGO_DEBUG: "1"
-    volumes:
-      - ./apps/api:/app
 
   web:
     image: rangon-web:dev
@@ -104,10 +46,9 @@ services:
     command: ["npm", "run", "dev"]
     environment:
       NODE_ENV: development
-      # Not from .env: an older one names Django (`http://api:8000`), which
-      # this stack no longer starts.
+      # Not from .env: an older one names Django's `http://api:8000`, which
+      # is gone.
       API_INTERNAL_URL: http://api-nest:3000/api/v1
-    depends_on: !override [api-nest]
     volumes:
       - ./apps/web:/app
       - /app/node_modules            # keep the image's node_modules

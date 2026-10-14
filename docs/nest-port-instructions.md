@@ -1,5 +1,11 @@
 # Instructions for the NestJS port
 
+> **History since 2026-10-14.** Django is gone ([ADR-0023](architecture/decisions/0023-django-is-gone.md)):
+> there is nothing left to port or to compare with, and the parity stack, the fixtures and the
+> Django-side commands below no longer exist. Read this for how the API came to be the way it is,
+> and for the lessons in §8. How to work on the API now is [CLAUDE.md](../CLAUDE.md),
+> [recorded-proof.md](architecture/recorded-proof.md) and [migrations.md](database/migrations.md).
+
 Everything needed to continue porting the Django API to NestJS (`apps/api-nest/`) without having been
 there for phases 1–4: the rules, the owner's decisions, the machine's traps, the exact commands, the
 method, the lessons that cost time, and what comes next. Written 2026-10-01, when phase 3 was done;

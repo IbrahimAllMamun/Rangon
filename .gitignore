@@ -3,28 +3,9 @@
 .env.*
 !.env.example
 
-# --- python ---
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-coverage.xml
-
-# --- django ---
-*.sqlite3
-/apps/api/staticfiles/
-/apps/api/media/
-# The recorded proof's snapshot and answers: made from the commit they sit beside.
-/apps/api-nest/parity/recorded/
-# The demo shop's snapshot (scripts/demo-snapshot.sh): likewise.
-/infrastructure/snapshots/
-/apps/api/logs/
+# --- uploads written by local runs ---
+/apps/api-nest/media/
+/infrastructure/snapshots/e2e-media/
 
 # --- node / next ---
 node_modules/
