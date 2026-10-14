@@ -24,12 +24,12 @@ docs/      constitution, architecture, ADRs, business rules, operations runbooks
 ```bash
 cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-docker compose exec api python manage.py migrate
-docker compose exec api python manage.py seed_demo --reset
+scripts/demo-snapshot.sh make && scripts/demo-snapshot.sh restore rangon-db-1
 ```
 
-Storefront <http://localhost:3000> · POS `/pos` · Admin `/admin` · API docs
-<http://localhost:8000/api/docs>. Demo logins are in the [README](../README.md) (all
+Storefront <http://localhost:3000> · POS `/pos` · Admin `/admin` · API (NestJS)
+<http://localhost:8000/api/v1/>; Django, for a rule that changes there first, is
+`--profile django` on port 8001 (README, "Quick start"). Demo logins are in the [README](../README.md) (all
 `rangon12345`).
 
 The storefront port is `WEB_PORT` in `.env`. On Windows it frequently cannot be 3000 — Windows

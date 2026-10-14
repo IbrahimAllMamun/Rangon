@@ -531,17 +531,19 @@ fuser -k -n tcp 4000    # then check `ps -eo lstart,args | grep next-server`
 ## Commands that actually work here
 
 ```bash
-# Full stack
+# Full stack: the NestJS API in watch mode; Django only with --profile django
+# (since 2026-10-14, removal plan step 6.1)
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api-nest
+# Demo data, into the empty development database (down -v first to start again)
+scripts/demo-snapshot.sh make && scripts/demo-snapshot.sh restore rangon-db-1
+docker compose exec api-nest node dist/cli.js verify-inventory
 
-# Backend (fast, reliable)
+# Backend, Django (fast, reliable): `run` starts the profiled service for the one command
 MSYS_NO_PATHCONV=1 docker compose -f docker-compose.yml -f docker-compose.dev.yml \
   run --rm -T -e DJANGO_SETTINGS_MODULE=config.settings.test api pytest -q
-docker compose exec api python manage.py migrate
-docker compose exec api python manage.py seed_demo --reset
-docker compose exec api python manage.py verify_inventory
-docker compose exec api ruff check . && docker compose exec api ruff format .
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm -T api python manage.py migrate
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm -T api sh -c 'ruff check . && ruff format .'
 
 # Frontend
 MSYS_NO_PATHCONV=1 docker exec rangon-web-1 npx tsc --noEmit      # ~10 min

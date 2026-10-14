@@ -4,7 +4,7 @@ Step 1 of [the plan to remove Django](django-removal-plan.md): a proof that the 
 right which does not need Django to be running. Decided in
 [ADR-0020](decisions/0020-django-is-removed-in-steps.md). **It removes nothing.** The comparison
 with Django ([nest-port.md](nest-port.md)) is unchanged and still the proof; this one runs
-beside it until the plan's step 6.
+beside it until the plan's step 6.4 (the comparison stays in CI until then: the plan, step 6.2).
 
 ## What it is
 
@@ -372,6 +372,8 @@ on the port's unit tests, not on this.
 6. **Where a recording lives once Django cannot make another.** Today it is made from the
    commit it sits beside and is untracked: a snapshot of 0.7 MB and 2.7 MB of answers, in a
    repository whose whole history packs to 11 MB. That is the plan's step 6 to decide.
+   *Decided by the owner on 2026-10-14: committed to the repository, in the change that takes
+   the comparison out of CI at step 6.4. Until then CI records and replays in one run, as now.*
 7. **The harness's own unordered choices.** 24 cases pick their subject with a query that
    has no order; on a turned-over database they ask about another row. They agree with their
    recording on a plain restore, and are all that the turned-over run still lists. Giving

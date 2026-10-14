@@ -33,14 +33,15 @@ what you need before touching anything.
 Storefront   http://localhost:4000          (NOT :3000 — see environment.md)
 Admin        http://localhost:4000/admin
 POS          http://localhost:4000/pos
-API          http://localhost:8000/api/v1/
-API docs     http://localhost:8000/api/docs/
+API          http://localhost:8000/api/v1/   (NestJS, since 2026-10-14)
+Django       http://localhost:8001/api/v1/   (--profile django, on demand)
 ```
 
 Logins (dev seed, all `rangon12345`): `owner@`, `manager@`, `cashier@`, `stock@`,
 `accounts@`, `customer@` — all `...@rangon.test`.
 
-`scripts/dev-stack-native.sh up` brings up postgres, redis, api and web without Docker. Many
+`scripts/dev-stack-native.sh up` brings up postgres, redis, api and web without Docker (the
+NestJS API in watch mode, on data Django seeds; `API=django` for Django). Many
 verification passes ran that way; others ran the suite in a container, and the log entries usually
 say which.
 

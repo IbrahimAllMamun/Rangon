@@ -40,7 +40,9 @@ Read these alongside it:
 3. **The Nest API serves production** (ADR-0017, 2026-10-08): the production compose files run
    it, and start Django only on demand. So a difference between the two APIs is no longer a
    drift in a side project: whichever way it goes, production has the wrong one. The development
-   stack is still Django's, and `docker-compose.django.yml` puts production back on Django.
+   stack runs the Nest API too since 2026-10-14 (removal plan step 6.1), with Django one profile
+   away for the rule that changes there first, and `docker-compose.django.yml` puts production
+   back on Django.
 4. **A write path is ported only with its row locks and its concurrency tests.** Stock and money go
    through one transaction with `SELECT … FOR UPDATE` on the rows whose invariant is protected. The
    race is driven across both APIs at once. Then the lock is removed and the test must fail

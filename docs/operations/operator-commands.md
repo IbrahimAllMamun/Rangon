@@ -39,6 +39,13 @@ In local production:
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js verify-inventory
 ```
 
+In the development stack, where the NestJS API is the one serving since the removal plan's
+step 6.1, the running container has the commands compiled from the working copy:
+
+```bash
+docker compose exec api-nest node dist/cli.js verify-inventory
+```
+
 `run` starts a container of the service beside the one that is serving and removes it
 afterwards. A command connects, does one thing and exits: 0 when it is done, 1 when it refused or
 failed, 2 when it was not understood. A refusal is one line saying why; nothing was changed.

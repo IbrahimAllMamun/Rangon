@@ -5,7 +5,9 @@ decisions are made; its wait -- a month of the real shop on the NestJS API -- ha
 Steps 1 to 5 are built (2026-10-09 to 2026-10-14; each step below says what was done and what
 was not). They are the reversible ones: Django still runs, still migrates production and is
 still the way back. What Django alone served, the admin and the API docs, is the one thing
-gone. Steps 6 to 8 are not started, and 6.4 is not authorised.** It follows
+gone. Steps 6.1 to 6.3 are built (2026-10-14): development, the browser suite and the scripts
+run on the NestJS API, and CI keeps Django's own checks until 6.4 (below). Steps 6.4 to 8 are
+not started, and 6.4 is not authorised.** It follows
 from the cutover ([ADR-0017](decisions/0017-nest-api-serves-production.md)), which left Django out
 of serving requests and in charge of four other things.
 
@@ -29,7 +31,7 @@ to day. What it still does, measured on 2026-10-08:
 Also Django-shaped, though the Nest API already owns the behaviour: the names of its settings
 (`DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and `DJANGO_SETTINGS_MODULE=config.settings.prod`
 choosing the production profile), two of the framework tables it reads and writes
-(`token_blacklist_*`), and the development stack, which is Django's.
+(`token_blacklist_*`), and the development stack, which was Django's until step 6.1.
 
 ## The shape of the plan
 
@@ -237,6 +239,37 @@ drf-spectacular from Django's serializers and has no counterpart.
 3. **Scripts**: `rebuild-local-prod.sh`, `e2e-local.sh` and `nest-parity.sh` use the snapshot
    and the Nest commands.
 4. **The first schema change made by a Drizzle migration.**
+
+*6.1 to 6.3 done on 2026-10-14, with one change to 6.2 made by the owner that day.*
+
+- *6.1. `docker-compose.dev.yml` runs the NestJS API in watch mode (the image's `dev` stage, the
+  working copy mounted) on port 8000, where Django's was; its jobs in pg-boss, worked and
+  scheduled by the one process, so Celery's worker and beat are not in the stack. Django, its
+  worker and its scheduler are profiles away (`--profile django`, on port 8001;
+  `--profile django-schedule` for beat), because a rule still changes in Django first until
+  6.4. The database starts empty; the demo shop is the snapshot, restored. The README, CLAUDE.md
+  §2 and §14, `scripts/dev-stack-native.sh` (Django seeds and stops, the NestJS API serves) and
+  `.claude/environment.md` say so.*
+- *6.2, as amended. **CI keeps Django's suite, both comparisons and the Django image's build and
+  scan until 6.4**, and they go in the change that makes the first Drizzle migration. The
+  reason is decision 5 of ADR-0020: until 6.4 a rule changes in Django first and Django is the
+  way back, and a Django-first change with no Django in CI would have no proof at all. What
+  went now is what proves nothing the rest does not: **the browser suite runs once, on the
+  NestJS API**, from the snapshot, with no Python in the job. The recorded proof's home once
+  the comparison goes was decided the same day: **committed to the repository**
+  (`apps/api-nest/parity/recorded/`, about 3.4 MB a recording), since nothing can make another
+  once Django is gone ([recorded-proof.md](recorded-proof.md), open question 6).*
+- *6.3. `rebuild-local-prod.sh` makes a snapshot with the stack's own password, restores it,
+  and runs the NestJS API's `migrate` (which adopts the database, as step 7 will the shop's),
+  `sync-permissions`, and after the smoke test `verify-inventory` and `verify-accounts`; no
+  Django container of that stack runs, though its image is still built for the way back.
+  `e2e-local.sh nest` restores the snapshot, making one first when there is none or `apps/api`
+  has changed since it was made. `nest-parity.sh empty` builds the empty shop with the NestJS
+  API's `migrate`, `sync-permissions`, `create-owner` and `bootstrap-store` -- a new
+  installation as it will be after Django -- and both APIs are compared on it. The seeded
+  comparison stays Django-made: its 28 fixtures are Django's ORM, `nest-baseline.sh` and
+  `nest-commands.sh` compare against a database Django migrated, and its replay already runs
+  from a snapshot with no Django. All of it goes with the comparison at 6.4.*
 
 > **The point of no return is step 6.4**, not the deletion in step 8. Until a migration exists
 > that Django's models do not describe, `docker-compose.django.yml` still works. After it,

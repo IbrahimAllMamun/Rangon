@@ -495,6 +495,57 @@ is still open and tracked in
 
 ## Verification log
 
+### Removing Django, steps 6.1 to 6.3: development, the browser suite and the scripts on the NestJS API, 2026-10-14
+
+Asked for: "do steps 6.1 to 6.3" of [the plan](architecture/django-removal-plan.md). The plan's 6.2
+takes Django's suite and the comparison out of CI; ADR-0020's decision 5 keeps a rule changing
+in Django first until 6.4. Put to the owner, who chose: **CI keeps Django's checks until 6.4**,
+and only the browser suite's Django leg goes now. And, for when the comparison does go, the
+recorded proof is committed to the repository.
+
+```text
+6.1  docker-compose.dev.yml ........... resolves: db, redis, api-nest, web, mailpit, minio; with --profile django
+                                        and django-schedule, api, worker, beat too; web calls api-nest:3000
+     the image's `dev` command ......... run natively on an empty database: compiles, serves, 10 queues and 5
+                                        schedules on pg-boss; a save restarts it in 7 s
+     scripts/dev-stack-native.sh up .... Django migrates and seeds and stops; the NestJS API's `migrate` adopts
+                                        the database (111 migrations), `sync-permissions`; the API in watch mode
+     the browser suite on that stack ... 50 of 50 (Playwright, next dev, the NestJS API), 3.0 min
+     dev-stack-native.sh down .......... the API, its compiler and the web server all stopped
+6.2  ci.yml ........................... the e2e job, one leg on the NestJS API from the snapshot; parses
+6.3  the snapshot path of rebuild-local-prod.sh, by its parts:
+       a Django-seeded dump, restored into a PostgreSQL named as an env file may (shopdb, shopuser)
+       ................................ 12 products, 40 orders; a second restore refused (exit 3)
+       migrate, sync-permissions, migrate . adopted; 0 permissions written; nothing to apply
+       verify-inventory, verify-accounts .. both consistent, matched by the lines the script tests
+       the uploads, untarred as uid 1001 into a new volume ... owned by that user
+     shellcheck ....................... no finding the four scripts did not have before
+     the production compose files ...... the same services as before, with and without the way back
+```
+
+**What changed.** The development stack serves the NestJS API on port 8000, compiled and
+restarted on every save, its jobs in PostgreSQL, so Celery's worker and beat are not in it;
+Django is `--profile django` on port 8001, for the rule that changes there first, and beat
+`--profile django-schedule`, because the schedule fires in one place. The database starts
+empty and the demo shop is the snapshot, restored; `seed_demo` runs only inside
+`demo-snapshot.sh make`. `rebuild-local-prod.sh` restores a snapshot made with the stack's
+password and has the NestJS API adopt it, as step 7 will the real shop's database, then checks
+both ledgers. `e2e-local.sh nest` restores the snapshot, making one when it is missing or older
+than `apps/api`. `nest-parity.sh empty` makes the empty shop with the NestJS API's four commands,
+from an empty database, and both APIs are compared on it. The seeded comparison stays
+Django-made, and goes with the rest at 6.4.
+
+**What could not be run here, and runs in CI or on the owner's machine.** This container's
+Docker cannot build an image that downloads packages: its builds do not trust the session's
+proxy, and patching the base images to trust it was refused as a TLS change. So the `dev`
+image, `rebuild-local-prod.sh`, `e2e-local.sh` and `nest-parity.sh empty` were not run as
+wholes. CI runs the browser suite and `empty` with `replay-empty` on every push; the other
+three are the owner's machine's to run first.
+
+**Required checks.** The browser suite's job is named as its Django leg was,
+"E2E (Playwright, four critical flows)". If branch protection requires "E2E on the NestJS API
+(Playwright, four critical flows)", that name no longer reports and must come out of the list.
+
 ### A return before the goods have left is refused (D164), in both APIs, 2026-10-14
 
 Asked for: item 2 of what was next on removing Django -- the one copied defect still worth

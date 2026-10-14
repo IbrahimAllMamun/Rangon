@@ -54,9 +54,12 @@ Sections 3–8 are one script:
 ./scripts/rebuild-local-prod.sh
 ```
 
-It tears the stack down with `compose down -v`, builds the three images, migrates and reseeds,
-brings the stack up, waits for the API to report healthy, restarts nginx and then smoke-tests the
-result — so it fails loudly rather than exiting `0` on a stack that is not serving.
+It tears the stack down with `compose down -v`, builds the three images, restores a new demo
+snapshot into the empty database, has the NestJS API's `migrate` adopt it, brings the stack up,
+waits for the API to report healthy, restarts nginx, smoke-tests the result and runs both ledger
+checks — so it fails loudly rather than exiting `0` on a stack that is not serving. No Django
+container of this stack runs; Django makes the snapshot, in a throwaway stack of its own
+([removal plan](../architecture/django-removal-plan.md), step 6.3).
 
 **It is destructive and unconditionally so.** `down -v` removes this project's volumes, which takes
 the database with them, so the reseed is not a step you can skip — it is how the stack gets a
@@ -112,7 +115,7 @@ The API that serves:
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
 ```
 
-Django, which migrates, seeds, and is there to go back to:
+Django, there to go back to (§9a) and for §5's second way; the demo snapshot does not need it:
 
 ```bash
 docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
@@ -149,16 +152,51 @@ Before anything is started. The database is a separate volume from the developme
 starts empty every time it is recreated; and the API works the job queue and fires the schedule
 from the moment it is up, so it should find its tables there.
 
-Django does both, in a container that exists for the one command (`run --rm`; it starts the
-database it depends on and waits for it):
+**The demo snapshot** (since 2026-10-14; what `scripts/rebuild-local-prod.sh` does). Django
+migrates and seeds a throwaway database in a stack of its own, and it is dumped; the dump is
+restored here, with no Django container of this stack's at any point -- which is how it will
+have to be done once Django is gone ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md),
+decision 3). Make it **with a password of your own**: this stack has been published through a
+tunnel before, and the README's `rangon12345` is public. A directory of its own keeps it apart
+from the test stacks' snapshot, which carries the README's:
+
+```bash
+DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod \
+  scripts/demo-snapshot.sh make
+```
+
+Then the database, the uploads, and the NestJS API's two commands -- `migrate` records its
+baseline as applied to a database Django built (it runs nothing), `sync-permissions` makes the
+roles match the build:
+
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --wait db
+DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod scripts/demo-snapshot.sh restore \
+  "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm --no-deps -T \
+  api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/local-prod/media.tar.gz
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js sync-permissions
+```
+
+The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore
+refuses a database that already has tables in it, so it cannot land on a shop. A snapshot made
+without `DJANGO_DEMO_SEED_PASSWORD` carries the password printed in the README, and says so when
+it is restored: that one is for test stacks, never for this one. The password must pass Django's
+validators (10+ characters, not common, not all digits). `scripts/rebuild-local-prod.sh` reads
+`DJANGO_DEMO_SEED_PASSWORD` from the environment or from `.env.prod.local`, and stops before its
+teardown if it is missing.
+
+**Or Django, in this stack** -- the way it was done until step 6.3, and still the way back. In a
+container that exists for the one command (`run --rm`; it starts the database it depends on and
+waits for it):
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
 ```
 
 This stack runs `config.settings.prod`, where `seed_demo` is **refused** unless you opt in for the one
-command and bring a password of your own. The README's `rangon12345` is refused too — this stack has
-been published through a tunnel before, and that password is public:
+command and bring a password of your own, and the README's is refused too:
 
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm \
@@ -170,31 +208,8 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 The last two variables are for this stack as it now runs: the seed saves categories and navigation
 items, each of which queues a storefront revalidation *for Celery*, and no Celery worker is
 running. They make those jobs run inline, with nowhere to send them — nothing is cached yet.
-
-The password must pass Django's validators (10+ characters, not common, not all digits). Re-running
-the seed with a new password also replaces the README one on any account an older seed left with it.
-`scripts/rebuild-local-prod.sh` reads `DJANGO_DEMO_SEED_PASSWORD` from the environment or from
-`.env.prod.local`, and stops before its teardown if it is missing.
-
-**A demo shop without Django** (since 2026-10-14). The same seeded shop can be restored from a
-snapshot, with no Django container at any point -- which is how it will have to be done once
-Django is gone ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md),
-decision 3). Make the snapshot once, on any machine with this checkout, **with a password of
-your own**; then restore it into this stack's database while that is still empty, in place of
-the migrate and seed above:
-
-```bash
-DJANGO_DEMO_SEED_PASSWORD='<a password of your own>' scripts/demo-snapshot.sh make
-```
-
-```bash
-scripts/demo-snapshot.sh restore "$(docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml ps -q db)" rangon rangon
-```
-
-The database name and user are this stack's (`POSTGRES_DB`, `POSTGRES_USER`). The restore
-refuses a database that already has tables in it, so it cannot land on a shop. A snapshot made
-without `DJANGO_DEMO_SEED_PASSWORD` carries the password printed in the README, and says so when
-it is restored: that one is for test stacks, never for this one.
+Re-running the seed with a new password also replaces the README one on any account an older seed
+left with it.
 
 ---
 
