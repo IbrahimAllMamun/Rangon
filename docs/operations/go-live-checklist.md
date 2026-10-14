@@ -31,9 +31,9 @@ consciously waived in writing.
 - [ ] Social profiles filled in and ticked, in the order wanted; WhatsApp number set if the floating
       chat button should appear
 - [ ] Managers hold `content.site_manage` (Admin → Staff, role matrix). `migrate` grants new
-      permission codes, so this is only missing if the deploy skipped its migrate job; running
-      `python manage.py migrate` fixes it. Do not use `seed_demo` for this, because it writes demo
-      data (docs/architecture/permissions.md)
+      permission codes, so this is only missing if the deploy skipped its `sync-permissions` step;
+      running `node dist/cli.js sync-permissions` fixes it. Do not restore the demo snapshot for
+      this, because it is demo data (docs/architecture/permissions.md)
 - [ ] Currency, phone format and address format verified for Bangladesh
 
 ## Brand
@@ -54,7 +54,7 @@ consciously waived in writing.
 - [ ] Error tracking (Sentry DSN) receiving events: set `SENTRY_DSN`, deploy, and **see one event arrive** -- the NestJS API reports since 2026-10-08 ([ADR-0019](../architecture/decisions/0019-nest-errors-to-sentry.md)), and has not yet been pointed at a real Sentry project. Django reports nothing either way ([D241](../roadmap.md#known-defects))
 - [ ] Structured logs shipped somewhere searchable; request ids present
 - [ ] Health and readiness endpoints wired to the load balancer
-- [ ] Background jobs running, and the schedule fired in **exactly one** place: `api-nest` itself, or -- when Django serves -- the Celery worker and one beat replica, never both. Scheduled jobs observed to fire (`SELECT name, state, completed_on FROM pgboss.job ORDER BY created_on DESC LIMIT 5`)
+- [ ] Background jobs running, and the schedule fired in **exactly one** place: `api-nest` itself, unless a separate worker is started with it off (`RANGON_JOBS_SCHEDULE=0`). Scheduled jobs observed to fire (`SELECT name, state, completed_on FROM pgboss.job ORDER BY created_on DESC LIMIT 5`)
 - [ ] Images built by CI, scanned, deployed by immutable tag
 - [ ] Rollback rehearsed once on staging
 - [ ] Full test suite green, including concurrency tests
@@ -72,4 +72,4 @@ consciously waived in writing.
 ## Day-one watchlist
 
 Sales per channel, failed payments, `INSUFFICIENT_STOCK` errors, 5xx rate, checkout completion rate,
-job queue depth (`pgboss.job` rows in `created` or `retry`; Celery's queue when Django serves), inventory drift report, POS lookup latency.
+job queue depth (`pgboss.job` rows in `created` or `retry`), inventory drift report, POS lookup latency.

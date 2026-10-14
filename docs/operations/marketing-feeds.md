@@ -1,7 +1,7 @@
 # The product feed
 
 > Where Facebook and Instagram get the catalogue from.
-> Endpoint: `catalog/feeds.py` · Tests: `apps/api/tests/api/test_product_feed.py`
+> Endpoint: the API's `/shop/feed.xml` (ported from Django's `catalog/feeds.py`)
 
 ---
 

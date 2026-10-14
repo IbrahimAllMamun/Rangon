@@ -7,9 +7,9 @@ database and order system.
 ```text
    Storefront (Next.js)        POS (Next.js)        Admin (Next.js)
             \                      |                     /
-             ------------  Django REST API  -------------
+             -------  REST API (NestJS, apps/api-nest)  -------
                                   |
-                    PostgreSQL  +  Redis  +  Celery
+              PostgreSQL (data + job queue)  +  Redis (cache)
 ```
 
 - Product spec: [rangon_fashion_build_plan.md](rangon_fashion_build_plan.md)
@@ -24,10 +24,10 @@ Not production-ready; not deployed anywhere; no real order has ever been placed.
 
 |                  |                                                                                                                                                                   |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CI               | Five jobs, all blocking — backend (ruff, mypy, migrations, pytest), frontend (lint, typecheck, Vitest, build), E2E (Playwright against a **production build**), dependency audits, image build + Trivy scan |
-| Backend tests    | 1,306 passing, including 20 threaded concurrency tests against real PostgreSQL                                                                                    |
+| CI               | All blocking — the API (lint, types, unit tests, migrations on a new and an adopted database), the API against its 12,243 recorded answers with the race checks, frontend (lint, typecheck, Vitest, build), E2E (Playwright against a **production build**), dependency audits, image build + Trivy scan |
+| Backend tests    | Jest unit tests; every recorded answer and race check replayed. Until 2026-10-14 also Django's 1,514 tests and a case-by-case comparison with Django ([ADR-0023](docs/architecture/decisions/0023-django-is-gone.md)) |
 | Frontend tests   | Vitest 324 passing; Playwright 46 (the four critical flows plus accessibility checks, desktop and mobile) — both run by CI                                       |
-| Type checking    | `tsc` clean; `mypy` clean across 154 source files and **blocking** in CI since 2026-09-21 ([D6](docs/roadmap.md#known-defects))                               |
+| Type checking    | `tsc` clean, API and web app, blocking in CI                                                                                                                       |
 | Verified by hand | A POS sale; a full storefront purchase (cart → COD checkout → confirmed order); a backup restored for real; most admin screens signed in and used — the supplier payment form and the order Delivery panel with the customer's parcel view since 2026-09-24 |
 | Known defects    | D1–D102 logged; **two open** — D7 (Playwright cannot run in the Alpine *dev* image) and D9 (no product photography)                                          |
 | Biggest gaps     | No live environment, no product photos, VAT not yet decided (the default is a placeholder), no payment gateway (COD works), no load test, no independent penetration test |
@@ -40,22 +40,15 @@ Phase-by-phase status, the full verification log and every known defect are in
 ```text
 Rangon/
 ├── apps/
-│   ├── api/                     Django + DRF modular monolith
-│   │   ├── config/              settings (base/dev/test/prod), urls, celery
-│   │   ├── core/                base models, money, errors, audit, sequences
-│   │   ├── accounts/            organization, branch, user, role, permission
-│   │   ├── catalog/             category, brand, product, variant, attributes, images
-│   │   ├── inventory/           inventory records + ledger engine
-│   │   ├── purchasing/          suppliers, purchase orders, receiving
-│   │   ├── customers/           customers, addresses, notes
-│   │   ├── orders/              orders, payments, refunds, returns, POS + checkout services
-│   │   ├── shipping/            zones, methods, shipments, tracking events
-│   │   ├── promotions/          coupons
-│   │   ├── engagement/          wishlist, reviews
-│   │   ├── reports/            dashboard + reporting endpoints
-│   │   └── notifications/       in-app/email notification infrastructure
+│   ├── api-nest/                the API: NestJS on Fastify, Drizzle, pg-boss
+│   │   ├── src/<domain>/        accounts, catalog, inventory, orders, pos, purchasing, finance, ...
+│   │   ├── src/cli/             the operator's commands (node dist/cli.js ...)
+│   │   ├── drizzle/             the schema and its migrations
+│   │   ├── parity/              the cases and race checks, and the recorded answers they are held to
+│   │   └── test/unit/           unit tests
 │   └── web/                     Next.js app: (storefront) (admin) (pos) route groups
-├── infrastructure/docker/       nginx config, entrypoint scripts
+├── infrastructure/docker/       nginx config
+├── infrastructure/snapshots/    the demo shop, as a database snapshot
 ├── docs/                        architecture, database, api, testing, operations
 ├── scripts/                     developer helper scripts
 └── docker-compose*.yml
@@ -72,42 +65,26 @@ cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
-The API is the NestJS one (`apps/api-nest`), recompiled and restarted on every save; it is what
-production runs. Its database starts empty. For the demo shop, in a second terminal:
+The API (`apps/api-nest`) is recompiled and restarted on every save. Its database starts empty. For
+the demo shop, in a second terminal:
 
 ```bash
-scripts/demo-snapshot.sh make                     # Django seeds a throwaway database of its own, and it is dumped
-scripts/demo-snapshot.sh restore rangon-db-1      # into the empty development database
+scripts/demo-snapshot.sh restore rangon-db-1      # the committed demo snapshot, into the empty database
 docker compose exec -T api-nest tar -xzf - -C /app/media < infrastructure/snapshots/demo/media.tar.gz
-```
-
-`make` is the one step that still needs Django, in a stack of its own (`rangon-snapshot`); make
-it again after a change under `apps/api`. `restore` refuses a database that already has tables:
-to start again, `docker compose down -v` and repeat. For a shop with nothing in it instead, the
-NestJS API's own commands build one ([operator-commands.md](docs/operations/operator-commands.md)):
-
-```bash
 docker compose exec api-nest node dist/cli.js migrate
 docker compose exec api-nest node dist/cli.js sync-permissions
 ```
 
-**Django is on demand** ([removal plan](docs/architecture/django-removal-plan.md), step 6.1).
-Until the plan's step 6.4 a business rule still changes in Django first, with its tests
-([ADR-0020](docs/architecture/decisions/0020-django-is-removed-in-steps.md)), so it is one
-profile away, on port 8001, with Celery's worker:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile django up -d api worker
-```
+`restore` refuses a database that already has tables: to start again, `docker compose down -v` and
+repeat. For a shop with nothing in it instead, `migrate`, `sync-permissions` and the API's other
+commands build one ([operator-commands.md](docs/operations/operator-commands.md)).
 
 | Service                | URL                                                                |
 | ---------------------- | ------------------------------------------------------------------ |
 | Storefront             | http://localhost:3000 (`WEB_PORT` — see the Windows note below) |
 | Admin                  | http://localhost:3000/admin                                        |
 | POS                    | http://localhost:3000/pos                                          |
-| API (NestJS)           | http://localhost:8000/api/v1/                                      |
-| Django, on demand      | http://localhost:8001/api/v1/ (`--profile django`; `DJANGO_PORT` moves it) |
-| API schema (Swagger)   | http://localhost:8001/api/docs/ (Django's, on demand; not in production) |
+| API                    | http://localhost:8000/api/v1/                                      |
 | Mailpit (dev email)    | http://localhost:8025                                              |
 | MinIO console (dev S3) | http://localhost:9001                                              |
 
@@ -131,7 +108,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile django 
 > Reclaiming 3000 instead needs an elevated `net stop winnat && net start winnat`,
 > which drops every other Docker port mapping while it restarts.
 
-Demo logins in the demo snapshot, made by `seed_demo` (development only):
+Demo logins in the demo snapshot (development only):
 
 | Role              | Email                | Password    |
 | ----------------- | -------------------- | ----------- |
@@ -155,7 +132,7 @@ docker compose down -v                                                     # sto
 To run the **production** build on your own machine instead, see
 [Run the production build locally](#run-the-production-build-locally).
 
-The NestJS API ([operator-commands.md](docs/operations/operator-commands.md) has every command):
+The API ([operator-commands.md](docs/operations/operator-commands.md) has every command):
 
 ```bash
 docker compose exec api-nest node dist/cli.js verify-inventory   # stock cache vs ledger
@@ -166,21 +143,14 @@ docker compose exec api-nest npm run lint
 docker compose exec api-nest npm run typecheck
 ```
 
+```bash
+docker compose exec api-nest npm run db:generate -- --name <what>   # a migration (docs/database/migrations.md)
+docker compose exec api-nest npm run db:copy                        # the API's copy of the schema
+scripts/nest-parity.sh replay                                       # every case against its recorded answer
+```
+
 A new `package.json` dependency needs `--renew-anon-volumes` on the next `up`, as the web app's
 does: `node_modules` is the image's, kept in a volume.
-
-Django, with `--profile django` up (above). The schema is still Django's: a model change is a
-migration here, then a new cut of the NestJS API's baseline (`scripts/nest-baseline.sh cut`):
-
-```bash
-docker compose exec api python manage.py makemigrations
-docker compose exec api python manage.py migrate
-docker compose exec api pytest                        # full suite
-docker compose exec api pytest -m "not slow"          # fast suite
-docker compose exec api ruff check .                  # lint
-docker compose exec api ruff format .                 # format
-docker compose exec api mypy .                        # type check
-```
 
 Frontend:
 
@@ -241,35 +211,25 @@ byte-identical dependencies. Never delete it or install with `npm install` in CI
 > docker compose -f docker-compose.yml -f docker-compose.dev.yml build web
 > ```
 
-Tests in a throwaway containerised environment (what CI runs):
+## How the API is proven
+
+`apps/api-nest/` was a NestJS port of a Django API, built beside it on the same database and proven
+equal to it endpoint by endpoint ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-alongside-django.md));
+Django was removed on 2026-10-14 ([ADR-0023](docs/architecture/decisions/0023-django-is-gone.md)).
+What stands in for the comparison is a recording of it: 12,243 answers, every row each request
+wrote and every job it queued, taken where the two APIs agreed, and the database they were given
+from ([recorded-proof.md](docs/architecture/recorded-proof.md)):
 
 ```bash
-docker compose -f docker-compose.test.yml run --rm api-test
-```
-
-## The NestJS API
-
-`apps/api-nest/` is a NestJS port of the API, built beside Django on the same database and proven
-equal to it endpoint by endpoint (ADR-0013). **It is what production runs** since 2026-10-08
-([ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)): every request, the
-background jobs and their schedule. Django still owns the schema and every business rule -- a rule
-changes there first, then in the port; the development stack above runs the port, with Django on
-demand for that. See
-[docs/architecture/nest-port.md](docs/architecture/nest-port.md) and
-[docs/nest-port-instructions.md](docs/nest-port-instructions.md):
-
-```bash
-scripts/nest-parity.sh reset      # both APIs on one fresh database, seeded
-scripts/nest-parity.sh run        # every request to both; fails on any difference
-scripts/nest-parity.sh run-jobs   # the same, with the jobs queued as production queues them
+scripts/nest-parity.sh replay                          # every case, the races, the worker, the rate limits
+scripts/nest-parity.sh replay-empty                    # the shop on its first day
+PARITY_ACCEPT='<case name regex>' scripts/nest-parity.sh replay   # a deliberate change to an answer
 ```
 
 ## Run the production build locally
 
-`docker-compose.prodlocal.yml` runs the **production** images on your own machine — the NestJS API,
-the production Next build and one Nginx origin — over plain HTTP. (Django is there too, started on
-demand: for migrations, for the Django admin, and to serve everything again with one more file.
-[local-production.md §9a](docs/operations/local-production.md#9a-django-on-demand-and-back-to-django).) Use it to see what the app
+`docker-compose.prodlocal.yml` runs the **production** images on your own machine — the API, the
+production Next build and one Nginx origin — over plain HTTP. Use it to see what the app
 actually feels like, to reproduce something that only happens in a production build (a CSP failure, a
 server/client boundary error), or to rehearse a deploy. It is *not* a deployment; for that see
 [docs/operations/](docs/operations/deployment.md).
@@ -300,17 +260,12 @@ silently targets the dev stack instead:
 alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml'
 ```
 
-**3. Build the three images by hand.** `prodlocal` sets `build: !reset null` on every application
+**3. Build the two images by hand.** `prodlocal` sets `build: !reset null` on every application
 service, so **`prodlocal up -d --build` builds nothing** and fails on a missing tag. Build them
-first — these tags collide with nothing. The API that serves, then Django (the way back,
-`-f docker-compose.django.yml`; nothing below runs it):
+first — these tags collide with nothing:
 
 ```bash
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
-```
-
-```bash
-docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
 ```
 
 The two `NEXT_PUBLIC_*` values are inlined into the client bundle at build time and cannot be changed
@@ -322,23 +277,21 @@ docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT
 ```
 
 **4. The demo shop, then start.** Its database is empty and separate from the dev one. It is the
-demo snapshot, made with a password of your own -- this stack runs production settings -- and
-restored before the stack is up; then the NestJS API's `migrate` adopts it and `sync-permissions`
-writes the roles:
+committed demo snapshot, restored before the stack is up; then the API's `migrate` brings it to this
+build's schema and `sync-permissions` writes the roles:
 
 ```bash
-DJANGO_DEMO_SEED_PASSWORD='<your own>' DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod \
-  scripts/demo-snapshot.sh make
 prodlocal up -d --wait db
-DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod scripts/demo-snapshot.sh restore rangon-prod-db-1
-prodlocal run --rm --no-deps -T api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/local-prod/media.tar.gz
+scripts/demo-snapshot.sh restore rangon-prod-db-1
+prodlocal run --rm --no-deps -T api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/demo/media.tar.gz
 prodlocal run --rm api-nest node dist/cli.js migrate
 prodlocal run --rm api-nest node dist/cli.js sync-permissions
 prodlocal up -d
 ```
 
-Never the README's password below on this stack: see
-[local-production.md §5](docs/operations/local-production.md#5-migrate-and-seed). `restore` names
+Then give every demo account a password of your own with `set-password`: never the README's below
+on this stack ([local-production.md §5](docs/operations/local-production.md#5-migrate-and-seed)).
+`./scripts/rebuild-local-prod.sh` does all of steps 2 to 5 with that. `restore` names
 the database `rangon` with the user `rangon`; if your env file names others, pass them after the
 container.
 
@@ -392,19 +345,15 @@ like the wrong layer, and starting a Cloudflare tunnel in front of it — is
 
 ## Local run without Docker (fallback)
 
-Docker is the supported path. On Linux with PostgreSQL 16, Redis 7, Python and Node,
-`scripts/dev-stack-native.sh up` runs the whole stack on the host: Django makes the demo data and
-stops, the NestJS API serves in watch mode, and the web app runs `next dev`. By hand, on Windows:
+Docker is the supported path. On Linux with PostgreSQL 16, Redis 7 and Node,
+`scripts/dev-stack-native.sh up` runs the whole stack on the host: the demo snapshot restored, the
+API in watch mode, and the web app on `next dev`. By hand, on Windows:
 
 ```bash
-cd apps/api
-python -m venv .venv && .venv\Scripts\activate      # Windows
-pip install -r requirements/dev.txt
-set DJANGO_SETTINGS_MODULE=config.settings.dev
-python manage.py migrate && python manage.py seed_demo --reset
+pg_restore --no-owner -d <your database URL> infrastructure/snapshots/demo/demo.dump
 
-cd ../api-nest                                       # with DATABASE_URL, REDIS_URL, DJANGO_SECRET_KEY, PORT=8000
-npm ci && npm run build
+cd apps/api-nest                                     # with DATABASE_URL, REDIS_URL, DJANGO_SECRET_KEY, PORT=8000
+npm ci && npm run build && node dist/cli.js migrate && node dist/cli.js sync-permissions
 npx tsc -p tsconfig.build.json --watch               # one terminal: the compiler
 node --watch-path=dist dist/main.js                  # another: the API, restarted on what it writes
 

@@ -5,13 +5,14 @@
 > for a shop that is going to trade.
 >
 > [local-production.md](local-production.md) is the same stack filled with demo products, orders and
-> staff by `seed_demo`. Its traps (nginx caching addresses, healthchecks that never pass, the OOM
+> staff from the demo snapshot. Its traps (nginx caching addresses, healthchecks that never pass, the OOM
 > killer) apply here too, and this page links to them rather than repeating them.
 
 **Never run either of these against this database:**
 
-- `seed_demo`: it fills the shop with demo products, orders, customers and five `@rangon.test`
-  staff accounts, and with `--reset` it deletes catalogue and order data first.
+- `scripts/demo-snapshot.sh restore`: it fills the shop with demo products, orders, customers and
+  `@rangon.test` staff accounts. It refuses a database that already has tables, but not one that is
+  merely empty of shop data.
 - `scripts/rebuild-local-prod.sh`: it starts with `compose down -v`, which **deletes the database
   volume**, and then reseeds the demo.
 
@@ -19,11 +20,11 @@ Once the shop is trading, new code goes on with
 [upgrading-local-production.md](upgrading-local-production.md): backup, build, migration check,
 swap, verify and rollback, without touching the database's volume.
 
-All commands run from the repository root. The first command of step 4, steps 5–7 and the
-integrity checks in step 9 were run against a brand-new database on 2026-10-03, including both forms
-of step 6. The owner was created
-with the non-interactive form of the same command and then signed in through the API. The image
-builds and nginx steps are the ones [local-production.md](local-production.md) already uses.
+All commands run from the repository root. Steps 5 to 7 and the integrity checks in step 9 are the
+API's own commands ([operator-commands.md](operator-commands.md)); each was compared with the Django
+command it replaced, on copies of one database, until Django went on 2026-10-14, and CI builds a new
+database with `migrate` on every change. The image builds and nginx steps are the ones
+[local-production.md](local-production.md) already uses.
 
 ---
 
@@ -135,20 +136,14 @@ different project.
 
 ---
 
-## 3. Build the three images
+## 3. Build the two images
 
 The local production compose file builds nothing itself (`build: !reset null`), so `up` fails on a
-missing image unless all three exist ([local-production.md §4](local-production.md#4-build-the-three-images-by-hand)).
-The API the shop runs on is the NestJS one; Django's image sets the database up in steps 5 to 7,
-and is what the stack can go back to
-([local-production.md §9a](local-production.md#9a-django-on-demand-and-back-to-django)).
+missing image unless both exist ([local-production.md §4](local-production.md#4-build-the-images-by-hand)).
+The API's image also carries the commands that set the database up in steps 5 to 7.
 
 ```bash
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
-```
-
-```bash
-docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
 ```
 
 ```bash
@@ -175,27 +170,25 @@ the database has its tables, its shop and its owner:
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d --wait db redis
 ```
 
-Steps 5 to 7 are Django's commands. Django is not one of the containers this stack keeps running,
-so each is `run --rm api ...`: a container made for the one command, and removed after it.
+Steps 5 to 7 are the API's commands, each `run --rm api-nest node dist/cli.js ...`: a container made
+for the one command, and removed after it.
 
 ---
 
-## 5. Migrate
+## 5. Migrate, and the roles
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js migrate
 ```
-
-Migrating also creates the seven roles and every permission code, through a `post_migrate` hook
-(`accounts.apps`). That is why it must come before step 7: the owner account takes the Owner role
-only if the role already exists. To see what a blank database holds now:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py shell -c "from accounts.models import Role, Permission, Organization, Branch; print('roles', Role.objects.count(), 'permissions', Permission.objects.count(), 'organizations', Organization.objects.count(), 'branches', Branch.objects.count())"
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js sync-permissions
 ```
 
-Expect `roles 7`, a permission count (43 today; it follows `accounts/permissions.py`), and **0
-organizations and 0 branches**. Step 6 fills that gap.
+The first builds every table ([migrations.md](../database/migrations.md)); the second writes the
+seven roles and every permission code, and prints how many. That is why it must come before step 7:
+the owner account takes the Owner role only if the role already exists. A blank database has **no
+organization and no branch** yet. Step 6 fills that gap.
 
 ---
 
@@ -203,8 +196,8 @@ organizations and 0 branches**. Step 6 fills that gap.
 
 **Nothing in the app creates the organization.** On a blank database `GET /organization/` answers
 404 (`No organisation configured.`), Settings has no shop to edit, and a branch added from the
-admin is saved against an organization that does not exist. Only `seed_demo` ever made one. `scripts/bootstrap-store.py` makes
-exactly these three rows and nothing else:
+admin is saved against an organization that does not exist. `bootstrap-store` makes exactly these
+three rows and nothing else:
 
 | Row | What it is |
 | --- | --- |
@@ -212,22 +205,10 @@ exactly these three rows and nothing else:
 | Branch | The first branch, marked default, with one register. Its code prints on receipts. |
 | Cash drawer | `<CODE> Cash Drawer`, the default cash account counter sales post into, at **৳ 0.00**. |
 
-The NestJS API has the same command, with flags in place of a piped file, so it runs the same
-way in every shell: `run --rm api-nest node dist/cli.js bootstrap-store --shop-name "Rangon
-Fashion" --branch-name "Rangon Panthapath" --branch-code DHK1` ([operator-commands.md](operator-commands.md)). Either does; this is
-Django's.
-
-Set the three names on the command. In **Git Bash**:
+Set the three names on the command. Flags, not a piped file, so it runs the same in every shell:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts/bootstrap-store.py
-```
-
-In **PowerShell**, go through `cmd`. PowerShell's own pipe prefixes a byte-order mark, and Python
-stops at line 1 with `SyntaxError: invalid non-printable character U+FEFF`:
-
-```powershell
-cmd /c 'docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts\bootstrap-store.py'
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T api-nest node dist/cli.js bootstrap-store --shop-name "Rangon Fashion" --branch-name "Rangon Panthapath" --branch-code DHK1
 ```
 
 It prints:
@@ -237,10 +218,6 @@ Organization: Rangon Fashion (rangon-fashion)
 Branch:       Rangon Panthapath (DHK1), default=True
 Cash drawers: 1
 ```
-
-Django's shell puts a line of its own above those, `88 objects imported automatically (use -v 2 for
-details).` (the number varies): since Django 5.2 it imports every model before it runs a script. It
-is not an error and says nothing about the shop.
 
 - **The names apply on the first run only.** Running it again is harmless, but it reuses what exists
   and ignores new names. The app is single-tenant and only ever reads the oldest organization, so a
@@ -254,31 +231,29 @@ is not an error and says nothing about the shop.
 
 ## 7. Create the owner account
 
-The NestJS API's `create-owner` does the same without asking questions: it takes the password
-from `OWNER_PASSWORD` in the environment ([operator-commands.md](operator-commands.md)). Either does; this is Django's.
-
-From **PowerShell** or Windows Terminal, because it asks questions:
+The password comes from the environment, `OWNER_PASSWORD`, never from the command line, where every
+process on the machine could read it. In **PowerShell**, asked for without showing it:
 
 ```powershell
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py createsuperuser
+$env:OWNER_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR((Read-Host -AsSecureString -Prompt "Owner password")))
+```
+```powershell
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm -T -e OWNER_PASSWORD api-nest node dist/cli.js create-owner --email owner@your-shop.example
+```
+```powershell
+Remove-Item Env:OWNER_PASSWORD
 ```
 
-From Git Bash, prefix it with `winpty`, or it stops with `the input device is not a TTY`:
+In **Git Bash**, `read -rs OWNER_PASSWORD && export OWNER_PASSWORD`, the same command, then
+`unset OWNER_PASSWORD`. `-e OWNER_PASSWORD` with no value passes the variable from your shell.
 
-```bash
-winpty docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py createsuperuser
-```
+The password must be at least 10 characters, not a common password, not all digits and not too
+close to the email address; a refused one is said why, and nothing is written. It prints
+`owner@your-shop.example is an owner: sign in at /login`.
 
-It asks for an email address and a password, twice. The password must be at least 10 characters,
-not a common password, not all digits and not too close to the email address.
-
-The account gets the **Owner** role automatically, plus access to the Django admin. It belongs to no
-branch on purpose: an owner works across every branch, and the default branch is used until they
-pick another.
-
-**Do not use `--noinput` with `DJANGO_SUPERUSER_PASSWORD` here.** Django checks the password rules
-only when it asks interactively; the non-interactive form accepts any password at all, for the one
-account that can do everything.
+The account gets the **Owner** role. It belongs to no branch on purpose: an owner works across every
+branch, and the default branch is used until they pick another. A forgotten password later is
+`set-password` ([operator-commands.md](operator-commands.md)).
 
 ---
 
@@ -289,7 +264,7 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 ```
 
 Do not add `--wait`: `web` reports `unhealthy` permanently
-([local-production.md §10](local-production.md#10-three-things-that-look-broken-and-are-not)),
+([local-production.md §10](local-production.md#10-two-things-that-look-broken-and-are-not)),
 so it would wait forever.
 
 nginx looks up the `api-nest` and `web` containers once, when it starts, and keeps those addresses.
@@ -311,11 +286,11 @@ bash scripts/smoke-test.sh http://localhost:4100
 The two ledgers should agree with themselves from the first minute:
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py verify_accounts
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js verify-accounts
 ```
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py verify_inventory
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js verify-inventory
 ```
 
 Expect `Accounts are consistent with the cash book.` and `Inventory is consistent with the
@@ -352,15 +327,15 @@ docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
 ```
 
 ```bash
-docker build -t rangon-api:prod -f apps/api/Dockerfile apps/api
-```
-
-```bash
 docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=http://localhost:4100
 ```
 
 ```bash
-docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api python manage.py migrate
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js migrate
+```
+
+```bash
+docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js sync-permissions
 ```
 
 ```bash
@@ -379,12 +354,11 @@ Use the same build arguments every time. Back the database up on a schedule: [ba
 
 | What you see | What it is |
 | --- | --- |
-| `SyntaxError: invalid non-printable character U+FEFF` in step 6 | The script was piped from PowerShell. Use the `cmd /c` form. |
-| `the input device is not a TTY` in step 7 | Git Bash under mintty. Use PowerShell, or prefix `winpty`. |
+| `create-owner: refused. There is no Owner role yet` in step 7 | Step 5's `sync-permissions` was skipped. Run it, then step 7 again. |
 | Settings shows no shop details; `/api/v1/organization/` answers 404 | Step 6 was skipped. Run it; it is safe on a database that already has data. |
 | Sign-in shows "An unexpected error occurred" | Usually Redis is not running: the login throttle needs it, and answers 500 without it ([.claude/environment.md](../../.claude/environment.md), "The stack runs without Docker"). `docker ps` should list `rangon-prod-redis-1`. |
 | Sign-in refused with `403 CROSS_ORIGIN_REFUSED` | The web image was built for a different `NEXT_PUBLIC_SITE_URL` than the address in the browser (step 3). |
 | `/api/...` answers 502 while pages render | nginx kept an old address. Step 8. |
-| `/django-admin/` or `/api/docs/` answers 404 | By design since 2026-10-14: the Django admin and the API docs were dropped ([ADR-0020](../architecture/decisions/0020-django-is-removed-in-steps.md)). The back office is `/admin`. |
+| `/django-admin/` or `/api/docs/` answers 404 | By design: Django's admin and API docs went with Django. The back office is `/admin`. |
 | The API cannot reach the database after changing `POSTGRES_PASSWORD` | Postgres kept the password it was created with (step 1). Put the old one back, or start from step 2. |
 | A command dies with exit 137, or finishes suspiciously fast and silent | Out of memory. Stop the other stacks and run it again ([local-production.md §2](local-production.md#2-before-you-start)). |

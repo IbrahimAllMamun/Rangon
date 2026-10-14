@@ -1,5 +1,12 @@
 # Deploying Rangon on a Webuzo server
 
+> **Written for the Django stack (2026-09).** The API is the NestJS one alone since 2026-10-14
+> ([ADR-0023](../architecture/decisions/0023-django-is-gone.md)): there is no `api`, `worker` or
+> `beat` service and no Celery. Read `api-nest` for `api`, and each `python manage.py <command>` as
+> its `node dist/cli.js` equivalent in [operator-commands.md](operator-commands.md) -- `migrate`
+> followed by `sync-permissions`, `create-owner` for `createsuperuser`, `bootstrap-store` for the
+> piped script. The panel-specific findings below still hold.
+
 > **Status: written, never executed.** Nothing in this project has been deployed anywhere
 > ([roadmap.md](../roadmap.md#still-unproven)). This document is a plan derived from the repo's actual
 > compose files, Dockerfiles and settings — not a transcript of a working deploy. Expect to correct it

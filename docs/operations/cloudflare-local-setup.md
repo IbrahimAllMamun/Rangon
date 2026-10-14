@@ -48,11 +48,10 @@ Bring that stack up first — a tunnel to nothing is §10's first row:
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml up -d
 ```
 
-That command assumes `rangon-api:prod` and `rangon-web:prod` already exist. **It does not build
+That command assumes `rangon-api-nest:prod` and `rangon-web:prod` already exist. **It does not build
 them** — `prodlocal` sets `build: !reset null`, so `up -d --build` builds nothing and fails on a
 missing tag. From a machine with no images, follow
-[local-production.md](local-production.md) first: it covers the two `docker build` commands, the
-migrate and seed that an always-empty database needs, and the nginx restart that stops `/api/`
+[local-production.md](local-production.md) first: it covers the two `docker build` commands, the demo snapshot and migrate that an always-empty database needs, and the nginx restart that stops `/api/`
 answering 502.
 
 Then prove the origin is reachable **from Windows**, not from a container
@@ -120,9 +119,6 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 ```bash
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml restart nginx
 ```
-
-(The API is `api-nest` since 2026-10-08. If this stack is serving from Django -- it was started
-with `-f docker-compose.django.yml` -- recreate `api worker beat` instead, with that file named.)
 
 Know what you are getting:
 
@@ -441,11 +437,10 @@ remove the CNAMEs, and what is left is a domain that resolves to a dead tunnel a
 
 The moment this is reachable from the internet it is a public web application, not a demo.
 
-- [ ] **Rotate the seed passwords.** `owner@rangon.test / rangon12345` is in the public GitHub README
-      and grants full owner access. Since 2026-09-19 `seed_demo` refuses that password under
-      production settings and seeds with your `DJANGO_DEMO_SEED_PASSWORD` instead — but a database
-      seeded before then still carries it. Reseed or rotate before exposing. Rotation snippet:
-      [self-hosting-with-a-domain.md §5.4](self-hosting-with-a-domain.md).
+- [ ] **Rotate the demo passwords.** `owner@rangon.test / rangon12345` is in the public GitHub README
+      and grants full owner access, and the demo snapshot carries it. `scripts/rebuild-local-prod.sh`
+      gives every demo account your `DJANGO_DEMO_SEED_PASSWORD` instead; by hand it is
+      `node dist/cli.js set-password` ([operator-commands.md](operator-commands.md)) for each.
 - [ ] `/django-admin/` and `/api/docs/` return 404 (§9, step 4).
 - [ ] `DJANGO_DEBUG=0` and a real `DJANGO_SECRET_KEY` in `.env.prod.local`.
 - [ ] Backups running **from the `db` container** — `pg_dump` in the API image is 15.19 against a 16.15

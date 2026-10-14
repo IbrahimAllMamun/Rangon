@@ -1,7 +1,7 @@
 # SMS notifications
 
 > What is built, and what you have to do to make it send.
-> Code: `apps/api/notifications/sms.py`, `notifications/providers/` · Tests: `apps/api/tests/test_sms.py`
+> Code: `apps/api-nest/src/jobs/sms.ts`, `jobs/sms.service.ts` (ported from Django's `notifications/sms.py`)
 
 ---
 
@@ -17,14 +17,12 @@ delivery waiting to happen: nobody is home, the rider leaves, and the shop pays 
 Everything except the last mile. The provider is an interface with a no-op implementation, so the
 system is complete and tested with no account and no spend:
 
-| Piece | Where |
+| Piece | Where (in `apps/api-nest/src/jobs/`) |
 |---|---|
-| Provider interface | `notifications/providers/base.py` |
-| `console` provider — logs, sends nothing, **the default** | `notifications/providers/console.py` |
-| Registry | `notifications/registry.py` |
-| Send + segment counting + the allowlist guard | `notifications/sms.py` |
-| Message log (`SmsMessage`) | `notifications/models.py` |
-| The Celery task | `notifications/tasks.py` |
+| Providers, the `console` one -- logs, sends nothing, **the default** -- among them | `sms.service.ts` |
+| Message bodies, segment counting, the allowlist guard | `sms.ts`, `sms.service.ts` |
+| Message log (`notifications_smsmessage`) | written by `sms.service.ts` |
+| The job | `notifications.tasks.send_order_sms`, in `job-handlers.service.ts` |
 
 Three messages are sent, and only three. Each maps to a template in `sms.TEMPLATES`; a notification
 type with no template sends no SMS, which is how "delivered" stays an email courtesy rather than a

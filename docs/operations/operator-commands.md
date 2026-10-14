@@ -1,27 +1,22 @@
-# The operator's commands, in both APIs
+# The operator's commands
 
-**Status:** 2026-10-14 · step 4 of [the removal plan](../architecture/django-removal-plan.md)
-
-What an operator does to a database rather than through the app has been Django's:
-`python manage.py ...`, run in a one-off `api` container. The NestJS API has the same commands
-now, in its own image: `node dist/cli.js <command>`, run in a one-off `api-nest` container. Both
-sets exist until Django goes, and for five of them either may be used. **Not for the sixth:**
-Django still migrates production.
-
-Every other page gives the Django command. This one gives the other.
+What an operator does to a database rather than through the app: `node dist/cli.js <command>`,
+run in a one-off `api-nest` container. Until 2026-10-14 these were Django's `python manage.py ...`;
+the right-hand column says which each replaces, for an older page or a habit.
 
 ## The commands
 
-| To do this | Django | NestJS API |
+| To do this | Command | Was Django's |
 |---|---|---|
-| Create the first owner | `manage.py createsuperuser` | `node dist/cli.js create-owner --email <address>`, with `OWNER_PASSWORD` in the environment |
-| Give a new database its organisation, first branch and cash drawer | `manage.py shell < scripts/bootstrap-store.py` | `node dist/cli.js bootstrap-store --shop-name "..." --branch-name "..." --branch-code <CODE>` |
-| Check the stock ledger against the cached stock | `manage.py verify_inventory [--branch <CODE>]` | `node dist/cli.js verify-inventory [--branch <CODE>]` |
-| ... and reconcile what drifted | `... --fix --reason "..."` | `... --fix --reason "..."` |
-| Check the cash book against the cached balances | `manage.py verify_accounts [--branch <CODE>] [--skip-unposted]` | `node dist/cli.js verify-accounts [--branch <CODE>] [--skip-unposted]` |
-| ... and reconcile | `... --fix --reason "..."` | `... --fix --reason "..."` |
-| Make the roles and permissions match the code | (runs after every `migrate`) | `node dist/cli.js sync-permissions` |
-| Migrate the schema | `manage.py migrate` | **Not yet.** `node dist/cli.js migrate` exists and is exercised in CI; production is migrated by Django until the plan's step 6.4 |
+| Bring the schema to this build's | `node dist/cli.js migrate` ([migrations.md](../database/migrations.md)) | `manage.py migrate` |
+| Make the roles and permissions match the code | `node dist/cli.js sync-permissions` -- after every `migrate` | (ran after every `migrate`) |
+| Create the first owner | `node dist/cli.js create-owner --email <address>`, with `OWNER_PASSWORD` in the environment | `manage.py createsuperuser` |
+| Set an account's password | `node dist/cli.js set-password --email <address>`, with `NEW_PASSWORD` in the environment | `manage.py changepassword` |
+| Give a new database its organisation, first branch and cash drawer | `node dist/cli.js bootstrap-store --shop-name "..." --branch-name "..." --branch-code <CODE>` | `manage.py shell < scripts/bootstrap-store.py` |
+| Check the stock ledger against the cached stock | `node dist/cli.js verify-inventory [--branch <CODE>]` | `manage.py verify_inventory` |
+| ... and reconcile what drifted | `... --fix --reason "..."` | the same |
+| Check the cash book against the cached balances | `node dist/cli.js verify-accounts [--branch <CODE>] [--skip-unposted]` | `manage.py verify_accounts` |
+| ... and reconcile | `... --fix --reason "..."` | the same |
 
 `node dist/cli.js` alone lists them.
 
@@ -39,8 +34,8 @@ In local production:
 docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -f docker-compose.prodlocal.yml run --rm api-nest node dist/cli.js verify-inventory
 ```
 
-In the development stack, where the NestJS API is the one serving since the removal plan's
-step 6.1, the running container has the commands compiled from the working copy:
+In the development stack the running container has the commands compiled from the working
+copy:
 
 ```bash
 docker compose exec api-nest node dist/cli.js verify-inventory
@@ -53,9 +48,9 @@ failed, 2 when it was not understood. A refusal is one line saying why; nothing 
 The image has to be a build that has the commands: one made from a commit after 2026-10-14.
 `Cannot find module '/app/dist/cli.js'` means it is not.
 
-## Where they differ from Django's
+## Passwords and flags
 
-- **`create-owner` takes its password from the environment**, `OWNER_PASSWORD`, never from the
+- **`create-owner` and `set-password` take the password from the environment**, `OWNER_PASSWORD`, never from the
   command line (every process on the machine can read that) and never by asking. It holds the
   password to the same four rules the app does. Django's `createsuperuser` asks twice and
   checks; its `--noinput` form checks nothing, which this does not copy.
@@ -71,20 +66,11 @@ The image has to be a build that has the commands: one made from a commit after 
   `BRANCH_CODE` from the environment. There is no file to pipe in, so the PowerShell
   byte-order-mark trap of [new-store-from-scratch.md](new-store-from-scratch.md) §6 does not
   arise.
-- **Refusals are worded for this command**, not as Django's `CommandError`. What is printed
-  when a command succeeds is the same, line for line.
+- **A refusal is one line saying why**; nothing was changed. What `verify-*` prints is what Django's
+  printed, line for line, so an older note of a clean run still reads the same.
 
-## How they are known to agree
+## How they are known to be right
 
-`scripts/nest-commands.sh compare`, in CI's parity job: each of the four is run on one database
-and Django's own on a copy of it.
-
-```text
-create-owner ............... the account's row is the same; Django accepts the password this hashed
-bootstrap-store ............ the organisation, branch, drawer and audit entry are the same; a second run changes nothing
-verify-inventory ........... the same lines printed, for every branch and for one; --fix appends the same rows
-verify-accounts ............ the same lines printed, unposted events included; --fix appends the same rows
-both repairs ............... the shelves and balances are left as they were; the audit entries are the same
-```
-
-A row is compared by what it says: ids and moments are each database's own.
+Each was compared with Django's own on copies of one database until Django went (2026-10-14): the
+rows they left and the lines they printed were the same. `migrate` is exercised in CI on a new
+database and on the demo snapshot, a database Django built; the two schemas must match.
