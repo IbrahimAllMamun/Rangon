@@ -31,8 +31,8 @@ database, one inventory ledger, one order table.
                                     └─────────────────────┘
 ```
 
-**That is the development stack, and Django's shape.** In production since 2026-10-08 the box
-marked as the API is the NestJS port of it (`apps/api-nest/`), answering the same endpoints over
+**That is Django's shape.** In production since 2026-10-08, and in the development stack since
+2026-10-14 (with Django one profile away), the box marked as the API is the NestJS port of it (`apps/api-nest/`), answering the same endpoints over
 the same PostgreSQL; the background jobs are rows in that database, run and scheduled by the API
 process itself, so there is no Celery worker or beat and Redis is cache and rate limits only.
 Django still owns the schema and the rules, and can serve the whole stack again with one compose

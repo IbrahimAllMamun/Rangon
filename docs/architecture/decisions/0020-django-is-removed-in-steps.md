@@ -103,7 +103,12 @@ default where the rule was the owner's: a payment past what an order owes is ref
 - **To settle at step 6, not now:** the plan's step 6.2 stops building and scanning the Django
   image, while step 7.4 keeps "the last Django-capable image" as the way back until step 8.
   An image nobody builds is one nobody has checked still starts. Whether CI keeps building it
-  between 6.2 and 8 is a question for that step.
+  between 6.2 and 8 is a question for that step. *Settled in part on 2026-10-14, by the owner,
+  when 6.1 to 6.3 were built: CI keeps Django's suite, both comparisons and the Django image's
+  build and scan until 6.4, for decision 5's reason -- a rule still changes in Django first
+  until then, and must be proven there. Only the browser suite's Django leg went at 6.2.
+  Between 6.4 and 8 is still open. The recorded proof, which nothing can make again once
+  Django is gone, will be committed to the repository.*
 
 ## Alternatives considered
 

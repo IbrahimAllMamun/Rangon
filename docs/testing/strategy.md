@@ -73,28 +73,32 @@ Each asserts both the API outcome **and** ledger integrity via `verify_integrity
 ## The browser suite runs against both APIs
 
 Since the cutover ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)) the
-E2E job in CI is a matrix of two: the web app on the NestJS API, which is what production runs,
-and on Django, which is what it goes back to. On the Django leg, Django migrates and seeds. The
-NestJS leg has no Django in it since 2026-10-14: a job before it has Django seed a throwaway
-database and dump it (`scripts/demo-snapshot.sh`), and the leg restores that snapshot. A flow that
-passes on one and fails on the other is a difference the parity harness missed, or a difference
-in speed the suite was leaning on -- the first run on the NestJS API found one of those: eleven
-sign-ins inside a minute against a limit of ten.
+E2E job in CI was a matrix of two: the web app on the NestJS API, which is what production runs,
+and on Django, which is what it goes back to. The first run on the NestJS API found a difference
+in speed the suite was leaning on: eleven sign-ins inside a minute against a limit of ten.
+**Since the removal plan's step 6.2 it is one job, on the NestJS API**, with no Django in it: a
+job before it has Django seed a throwaway database and dump it (`scripts/demo-snapshot.sh`), and
+the suite's database is a restore of that snapshot. Until step 6.4 the way back is still proven
+in CI by Django's own suite and by the comparison of the two APIs, which drive the same requests
+the browser does.
 
-`scripts/e2e-local.sh nest` (or `django`) is that job in containers, for a machine with Docker and
-nothing else: a fresh database each time, the storefront's production build, Playwright in its own
-image. 50 of 50 on each, 2026-10-08.
+`scripts/e2e-local.sh nest` is that job in containers, for a machine with Docker and nothing else:
+a fresh database restored from the snapshot each time (made first, by Django in a stack of its
+own, when there is none or `apps/api` has changed since), the storefront's production build,
+Playwright in its own image. `scripts/e2e-local.sh django` is the Django leg that left CI. 50 of
+50 on each, 2026-10-08; 50 of 50 on the NestJS API in watch mode on the native development stack,
+2026-10-14.
 
 ## Commands
 
 ```bash
-docker compose exec api pytest                      # everything
+docker compose exec api pytest                      # everything (Django on demand: --profile django, README)
 docker compose exec api pytest -m "not slow"        # skips concurrency/perf
 docker compose exec api pytest --cov=. --cov-report=term-missing
 docker compose exec web npm run test                # Vitest (17 tests, ~25 s)
 docker compose exec web npm run test:e2e            # Playwright — DOES NOT WORK, see above
 scripts/e2e-local.sh nest                           # Playwright, as CI runs it, on the NestJS API
-scripts/e2e-local.sh django                         # the same, on the Django API
+scripts/e2e-local.sh django                         # the same, on the Django API (the way back)
 docker compose -f docker-compose.test.yml run --rm api-test    # what CI runs
 ```
 

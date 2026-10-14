@@ -42,9 +42,10 @@ over the same database ([ADR-0013](docs/architecture/decisions/0013-nestjs-api-a
 [plan](docs/architecture/nest-port.md)). Since [ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)
 the production compose files run it -- the API, the background jobs and their schedule -- and start Django
 only on demand: for migrations and to go back
-(`docker-compose.django.yml`). **Django still owns the schema and every business rule**, and the development
-stack and the commands in this file are Django's: never run Drizzle migrations, and change a rule in Django
-first, with its tests, then port it. The one exception is the `pgboss` schema, which the Nest API's job queue
+(`docker-compose.django.yml`). The development stack runs the NestJS API too, with Django one profile away
+([removal plan](docs/architecture/django-removal-plan.md), step 6.1). **Django still owns the schema and
+every business rule** until the plan's step 6.4 ([ADR-0020](docs/architecture/decisions/0020-django-is-removed-in-steps.md)):
+never write a Drizzle migration, and change a rule in Django first, with its tests, then port it. The one exception is the `pgboss` schema, which the Nest API's job queue
 creates and owns ([ADR-0016](docs/architecture/decisions/0016-nest-jobs-on-pg-boss.md)). A ported endpoint
 must pass the parity harness (`scripts/nest-parity.sh run`) against Django before it changes; a write path
 is ported only with its row locks and concurrency tests. A change made to one API and not the other is a
@@ -210,11 +211,13 @@ their field, never colour alone, reduced-motion support. Bengali/Unicode text mu
 See [README.md](README.md) for the full list. The common ones:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build   # whole stack
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build   # whole stack, on the NestJS API
+scripts/demo-snapshot.sh make && scripts/demo-snapshot.sh restore rangon-db-1   # demo data, into an empty database
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile django up -d api   # Django, for a rule change
 docker compose exec api python manage.py migrate
-docker compose exec api python manage.py seed_demo --reset
 docker compose exec api pytest
 docker compose exec api ruff check . && docker compose exec api ruff format --check .
+docker compose exec api-nest npm test && docker compose exec api-nest npm run typecheck
 docker compose exec web npm run lint && docker compose exec web npm run typecheck
 ```
 

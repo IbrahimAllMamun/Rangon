@@ -266,14 +266,16 @@ jobs:
   # once. `E2E_SEED_CMD` would reseed *underneath* the running server, which is
   # a different and worse problem -- see the note on "Run the suite".
   #
-  # Twice since the cutover (ADR-0017): against the NestJS API, which is what
-  # production runs, and against Django, which is what it goes back to. The
-  # Django leg keeps the name this job always had. In both, Django migrates
-  # and seeds -- it owns the schema.
+  # Against the NestJS API alone since the removal plan's step 6.2: it is what
+  # production runs, and its database is the demo snapshot, so the job has no
+  # Python and no Django in it. From the cutover (ADR-0017) to step 6 it ran a
+  # second time against Django, the way back; the way back is still proven
+  # here until step 6.4 by Django's own suite and by the comparison, which
+  # drive the same API the browser does.
   # The demo shop as a database snapshot (django-removal-plan.md, step 2):
   # Django migrates and seeds a throwaway database, and what it holds is
-  # dumped. It is the one job the browser suite's NestJS leg needs Django
-  # for, and it is not in that leg: that leg restores the dump.
+  # dumped. It is the one job the browser suite needs Django for, and it is
+  # not in that job: the browser suite restores the dump.
   demo-snapshot:
     name: Demo snapshot (made by Django, for stacks that have none)
     runs-on: ubuntu-latest
@@ -291,18 +293,9 @@ jobs:
           if-no-files-found: error
 
   e2e:
-    name: ${{ matrix.name }}
+    name: E2E (Playwright, four critical flows)
     runs-on: ubuntu-latest
-    # Only the NestJS leg uses the snapshot; a matrix has one `needs`.
     needs: [demo-snapshot]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - api: django
-            name: E2E (Playwright, four critical flows)
-          - api: nest
-            name: E2E on the NestJS API (Playwright, four critical flows)
 
     services:
       postgres:
@@ -350,71 +343,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        if: matrix.api == 'django'
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: apps/api/requirements/*.txt
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - name: Install the API
-        if: matrix.api == 'django'
-        working-directory: apps/api
-        run: pip install -r requirements/dev.txt
-
-      - name: Migrate and seed
-        if: matrix.api == 'django'
-        working-directory: apps/api
-        run: |
-          python manage.py migrate --noinput
-          python manage.py seed_demo --reset
-
-      # The NestJS leg has no Python and no Django in it: its database is the
-      # snapshot the job above made, restored into the empty service
-      # database, and its uploads are unpacked where the API reads them.
+      # No Python and no Django: the database is the snapshot the job above
+      # made, restored into the empty service database, and its uploads are
+      # unpacked where the API reads them.
       - uses: actions/download-artifact@v4
-        if: matrix.api == 'nest'
         with:
           name: demo-snapshot
           path: infrastructure/snapshots/demo
 
       - name: Restore the demo snapshot
-        if: matrix.api == 'nest'
         env:
           MEDIA_DIR: ${{ github.workspace }}/apps/api/media
         run: |
           cat infrastructure/snapshots/demo/made.txt
           bash scripts/demo-snapshot.sh restore "${{ job.services.postgres.id }}" rangon rangon
 
-      - name: Start the API (Django)
-        if: matrix.api == 'django'
-        working-directory: apps/api
-        run: |
-          nohup python manage.py runserver 8000 --noreload > /tmp/api.log 2>&1 &
-          for _ in $(seq 1 40); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/v1/ || true)
-            # 401 is the right answer for an unauthenticated API root.
-            if [ "$code" = "401" ] || [ "$code" = "200" ]; then
-              echo "API ready ($code)"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "API never became ready"
-          cat /tmp/api.log
-          exit 1
-
       # The NestJS API as production starts it: the built `dist/main.js`, its
       # jobs in PostgreSQL, worked and scheduled by the same process. It
       # reads uploads from where the snapshot's were unpacked.
       - name: Start the API (NestJS)
-        if: matrix.api == 'nest'
         working-directory: apps/api-nest
         env:
           PORT: "8000"
@@ -510,10 +463,9 @@ jobs:
       # half the time. `next dev` never showed this because it does not hold
       # that cache.
       #
-      # The database is already pristine: "Migrate and seed" above runs the
-      # same `seed_demo --reset` a few steps earlier (on the NestJS leg, the
-      # snapshot of one is restored), and it runs *before* the storefront
-      # starts, which is the ordering that matters. This job runs
+      # The database is already pristine: "Restore the demo snapshot" above
+      # puts back what one `seed_demo --reset` made, and it runs *before* the
+      # storefront starts, which is the ordering that matters. This job runs
       # the suite exactly once against a fresh container, so the repeatability
       # that `E2E_SEED_CMD` buys is not needed here.
       - name: Run the suite
@@ -524,7 +476,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-${{ matrix.api }}
+          name: playwright-report
           path: apps/web/playwright-report
           retention-days: 7
 

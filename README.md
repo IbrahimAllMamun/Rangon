@@ -72,11 +72,32 @@ cp .env.example .env
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
-Then, in a second terminal:
+The API is the NestJS one (`apps/api-nest`), recompiled and restarted on every save; it is what
+production runs. Its database starts empty. For the demo shop, in a second terminal:
 
 ```bash
-docker compose exec api python manage.py migrate
-docker compose exec api python manage.py seed_demo --reset
+scripts/demo-snapshot.sh make                     # Django seeds a throwaway database of its own, and it is dumped
+scripts/demo-snapshot.sh restore rangon-db-1      # into the empty development database
+docker compose exec -T api-nest tar -xzf - -C /app/media < infrastructure/snapshots/demo/media.tar.gz
+```
+
+`make` is the one step that still needs Django, in a stack of its own (`rangon-snapshot`); make
+it again after a change under `apps/api`. `restore` refuses a database that already has tables:
+to start again, `docker compose down -v` and repeat. For a shop with nothing in it instead, the
+NestJS API's own commands build one ([operator-commands.md](docs/operations/operator-commands.md)):
+
+```bash
+docker compose exec api-nest node dist/cli.js migrate
+docker compose exec api-nest node dist/cli.js sync-permissions
+```
+
+**Django is on demand** ([removal plan](docs/architecture/django-removal-plan.md), step 6.1).
+Until the plan's step 6.4 a business rule still changes in Django first, with its tests
+([ADR-0020](docs/architecture/decisions/0020-django-is-removed-in-steps.md)), so it is one
+profile away, on port 8001, with Celery's worker:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile django up -d api worker
 ```
 
 | Service                | URL                                                                |
@@ -84,9 +105,9 @@ docker compose exec api python manage.py seed_demo --reset
 | Storefront             | http://localhost:3000 (`WEB_PORT` — see the Windows note below) |
 | Admin                  | http://localhost:3000/admin                                        |
 | POS                    | http://localhost:3000/pos                                          |
-| API                    | http://localhost:8000/api/v1/                                      |
-| API schema (Swagger)   | http://localhost:8000/api/docs/ (this stack only; not in production) |
-| Django admin           | http://localhost:8000/django-admin/ (this stack only; not in production) |
+| API (NestJS)           | http://localhost:8000/api/v1/                                      |
+| Django, on demand      | http://localhost:8001/api/v1/ (`--profile django`; `DJANGO_PORT` moves it) |
+| API schema (Swagger)   | http://localhost:8001/api/docs/ (Django's, on demand; not in production) |
 | Mailpit (dev email)    | http://localhost:8025                                              |
 | MinIO console (dev S3) | http://localhost:9001                                              |
 
@@ -104,13 +125,13 @@ docker compose exec api python manage.py seed_demo --reset
 > `DJANGO_CSRF_TRUSTED_ORIGINS`. Recreate with:
 >
 > ```bash
-> docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api
+> docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate web api-nest
 > ```
 >
 > Reclaiming 3000 instead needs an elevated `net stop winnat && net start winnat`,
 > which drops every other Docker port mapping while it restarts.
 
-Demo logins created by `seed_demo` (development only):
+Demo logins in the demo snapshot, made by `seed_demo` (development only):
 
 | Role              | Email                | Password    |
 | ----------------- | -------------------- | ----------- |
@@ -126,7 +147,7 @@ Demo logins created by `seed_demo` (development only):
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up          # start
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d       # start detached
-docker compose logs -f api                                                 # tail api logs
+docker compose logs -f api-nest                                            # tail api logs
 docker compose down                                                        # stop
 docker compose down -v                                                     # stop + wipe volumes
 ```
@@ -134,15 +155,26 @@ docker compose down -v                                                     # sto
 To run the **production** build on your own machine instead, see
 [Run the production build locally](#run-the-production-build-locally).
 
-Backend:
+The NestJS API ([operator-commands.md](docs/operations/operator-commands.md) has every command):
+
+```bash
+docker compose exec api-nest node dist/cli.js verify-inventory   # stock cache vs ledger
+docker compose exec api-nest node dist/cli.js verify-accounts    # balances vs cash book
+docker compose exec -e OWNER_PASSWORD api-nest node dist/cli.js create-owner --email you@example.com
+docker compose exec api-nest npm test                  # unit tests
+docker compose exec api-nest npm run lint
+docker compose exec api-nest npm run typecheck
+```
+
+A new `package.json` dependency needs `--renew-anon-volumes` on the next `up`, as the web app's
+does: `node_modules` is the image's, kept in a volume.
+
+Django, with `--profile django` up (above). The schema is still Django's: a model change is a
+migration here, then a new cut of the NestJS API's baseline (`scripts/nest-baseline.sh cut`):
 
 ```bash
 docker compose exec api python manage.py makemigrations
 docker compose exec api python manage.py migrate
-docker compose exec api python manage.py createsuperuser
-docker compose exec api python manage.py seed_demo --reset
-docker compose exec api python manage.py verify_inventory   # stock cache vs ledger
-docker compose exec api python manage.py verify_accounts    # balances vs cash book
 docker compose exec api pytest                        # full suite
 docker compose exec api pytest -m "not slow"          # fast suite
 docker compose exec api ruff check .                  # lint
@@ -221,7 +253,8 @@ docker compose -f docker-compose.test.yml run --rm api-test
 equal to it endpoint by endpoint (ADR-0013). **It is what production runs** since 2026-10-08
 ([ADR-0017](docs/architecture/decisions/0017-nest-api-serves-production.md)): every request, the
 background jobs and their schedule. Django still owns the schema and every business rule -- a rule
-changes there first, then in the port -- and the development stack above is Django's. See
+changes there first, then in the port; the development stack above runs the port, with Django on
+demand for that. See
 [docs/architecture/nest-port.md](docs/architecture/nest-port.md) and
 [docs/nest-port-instructions.md](docs/nest-port-instructions.md):
 
@@ -257,7 +290,7 @@ POSTGRES_PASSWORD=<any local password>
 instead of exiting `0` on a stack that is not serving:
 
 ```bash
-./scripts/rebuild-local-prod.sh          # DESTRUCTIVE: down -v, rebuild, reseed
+./scripts/rebuild-local-prod.sh          # DESTRUCTIVE: down -v, rebuild, a new demo shop
 ```
 
 **2. Name the stack once**, because every command needs the same four flags and getting one wrong
@@ -269,8 +302,8 @@ alias prodlocal='docker compose -p rangon-prod --env-file .env.prod.local -f doc
 
 **3. Build the three images by hand.** `prodlocal` sets `build: !reset null` on every application
 service, so **`prodlocal up -d --build` builds nothing** and fails on a missing tag. Build them
-first — these tags collide with nothing. The API that serves, then Django (which migrates and
-seeds):
+first — these tags collide with nothing. The API that serves, then Django (the way back,
+`-f docker-compose.django.yml`; nothing below runs it):
 
 ```bash
 docker build -t rangon-api-nest:prod -f apps/api-nest/Dockerfile apps/api-nest
@@ -288,20 +321,26 @@ afterwards; omit them and the image silently keeps the Dockerfile defaults (`loc
 docker build -t rangon-web:prod -f apps/web/Dockerfile apps/web --build-arg NEXT_PUBLIC_API_URL=http://localhost:4100/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=http://localhost:4100
 ```
 
-**4. Migrate and seed, then start.** Its database is empty and separate from the dev one. Django
-does both from a one-off container (`run --rm`), before the stack is up:
+**4. The demo shop, then start.** Its database is empty and separate from the dev one. It is the
+demo snapshot, made with a password of your own -- this stack runs production settings -- and
+restored before the stack is up; then the NestJS API's `migrate` adopts it and `sync-permissions`
+writes the roles:
 
 ```bash
-prodlocal run --rm api python manage.py migrate
-prodlocal run --rm -e DJANGO_ALLOW_DEMO_SEED=1 -e DJANGO_DEMO_SEED_PASSWORD='<your own>' \
-  -e CELERY_TASK_ALWAYS_EAGER=1 -e WEB_REVALIDATE_URL= \
-  api python manage.py seed_demo --reset
+DJANGO_DEMO_SEED_PASSWORD='<your own>' DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod \
+  scripts/demo-snapshot.sh make
+prodlocal up -d --wait db
+DEMO_SNAPSHOT_DIR=infrastructure/snapshots/local-prod scripts/demo-snapshot.sh restore rangon-prod-db-1
+prodlocal run --rm --no-deps -T api-nest sh -c 'tar -xzf - -C /app/media' < infrastructure/snapshots/local-prod/media.tar.gz
+prodlocal run --rm api-nest node dist/cli.js migrate
+prodlocal run --rm api-nest node dist/cli.js sync-permissions
 prodlocal up -d
 ```
 
-Production settings refuse `seed_demo` without that opt-in, and refuse the demo password below even
-with it — see [local-production.md §5](docs/operations/local-production.md#5-migrate-and-seed),
-which also says what the last two variables are for.
+Never the README's password below on this stack: see
+[local-production.md §5](docs/operations/local-production.md#5-migrate-and-seed). `restore` names
+the database `rangon` with the user `rangon`; if your env file names others, pass them after the
+container.
 
 **5. Restart Nginx**, which resolves `api-nest` and `web` once at startup and caches the addresses. Any
 container recreated after it gets an address Nginx does not know, and `/api/` answers 502 while the
@@ -353,15 +392,21 @@ like the wrong layer, and starting a Cloudflare tunnel in front of it — is
 
 ## Local run without Docker (fallback)
 
-Docker is the supported path. If you must run on the host you still need PostgreSQL 16 and Redis 7
-available, then:
+Docker is the supported path. On Linux with PostgreSQL 16, Redis 7, Python and Node,
+`scripts/dev-stack-native.sh up` runs the whole stack on the host: Django makes the demo data and
+stops, the NestJS API serves in watch mode, and the web app runs `next dev`. By hand, on Windows:
 
 ```bash
 cd apps/api
 python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements/dev.txt
 set DJANGO_SETTINGS_MODULE=config.settings.dev
-python manage.py migrate && python manage.py seed_demo --reset && python manage.py runserver
+python manage.py migrate && python manage.py seed_demo --reset
+
+cd ../api-nest                                       # with DATABASE_URL, REDIS_URL, DJANGO_SECRET_KEY, PORT=8000
+npm ci && npm run build
+npx tsc -p tsconfig.build.json --watch               # one terminal: the compiler
+node --watch-path=dist dist/main.js                  # another: the API, restarted on what it writes
 
 cd ../web
 npm install && npm run dev

@@ -11,7 +11,8 @@ How to work on it -- the rules, commands, method and lessons -- is in
 every path the storefront, admin and POS use, uploaded files, the background jobs and their
 schedule. **Django remains the source of truth for the schema and the rules.** It owns every
 migration; a rule changes there first, with its tests, and is then ported; and one compose file
-puts the whole stack back on it. The development stack is Django's.
+puts the whole stack back on it. The development stack has run the Nest API since 2026-10-14,
+with Django on demand ([removal plan](django-removal-plan.md), step 6.1).
 
 **Django is to be removed, in steps** ([ADR-0020](decisions/0020-django-is-removed-in-steps.md),
 [the plan](django-removal-plan.md)); nothing of it has been yet. The first step is a proof that
