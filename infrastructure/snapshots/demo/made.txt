@@ -1,0 +1,24 @@
+commit   baf87dae6d9489ddf3d9e8d5ffb4b18974e5548f
+made     2026-10-14T06:42:18Z
+accounts THE PASSWORD PRINTED IN THE README: for a stack only you can reach
+rows     12 products, 40 orders, 6 accounts
+migrations
+  accounts 0004_organization_counter_sells_reserved
+  admin 0003_logentry_add_action_flag_choices
+  auth 0012_alter_user_first_name_max_length
+  catalog 0008_variant_attributes_in_the_attributes_order
+  content 0004_home_carousel
+  contenttypes 0002_remove_content_type_name
+  core 0004_alter_auditlog_action
+  customers 0004_canonical_phone_numbers
+  django_celery_beat 0019_alter_periodictasks_options
+  engagement 0002_initial
+  finance 0006_expense_attachment_random_name
+  inventory 0005_one_order_for_the_lines_of_a_document
+  notifications 0003_alter_notification_notification_type
+  orders 0008_payment_idempotency_key
+  promotions 0002_free_shipping_carries_no_value
+  purchasing 0007_one_order_for_a_supplier_returns_lines
+  sessions 0001_initial
+  shipping 0004_one_order_for_the_lines_of_a_document
+  token_blacklist 0012_alter_outstandingtoken_user
