@@ -495,6 +495,74 @@ is still open and tracked in
 
 ## Verification log
 
+### The real shop's upgrade, rehearsed on its own data, 2026-10-14
+
+Asked for: "do item 2 with a rehearsal first. Find the real shop data in backup folder" --
+item 2 being the upgrade of the real shop to `main`, which starts the month
+[ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md) asks for. The backup is
+`backups/rangon-prodlocal-before-84.dump`, taken 2026-10-05 17:04 UTC, three minutes after PR #84
+merged: the shop as it was on `264103f`, with all of that commit's migrations applied and none
+after. **The shop is therefore still served by Django**, and its upgrade is the one that crosses
+the cutover ([upgrading-local-production.md](operations/upgrading-local-production.md), step
+6-once). The rehearsal was that page, start to finish, on a throwaway stack
+(`-p rangon-rehearsal`) on the Linux machine: images built from `264103f`, the backup restored,
+the old stack started, then the upgrade to `07f9404`.
+
+```text
+the copy ..................................... 96 tables, 2,697 rows: 46 products, 143 variants, 34 purchase orders, 1 order
+the old stack on it .......................... Django answers; smoke test passes; both ledger checks clean
+step 1  migrations not yet applied ........... 7, the ones expected
+step 2  backup ............................... written in the container, copied out, reads back (999 lines of contents)
+step 5  the plan ............................. 6 x "Change Meta options" (no SQL at all), 1 x "Add field idempotency_key to payment" (one nullable column, two indexes)
+step 6a migrate, the old code still serving .. applied; smoke test passes on the old code
+6-once  a  Celery's queue .................... 0
+        b-d stop Django, start the stack ..... the shop answers again 26 seconds after the stop
+        e  which API answers ................. 404: the NestJS API
+step 7  smoke test ........................... passes
+        verify_inventory, verify_accounts .... clean, from Django's commands and from the NestJS API's own
+the data, before and after ................... 93 of 96 tables the same row for row; django_migrations 104 -> 111; roles and permissions touched (updated_at only)
+82 questions, asked before and after ......... 77 answered the same to the byte; 5 explained below
+a sign-in from before ........................ the access and the refresh token Django issued both work on the NestJS API
+an order placed afterwards ................... 201, and its confirmation email arrives: the job queue works
+the back office, through the web app ......... sign-in sets both cookies; seven pages and three proxied calls answer
+back to Django (5.2.18), the same data ....... 12 seconds; smoke test passes; 83 of 84 answers the same as the NestJS API's
+forward again ................................ 14 seconds; the schedule back with the NestJS API
+the logs afterwards .......................... no error from the API or the web app, no 5xx from nginx
+```
+
+**The five answers that differ are the fixes the upgrade brings.** A purchase order's lines, the
+supplier price list and the stock valuation report (as JSON and as CSV) come in another order:
+the same rows, in the one order D243 to D245 gave them. The fifth is the rehearsal account's own
+`last_login`. Django 5.2 and the NestJS API, asked on one state of the data, differ in that field
+alone.
+
+**The environment file needs no change.** The stack was run throughout with a
+`.env.prod.local` written before the NestJS API existed, one that names the shop's domain;
+every variable the new compose files add has a default.
+
+**The schema is the baseline's.** After the upgrade, `pg_dump --schema-only` of the shop's
+database and of one built by `node dist/cli.js migrate` are the same 7,774 lines, and that
+command, tried on the copy, adopts the shop's database without running anything. That is the
+question removal step 7 asks, answered early for the data as it was on 5 October.
+
+**What the guide lacked.** Six of the seven migrations are `AlterModelOptions`, which step 5's
+two lists did not mention; it says now that they run no SQL, and how to see what one would run.
+
+**What this does not show.** PowerShell: the rehearsal ran the same commands from bash. The
+live stack: the shop has nine more days in it than the backup, and its uploads were not in the
+backup at all. Whether the shop was deployed again after `264103f`: step 1's image label says.
+The Cloudflare tunnel. A browser: the web app was driven through its own sign-in route and
+pages, by a script.
+
+**How it was run.** The machine's own `rangon-*:prod` tags were not moved; the rehearsal named
+its images in a compose file of its own. Nothing a row says was printed: the comparisons are
+counts, hashes and the names of the keys that differ. A rehearsal-only owner account and one
+order were added to the copy, and the stack, its volumes, the kept answers and the copy of the
+backup were removed afterwards.
+
+**Not green on `main` yet.** With the Django image clean (PR #101), "Build & scan images" reached
+the web image for the first time and stops there (D250).
+
 ### Django 5.2: the image scan's one finding, and the one answer the framework changed, 2026-10-14
 
 Asked for: "do the Django 5.2 upgrade", after `main`'s run for PR #100 came back green but
@@ -5578,6 +5646,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D247 | **A recording taken straight after anything had written to its database did not replay.** The replay's clocks are set a minute and a half behind the recording's age, for the stack to come up in, so its harness began up to that much earlier than the recording's had; and the cases are built from the clock -- what an API mints is told from what was there by being newer than the harness. A row made in the two minutes before the recording was older than one harness and newer than the other. Straight after a reset, 109 cases differed, each by a timestamp read as "now" on one side; and **the first run of the recorded proof on GitHub failed on it** (`main`, 2026-10-12): four cases of the audit log, whose rows the comparison's races had written seconds before the recording began. *Found replaying a recording of merged `main` on 2026-10-13, an hour before that run's log could be read.* | Low | **Fixed 2026-10-13.** A recording keeps the instant its harness began (`began.txt`); a replay waits for it before it builds a case. `apps/api-nest/parity/recording.ts`, `run.ts` |
 | D248 | **The stock valuation lists its branches in no stated order.** `GET /inventory/valuation/` groups the stock by branch and asks for no order, so `by_branch` comes back as the planner hashed the groups. The sweep for D245 looked for orderings that tie and missed a grouped query with none at all; the other grouped queries were read again, and each is ordered or is read into a dictionary. *Found by the recorded proof's second run on GitHub (`main`, 2026-10-13): one case of 12,243, the two branches having changed places between the recording and its replay on one database. It never did locally.* | Low | **Fixed in Django and in the NestJS API, 2026-10-13.** Ordered by the branch's code, then its name. `inventory/api/views.py`, `inventory-admin.service.ts`, `tests/test_one_order.py` |
 | D249 | **The dependency audit lists three advisories in Django's packages, below what the image scan stops on.** `djangorestframework` 3.15.2: CVE-2026-73228 (a JSON or form body larger than `DATA_UPLOAD_MAX_MEMORY_SIZE` is parsed through `request.data`) and CVE-2026-73229 (`AdminRenderer` can show what a GET would have refused); both fixed in 3.17.2. `djangorestframework-simplejwt` 5.3.1: CVE-2024-22513 (`for_user` mints a token for a disabled account), fixed in 5.5.1. CI's audit step reports them as a warning and passes. What limits them here: nginx refuses a body over 12 MB before either API sees it; `AdminRenderer` is not among the renderers in any settings file; and Django serves production only when someone goes back to it. *Found running `pip-audit` on the pins after the Django 5.2 upgrade; all three are on the pins as they were before it.* | Low | Not fixed here: two minor versions of DRF is a change to what happens before a view runs, which is what the NestJS API was ported from case by case, and wants its own comparison. The owner's to schedule, or moot once Django goes. `requirements/base.txt` |
+| D250 | **The web image fails its security scan, and nobody had seen it.** The image job scans three images in turn and stops at the first that fails; until the Django image came clean (D242) it never reached the web image. Two HIGH findings in npm packages: `sharp` 0.35.4 (GHSA-wq5f-xc86-pv6w, a flaw in the librsvg it bundles; fixed in 0.35.5) and `source-map-js` 1.2.1 (CVE-2026-93749, denial of service; fixed in 1.2.2). `sharp` is what resizes product photographs. *Found on `main`'s run for PR #101, and confirmed by scanning the web image built from `07f9404` with CI's options.* | Medium | Not fixed here: two patch releases, with the web checks run on them. `sharp` is pinned in `apps/web/package.json`; `source-map-js` comes with other packages and moves in the lockfile. `apps/web/package.json`, `apps/web/package-lock.json` |
 
 ## Still API-only (no UI)
 
