@@ -217,6 +217,15 @@ jobs:
       - name: With no Django -- the shop with nothing in it, against its recorded answers
         run: bash scripts/nest-parity.sh replay-empty
 
+      # The recording, kept: what replaces the comparison once Django is gone
+      # (django-removal-plan.md, step 6.4) is committed from a run like this.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-recorded
+          path: apps/api-nest/parity/recorded
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Logs on failure
         if: failure()
         run: |
