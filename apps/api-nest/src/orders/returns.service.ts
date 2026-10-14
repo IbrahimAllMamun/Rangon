@@ -90,6 +90,11 @@ const PAYMENT_METHODS = [
 
 /** Reasons where the shop, not the customer, is at fault: shipping is refunded. */
 const SHOP_FAULT_REASONS = new Set(['DEFECTIVE', 'WRONG_PRODUCT', 'DAMAGED']);
+/**
+ * `GOODS_HAVE_LEFT`: the statuses in which the goods have left the shop. A
+ * return is of those goods and of no others (business rule 1.3, D164).
+ */
+const GOODS_HAVE_LEFT = new Set(['SHIPPED', 'DELIVERED', 'RETURN_REQUESTED', 'RETURNED']);
 
 const FILTERS: readonly FilterField[] = [
   choiceFilter('status', `${R}."status"`, RETURN_STATUSES),
@@ -532,6 +537,10 @@ export class ReturnsService {
       throw new Conflict(`An order in status ${order.status} cannot be returned.`);
     if (!order.stock_committed && order.channel !== 'POS')
       throw new Conflict('The goods have not been dispatched yet — cancel the order instead.');
+    // `GOODS_HAVE_LEFT`: a packed order's goods are off the shelf and still in
+    // the building. A return of them put a unit back that then shipped (D164).
+    if (!GOODS_HAVE_LEFT.has(order.status))
+      throw new Conflict('The goods have not left the shop yet, so there is nothing to return.');
     if (!ask.lines.length) throw new ValidationError('Select at least one item to return.');
 
     const days = this.env.RANGON_RETURN_WINDOW_DAYS;

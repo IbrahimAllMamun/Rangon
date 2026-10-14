@@ -39,6 +39,17 @@ from orders.services.lifecycle import log_event, transition
 #: Reasons where the shop, not the customer, is at fault — shipping is refunded.
 SHOP_FAULT_REASONS = {"DEFECTIVE", "WRONG_PRODUCT", "DAMAGED"}
 
+#: The statuses in which the goods have left the shop. A return is of those
+#: goods and of no others: a packed order's are off the shelf (§1.3) but still
+#: in the building, and a return of them put a unit back on the shelf that the
+#: order then shipped (D164).
+GOODS_HAVE_LEFT = {
+    OrderStatus.SHIPPED,
+    OrderStatus.DELIVERED,
+    OrderStatus.RETURN_REQUESTED,
+    OrderStatus.RETURNED,
+}
+
 
 def _within_return_window(order: Order) -> bool:
     reference = order.delivered_at or order.placed_at
@@ -83,6 +94,8 @@ def request_return(
         raise Conflict(f"An order in status {order.status} cannot be returned.")
     if not order.stock_committed and order.channel != "POS":
         raise Conflict("The goods have not been dispatched yet — cancel the order instead.")
+    if order.status not in GOODS_HAVE_LEFT:
+        raise Conflict("The goods have not left the shop yet, so there is nothing to return.")
     if not lines:
         raise ValidationError("Select at least one item to return.")
 

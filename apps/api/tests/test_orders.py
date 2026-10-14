@@ -441,6 +441,74 @@ class TestReturns:
                 order=order, lines=[(item.pk, 1)], reason="WRONG_SIZE", actor=shop["manager"]
             )
 
+    def _online_order(self, shop, *, to: str):
+        """One unit ordered online, cash on delivery, walked to `to`."""
+        cart = checkout_services.get_or_create_cart(
+            customer=shop["customer"], branch=shop["branch"]
+        )
+        checkout_services.add_item(cart=cart, variant_id=shop["variants"][0].pk, quantity=1)
+        order = checkout_services.place_order(
+            cart=cart,
+            shipping_address={
+                "recipient_name": "A",
+                "phone": "01712345678",
+                "line1": "x",
+                "city": "Dhaka",
+            },
+            payment_method=PaymentMethod.COD,
+            customer=shop["customer"],
+            idempotency_key=f"web-return-{to}",
+        )
+        for status in (OrderStatus.PROCESSING, OrderStatus.PACKED, OrderStatus.SHIPPED):
+            order = lifecycle.transition(order=order, to_status=status, notify=False)
+            if status == to:
+                break
+        return order
+
+    @pytest.mark.parametrize("route", ["a return request", "a counter return"])
+    def test_a_packed_order_cannot_be_returned(self, shop, route):
+        """D164: its goods are off the shelf and still in the building. A
+        return put one back on the shelf, and the order then shipped."""
+        from orders.models import ReturnRequest
+
+        order = self._online_order(shop, to=OrderStatus.PACKED)
+        item = order.items.get()
+        shelf = Inventory.objects.get(variant=shop["variants"][0], branch=shop["branch"])
+        assert shelf.on_hand == 9
+
+        with pytest.raises(Conflict, match="have not left the shop"):
+            if route == "a return request":
+                return_services.request_return(
+                    order=order, lines=[(item.pk, 1)], reason="WRONG_SIZE", actor=shop["manager"]
+                )
+            else:
+                pos.pos_return(
+                    order=order,
+                    actor=shop["manager"],
+                    lines=[(item.pk, 1, RestockDecision.RESTOCK)],
+                    reason="WRONG_SIZE",
+                )
+
+        shelf.refresh_from_db()
+        order.refresh_from_db()
+        item.refresh_from_db()
+        assert shelf.on_hand == 9
+        assert order.status == OrderStatus.PACKED
+        assert item.returned_quantity == 0
+        assert not ReturnRequest.objects.filter(order=order).exists()
+
+    def test_once_it_has_shipped_it_can(self, shop):
+        order = self._online_order(shop, to=OrderStatus.SHIPPED)
+        item = order.items.get()
+
+        request = return_services.request_return(
+            order=order, lines=[(item.pk, 1)], reason="WRONG_SIZE", actor=shop["manager"]
+        )
+
+        order.refresh_from_db()
+        assert request.status == ReturnStatus.REQUESTED
+        assert order.status == OrderStatus.RETURN_REQUESTED
+
     def test_completing_a_return_twice_refunds_once(self, shop):
         order = _sale(shop, quantity=2)
         item = order.items.first()
