@@ -2,15 +2,16 @@ import { bootstrapStore } from './cli/bootstrap-store';
 import { createOwner } from './cli/create-owner';
 import { migrate, Refusal } from './cli/migrate';
 import { type Flags, parseFlags } from './cli/session';
+import { setPassword } from './cli/set-password';
 import { syncPermissions } from './cli/sync-permissions';
 import { verifyAccounts, verifyInventory } from './cli/verify';
 
 /**
  * The operator's commands: `node dist/cli.js <command>`.
  *
- * What `python manage.py ...` is for Django, for the things an operator does
+ * What `python manage.py ...` was for Django, for the things an operator does
  * to a database rather than through the API
- * (docs/architecture/django-removal-plan.md, steps 3 and 4). Each command
+ * (docs/operations/operator-commands.md). Each command
  * connects, does one thing and exits: 0 when it is done, 1 when it refused or
  * failed, 2 when it was not understood. None runs as the API starts.
  */
@@ -31,6 +32,11 @@ const COMMANDS: Record<string, { summary: string; flags: readonly string[]; run:
     summary: 'the first account of a shop: --email, and OWNER_PASSWORD in the environment',
     flags: ['email', 'first-name', 'last-name'],
     run: createOwner,
+  },
+  'set-password': {
+    summary: "an account's password: --email, and NEW_PASSWORD in the environment",
+    flags: ['email'],
+    run: setPassword,
   },
   'bootstrap-store': {
     summary:
