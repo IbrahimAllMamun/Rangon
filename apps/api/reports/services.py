@@ -514,12 +514,19 @@ def inventory_report(*, branch: Any = None) -> list[dict]:
     queryset = Inventory.objects.select_related("branch", "variant", "variant__product")
     if branch is not None:
         queryset = queryset.filter(branch=branch)
+    # `stock_value` is also a property of Inventory.  These rows leave as dicts
+    # (`.values()` below), so nothing ever sets it on an instance, which is the
+    # collision the type checker warns of.
     return list(
-        queryset.annotate(
+        queryset.annotate(  # type: ignore[no-redef]
             available_qty=F("on_hand") - F("reserved"),
             stock_value=ExpressionWrapper(F("on_hand") * F("average_cost"), output_field=MONEY),
             retail_value=ExpressionWrapper(F("on_hand") * F("variant__price"), output_field=MONEY),
         )
+        # The order here is the order of the export's columns: what is stored,
+        # then what is worked out.  Until Django 5.2 a row's keys came that way
+        # whatever order was written here, and it is the order the NestJS API
+        # ported; 5.2 takes the order as written, so it is written that way.
         .values(
             "variant__sku",
             "variant__product__name",
@@ -527,11 +534,11 @@ def inventory_report(*, branch: Any = None) -> list[dict]:
             "branch__code",
             "on_hand",
             "reserved",
-            "available_qty",
             "average_cost",
+            "reorder_point",
+            "available_qty",
             "stock_value",
             "retail_value",
-            "reorder_point",
         )
         .order_by("variant__product__name", "variant__sku", "branch__code", "pk")
     )
@@ -543,8 +550,10 @@ def purchase_report(*, date_range: DateRange, branch: Any = None) -> list[dict]:
     )
     if branch is not None:
         queryset = queryset.filter(branch=branch)
+    # `outstanding` is also a property of PurchaseOrder.  The rows are dicts
+    # from the first call on, so the name never lands on an instance.
     return list(
-        queryset.values(
+        queryset.values(  # type: ignore[no-redef]
             "number",
             "status",
             "payment_status",

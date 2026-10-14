@@ -76,7 +76,9 @@ case "${1:-}" in
     refused "no password at all" nest ops_nest create-owner --email second@shop.example
 
     store=(-e SHOP_NAME="Parity & Sons Ltd." -e BRANCH_NAME="First Shop" -e BRANCH_CODE=one)
-    django ops_django "${store[@]}" django python manage.py shell < scripts/bootstrap-store.py > "$work/store.django" 2> "$work/stderr"
+    # `-v 0`: since Django 5.2 the shell says how many models it imported for
+    # you before it runs anything, and that line is the shell's, not the script's.
+    django ops_django "${store[@]}" django python manage.py shell -v 0 < scripts/bootstrap-store.py > "$work/store.django" 2> "$work/stderr"
     nest ops_nest "${store[@]}" bootstrap-store > "$work/store.nest" 2> "$work/stderr" || { cat "$work/stderr"; status=1; }
     same "what bootstrap-store prints" "$work/store.django" "$work/store.nest"
     stores() {
