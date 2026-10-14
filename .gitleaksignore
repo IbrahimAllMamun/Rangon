@@ -32,3 +32,9 @@ b4ae871afaee096a6d9dcbd17cf0729d56d64693:.gitleaksignore:generic-api-key:16
 # token masking against the NestJS port of it. It protects nothing: no
 # deployment has it, and the parity stack reaches no network.
 87eb1d87bf50587338232b4bd50ffbdba7dcfba0:apps/api-nest/parity/run.ts:generic-api-key:210
+
+# The same image tags, in the same runbook, after Django's image left those
+# commands (ADR-0023): rewritten in the commit that updated the guide, then
+# given a date placeholder in place of a real date.
+b8b47e127c10585d494c358c4e2abec0092fd525:docs/operations/upgrading-local-production.md:generic-api-key:305
+b8b47e127c10585d494c358c4e2abec0092fd525:docs/operations/upgrading-local-production.md:generic-api-key:319

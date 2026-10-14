@@ -302,7 +302,7 @@ remove the old ones by name:
 docker images rangon-api-nest; docker images rangon-web
 ```
 ```powershell
-docker rmi rangon-api-nest:prod-before-20261014 rangon-web:prod-before-20261014
+docker rmi rangon-api-nest:prod-before-YYYYMMDD rangon-web:prod-before-YYYYMMDD
 ```
 
 After the first deploy past Django, its image is nothing's any more: `docker images rangon-api`,
@@ -312,14 +312,14 @@ then `docker rmi` each tag it lists, once you are sure of the release.
 
 ## Rolling back
 
-**The code:** point the tags back at the images step 3 kept. Use the date shown by
+**The code:** point the tags back at the images step 3 kept, with `YYYYMMDD` the date shown by
 `docker images rangon-api-nest`. Then repeat step 6b and 6c:
 
 ```powershell
-docker tag rangon-api-nest:prod-before-20261014 rangon-api-nest:prod
+docker tag rangon-api-nest:prod-before-YYYYMMDD rangon-api-nest:prod
 ```
 ```powershell
-docker tag rangon-web:prod-before-20261014 rangon-web:prod
+docker tag rangon-web:prod-before-YYYYMMDD rangon-web:prod
 ```
 
 That holds for the deploy past Django too: the image from `c5f4e81` serves a database `0001` has
