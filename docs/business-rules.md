@@ -833,10 +833,9 @@ the defect numbers are in [roadmap.md](roadmap.md).
   (422 `PAYMENT_EXCEEDS_OUTSTANDING`) -- what it owes being its total less everything captured,
   refunded since or not. All of it is decided under the order's lock, and the account is set
   there too: one the money cannot land in no longer leaves the waiting payment pointing at it.
-  *`DECISION REQUIRED` -- should a payment past what is outstanding be refused, or kept as credit
-  owed to the customer? **Refused until decided** (changed from "recorded as paid" on 2026-10-13):
-  there is nowhere to hold a customer's credit, a refusal loses nothing, and the excess recorded
-  as paid was money in the drawer that no order accounted for.*
+  **Decided by the owner, 2026-10-14: a payment past what is outstanding is refused.** There is no
+  customer credit to keep it as, and none is wanted. (It was "recorded as paid" until 2026-10-13,
+  which was money in the drawer that no order accounted for.)
 - **The return statuses can be set by hand.** `RETURN_REQUESTED`, `RETURNED` and `REFUNDED` are
   edges of §5.1 that the status route follows like any other: a delivered order can be walked to
   `REFUNDED` with no return raised and no money paid back.
@@ -1305,17 +1304,30 @@ Rules:
 
 ### 7.1 Staff accounts
 
-Only `OWNER` holds `users.manage`; `MANAGER` holds `users.view` and can see the list without changing
-it. Every edit goes through `accounts.services.update_staff_user()`, never onto the model from a
-serializer, because two guards and one audit entry hang off it:
+`OWNER` and `ADMIN` hold `users.manage`; `MANAGER` holds `users.view` and can see the list without
+changing it. Every edit goes through `accounts.services.update_staff_user()`, never onto the model
+from a serializer, because three guards and one audit entry hang off it:
 
-- **Nobody may lock themselves out.** Deactivating or demoting *your own* account is refused, on the
-  `deactivate` action and on a plain `PATCH` alike. Guarding only the action left the PATCH as a way
-  around it.
-- **The last active owner may not be deactivated or demoted.** Nothing but `OWNER` holds
-  `users.manage` or `settings.manage`, so an organisation with no active owner cannot grant them to
-  anybody again — there is no recovery path short of a shell on the server. Promote a second owner
-  first.
+- **Only an owner manages an owner** (decided by the owner, 2026-10-14). An administrator runs the
+  rest of the staff list -- hires, edits, resets passwords, switches accounts off and on, and may
+  make another administrator -- but an owner's account is out of their reach in both directions.
+  They may not *touch* one: not its name, its role, its password, its profile, nor whether it is
+  switched on, by `PATCH`, `PUT`, `deactivate`, `activate` or `DELETE`. And they may not *make*
+  one: not by creating an account with the owner role, nor by giving the role to an account, their
+  own included. Each is a 403. They still see owners in the list. "An owner", on either side of
+  the rule, is whoever holds every permission: the owner role, or a superuser made in the shell.
+  Without this an administrator was an owner whenever they chose to be -- a password reset signed
+  them in as one -- and with the owner role came the one decision this file reserves to the owner
+  (§1.4, selling reserved stock at the counter).
+- **Nobody may lock themselves out.** Deactivating *your own* account, or changing your own role,
+  is refused, on the `deactivate` action and on a plain `PATCH` alike. Guarding only the action
+  left the PATCH as a way around it; and until 2026-10-14 the role half of it ran only for an
+  owner, so an administrator could demote themselves out of `users.manage`.
+- **The last active owner may not be deactivated or demoted.** Nothing but `OWNER` holds every
+  permission whatever is added later, and only an owner can make another, so an organisation with
+  no active owner has no way back short of a shell on the server. Promote a second owner first.
+  Since only an owner reaches this guard, it is met when two owners act on each other at once --
+  which is what its lock is for -- or by a superuser who is not an owner by role.
 - **Every change is audited.** A role change decides who may refund, discount and adjust stock; a
   password reset hands somebody an account. Both write an `AuditLog` entry with before and after.
   The password itself is never written to it — only `password_reset: true`.
@@ -1323,20 +1335,17 @@ serializer, because two guards and one audit entry hang off it:
 Staff are **deactivated, never deleted**: `DELETE /users/<id>/` deactivates, because the audit trail
 has to keep pointing at a real row. Customers never appear in the staff list.
 
-> **DECISION REQUIRED — default: as the code stands.** The first line of this section is not what
-> the code does ([D221](roadmap.md#known-defects)). `ROLE_PERMISSIONS` gives `ADMIN` every
-> permission, `users.manage` and `settings.manage` among them, so an administrator creates and
-> edits staff exactly as an owner does — and that includes owners: an administrator can give the
-> owner role to anyone, themselves included, reset an owner's password, and deactivate or demote
-> any owner but the last. Promoting themselves also hands them the one decision this file reserves
-> to the owner (§1.4, selling reserved stock at the counter). Either the rule is "only an owner
-> manages staff" and `ADMIN` should lose `users.manage`, or administrators manage staff and the
-> rule should be "only an owner may make, edit or remove an owner". Found while porting the staff
-> screens to the NestJS API on 2026-10-07 and left as it was in both.
+> **Decided (owner, 2026-10-14): an administrator may not manage owner accounts.** This section
+> used to open "only `OWNER` holds `users.manage`", which the code never did
+> ([D221](roadmap.md#known-defects)): `ROLE_PERMISSIONS` gives `ADMIN` every permission, so an
+> administrator created and edited staff exactly as an owner does, owners included. Of the two
+> ways to close that -- take `users.manage` from administrators, or keep it and put owners out of
+> their reach -- the owner chose the second. Found while porting the staff screens to the NestJS
+> API on 2026-10-07; in both APIs since 2026-10-14.
 >
-> What was **not** a decision is fixed (2026-10-13): the guard that keeps the last owner now locks
-> the owners' rows for as long as the change takes, on both routes that can lose one. Two
-> requests, each switching off one of the last two owners, used both to go through.
+> The guard that keeps the last owner locks the owners' rows for as long as the change takes, on
+> both routes that can lose one (2026-10-13). Two requests, each switching off one of the last
+> two owners, used both to go through.
 
 > **DECISION REQUIRED — default: as the code stands.** `PATCH /organization/` accepts `status`, so
 > the organisation can be set `INACTIVE` — after which it cannot be read, and the next edit

@@ -145,6 +145,7 @@ def create_staff_user(
     profile: dict[str, Any] | None = None,
     actor: User | None = None,
 ) -> User:
+    check_may_manage_owners(actor=actor, becoming_owner=role_code == RoleCode.OWNER)
     role = Role.objects.get(code=role_code)
     organization = get_organization()
     user = User.objects.create_user(
@@ -274,6 +275,40 @@ def set_user_status(
     return user
 
 
+def _is_an_owner(user: User) -> bool:
+    """Holds every permission: the owner role, or a superuser made in the shell."""
+    return user.is_owner or user.is_superuser
+
+
+def check_may_manage_owners(
+    *, actor: User | None, user: User | None = None, becoming_owner: bool = False
+) -> None:
+    """Only an owner makes, edits or removes an owner (business rule 7.1, D221).
+
+    An administrator holds `users.manage` and runs the staff list, but an
+    owner's account is out of their reach in both directions: they may not
+    touch one that exists -- its name, its role, its password, whether it is
+    switched on -- and they may not make one, by creating it or by giving the
+    role to an account, their own included. Otherwise an administrator is an
+    owner whenever they choose to be: a password reset signs them in as one.
+
+    `actor` is None for the system itself -- a seed, a management command --
+    which is not a person using `users.manage`.
+    """
+    if actor is None or _is_an_owner(actor):
+        return
+    if user is not None and _is_an_owner(user):
+        raise PermissionDenied(
+            "Only an owner can change an owner's account.",
+            details={"user": "Ask an owner to make this change."},
+        )
+    if becoming_owner:
+        raise PermissionDenied(
+            "Only an owner can give the owner role.",
+            details={"role_code": "Ask an owner to make this change."},
+        )
+
+
 def _other_active_owners(user: User) -> int:
     """How many active owners there are besides `user` -- with their rows locked.
 
@@ -326,8 +361,16 @@ def deactivate_user(*, user: User, actor: User | None = None, reason: str = "") 
     The guard and the write are one transaction, so the owners the guard
     locked stay locked until the account is off.
     """
+    check_may_manage_owners(actor=actor, user=user)
     check_can_lose_access(user=user, actor=actor, what="deactivate")
     return set_user_status(user=user, status=Status.INACTIVE, actor=actor, reason=reason)
+
+
+@transaction.atomic
+def activate_user(*, user: User, actor: User | None = None) -> User:
+    """Switch a staff account back on. An owner's, only by an owner."""
+    check_may_manage_owners(actor=actor, user=user)
+    return set_user_status(user=user, status=Status.ACTIVE, actor=actor)
 
 
 def mint_refresh_token(user: User) -> RefreshToken:
@@ -394,7 +437,7 @@ def update_staff_user(
     fields: dict[str, Any] | None = None,
     profile: dict[str, Any] | None = None,
 ) -> User:
-    """Edit a staff account, with the two guards and the audit entry.
+    """Edit a staff account, with the three guards and the audit entry.
 
     A role change decides who may refund, discount and adjust stock, and a
     password reset hands somebody an account.  Both were previously written
@@ -403,6 +446,10 @@ def update_staff_user(
     ones with no trace (CLAUDE.md §5).
     """
     fields = dict(fields or {})
+    changing_role = bool(role_code) and (user.role is None or role_code != user.role.code)
+    check_may_manage_owners(
+        actor=actor, user=user, becoming_owner=changing_role and role_code == RoleCode.OWNER
+    )
     before = {
         "role": user.role.code if user.role else None,
         "status": user.status,
@@ -414,9 +461,12 @@ def update_staff_user(
     if new_status is not None and new_status != user.status and new_status != Status.ACTIVE:
         check_can_lose_access(user=user, actor=actor, what="deactivate")
 
-    if role_code and (user.role is None or role_code != user.role.code):
-        if user.role and user.role.code == RoleCode.OWNER:
-            check_can_lose_access(user=user, actor=actor, what="demote")
+    if changing_role:
+        # Your own role is not yours to change, whatever it is: an
+        # administrator who demotes themselves has given up `users.manage`
+        # with nobody having decided it. For an owner this is also where the
+        # last one is kept (and the owners' rows locked).
+        check_can_lose_access(user=user, actor=actor, what="demote")
         user.role = Role.objects.get(code=role_code)
 
     for field, value in fields.items():

@@ -198,6 +198,7 @@ export async function teamCases(): Promise<Case[]> {
   const TEMP = 'parity.temp@rangon.test';
   const OWNER = 'owner@rangon.test';
   const OWNER2 = 'parity.owner2@rangon.test';
+  const SUPERUSER = 'parity.super@rangon.test';
   const ADMIN = 'parity.admin@rangon.test';
   const GONE = 'parity.gone@rangon.test';
   const NOROLE = 'parity.norole@rangon.test';
@@ -588,6 +589,35 @@ export async function teamCases(): Promise<Case[]> {
   });
   hire('an email and a password', recruit);
   hire('by an administrator', recruit, 'admin');
+  hire('an owner, by an administrator', { ...recruit, role_code: 'OWNER' }, 'admin');
+  hire(
+    'an owner with a profile, by an administrator',
+    {
+      ...recruit,
+      role_code: 'OWNER',
+      profile: { designation: 'Partner' },
+    },
+    'admin',
+  );
+  hire(
+    'an owner with no password, by an administrator',
+    {
+      email: recruit.email,
+      role_code: 'OWNER',
+    },
+    'admin',
+  );
+  hire(
+    'an owner with an email taken, by an administrator',
+    {
+      ...recruit,
+      email: 'owner@rangon.test',
+      role_code: 'OWNER',
+    },
+    'admin',
+  );
+  hire('an administrator, by an administrator', { ...recruit, role_code: 'ADMIN' }, 'admin');
+  hire('an owner, by a superuser who is no owner', { ...recruit, role_code: 'OWNER' }, 'super');
   hire('nothing', {});
   hire('no password', { email: recruit.email });
   hire('no password, and other things wrong', { email: 'x', role_code: 'NOPE' });
@@ -873,6 +903,76 @@ export async function teamCases(): Promise<Case[]> {
       prepare: twoOwners,
     });
   }
+  // Only an owner manages an owner (business rule 7.1): an administrator is
+  // refused above, whichever owner it is. The last-owner guard is reached by
+  // whoever holds everything without being counted as an owner.
+  for (const [what, body] of [
+    ['deactivated', { status: 'INACTIVE' }],
+    ['demoted', { role_code: 'ADMIN' }],
+    ['demoted and suspended', { role_code: 'MANAGER', status: 'SUSPENDED' }],
+    ['renamed', { first_name: 'Boss' }],
+    ['given a new password', { password: 'another horse 43' }],
+  ] as [string, unknown][]) {
+    edit(`the last owner ${what} by a superuser who is no owner`, OWNER, body, 'super');
+    edit(`one of two owners ${what} by a superuser who is no owner`, OWNER, body, 'super', {
+      prepare: twoOwners,
+    });
+  }
+  edit(
+    'an owner who is off, switched on by an administrator',
+    OWNER2,
+    { status: 'ACTIVE' },
+    'admin',
+  );
+  edit('an owner who is off, renamed by an administrator', OWNER2, { first_name: 'x' }, 'admin');
+  edit('an owner, nothing changed, by an administrator', OWNER, {}, 'admin');
+  edit(
+    'an owner, a profile, by an administrator',
+    OWNER,
+    { profile: { designation: 'x' } },
+    'admin',
+  );
+  edit('an owner, something invalid, by an administrator', OWNER, { email: 'x' }, 'admin');
+  edit('a clerk given the owner role by an administrator', CLERK, { role_code: 'OWNER' }, 'admin');
+  edit(
+    'a clerk given the owner role and more by an administrator',
+    CLERK,
+    {
+      role_code: 'OWNER',
+      first_name: 'Boss',
+    },
+    'admin',
+  );
+  edit(
+    'a clerk given the administrator role by an administrator',
+    CLERK,
+    { role_code: 'ADMIN' },
+    'admin',
+  );
+  edit(
+    'a clerk given the owner role by a superuser who is no owner',
+    CLERK,
+    { role_code: 'OWNER' },
+    'super',
+  );
+  edit(
+    'a superuser who is a cashier, renamed by an administrator',
+    SUPERUSER,
+    { first_name: 'x' },
+    'admin',
+  );
+  edit(
+    'a superuser who is a cashier, a new password by an administrator',
+    SUPERUSER,
+    {
+      password: 'another horse 43',
+    },
+    'admin',
+  );
+  edit('a superuser who is a cashier, renamed by the owner', SUPERUSER, { first_name: 'x' });
+  edit('an administrator, their own role again', ADMIN, { role_code: 'ADMIN' }, 'admin');
+  edit('an administrator, their own name', ADMIN, { first_name: 'Still admin' }, 'admin');
+  edit('an administrator, another administrator made', CLERK, { role_code: 'ADMIN' }, 'admin');
   edit('an owner who is switched off, demoted', OWNER2, { role_code: 'MANAGER' });
   edit('an owner who is switched off, switched on', OWNER2, { status: 'ACTIVE' });
   edit('the second owner switched off by the first', OWNER2, { status: 'INACTIVE' }, 'owner', {
@@ -892,6 +992,7 @@ export async function teamCases(): Promise<Case[]> {
     'super',
   );
   write('an account replaced', 'PUT', oneUser(CLERK), { email: CLERK, first_name: 'Only' });
+  write('an owner replaced by an administrator', 'PUT', oneUser(OWNER), { email: OWNER }, 'admin');
   write('an account replaced by its email alone', 'PUT', oneUser(CLERK), { email: CLERK });
   write('an account replaced without its email', 'PUT', oneUser(CLERK), { first_name: 'x' });
   write('an account replaced with a status of its own choosing', 'PUT', oneUser(OWNER), {
@@ -946,6 +1047,12 @@ export async function teamCases(): Promise<Case[]> {
   off('one of two owners, by an administrator', OWNER, { reason: 'Sold the shop' }, 'admin', {
     prepare: twoOwners,
   });
+  off('the last owner, by a superuser who is no owner', OWNER, {}, 'super');
+  off('one of two owners, by a superuser who is no owner', OWNER, { reason: 'Sold' }, 'super', {
+    prepare: twoOwners,
+  });
+  off('an owner who is already off, by an administrator', OWNER2, {}, 'admin');
+  off('a superuser who is a cashier, by an administrator', SUPERUSER, {}, 'admin');
   off('an owner who is already off', OWNER2, {});
   off('the second owner, by the first', OWNER2, {}, 'owner', { prepare: twoOwners });
   off('a customer is not one', 'parity.customer@rangon.test', {});
@@ -961,6 +1068,14 @@ export async function teamCases(): Promise<Case[]> {
     ['yourself', OWNER, undefined, 'owner', {}],
     ['the last owner, by an administrator', OWNER, undefined, 'admin', {}],
     ['one of two owners, by an administrator', OWNER, undefined, 'admin', { prepare: twoOwners }],
+    ['the last owner, by a superuser who is no owner', OWNER, undefined, 'super', {}],
+    [
+      'one of two owners, by a superuser who is no owner',
+      OWNER,
+      undefined,
+      'super',
+      { prepare: twoOwners },
+    ],
     ['a customer is not one', 'parity.customer@rangon.test', undefined, 'owner', {}],
   ] as [string, string, unknown, Who, Partial<Case>][]) {
     write(`an account deleted: ${what}`, 'DELETE', oneUser(email), body, who, extra);
@@ -975,6 +1090,10 @@ export async function teamCases(): Promise<Case[]> {
   on('someone already on', CLERK, {});
   on('an owner who is off', OWNER2, {});
   on('by an administrator', GONE, {}, 'admin');
+  on('an owner who is off, by an administrator', OWNER2, {}, 'admin');
+  on('an owner who is on, by an administrator', OWNER, {}, 'admin');
+  on('an owner who is off, by a superuser who is no owner', OWNER2, {}, 'super');
+  on('a superuser who is a cashier, by an administrator', SUPERUSER, {}, 'admin');
   on('yourself', OWNER, {});
   on('a customer is not one', 'parity.customer@rangon.test', {});
   write('activate: a key that is no id', 'POST', `${USERS}abc/activate/`, {});
