@@ -959,11 +959,12 @@ def test_the_last_two_owners_cannot_both_be_switched_off_at_once():
 
     shop = factories.full_shop()
     owners = [shop["owner"], factories.user(RoleCode.OWNER, branch_obj=shop["branch"])]
-    admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
 
+    # Only an owner switches an owner off, so the race is the two of them,
+    # each switching off the other.
     def switch_off(index: int):
         return account_services.deactivate_user(
-            user=User.objects.get(pk=owners[index].pk), actor=admin
+            user=User.objects.get(pk=owners[index].pk), actor=owners[1 - index]
         )
 
     results, errors = run_together(switch_off, 2)
@@ -981,15 +982,15 @@ def test_one_owner_demoted_while_the_other_is_switched_off_leaves_an_owner():
 
     shop = factories.full_shop()
     second = factories.user(RoleCode.OWNER, branch_obj=shop["branch"])
-    admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
 
+    # Each owner acts on the other: one is switched off, one demoted.
     def lose(index: int):
         if index == 0:
             return account_services.deactivate_user(
-                user=User.objects.get(pk=shop["owner"].pk), actor=admin
+                user=User.objects.get(pk=shop["owner"].pk), actor=second
             )
         return account_services.update_staff_user(
-            user=User.objects.get(pk=second.pk), actor=admin, role_code=RoleCode.MANAGER
+            user=User.objects.get(pk=second.pk), actor=shop["owner"], role_code=RoleCode.MANAGER
         )
 
     results, errors = run_together(lose, 2)

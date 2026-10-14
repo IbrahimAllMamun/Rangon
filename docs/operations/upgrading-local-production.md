@@ -29,9 +29,19 @@ throwaway stacks: the three builds, the one-off migration, the swap, the smoke t
 `verify_` commands. Step 6-once was rehearsed the way a running shop will meet it -- a stack
 started from the old compose files, with an order and an uploaded photograph in it, then the step
 as written: the photograph, the order numbering, the owner's sign-in and both ledger checks came
-through, and the two commands at its end took the stack back to Django. None of this has been run
-in **PowerShell**, or against a stack holding **real data**; the commands are the same ones, and
-step 2's backup is what makes that safe to find out.
+through, and the two commands at its end took the stack back to Django.
+
+**On 2026-10-14 the whole page was rehearsed on the real shop's own data**: a throwaway stack on
+that Linux machine, started from the code the shop runs (`264103f`, Django serving) with the shop's
+backup of 2026-10-05 restored into it, then steps 1 to 7 with 6-once, to `07f9404`. What it
+showed is in [the roadmap](../roadmap.md#verification-log), and in short: seven migrations, six of
+which change nothing in the database and one that adds a column; 26 seconds between stopping
+Django and the shop answering again; every table but the migrations' own the same row for row;
+both ledger checks clean from both APIs; a sign-in from before still good; and the way back to
+Django, and forward again, each in under 15 seconds. It was run with an environment file written
+before the NestJS API existed, unchanged. None of this has been run in **PowerShell**, or against
+the **live stack**; the commands are the same ones, and step 2's backup is what makes that safe to
+find out.
 
 Before it, this procedure was run end to end on this machine for the label-sheet release on 2026-10-03: the
 migration, the image swap, the smoke test and `verify_inventory`. The commands on this page are the
@@ -216,9 +226,12 @@ docker compose -p rangon-prod --env-file .env.prod.local -f docker-compose.yml -
 - **A list.** Every entry must be one step 1 expected. Open each migration file and read its
   operations. `CreateModel`, `AddField` with a default or `null=True`, `AddIndex` and
   `AddConstraint` are additive: they leave every existing row alone, and the old code still running
-  ignores them. `RemoveField`, `DeleteModel`, `RenameField`, `RenameModel`, `AlterField`, `RunSQL` and
+  ignores them. `AlterModelOptions` (the plan says *Change Meta options on ...*) is less than that:
+  it changes how Django orders or names things and runs no SQL at all. `RemoveField`, `DeleteModel`, `RenameField`, `RenameModel`, `AlterField`, `RunSQL` and
   `RunPython` can change or drop data. **If you see one of those, stop.** That change needs an
-  expand/contract plan (CLAUDE.md § 6), not this page.
+  expand/contract plan (CLAUDE.md § 6), not this page. To see the SQL one migration would run,
+  without running it: the same command ending `sqlmigrate <app> <number>` in place of
+  `migrate --plan` (`sqlmigrate orders 0008`).
 
 ---
 

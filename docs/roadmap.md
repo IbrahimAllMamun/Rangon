@@ -495,6 +495,126 @@ is still open and tracked in
 
 ## Verification log
 
+### Two rules decided by the owner: an overpayment is refused, and only an owner manages an owner, 2026-10-14
+
+The owner's words: "an overpayment on an order is refused (D167); no need to keep overpayment",
+and "whether an administrator may manage owner accounts (D221). no, administrator may not manage
+owner accounts". Branch `feat/only-an-owner-manages-owners`.
+
+**The first needed no code.** The refusal has been what both APIs do since 2026-10-13; the
+business rules now give it as the rule and not as a default awaiting one.
+
+**The second is a rule in both APIs** ([business rule 7.1](business-rules.md#71-staff-accounts)).
+An administrator keeps `users.manage` and runs the rest of the staff list. An owner's account is
+out of their reach in both directions:
+
+- they may not touch one -- its name, role, password, profile, or whether it is switched on --
+  by `PATCH`, `PUT`, `deactivate`, `activate` or `DELETE`;
+- they may not make one -- by creating an account with the owner role, or giving the role to an
+  account, their own included.
+
+Each is a 403, `PERMISSION_DENIED`, decided in the staff service inside the transaction that
+would have made the change, after the request has been validated. "An owner", on either side,
+is whoever holds every permission: the owner role, or a superuser made in the shell. Django
+first (`check_may_manage_owners`, and `activate_user`, which the view used to do without a
+service), then the NestJS API.
+
+**One thing more, which was not a decision.** Rule 7.1 has always said nobody demotes their own
+account. The guard ran only when the account was an owner's, so an administrator could demote
+themselves out of `users.manage` (the last line of D221). It runs for any account now.
+
+```text
+pytest ....................................... 1,834 passed (19 new: TestOnlyAnOwnerManagesOwners, and one more for the last owner)
+ruff / mypy / makemigrations --check ......... clean / clean / no changes
+nest unit tests / tsc / eslint / prettier .... 1,788 passed (13 new) / clean
+web tsc / eslint on the staff screens ........ clean
+the whole seeded comparison .................. 12,325 of 12,325 match (42 new cases)
+the races .................................... 221 pass, three of them re-aimed
+```
+
+**What had to be re-aimed.** The tests and race checks of the last-owner guard used an
+administrator to switch owners off, which is now refused before that guard is reached. They are
+aimed at who can still reach it: two owners acting on each other at once, and a superuser who is
+not an owner by role (`parity.super`). None was removed. The parity cases that had an
+administrator act on an owner stay as they were -- both APIs answer them 403 now -- and 42 are
+added: the same changes by a superuser, the owner role given and created by each kind of
+caller, and switching an owner back on.
+
+**The back office.** An administrator is no longer offered the owner role in either staff form,
+nor the switch on an owner's row, and an owner's page says why it has nothing to edit. That is
+a courtesy; the API is what refuses.
+
+**Not run here.** The web app's unit tests: this machine's copy of its dependencies has no
+build of one tool for Linux. Nothing they cover was changed, and CI runs them. A browser.
+
+### The real shop's upgrade, rehearsed on its own data, 2026-10-14
+
+Asked for: "do item 2 with a rehearsal first. Find the real shop data in backup folder" --
+item 2 being the upgrade of the real shop to `main`, which starts the month
+[ADR-0020](architecture/decisions/0020-django-is-removed-in-steps.md) asks for. The backup is
+`backups/rangon-prodlocal-before-84.dump`, taken 2026-10-05 17:04 UTC, three minutes after PR #84
+merged: the shop as it was on `264103f`, with all of that commit's migrations applied and none
+after. **The shop is therefore still served by Django**, and its upgrade is the one that crosses
+the cutover ([upgrading-local-production.md](operations/upgrading-local-production.md), step
+6-once). The rehearsal was that page, start to finish, on a throwaway stack
+(`-p rangon-rehearsal`) on the Linux machine: images built from `264103f`, the backup restored,
+the old stack started, then the upgrade to `07f9404`.
+
+```text
+the copy ..................................... 96 tables, 2,697 rows: 46 products, 143 variants, 34 purchase orders, 1 order
+the old stack on it .......................... Django answers; smoke test passes; both ledger checks clean
+step 1  migrations not yet applied ........... 7, the ones expected
+step 2  backup ............................... written in the container, copied out, reads back (999 lines of contents)
+step 5  the plan ............................. 6 x "Change Meta options" (no SQL at all), 1 x "Add field idempotency_key to payment" (one nullable column, two indexes)
+step 6a migrate, the old code still serving .. applied; smoke test passes on the old code
+6-once  a  Celery's queue .................... 0
+        b-d stop Django, start the stack ..... the shop answers again 26 seconds after the stop
+        e  which API answers ................. 404: the NestJS API
+step 7  smoke test ........................... passes
+        verify_inventory, verify_accounts .... clean, from Django's commands and from the NestJS API's own
+the data, before and after ................... 93 of 96 tables the same row for row; django_migrations 104 -> 111; roles and permissions touched (updated_at only)
+82 questions, asked before and after ......... 77 answered the same to the byte; 5 explained below
+a sign-in from before ........................ the access and the refresh token Django issued both work on the NestJS API
+an order placed afterwards ................... 201, and its confirmation email arrives: the job queue works
+the back office, through the web app ......... sign-in sets both cookies; seven pages and three proxied calls answer
+back to Django (5.2.18), the same data ....... 12 seconds; smoke test passes; 83 of 84 answers the same as the NestJS API's
+forward again ................................ 14 seconds; the schedule back with the NestJS API
+the logs afterwards .......................... no error from the API or the web app, no 5xx from nginx
+```
+
+**The five answers that differ are the fixes the upgrade brings.** A purchase order's lines, the
+supplier price list and the stock valuation report (as JSON and as CSV) come in another order:
+the same rows, in the one order D243 to D245 gave them. The fifth is the rehearsal account's own
+`last_login`. Django 5.2 and the NestJS API, asked on one state of the data, differ in that field
+alone.
+
+**The environment file needs no change.** The stack was run throughout with a
+`.env.prod.local` written before the NestJS API existed, one that names the shop's domain;
+every variable the new compose files add has a default.
+
+**The schema is the baseline's.** After the upgrade, `pg_dump --schema-only` of the shop's
+database and of one built by `node dist/cli.js migrate` are the same 7,774 lines, and that
+command, tried on the copy, adopts the shop's database without running anything. That is the
+question removal step 7 asks, answered early for the data as it was on 5 October.
+
+**What the guide lacked.** Six of the seven migrations are `AlterModelOptions`, which step 5's
+two lists did not mention; it says now that they run no SQL, and how to see what one would run.
+
+**What this does not show.** PowerShell: the rehearsal ran the same commands from bash. The
+live stack: the shop has nine more days in it than the backup, and its uploads were not in the
+backup at all. Whether the shop was deployed again after `264103f`: step 1's image label says.
+The Cloudflare tunnel. A browser: the web app was driven through its own sign-in route and
+pages, by a script.
+
+**How it was run.** The machine's own `rangon-*:prod` tags were not moved; the rehearsal named
+its images in a compose file of its own. Nothing a row says was printed: the comparisons are
+counts, hashes and the names of the keys that differ. A rehearsal-only owner account and one
+order were added to the copy, and the stack, its volumes, the kept answers and the copy of the
+backup were removed afterwards.
+
+**Not green on `main` yet.** With the Django image clean (PR #101), "Build & scan images" reached
+the web image for the first time and stops there (D250).
+
 ### Django 5.2: the image scan's one finding, and the one answer the framework changed, 2026-10-14
 
 Asked for: "do the Django 5.2 upgrade", after `main`'s run for PR #100 came back green but
@@ -5495,7 +5615,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D164 | **A return on a packed order puts goods on the shelf that then ship.** `request_return` asks only that stock is committed, which it is from PACKED on, and moves the order to RETURN_REQUESTED only from SHIPPED or DELIVERED. Measured: a counter return of a PACKED, unpaid online order is a 201 -- the unit goes back on the shelf (42 to 43), the line is marked returned, nothing is refunded -- and the order stays PACKED; `POST /orders/<id>/status/` then ships it, and the shelf still says 43 for a unit that has left. *Found by the cases for each order status.* | Medium | Copied by the port. Refuse a return before SHIPPED (a packed order is cancelled or unpacked, not returned). `orders/services/returns.py` |
 | D165 | **A return past the window, let through by the override, leaves no audit entry.** [business-rules.md](business-rules.md) §2.2 says a return beyond the window needs `sales.refund_override` "and a reason, which is recorded in the audit log". `request_return` checks the permission and records nothing: the only audit row is the order's status change, and no reason is asked for beyond the return's own. Measured: an administrator opens a return on a sale delivered 40 days earlier; one `ORDER_STATUS_CHANGED` row, nothing naming the override. *Found comparing the rule with the rows the request writes.* | Low | Copied by the port. Write an audit entry when the override is what let the return through. `orders/services/returns.py` |
 | D166 | **The status route cancels an order without the right to cancel, and without a refund.** `POST /orders/<id>/status/` asks for `orders.update_status` and takes any `to_status`; CANCELLED goes through `transition`, not `cancel_order`. [business-rules.md](business-rules.md) §5.2 gives cancelling to staff with `sales.cancel` and has it refund what was captured. Measured on the parity stack: the inventory manager, who holds `orders.update_status` and not `sales.cancel`, is refused by `POST /orders/<id>/cancel/` (403) and cancels the same order with `{"to_status": "CANCELLED"}` (200); an order paid 1602.00 by card and cancelled this way is left CANCELLED and PAID, its stock and coupon released and nothing refunded. *Found by the status cases, run as every role.* | High | **Fixed in Django and in the NestJS API, 2026-10-13.** `CANCELLED` on the status route needs `sales.cancel` as well as `orders.update_status` (a 403 without it, before the order is looked for) and goes through `cancel_order`: the same refusals as the cancel route, and what was captured goes back. The back office's Cancel button uses this route, so this was how most orders were cancelled; it is now offered only to those who may. `orders/api/views.py`, `staff-order-actions.service.ts`, `order-actions.tsx`, `tests/test_guards_before_django_goes.py` |
-| D167 | **Recording a payment can record the money twice.** `POST /orders/<id>/payments/` takes no `Idempotency-Key`, though §5.5 has every operation that moves money honour one, and nothing compares the amount with what the order still owes. A pending payment of the same method and amount is captured; anything else -- the same request sent again included -- is a new captured payment. Measured: the cash on delivery of a delivered order, 4230.00, recorded a second time is a 201 and a second 4230.00 into the drawer; 9999.00 in cash on a 5790.00 order is recorded as paid; a voided sale and an order refunded in full both accept a payment. And an account the money cannot land in is refused only after it has been saved: asking to capture cash on delivery into the bank is a 400 that leaves the pending payment pointing at the bank, because the view saves the account before the service's transaction begins. *Found porting the payments action.* | High | **Fixed in Django and in the NestJS API, 2026-10-13.** `receive_payment`, one transaction under the order's lock: the `Idempotency-Key` is claimed on the payment (migration `orders/0008`; a key used for another order's payment is a 409), an order that is cancelled, returned or refunded takes none (409), an amount past the total less what was captured is a 422 `PAYMENT_EXCEEDS_OUTSTANDING`, and the account is set inside. **The refusal is a default the owner may change** (business-rules.md §5.7): kept as credit was the other answer. The back office sends a key that changes only when the paid total does. `orders/services/payments.py`, `order-payments.service.ts` |
+| D167 | **Recording a payment can record the money twice.** `POST /orders/<id>/payments/` takes no `Idempotency-Key`, though §5.5 has every operation that moves money honour one, and nothing compares the amount with what the order still owes. A pending payment of the same method and amount is captured; anything else -- the same request sent again included -- is a new captured payment. Measured: the cash on delivery of a delivered order, 4230.00, recorded a second time is a 201 and a second 4230.00 into the drawer; 9999.00 in cash on a 5790.00 order is recorded as paid; a voided sale and an order refunded in full both accept a payment. And an account the money cannot land in is refused only after it has been saved: asking to capture cash on delivery into the bank is a 400 that leaves the pending payment pointing at the bank, because the view saves the account before the service's transaction begins. *Found porting the payments action.* | High | **Fixed in Django and in the NestJS API, 2026-10-13.** `receive_payment`, one transaction under the order's lock: the `Idempotency-Key` is claimed on the payment (migration `orders/0008`; a key used for another order's payment is a 409), an order that is cancelled, returned or refunded takes none (409), an amount past the total less what was captured is a 422 `PAYMENT_EXCEEDS_OUTSTANDING`, and the account is set inside. **The refusal is the rule: decided by the owner, 2026-10-14** (kept as credit was the other answer, and is not wanted). The back office sends a key that changes only when the paid total does. `orders/services/payments.py`, `order-payments.service.ts` |
 | D168 | **A cancel's reason is not validated.** `cancel` reads `request.data.get("reason", "")` and `transition` slices it (`reason[:255]`) after the stock is released. Measured: `{"reason": null}`, a number, `true` or an object is a 500 on an order that could be cancelled (and the 409 it would otherwise be on one that could not); a list goes through, stored as Python prints it (`['Changed', 'mind']`) in the order, the ledger and the audit log; a body that is a JSON list is a 500. *Found by the reason cases.* | Low | Copied by the port. Give the action a serializer. `orders/api/views.py` |
 | D169 | **An order paid and refunded in full cannot be cancelled.** `cancel_order` refunds `paid_total - refunded_total` whenever `paid_total` is above zero; when everything has already gone back that is a refund of 0.00, which `refund_order` refuses ("Refund amount must be positive."), and the cancellation is rolled back with it. Measured: a PENDING order paid 890.00 and refunded 890.00 answers 400 to `POST /orders/<id>/cancel/` and stays PENDING, its stock still reserved; only the status route (D166) cancels it. *Found by a fixture order with nothing left to refund.* | Medium | Copied by the port. Refund only when something is left. `orders/services/lifecycle.py` |
 | D170 | **A cancel answers with the payment status from before its own refund.** `cancel_order` returns the order `transition` loaded; `refund_order` then loads and saves its own copy. Measured: cancelling an order paid 1602.00 answers `payment_status: PAID`, `refunded_total: 0.00` beside a `refunds` list holding the 1602.00 refund; the next read says REFUNDED and 1602.00. *Found comparing the answer with the row.* | Low | Copied by the port. Refresh the order before serialising it. `orders/services/lifecycle.py` |
@@ -5549,7 +5669,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D218 | **A staff email in other letters is a bare 409.** `User.save()` stores the email lower-cased; `UserWriteSerializer`'s `UniqueValidator` compares it as typed. `OWNER@rangon.test` passes validation against a stored `owner@rangon.test` and meets the unique index, on a create and on an edit. D198 and D202 are the same shape. *Found by the email cases.* | Low | Copied by the port. Lower-case in the field, before the validator. `accounts/api/serializers.py` |
 | D219 | **What a new staff account ignores.** `create_staff_user` always passes `status=ACTIVE`: a `status` sent with the create is validated and dropped. `validate_password(value)` is called with no user, so the similarity check never runs and an account's email is accepted as its password. And `role_code` takes every `RoleCode`, CUSTOMER among them: the account is made with no `Customer` behind it, answered 201, and the staff list -- which excludes that role -- never shows it again; an edit to that role makes a member of staff vanish the same way. With no active organisation the account is made belonging to none. *Found by the create cases.* | Low | Copied by the port. Honour or refuse `status`; pass a user to `validate_password`; take CUSTOMER out of the staff choices. `accounts/api/serializers.py`, `accounts/services.py` |
 | D220 | **An ID number resent with an edit is "already taken" -- by itself.** `StaffProfile.national_id` has a conditional unique constraint, from which DRF builds a `UniqueValidator` on the nested `StaffProfileSerializer`. A nested serializer is never given an instance, so the validator cannot exclude the profile being edited: `PATCH {"profile": {"national_id": <their own>, "designation": "Lead"}}` is a 400, "staff profile with this national id already exists." A form that sends the whole profile back cannot save a member of staff who has an ID number. `save_staff_profile` has the correct check, which is never reached. *Found by the profile cases.* | Medium | Copied by the port. `extra_kwargs = {"national_id": {"validators": []}}`: the service already answers a real duplicate. `accounts/api/serializers.py` |
-| D221 | **The staff guards take no lock, and an administrator is an owner in all but name.** `check_can_lose_access` counts the other active owners with no lock and the write follows: measured in both APIs, the second owner switched off while the first's deactivation is in flight leaves *no* active owner -- the state the guard exists to prevent, with "no recovery path short of the shell". Separately: business rule 7.1 says only `OWNER` holds `users.manage`; `ROLE_PERMISSIONS[ADMIN]` is every permission. An administrator can therefore give anyone the owner role, themselves included -- which also hands them the owner-only decision on reserved stock (D115) -- can reset an owner's password and sign in as them, and can deactivate or demote any owner but the last. And the "not yourself" guard covers a role change only for an owner: an administrator can demote themselves out of `users.manage`. *Found by the guard cases and a mid-flight check.* | High | **The missing lock: fixed in Django and in the NestJS API, 2026-10-13.** `check_can_lose_access` locks the active owners' rows, in key order, and both routes call it inside the transaction that makes the change (`deactivate_user` is new: the view called the guard and then the service, with nothing held between). Races in `tests/test_concurrency.py` and `team-concurrency.ts`. **The rule is still open** (business rule 7.1, `DECISION REQUIRED`): may an administrator manage owners at all? `accounts/services.py`, `staff-users.service.ts` |
+| D221 | **The staff guards take no lock, and an administrator is an owner in all but name.** `check_can_lose_access` counts the other active owners with no lock and the write follows: measured in both APIs, the second owner switched off while the first's deactivation is in flight leaves *no* active owner -- the state the guard exists to prevent, with "no recovery path short of the shell". Separately: business rule 7.1 says only `OWNER` holds `users.manage`; `ROLE_PERMISSIONS[ADMIN]` is every permission. An administrator can therefore give anyone the owner role, themselves included -- which also hands them the owner-only decision on reserved stock (D115) -- can reset an owner's password and sign in as them, and can deactivate or demote any owner but the last. And the "not yourself" guard covers a role change only for an owner: an administrator can demote themselves out of `users.manage`. *Found by the guard cases and a mid-flight check.* | High | **The missing lock: fixed in Django and in the NestJS API, 2026-10-13.** `check_can_lose_access` locks the active owners' rows, in key order, and both routes call it inside the transaction that makes the change (`deactivate_user` is new: the view called the guard and then the service, with nothing held between). Races in `tests/test_concurrency.py` and `team-concurrency.ts`. **The rule: decided by the owner and fixed in both APIs, 2026-10-14.** An administrator may not manage owner accounts: only an owner (the role, or a superuser) edits, resets, switches off or on, or deletes an owner's account, and only an owner creates one or gives the role; each is a 403 for anyone else, on every route. And nobody changes their own role, which rule 7.1 always said and the guard ran only for an owner. `check_may_manage_owners`, `activate_user`; the back office no longer offers an administrator the owner role or the buttons on an owner. `accounts/services.py`, `staff-users.service.ts`, `tests/test_guards_before_django_goes.py`, `team-cases.ts` |
 | D222 | **A staff account's edit writes back the password it read.** `update_staff_user` ends in `user.save()` with no `update_fields` and no lock: every column goes back as read, `password` and `last_login` among them. Measured in both APIs: a password changed while an edit of the account's name waits at its `UPDATE` is put back as it was -- the member of staff who just changed a leaked password has the old one again, and no session was ended. D184, D200, D203, D207 and D215 are the same shape. *Found by reading the captured `UPDATE`, then a mid-flight check.* | Medium | Copied by the port. `update_fields` of what was changed. `accounts/services.py` |
 | D223 | **Deactivating reads its reason by hand.** `deactivate` passes `request.data.get("reason", "")` to the service: a body that is a list, a string or `null` is a 500 -- after the guards, so only for an account that could be deactivated -- and a reason that is a number, a list or an object is stored as Python prints it. An account already off is switched off again and logged again (six at once: six entries); `activate` is the same. A deactivation does not end the account's sessions, though nothing they hold will authenticate. D199 and D214 are the same reading of a body. *Found by the deactivate cases.* | Low | Copied by the port. A one-field serializer; answer an account already in the state as it is. `accounts/api/views.py` |
 | D224 | **Branches: a bare 409, two defaults or none, and no audit.** `accounts_branch_org_code_uniq` is over `(organization, code)` and the serializer has no `organization` field, so DRF builds no validator: a code taken -- or a create with no active organisation -- is the index's bare 409. `is_default` is a plain boolean: a second default branch is accepted, and the default one can be switched off or un-defaulted, leaving `default_branch()` to pick by age. A branch is made, edited and deleted with no audit entry, and deleting one silently removes its parked sales. *Found by the branch cases.* | Low | Copied by the port. A `validate_code`; a partial unique index on `is_default`; `audit.record`. `accounts/api/serializers.py`, `accounts/models.py` |
@@ -5578,6 +5698,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D247 | **A recording taken straight after anything had written to its database did not replay.** The replay's clocks are set a minute and a half behind the recording's age, for the stack to come up in, so its harness began up to that much earlier than the recording's had; and the cases are built from the clock -- what an API mints is told from what was there by being newer than the harness. A row made in the two minutes before the recording was older than one harness and newer than the other. Straight after a reset, 109 cases differed, each by a timestamp read as "now" on one side; and **the first run of the recorded proof on GitHub failed on it** (`main`, 2026-10-12): four cases of the audit log, whose rows the comparison's races had written seconds before the recording began. *Found replaying a recording of merged `main` on 2026-10-13, an hour before that run's log could be read.* | Low | **Fixed 2026-10-13.** A recording keeps the instant its harness began (`began.txt`); a replay waits for it before it builds a case. `apps/api-nest/parity/recording.ts`, `run.ts` |
 | D248 | **The stock valuation lists its branches in no stated order.** `GET /inventory/valuation/` groups the stock by branch and asks for no order, so `by_branch` comes back as the planner hashed the groups. The sweep for D245 looked for orderings that tie and missed a grouped query with none at all; the other grouped queries were read again, and each is ordered or is read into a dictionary. *Found by the recorded proof's second run on GitHub (`main`, 2026-10-13): one case of 12,243, the two branches having changed places between the recording and its replay on one database. It never did locally.* | Low | **Fixed in Django and in the NestJS API, 2026-10-13.** Ordered by the branch's code, then its name. `inventory/api/views.py`, `inventory-admin.service.ts`, `tests/test_one_order.py` |
 | D249 | **The dependency audit lists three advisories in Django's packages, below what the image scan stops on.** `djangorestframework` 3.15.2: CVE-2026-73228 (a JSON or form body larger than `DATA_UPLOAD_MAX_MEMORY_SIZE` is parsed through `request.data`) and CVE-2026-73229 (`AdminRenderer` can show what a GET would have refused); both fixed in 3.17.2. `djangorestframework-simplejwt` 5.3.1: CVE-2024-22513 (`for_user` mints a token for a disabled account), fixed in 5.5.1. CI's audit step reports them as a warning and passes. What limits them here: nginx refuses a body over 12 MB before either API sees it; `AdminRenderer` is not among the renderers in any settings file; and Django serves production only when someone goes back to it. *Found running `pip-audit` on the pins after the Django 5.2 upgrade; all three are on the pins as they were before it.* | Low | Not fixed here: two minor versions of DRF is a change to what happens before a view runs, which is what the NestJS API was ported from case by case, and wants its own comparison. The owner's to schedule, or moot once Django goes. `requirements/base.txt` |
+| D250 | **The web image fails its security scan, and nobody had seen it.** The image job scans three images in turn and stops at the first that fails; until the Django image came clean (D242) it never reached the web image. Two HIGH findings in npm packages: `sharp` 0.35.4 (GHSA-wq5f-xc86-pv6w, a flaw in the librsvg it bundles; fixed in 0.35.5) and `source-map-js` 1.2.1 (CVE-2026-93749, denial of service; fixed in 1.2.2). `sharp` is what resizes product photographs. *Found on `main`'s run for PR #101, and confirmed by scanning the web image built from `07f9404` with CI's options.* | Medium | Not fixed here: two patch releases, with the web checks run on them. `sharp` is pinned in `apps/web/package.json`; `source-map-js` comes with other packages and moves in the lockfile. `apps/web/package.json`, `apps/web/package-lock.json` |
 
 ## Still API-only (no UI)
 

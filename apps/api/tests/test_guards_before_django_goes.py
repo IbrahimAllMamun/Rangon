@@ -587,7 +587,12 @@ class TestTheReservationSweep:
 
 
 class TestTheLastOwner:
-    """The rule is unchanged; these hold it while the guard gains a lock."""
+    """The rule is unchanged; these hold it while the guard gains a lock.
+
+    Since only an owner may switch an owner off, the last one is reached by
+    somebody who holds every permission without being counted as an owner: a
+    superuser made in the shell, whose role is something else.
+    """
 
     def test_one_of_two_owners_can_be_switched_off(self, shop, auth_client) -> None:
         second = factories.user(RoleCode.OWNER, branch_obj=shop["branch"])
@@ -599,20 +604,246 @@ class TestTheLastOwner:
         assert second.status == Status.INACTIVE
 
     def test_the_only_owner_cannot(self, shop, auth_client) -> None:
-        admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
+        superuser = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"], is_superuser=True)
 
-        response = auth_client(admin).post(f"/api/v1/users/{shop['owner'].pk}/deactivate/")
+        response = auth_client(superuser).post(f"/api/v1/users/{shop['owner'].pk}/deactivate/")
 
-        assert response.status_code == 400
+        assert response.status_code == 400, response.data
+        assert "last owner" in response.data["error"]["message"]
         shop["owner"].refresh_from_db()
         assert shop["owner"].status == Status.ACTIVE
+
+    def test_nor_by_the_system_itself(self, shop) -> None:
+        from accounts.services import deactivate_user
+        from core.exceptions import ValidationError
+
+        with pytest.raises(ValidationError, match="last owner"):
+            deactivate_user(user=shop["owner"], actor=None)
 
     def test_a_refused_deactivation_writes_nothing(self, shop, auth_client) -> None:
         from core.models import AuditLog
 
-        admin = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
+        superuser = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"], is_superuser=True)
         before = AuditLog.objects.count()
 
-        auth_client(admin).post(f"/api/v1/users/{shop['owner'].pk}/deactivate/")
+        auth_client(superuser).post(f"/api/v1/users/{shop['owner'].pk}/deactivate/")
 
         assert AuditLog.objects.count() == before
+
+
+class TestOnlyAnOwnerManagesOwners:
+    """Decided by the owner on 2026-10-14 (business rule 7.1, the rest of D221).
+
+    An administrator runs the staff list. An owner's account is out of their
+    reach in both directions: they may not touch one, and they may not make
+    one -- of somebody else, or of themselves.
+    """
+
+    PASSWORD = "a-strong-password-1"
+
+    @pytest.fixture
+    def admin(self, shop):
+        return factories.user(RoleCode.ADMIN, branch_obj=shop["branch"])
+
+    @pytest.fixture
+    def second_owner(self, shop):
+        return factories.user(RoleCode.OWNER, branch_obj=shop["branch"], first_name="Second")
+
+    def _refused(self, response) -> None:
+        assert response.status_code == 403, response.data
+        assert response.data["error"]["code"] == "PERMISSION_DENIED"
+
+    # --- an owner's account, as it stands ---------------------------------
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"first_name": "Renamed"},
+            {"role_code": "MANAGER"},
+            {"status": "INACTIVE"},
+            {"password": PASSWORD},
+            {"profile": {"designation": "Demoted on paper"}},
+        ],
+        ids=["a name", "the role", "the status", "the password", "the profile"],
+    )
+    def test_an_administrator_cannot_edit_an_owner(
+        self, admin, second_owner, auth_client, change
+    ) -> None:
+        from core.models import AuditLog
+
+        before = AuditLog.objects.count()
+
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{second_owner.pk}/", change, format="json"
+        )
+
+        self._refused(response)
+        assert "owner's account" in response.data["error"]["message"]
+        second_owner.refresh_from_db()
+        assert second_owner.first_name == "Second"
+        assert second_owner.role.code == RoleCode.OWNER
+        assert second_owner.status == Status.ACTIVE
+        assert second_owner.check_password("test-password-123")
+        assert AuditLog.objects.count() == before
+
+    @pytest.mark.parametrize("route", ["deactivate", "delete"])
+    def test_an_administrator_cannot_switch_an_owner_off(
+        self, admin, second_owner, auth_client, route
+    ) -> None:
+        client = auth_client(admin)
+
+        response = (
+            client.post(f"/api/v1/users/{second_owner.pk}/deactivate/")
+            if route == "deactivate"
+            else client.delete(f"/api/v1/users/{second_owner.pk}/")
+        )
+
+        self._refused(response)
+        second_owner.refresh_from_db()
+        assert second_owner.status == Status.ACTIVE
+
+    def test_an_administrator_cannot_switch_an_owner_back_on(
+        self, admin, second_owner, auth_client
+    ) -> None:
+        second_owner.status = Status.INACTIVE
+        second_owner.save()
+
+        response = auth_client(admin).post(f"/api/v1/users/{second_owner.pk}/activate/")
+
+        self._refused(response)
+        second_owner.refresh_from_db()
+        assert second_owner.status == Status.INACTIVE
+
+    # --- making an owner ---------------------------------------------------
+
+    def test_an_administrator_cannot_create_an_owner(self, admin, auth_client) -> None:
+        from accounts.models import User
+
+        response = auth_client(admin).post(
+            "/api/v1/users/",
+            {"email": "made-owner@rangon.test", "password": self.PASSWORD, "role_code": "OWNER"},
+            format="json",
+        )
+
+        self._refused(response)
+        assert "give the owner role" in response.data["error"]["message"]
+        assert not User.objects.filter(email="made-owner@rangon.test").exists()
+
+    def test_an_administrator_cannot_give_the_owner_role(self, shop, admin, auth_client) -> None:
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{shop['manager'].pk}/", {"role_code": "OWNER"}, format="json"
+        )
+
+        self._refused(response)
+        shop["manager"].refresh_from_db()
+        assert shop["manager"].role.code == RoleCode.MANAGER
+
+    def test_nor_take_it_for_themselves(self, admin, auth_client) -> None:
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{admin.pk}/", {"role_code": "OWNER"}, format="json"
+        )
+
+        self._refused(response)
+        admin.refresh_from_db()
+        assert admin.role.code == RoleCode.ADMIN
+
+    # --- what an administrator still does ----------------------------------
+
+    def test_an_administrator_still_runs_the_rest_of_the_staff(
+        self, shop, admin, auth_client
+    ) -> None:
+        client = auth_client(admin)
+
+        made = client.post(
+            "/api/v1/users/",
+            {"email": "new-admin@rangon.test", "password": self.PASSWORD, "role_code": "ADMIN"},
+            format="json",
+        )
+        assert made.status_code == 201, made.data
+
+        promoted = client.patch(
+            f"/api/v1/users/{shop['cashier'].pk}/", {"role_code": "MANAGER"}, format="json"
+        )
+        assert promoted.status_code == 200, promoted.data
+
+        reset = client.patch(
+            f"/api/v1/users/{shop['manager'].pk}/", {"password": self.PASSWORD}, format="json"
+        )
+        assert reset.status_code == 200, reset.data
+
+        off = client.post(f"/api/v1/users/{shop['cashier'].pk}/deactivate/")
+        assert off.status_code == 200, off.data
+        on = client.post(f"/api/v1/users/{shop['cashier'].pk}/activate/")
+        assert on.status_code == 200, on.data
+
+    def test_an_administrator_still_sees_the_owners(self, admin, second_owner, auth_client) -> None:
+        response = auth_client(admin).get(f"/api/v1/users/{second_owner.pk}/")
+
+        assert response.status_code == 200, response.data
+
+    # --- what an owner does --------------------------------------------------
+
+    def test_an_owner_does_all_of_it(self, shop, second_owner, auth_client) -> None:
+        client = auth_client(shop["owner"])
+
+        made = client.post(
+            "/api/v1/users/",
+            {"email": "third-owner@rangon.test", "password": self.PASSWORD, "role_code": "OWNER"},
+            format="json",
+        )
+        assert made.status_code == 201, made.data
+
+        given = client.patch(
+            f"/api/v1/users/{shop['manager'].pk}/", {"role_code": "OWNER"}, format="json"
+        )
+        assert given.status_code == 200, given.data
+
+        edited = client.patch(
+            f"/api/v1/users/{second_owner.pk}/",
+            {"first_name": "Renamed", "password": self.PASSWORD},
+            format="json",
+        )
+        assert edited.status_code == 200, edited.data
+
+        demoted = client.patch(
+            f"/api/v1/users/{second_owner.pk}/", {"role_code": "MANAGER"}, format="json"
+        )
+        assert demoted.status_code == 200, demoted.data
+
+    def test_a_superuser_counts_as_one(self, shop, second_owner, auth_client) -> None:
+        superuser = factories.user(RoleCode.ADMIN, branch_obj=shop["branch"], is_superuser=True)
+
+        response = auth_client(superuser).patch(
+            f"/api/v1/users/{second_owner.pk}/", {"first_name": "Renamed"}, format="json"
+        )
+
+        assert response.status_code == 200, response.data
+
+    def test_and_a_superusers_account_is_an_owners(self, shop, admin, auth_client) -> None:
+        superuser = factories.user(RoleCode.MANAGER, branch_obj=shop["branch"], is_superuser=True)
+
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{superuser.pk}/", {"password": self.PASSWORD}, format="json"
+        )
+
+        self._refused(response)
+
+    # --- your own role -------------------------------------------------------
+
+    def test_an_administrator_cannot_demote_themselves(self, admin, auth_client) -> None:
+        """Rule 7.1 always said so; the guard only ran for an owner."""
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{admin.pk}/", {"role_code": "MANAGER"}, format="json"
+        )
+
+        assert response.status_code == 400, response.data
+        assert "your own account" in response.data["error"]["message"]
+        admin.refresh_from_db()
+        assert admin.role.code == RoleCode.ADMIN
+
+    def test_but_may_still_edit_the_rest_of_their_own_account(self, admin, auth_client) -> None:
+        response = auth_client(admin).patch(
+            f"/api/v1/users/{admin.pk}/", {"first_name": "Renamed"}, format="json"
+        )
+
+        assert response.status_code == 200, response.data

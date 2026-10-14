@@ -21,7 +21,7 @@ import {
   pkRelatedField,
   runSerializer,
 } from '../common/drf';
-import { Conflict, NotFound, ValidationError } from '../common/errors';
+import { Conflict, NotFound, PermissionDenied, ValidationError } from '../common/errors';
 import {
   applyFilters,
   choiceFilter,
@@ -220,6 +220,32 @@ function cannot(what: string, whom: 'own' | 'last'): ValidationError {
     : new ValidationError(`You cannot ${what} the last owner.`, {
         details: { user: 'Give another account the owner role first.' },
       });
+}
+
+/**
+ * `check_may_manage_owners`: only an owner makes, edits or removes an owner
+ * (business rule 7.1, D221). An administrator holds `users.manage` and runs
+ * the staff list, but may not touch an owner's account -- its name, its
+ * role, its password, whether it is switched on -- nor make one, by creating
+ * it or by giving the role to an account, their own included. An owner, on
+ * either side, is the owner role or a superuser: whoever holds everything.
+ */
+export function checkMayManageOwners(
+  actor: Pick<RequestUser, 'roleCode' | 'isSuperuser'>,
+  target: Pick<UserRow, 'role_code' | 'is_superuser'> | null,
+  becomingOwner = false,
+): void {
+  if (actor.roleCode === 'OWNER' || actor.isSuperuser) return;
+  if (target && (target.role_code === 'OWNER' || target.is_superuser)) {
+    throw new PermissionDenied("Only an owner can change an owner's account.", {
+      details: { user: 'Ask an owner to make this change.' },
+    });
+  }
+  if (becomingOwner) {
+    throw new PermissionDenied('Only an owner can give the owner role.', {
+      details: { role_code: 'Ask an owner to make this change.' },
+    });
+  }
 }
 
 @Injectable()
@@ -575,6 +601,7 @@ export class StaffUsersService {
     const email = pyStrip((values.email as string).toLowerCase());
 
     const id = await this.db.transaction(async (tx) => {
+      checkMayManageOwners(user, null, roleCode === 'OWNER');
       const roleId = await this.role(tx, roleCode);
       const organization = await tx.one<{ id: string }>(
         `SELECT "id" FROM "accounts_organization" WHERE "accounts_organization"."status" = 'ACTIVE'
@@ -648,7 +675,7 @@ export class StaffUsersService {
   }
 
   /**
-   * `update` and `update_staff_user`: the two guards, the account saved whole
+   * `update` and `update_staff_user`: the three guards, the account saved whole
    * -- every column written back as read -- a new password ending every
    * session, the profile, and one audit entry naming what changed.
    */
@@ -665,6 +692,8 @@ export class StaffUsersService {
     const actor = { id: user.id, email: user.email };
 
     await this.db.transaction(async (tx) => {
+      const changingRole = Boolean(values.role_code) && values.role_code !== instance.role_code;
+      checkMayManageOwners(user, instance, changingRole && values.role_code === 'OWNER');
       const before = {
         role: instance.role_code,
         status: instance.status,
@@ -677,9 +706,10 @@ export class StaffUsersService {
 
       let roleId = instance.role_id;
       let roleCode = instance.role_code;
-      if (values.role_code && values.role_code !== instance.role_code) {
-        if (instance.role_code === 'OWNER')
-          await this.checkCanLoseAccess(tx, instance, actor, 'demote');
+      if (values.role_code && changingRole) {
+        // Your own role is not yours to change, whatever it is; for an owner
+        // this is also where the last one is kept, and the owners' rows locked.
+        await this.checkCanLoseAccess(tx, instance, actor, 'demote');
         roleId = await this.role(tx, values.role_code);
         roleCode = values.role_code;
       }
@@ -750,15 +780,18 @@ export class StaffUsersService {
 
   /** `set_user_status`: the status, `is_active` with it, and the audit entry. */
   private async setStatus(
+    user: RequestUser,
     target: UserRow,
     status: 'ACTIVE' | 'INACTIVE',
-    actor: Actor,
     reason: unknown,
     context: AuditContext,
     /** `deactivate_user`: the guards first, in the transaction that writes. */
     guarded = false,
   ) {
+    const actor = { id: user.id, email: user.email };
     await this.db.transaction(async (tx) => {
+      // `deactivate_user` and `activate_user` alike: an owner's, only by an owner.
+      checkMayManageOwners(user, target);
       if (guarded) await this.checkCanLoseAccess(tx, target, actor, 'deactivate');
       await tx.query(
         `UPDATE ${U} SET "status" = $2, "is_active" = $3, "updated_at" = clock_timestamp()
@@ -793,21 +826,20 @@ export class StaffUsersService {
     context: AuditContext,
   ) {
     const target = await this.find(pk, query);
-    const actor = { id: user.id, email: user.email };
     const given = dataGet(data(), 'reason');
     return this.setStatus(
+      user,
       target,
       'INACTIVE',
-      actor,
       given === undefined ? '' : given,
       context,
       true,
     );
   }
 
-  /** `activate`: no guard, and no reason but the default. */
+  /** `activate` and `activate_user`: the owner rule, and no reason but the default. */
   async activate(user: RequestUser, pk: string, query: QueryDict, context: AuditContext) {
     const target = await this.find(pk, query);
-    return this.setStatus(target, 'ACTIVE', { id: user.id, email: user.email }, '', context);
+    return this.setStatus(user, target, 'ACTIVE', '', context);
   }
 }

@@ -46,6 +46,8 @@ export default async function StaffPage({ searchParams }: { searchParams: Search
   const can = (permission: string) =>
     user.permissions.includes("*") || user.permissions.includes(permission);
   const canManage = can("users.manage");
+  // Only an owner manages an owner (business rule 7.1), and `*` is what an owner holds.
+  const isOwner = user.permissions.includes("*");
 
   let staff: StaffRow[] = [];
   let staffTotal = 0;
@@ -94,10 +96,11 @@ export default async function StaffPage({ searchParams }: { searchParams: Search
             </h2>
             <StaffManager
               staff={staff}
-              roles={roles}
+              roles={isOwner ? roles : roles.filter((role) => role.code !== "OWNER")}
               branches={branches}
               currentUserId={user.id}
               canManage={canManage}
+              canManageOwners={isOwner}
             />
             <Card className="mt-4 overflow-hidden">
               <Pagination

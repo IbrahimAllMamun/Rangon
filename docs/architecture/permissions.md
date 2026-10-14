@@ -78,6 +78,11 @@ owner holds every permission whatever its row lists (`holds_every_permission` on
 | content.site_manage | ✔ | ✔ | ✔ | — | — | — | — |
 | audit.view | ✔ | ✔ | — | — | — | ✔ | — |
 
+`users.manage` is not the whole of it for an administrator: only an owner may change an owner's
+account or give the owner role, whatever codes the caller holds
+([business rule 7.1](../business-rules.md#71-staff-accounts)). It is a rule of the staff
+service, not a permission code.
+
 `content.site_manage` covers the footer's text and contact details, the social links, and the site
 pages — About, Contact, and the shipping, returns, privacy and terms policies. The owner decided on
 2026-09-26 that managers edit the legal pages alongside the navbar. The footer's link *columns* are

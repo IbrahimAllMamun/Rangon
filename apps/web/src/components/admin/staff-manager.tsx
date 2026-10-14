@@ -124,6 +124,8 @@ function toFieldErrors(caught: unknown, fallback: string): FieldError[] {
  *  - You cannot deactivate or demote the **last active owner** — nothing else
  *    holds `users.manage` or `settings.manage`, so that would leave an
  *    organisation nobody can administer again.
+ *  - Only an owner changes an owner's account or gives the owner role: an
+ *    administrator runs the rest of the staff list (business rule 7.1).
  *  - Staff are deactivated, never deleted: the audit trail has to keep
  *    pointing at a real row.
  */
@@ -133,12 +135,16 @@ export function StaffManager({
   branches,
   currentUserId,
   canManage,
+  canManageOwners,
 }: {
   staff: StaffRow[];
+  /** The roles the reader may give: without the owner role, unless they are one. */
   roles: RoleOption[];
   branches: BranchOption[];
   currentUserId: string;
   canManage: boolean;
+  /** Only an owner switches an owner on or off; the API refuses anyone else. */
+  canManageOwners: boolean;
 }) {
   const [creating, setCreating] = useState(false);
 
@@ -211,7 +217,7 @@ export function StaffManager({
                     </Badge>
                   </td>
                   <td className="px-4 py-2.5 text-right">
-                    {canManage && (
+                    {canManage && (canManageOwners || row.role_code !== "OWNER") && (
                       <div className={`${ROW_LINK_ABOVE} flex justify-end gap-1`}>
                         <StatusButton
                           row={row}
@@ -233,6 +239,7 @@ export function StaffManager({
       <p className="text-caption text-muted">
         Staff are deactivated, never deleted — every order, adjustment and audit entry keeps pointing
         at a real account. Deactivating your own account, or the last active owner, is refused.
+        Only an owner can change an owner&rsquo;s account or give the owner role.
       </p>
     </div>
   );

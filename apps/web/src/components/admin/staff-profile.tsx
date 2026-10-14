@@ -28,6 +28,7 @@ export function StaffProfileView({
   isSelf,
   isLastOwner,
   back,
+  notice,
 }: {
   staff: StaffRow;
   roles: RoleOption[];
@@ -36,6 +37,8 @@ export function StaffProfileView({
   isSelf: boolean;
   isLastOwner: boolean;
   back: { href: string; label: string };
+  /** Why there is nothing to edit here, when the reader might expect there to be. */
+  notice?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const name = staff.full_name || staff.email;
@@ -75,6 +78,8 @@ export function StaffProfileView({
           ) : undefined
         }
       />
+
+      {notice && <p className="mb-4 text-body-sm text-muted">{notice}</p>}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>

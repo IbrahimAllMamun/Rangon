@@ -435,9 +435,9 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def activate(self, request: AuthedRequest, pk: str | None = None) -> Response:
-        from accounts.services import set_user_status
+        from accounts.services import activate_user
 
-        user = set_user_status(user=self.get_object(), status="ACTIVE", actor=request.user)
+        user = activate_user(user=self.get_object(), actor=request.user)
         return Response(UserSerializer(user).data)
 
 

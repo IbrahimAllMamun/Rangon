@@ -1,9 +1,11 @@
 import {
   BLANK_PROFILE,
   changedProfileFields,
+  checkMayManageOwners,
   type Profile,
 } from '../../src/accounts/staff-users.service';
 import { auditDiff } from '../../src/common/audit';
+import { PermissionDenied } from '../../src/common/errors';
 
 /**
  * Staff accounts. Every expected value was printed by Django itself
@@ -84,5 +86,64 @@ describe('changedProfileFields (save_staff_profile)', () => {
     ],
   ])('stored %j, sent %j: %j changed', (was, sent, changed) => {
     expect(changedProfileFields(stored(was), sent)).toEqual(changed);
+  });
+});
+
+/**
+ * Only an owner manages an owner (business rule 7.1, `check_may_manage_owners`).
+ * The cases are Django's own tests of it, `TestOnlyAnOwnerManagesOwners`.
+ */
+describe('checkMayManageOwners (check_may_manage_owners)', () => {
+  const owner = { roleCode: 'OWNER', isSuperuser: false };
+  const admin = { roleCode: 'ADMIN', isSuperuser: false };
+  const superuser = { roleCode: 'CASHIER', isSuperuser: true };
+  const anOwner = { role_code: 'OWNER', is_superuser: false };
+  const aClerk = { role_code: 'CASHIER', is_superuser: false };
+  const aSuperuser = { role_code: 'MANAGER', is_superuser: true };
+
+  it.each([
+    ['an owner, an owner', owner, anOwner, false],
+    ['an owner, making an owner', owner, aClerk, true],
+    ['an owner, creating an owner', owner, null, true],
+    ['a superuser who is no owner, an owner', superuser, anOwner, false],
+    ['a superuser who is no owner, making an owner', superuser, aClerk, true],
+    ['an administrator, a clerk', admin, aClerk, false],
+    ['an administrator, creating anyone else', admin, null, false],
+    ['someone with no role, a clerk', { roleCode: null, isSuperuser: false }, aClerk, false],
+  ] as const)('%s: allowed', (_name, actor, target, becomingOwner) => {
+    expect(() => checkMayManageOwners(actor, target, becomingOwner)).not.toThrow();
+  });
+
+  it.each([
+    ['an owner', anOwner, false, "Only an owner can change an owner's account.", 'user'],
+    ['an owner, their role', anOwner, true, "Only an owner can change an owner's account.", 'user'],
+    [
+      "a superuser's account",
+      aSuperuser,
+      false,
+      "Only an owner can change an owner's account.",
+      'user',
+    ],
+    ['a clerk, made an owner', aClerk, true, 'Only an owner can give the owner role.', 'role_code'],
+    [
+      'nobody yet, created an owner',
+      null,
+      true,
+      'Only an owner can give the owner role.',
+      'role_code',
+    ],
+  ] as const)('an administrator, %s: refused', (_name, target, becomingOwner, message, key) => {
+    let refusal: unknown;
+    try {
+      checkMayManageOwners(admin, target, becomingOwner);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(PermissionDenied);
+    expect((refusal as PermissionDenied).message).toBe(message);
+    expect((refusal as PermissionDenied).statusCode).toBe(403);
+    expect((refusal as PermissionDenied).details).toEqual({
+      [key]: 'Ask an owner to make this change.',
+    });
   });
 });

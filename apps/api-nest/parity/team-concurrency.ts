@@ -145,6 +145,9 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
       detail: `statuses ${statuses(profiles).join(',')}, ${made?.count} profile`,
     });
 
+    // Who switches an owner off, in 3 to 3b: only an owner may (business rule 7.1),
+    // so it is `parity.super`, who holds everything and is not counted as one.
+    //
     // 3. The second owner switched off while the first's deactivation waits for
     // the owners' rows. Both are held, in the order the guard takes them: one
     // held alone could be waited for with the other already taken.
@@ -158,7 +161,7 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
           [[ids.owner, ids.owner2]],
         ],
         '%accounts_user%FOR UPDATE%',
-        [() => request(api, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {})],
+        [() => request(api, 'super', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {})],
         async (holder) => {
           await holder.query(
             `UPDATE accounts_user SET status = 'INACTIVE', is_active = false WHERE id = $1`,
@@ -179,8 +182,8 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
     await restore();
     await twoOwners();
     const lastTwo = await Promise.all([
-      request(apis.DJANGO, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
-      request(apis.NEST, 'admin', 'POST', `/api/v1/users/${ids.owner2}/deactivate/`, {}),
+      request(apis.DJANGO, 'super', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
+      request(apis.NEST, 'super', 'POST', `/api/v1/users/${ids.owner2}/deactivate/`, {}),
     ]);
     const kept = await activeOwners();
     checks.push({
@@ -193,8 +196,8 @@ export async function teamConcurrencyChecks(apis: { DJANGO: URL; NEST: URL }): P
     await restore();
     await twoOwners();
     const offAndDown = await Promise.all([
-      request(apis.NEST, 'admin', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
-      request(apis.DJANGO, 'admin', 'PATCH', `/api/v1/users/${ids.owner2}/`, {
+      request(apis.NEST, 'super', 'POST', `/api/v1/users/${ids.owner}/deactivate/`, {}),
+      request(apis.DJANGO, 'super', 'PATCH', `/api/v1/users/${ids.owner2}/`, {
         role_code: 'MANAGER',
       }),
     ]);

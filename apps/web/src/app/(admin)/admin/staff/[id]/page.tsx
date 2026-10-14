@@ -24,8 +24,11 @@ export default async function StaffMemberPage({ params }: { params: Promise<{ id
   const user = await currentUser<SessionUser>();
   if (!user) redirect(`/login?next=/admin/staff/${id}`);
 
-  const canManage =
+  const holdsUsersManage =
     user.permissions.includes("*") || user.permissions.includes("users.manage");
+  // Only an owner manages an owner (business rule 7.1). `*` is what an owner
+  // holds; an administrator holds `users.manage` and every other code by name.
+  const isOwner = user.permissions.includes("*");
 
   let staff: StaffRow | null = null;
   let error: string | null = null;
@@ -52,6 +55,9 @@ export default async function StaffMemberPage({ params }: { params: Promise<{ id
     );
   }
 
+  const ownersOnly = holdsUsersManage && !isOwner && staff.role_code === "OWNER";
+  const canManage = holdsUsersManage && !ownersOnly;
+
   // The form's role picker, branch picker and last-owner guard are only
   // needed by someone who can edit.
   let roles: RoleOption[] = [];
@@ -62,9 +68,11 @@ export default async function StaffMemberPage({ params }: { params: Promise<{ id
       apiServer<MaybePaged<RoleOption>>("/roles/").catch(() => null),
       apiServer<{ branches: BranchOption[] }>("/organization/").catch(() => null),
     ]);
-    roles = rows(rolePayload);
+    const everyRole = rows(rolePayload);
+    // The API refuses an administrator who gives the owner role; do not offer it.
+    roles = isOwner ? everyRole : everyRole.filter((role) => role.code !== "OWNER");
     branches = organization?.branches ?? [];
-    const ownerRole = roles.find((role) => role.code === "OWNER");
+    const ownerRole = everyRole.find((role) => role.code === "OWNER");
     if (ownerRole) {
       const owners = await apiServer<MaybePaged<StaffRow>>(
         `/users/?role=${ownerRole.id}&status=ACTIVE&page_size=1`,
@@ -82,6 +90,7 @@ export default async function StaffMemberPage({ params }: { params: Promise<{ id
       isSelf={staff.id === user.id}
       isLastOwner={staff.role_code === "OWNER" && staff.status === "ACTIVE" && activeOwners <= 1}
       back={BACK}
+      notice={ownersOnly ? "Only an owner can change an owner's account." : undefined}
     />
   );
 }
