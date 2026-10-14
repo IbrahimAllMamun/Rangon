@@ -495,6 +495,31 @@ is still open and tracked in
 
 ## Verification log
 
+### The web image's two scan findings (D250), 2026-10-14
+
+Asked for: "fix D250". What the image job found once it could reach the web image: `sharp`
+0.35.4 (GHSA-wq5f-xc86-pv6w, in the librsvg it bundles) and `source-map-js` 1.2.1
+(CVE-2026-93749). Both have a patch release. Branch `fix/web-image-scan-d250`, on top of
+`feat/only-an-owner-manages-owners`.
+
+```text
+sharp 0.35.4 -> 0.35.5 ....................... the `overrides` entry in apps/web/package.json; its 26 platform packages with it
+source-map-js 1.2.1 -> 1.2.2 ................. the lockfile only: postcss asks for ^1.2.1
+anything else in the lockfile ................ no package changed version, none added or removed
+the image, scanned as CI scans it ............ 0 HIGH, 0 CRITICAL (the image built from main: 2 HIGH)
+the image's build ............................ passes: next build, with its type check and lint
+sharp in the built image ..................... loads, and resizes an image to WebP (libvips 8.18.7)
+vitest, in the image's build stage ........... 498 passed
+```
+
+The web app's unit tests could not be run from this machine's own copy of the dependencies
+(no Linux build of one tool in it); they run in the image's build stage, where `npm ci` has
+installed for Linux. That run is of this branch, so it covers the staff screens changed for
+the owner rule as well.
+
+**What only CI can say.** That "Build & scan images" is green on a runner: with this it has no
+finding left that is known.
+
 ### Two rules decided by the owner: an overpayment is refused, and only an owner manages an owner, 2026-10-14
 
 The owner's words: "an overpayment on an order is refused (D167); no need to keep overpayment",
@@ -5698,7 +5723,7 @@ habit this file keeps recommending; D60 is the reason that screen had been read-
 | D247 | **A recording taken straight after anything had written to its database did not replay.** The replay's clocks are set a minute and a half behind the recording's age, for the stack to come up in, so its harness began up to that much earlier than the recording's had; and the cases are built from the clock -- what an API mints is told from what was there by being newer than the harness. A row made in the two minutes before the recording was older than one harness and newer than the other. Straight after a reset, 109 cases differed, each by a timestamp read as "now" on one side; and **the first run of the recorded proof on GitHub failed on it** (`main`, 2026-10-12): four cases of the audit log, whose rows the comparison's races had written seconds before the recording began. *Found replaying a recording of merged `main` on 2026-10-13, an hour before that run's log could be read.* | Low | **Fixed 2026-10-13.** A recording keeps the instant its harness began (`began.txt`); a replay waits for it before it builds a case. `apps/api-nest/parity/recording.ts`, `run.ts` |
 | D248 | **The stock valuation lists its branches in no stated order.** `GET /inventory/valuation/` groups the stock by branch and asks for no order, so `by_branch` comes back as the planner hashed the groups. The sweep for D245 looked for orderings that tie and missed a grouped query with none at all; the other grouped queries were read again, and each is ordered or is read into a dictionary. *Found by the recorded proof's second run on GitHub (`main`, 2026-10-13): one case of 12,243, the two branches having changed places between the recording and its replay on one database. It never did locally.* | Low | **Fixed in Django and in the NestJS API, 2026-10-13.** Ordered by the branch's code, then its name. `inventory/api/views.py`, `inventory-admin.service.ts`, `tests/test_one_order.py` |
 | D249 | **The dependency audit lists three advisories in Django's packages, below what the image scan stops on.** `djangorestframework` 3.15.2: CVE-2026-73228 (a JSON or form body larger than `DATA_UPLOAD_MAX_MEMORY_SIZE` is parsed through `request.data`) and CVE-2026-73229 (`AdminRenderer` can show what a GET would have refused); both fixed in 3.17.2. `djangorestframework-simplejwt` 5.3.1: CVE-2024-22513 (`for_user` mints a token for a disabled account), fixed in 5.5.1. CI's audit step reports them as a warning and passes. What limits them here: nginx refuses a body over 12 MB before either API sees it; `AdminRenderer` is not among the renderers in any settings file; and Django serves production only when someone goes back to it. *Found running `pip-audit` on the pins after the Django 5.2 upgrade; all three are on the pins as they were before it.* | Low | Not fixed here: two minor versions of DRF is a change to what happens before a view runs, which is what the NestJS API was ported from case by case, and wants its own comparison. The owner's to schedule, or moot once Django goes. `requirements/base.txt` |
-| D250 | **The web image fails its security scan, and nobody had seen it.** The image job scans three images in turn and stops at the first that fails; until the Django image came clean (D242) it never reached the web image. Two HIGH findings in npm packages: `sharp` 0.35.4 (GHSA-wq5f-xc86-pv6w, a flaw in the librsvg it bundles; fixed in 0.35.5) and `source-map-js` 1.2.1 (CVE-2026-93749, denial of service; fixed in 1.2.2). `sharp` is what resizes product photographs. *Found on `main`'s run for PR #101, and confirmed by scanning the web image built from `07f9404` with CI's options.* | Medium | Not fixed here: two patch releases, with the web checks run on them. `sharp` is pinned in `apps/web/package.json`; `source-map-js` comes with other packages and moves in the lockfile. `apps/web/package.json`, `apps/web/package-lock.json` |
+| D250 | **The web image fails its security scan, and nobody had seen it.** The image job scans three images in turn and stops at the first that fails; until the Django image came clean (D242) it never reached the web image. Two HIGH findings in npm packages: `sharp` 0.35.4 (GHSA-wq5f-xc86-pv6w, a flaw in the librsvg it bundles; fixed in 0.35.5) and `source-map-js` 1.2.1 (CVE-2026-93749, denial of service; fixed in 1.2.2). `sharp` is what resizes product photographs. *Found on `main`'s run for PR #101, and confirmed by scanning the web image built from `07f9404` with CI's options.* | Medium | **Fixed 2026-10-14.** `sharp` 0.35.5 (it is an `overrides` entry in `apps/web/package.json`, so that is where it moves) and `source-map-js` 1.2.2 (in the lockfile; `postcss` asks for `^1.2.1`). Nothing else in the lockfile changed version. The image built from it scans clean with CI's options. `apps/web/package.json`, `apps/web/package-lock.json` |
 
 ## Still API-only (no UI)
 
