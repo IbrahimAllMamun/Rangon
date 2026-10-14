@@ -8,7 +8,10 @@
 #                                        PARITY_TIES=mark: where an answer is the recorded rows
 #                                        with tied ones in another order, keep where.
 #                                        PARITY_HEAP=reversed: every table's rows turned over
-#                                        first, to find what depends on the order rows lie in
+#                                        first, to find what depends on the order rows lie in.
+#                                        PARITY_ACCEPT=<regex>: the API's answer becomes the
+#                                        recorded one for the cases it names -- a deliberate
+#                                        change, committed with the change that made it
 #   scripts/nest-parity.sh replay-empty  the same for the shop with nothing in it, at each of
 #                                        its two moments
 #   scripts/nest-parity.sh replay-down   remove that stack and its volumes
@@ -70,8 +73,10 @@ case "${1:-}" in
     "${recorded[@]}" up -d --build nest nest-b
     wait_for "http://127.0.0.1:${RECORDED_PORT:-8640}/api/health/"
     status=0
-    # PARITY_TIES=mark writes beside the answers, so as the user who owns them.
-    "${recorded[@]}" --profile replay run --rm ${PARITY_TIES:+--user "$(id -u):$(id -g)" -e HOME=/tmp} replay || status=$?
+    # PARITY_TIES=mark and PARITY_ACCEPT write beside the answers, so as the
+    # user who owns them.
+    writes="${PARITY_TIES:-}${PARITY_ACCEPT:-}"
+    "${recorded[@]}" --profile replay run --rm ${writes:+--user "$(id -u):$(id -g)" -e HOME=/tmp} replay || status=$?
     # The worker on what the API queues: only after a whole replay, which
     # leaves the database as it found it.
     if [ -z "${PARITY_ONLY:-}" ]; then
@@ -119,6 +124,6 @@ case "${1:-}" in
     exit "$status"
     ;;
   *)
-    sed -n '2,17p' "$0"; exit 2
+    sed -n '2,20p' "$0"; exit 2
     ;;
 esac

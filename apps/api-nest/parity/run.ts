@@ -103,6 +103,11 @@ const ONLY = process.env.PARITY_ONLY ?? '';
 const RACES = process.env.PARITY_RACES ?? '';
 // PARITY_VERBOSE=1: print each case's status and side effects, to check a case tests what it says.
 const VERBOSE = Boolean(process.env.PARITY_VERBOSE);
+// A replay that takes the API's answer as the new recorded one, for the cases
+// whose names this matches: how a deliberate change to an answer reaches the
+// recording, now that nothing can record a whole one again (recorded-proof.md,
+// "Changing an answer"). The rewritten file is reviewed in the same commit.
+const ACCEPT = process.env.PARITY_ACCEPT ? new RegExp(process.env.PARITY_ACCEPT) : null;
 
 export type Side = 'django' | 'nest';
 
@@ -1183,6 +1188,7 @@ async function main(): Promise<void> {
   const cases = stage ? await emptyShopCases(stage) : await buildCases();
   let failed = 0;
   let known = 0;
+  let accepted = 0;
   const knownReasons = new Map<string, number>();
   const names = new Names();
   const recorder = mode === 'record' ? new Recorder() : null;
@@ -1303,7 +1309,28 @@ async function main(): Promise<void> {
       if (reason) knownReasons.set(reason, (knownReasons.get(reason) ?? 0) + 1);
       return !reason;
     });
-    if (unexplained.length) {
+    if (unexplained.length && recording && ACCEPT?.test(key)) {
+      // Taken as the answer from now on, at the moment the old one was asked:
+      // the pace of a replay is the recording's.
+      const before = recording.get(key);
+      recording.set(key, {
+        name: key,
+        request: `${testCase.method ?? 'GET'} ${testCase.path}`,
+        at: before?.at ?? asked,
+        response: kept(nest.response),
+        effects: nest.effects,
+      });
+      replayed.add(key);
+      accepted += 1;
+      console.log(
+        `TAKEN ${key}  [${testCase.method ?? 'GET'} ${testCase.path}]: the new answer is recorded`,
+      );
+      for (const difference of unexplained.slice(0, 12)) {
+        console.log(
+          `      ${difference.path}: ${reference}=${JSON.stringify(difference.django)} nest=${JSON.stringify(difference.nest)}`,
+        );
+      }
+    } else if (unexplained.length) {
       failed += 1;
       console.log(`DIFF  ${key}  [${testCase.method ?? 'GET'} ${testCase.path}]`);
       for (const difference of unexplained.slice(0, 12)) {
@@ -1361,6 +1388,19 @@ async function main(): Promise<void> {
   // Before the races, which are no part of it: the answers are whole once the
   // last case has run, and a race that fails afterwards does not unmake them.
   let recordedLine = '';
+  if (recording && accepted) {
+    // Only where every other case answered as recorded: a recording is of a
+    // run that agrees with itself.
+    if (failed) {
+      recordedLine = `not rewritten: ${failed} cases differ beyond the ${accepted} taken`;
+    } else {
+      const rewrite = new Recorder();
+      for (const entry of recording.values()) rewrite.add(entry);
+      const { path, bytes } = rewrite.write('answers');
+      recordedLine = `rewritten with ${accepted} answers taken: ${path}, ${bytes} bytes`;
+    }
+    console.log(recordedLine);
+  }
   if (recorder) {
     // A recording with a hole in it would pass a replay that skips the hole.
     if (failed) {

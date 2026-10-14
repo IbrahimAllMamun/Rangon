@@ -177,7 +177,8 @@ services:
     profiles: [replay]
     working_dir: /app
     # /recorded is read, but for a replay that marks tied rows
-    # (`PARITY_TIES=mark`), which the script runs as the user who owns it.
+    # (`PARITY_TIES=mark`) or takes new answers (`PARITY_ACCEPT`), which the
+    # script runs as the user who owns it.
     volumes:
       - ./apps/api-nest/parity:/app/parity:ro
       - ${PARITY_RECORDED_DIR:-./apps/api-nest/parity/recorded}:/recorded
@@ -185,6 +186,7 @@ services:
       <<: *harness-env
       PARITY_MODE: replay
       PARITY_TIES: ${PARITY_TIES:-}
+      PARITY_ACCEPT: ${PARITY_ACCEPT:-}
       PARITY_ONLY: ${PARITY_ONLY:-}
       PARITY_VERBOSE: ${PARITY_VERBOSE:-}
       PARITY_RACES: ${PARITY_RACES:-}
