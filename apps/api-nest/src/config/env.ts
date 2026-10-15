@@ -37,6 +37,12 @@ const list = (fallback: string) =>
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
+  // The address the API listens on. Every address by default, as a container
+  // needs; `127.0.0.1` on a host where only the web app beside it reaches the
+  // API, so that its port is not open to the network
+  // (docs/operations/webuzo-deployment.md). Not `HOST`: some shells export
+  // that as the machine's name.
+  RANGON_LISTEN_ADDRESS: z.string().min(1).default('0.0.0.0'),
   DJANGO_SETTINGS_MODULE: z.string().default('config.settings.dev'),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
