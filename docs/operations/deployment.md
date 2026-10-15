@@ -218,9 +218,13 @@ the other — [security.md](security.md#deploying-behind-a-proxy) has the table 
 [D88](../roadmap.md#known-defects) is what happens without them. The API must also be unreachable
 around the proxy, or a direct request carries no trusted entry at all.
 
-A worked example of exactly that: [webuzo-deployment.md](webuzo-deployment.md), where the panel's own
-web server terminates TLS and the project's Nginx container is not used. It also recorded three defects
-in the shipped prod stack that stopped a first deploy. Two are fixed: the Nginx config is a
-`templates/default.conf.template` the image renders with `envsubst`, so `${RANGON_DOMAIN}` is
-substituted at start, and Django's static files, the other, went with Django. The third stands: the prod overlay sets `build: !reset null` on purpose,
-because production pulls images CI built and scanned rather than building them on the server.
+The defects the 2026-09 Webuzo plan recorded in the shipped prod stack stand as they were: two are
+fixed (the Nginx config is a `templates/default.conf.template` the image renders with `envsubst`, so
+`${RANGON_DOMAIN}` is substituted at start; Django's static files went with Django), and the third
+holds on purpose: the prod overlay sets `build: !reset null`, because production pulls images CI
+built and scanned rather than building them on the server.
+
+A deployment with no proxy of the project's own: [webuzo-deployment.md](webuzo-deployment.md), done
+once with the demo shop. There Next.js is the only public process, behind the panel's web server,
+and the API listens on 127.0.0.1 with `DJANGO_TRUSTED_PROXY_HOPS=0`: every request it sees comes from
+Next.js.

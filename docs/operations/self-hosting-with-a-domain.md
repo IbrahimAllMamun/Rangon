@@ -1,6 +1,6 @@
 # Hosting Rangon from your own machine, on your own domain
 
-> Companion to [webuzo-deployment.md](webuzo-deployment.md) (rented VPS) and
+> Companion to [webuzo-deployment.md](webuzo-deployment.md) (a Webuzo hosting account) and
 > [deployment.md](deployment.md) (general release procedure). This file is for the case where the
 > hardware is **yours** — a laptop or desktop at home or in the shop — and you point a real domain at it.
 >

@@ -495,6 +495,38 @@ is still open and tracked in
 
 ## Verification log
 
+### The demo shop on a Webuzo account, 2026-10-15
+
+Asked for: "can I host the webapp in a shared hosting?", then the owner's own account: shell access,
+PostgreSQL 16, Webuzo's Node.js applications. Done with the demo shop, at
+`https://rangon.stataisrt.org`, and written up as
+[webuzo-deployment.md](operations/webuzo-deployment.md), which replaces the Django-era plan that was
+never run.
+
+```text
+the account ............................. PostgreSQL 16.10 (server), Node 22, cron, gcc; no Docker, no root
+Redis ................................... built from source in ~, password generated; answers after hours
+the database ............................ demo snapshot restored; migrate: adopted + 0001; sync-permissions;
+                                          six accounts given the owner's password (set-password)
+the API ................................. Node 22 from cron (scripts/webuzo-start.sh), 127.0.0.1:30249
+                                          (RANGON_LISTEN_ADDRESS, new); the HTTPS redirect off, as only
+                                          Next.js calls it; health, ready and products 200
+the web app ............................. a Webuzo application, rangon.stataisrt.org, SSL on; the owner:
+                                          "all works fine"
+```
+
+**The build met the account's limits.** `next build` was killed (`SIGKILL`) while compiling; with the
+heap capped it compiled and died in the type check on `pthread_create` (`SIGABRT`). The server reports
+48 cores, and Next.js starts a worker per core less one, Node a thread per core per pool. With
+`CIRCLE_NODE_TOTAL=2` (Next.js's own override of its worker count), `--v8-pool-size=2`,
+`UV_THREADPOOL_SIZE=2`, `--max-old-space-size=768` and `--no-lint`, it built. Measured on 4 cores: 1.55
+GB and 73 threads before, 1.13 GB and 31 after; Next.js's `experimental.cpus: 1` with its memory
+options, 2.26 GB.
+
+**Found on the way, not fixed:** Next.js does not pass the shopper's address to the API, so every
+anonymous visitor shares one rate-limit bucket and one sign-in limit, here and in the Docker stack.
+Next.js 15.5.24 carries a moderate advisory for self-hosted sites, fixed in 15.5.28.
+
 ### Removing Django, steps 6.4, 7 and 8: the NestJS API alone, 2026-10-14
 
 Asked for: "no need to rehearse. do everything so that it works fine", after the plan's 6.1 to 6.3
@@ -5569,7 +5601,7 @@ Do not describe any of these as working.
 | ~~Backup restore~~                       | **Proven 2026-08-22, under real conditions** — a `pg_dump -Fc` taken 14 minutes earlier was the only surviving copy of the production database after its volume was destroyed, and `pg_restore` brought back all 74 tables, 40 orders, 12 products, 6 users and 169 ledger rows |
 | Load / performance                      | Query budgets **are** asserted — `tests/test_performance.py` and `tests/test_concurrency.py` ran 38 passed on 2026-09-21. What is still missing is a **load test**: a budget is a query count, not a latency under concurrency, and nothing has driven listing, checkout or POS search at peak |
 | Security                                | Controls implemented, audits and image scans automated;**no independent penetration test**. 2026-09-21 is the argument for one: auditing a single control found every rate limit bypassable by a header and the audit trail writable by the caller ([D88](#known-defects)), both of which this table and `security.md` had listed as present. **2026-09-23 made the same argument three more times**: auditing uploads, the session and branch scope found receipts public, sign-out not revoking after thirty idle minutes, every report readable for any branch, and stock transferable out of any branch ([D91–D94](#known-defects)) — all four listed as controlled. **2026-09-24 once more**: of five more controls measured, CORS and CSP held, but the CSRF token `security.md` listed had never been built ([D101](#known-defects)), one error path echoed SQL ([D99](#known-defects)), and the order-tracking link returned the staff record ([D97](#known-defects)) |
-| Deployment                              | Compose prod stack + green CI;**no live environment** — nothing has ever been deployed                                                     |
+| Deployment                              | Compose prod stack + green CI. **One live environment, the demo shop**: a Webuzo account, 2026-10-15 ([webuzo-deployment.md](operations/webuzo-deployment.md)). No shop has traded on it, and the Docker prod stack has still never been deployed |
 | Size chart cache refresh                | Saving a size chart pings the web app to drop every cached product page (`products`) on commit. Never exercised end to end — the 2026-09-27 pass had no `WEB_REVALIDATE_URL`. Without it, a chart edit reaches the storefront within the product page's 60-second window |
 | Footer / page cache refresh             | Saving the footer, a social link or a page pings the web app to drop its cache (`site`, `pages`, `page:<slug>`). The signals and the route's allow-list are tested; the round trip is **not** — the 2026-09-26 browser pass had no `WEB_REVALIDATE_URL`. Without it, edits reach the storefront within the 5-minute cache window |
 

@@ -1,527 +1,329 @@
-# Deploying Rangon on a Webuzo server
+# Deploying Rangon on a Webuzo account
 
-> **Written for the Django stack (2026-09).** The API is the NestJS one alone since 2026-10-14
-> ([ADR-0023](../architecture/decisions/0023-django-is-gone.md)): there is no `api`, `worker` or
-> `beat` service and no Celery. Read `api-nest` for `api`, and each `python manage.py <command>` as
-> its `node dist/cli.js` equivalent in [operator-commands.md](operator-commands.md) -- `migrate`
-> followed by `sync-permissions`, `create-owner` for `createsuperuser`, `bootstrap-store` for the
-> piped script. The panel-specific findings below still hold.
-
-> **Status: written, never executed.** Nothing in this project has been deployed anywhere
-> ([roadmap.md](../roadmap.md#still-unproven)). This document is a plan derived from the repo's actual
-> compose files, Dockerfiles and settings — not a transcript of a working deploy. Expect to correct it
-> the first time you run it, and edit this file as you go.
+> **Done once, with the demo shop, on 2026-10-15**: `https://rangon.stataisrt.org`, a Webuzo
+> account with shell access on a shared server. Every command below is the one that worked there,
+> and every trap in §10 was hit there. A shop that trades has not run on it yet: before one does,
+> read §11.
 >
-> Hosting on hardware you own instead of a rented VPS:
+> This replaces the page written in 2026-09 for the Django stack on a Webuzo VPS with root and
+> Docker, which was never executed. No Docker and no root are needed here.
+>
+> General release rules -- backups first, migrations as their own step, expand/contract -- are in
+> [deployment.md](deployment.md). Hosting on hardware you own instead:
 > [self-hosting-with-a-domain.md](self-hosting-with-a-domain.md).
->
-> General release procedure, rollback and expand/contract migrations live in
-> [deployment.md](deployment.md). This file covers only what is **specific to Webuzo**.
->
-> **This plan still runs Django.** Since 2026-10-08 the production overlay
-> (`docker-compose.prod.yml`) runs the NestJS API and starts Django on demand
-> ([ADR-0017](../architecture/decisions/0017-nest-api-serves-production.md)). The overlay this page
-> has you write is laid over the base file alone, where nothing has changed: `api`, `worker` and
-> `beat` start as they always did, and the vhost sends `/api/` to Django. That works, and is the
-> stack the rollback file gives everyone else. To run the NestJS API here instead, the overlay
-> needs what `docker-compose.prod.yml` now carries for `api-nest`, `web` and the three Django
-> services, and the vhost needs `/api/` and `/media/` sent to `api-nest`'s port -- not written or
-> tried.
 
 ---
 
-## 1. Does your server actually qualify?
-
-Webuzo comes in two very different shapes, and only one can run this stack.
-
-| You have | Can it run Rangon? |
-|---|---|
-| **Webuzo on your own VPS/dedicated server, with root SSH** | **Yes** — this guide |
-| A Webuzo *end-user account* on someone else's server (no root, no SSH) | **No** |
-
-Rangon needs long-running processes (Gunicorn, a Node server, two Celery processes), PostgreSQL 16,
-Redis, and the ability to bind local ports. A restricted panel account that only offers PHP, MySQL and
-a file manager cannot host it at any price. If you are not sure which you have, log in and check for a
-**root** SSH login — no root, no deploy.
-
-**Minimum sizing.** The stack is eight processes plus a database. Budget **4 GB RAM and 2 vCPU** as a
-floor, 8 GB if the same box also runs Webuzo's own Apache/MySQL for other sites. The production compose
-file alone requests 2 GB for Postgres and 1 GB per API replica.
-
----
-
-## 2. Three things that would break the first deploy — two are now fixed
-
-Found by reading the production setup, not by deploying. Each one stopped the stack cold. §2.1 and
-§2.2 were fixed on 2026-09-09 (D15); §2.3 is unchanged and still applies to you.
-
-### 2.1 `${RANGON_DOMAIN}` is never substituted — **fixed**
-
-The Nginx config used to be mounted straight into `conf.d/`, where `server_name ${RANGON_DOMAIN};` and
-
-```nginx
-ssl_certificate /etc/letsencrypt/live/${RANGON_DOMAIN}/fullchain.pem;
-```
-
-are literal strings: Nginx does **not** expand environment variables in config files. It would look
-for a certificate in a directory literally named `${RANGON_DOMAIN}` and refuse to start.
-
-It is now
-[`infrastructure/docker/nginx/templates/default.conf.template`](../../infrastructure/docker/nginx/templates/default.conf.template),
-which the official image renders with `envsubst` at container start. `docker-compose.prod.yml` passes
-`RANGON_DOMAIN` (required — the stack refuses to start without it) and sets
-`NGINX_ENVSUBST_FILTER=RANGON_` so only our own names are substituted.
-
-**On Webuzo it does not arise either way**, because you do not run that container — see §3.
-
-### 2.2 `/static/` would 404 — **fixed**
-
-The prod compose mounted an `api_static` volume into Nginx read-only and **nothing ever populated it**:
-the `api` service never mounted it, so the `location /static/` alias served an empty directory. The
-`api` service now mounts `api_static:/app/staticfiles`, and `collectstatic` is step 3b of the release
-procedure — a named volume is seeded from the image only on first creation, so without that step every
-later release would serve the first release's assets.
-
-Harmless here regardless, because the API ships **WhiteNoise**
-(`whitenoise.storage.CompressedManifestStaticFilesStorage`) and serves its own hashed, compressed static
-files. Django admin and the DRF browsable API work as long as nothing intercepts `/static/`.
-
-### 2.3 The production compose cannot build images — still true
-
-`docker-compose.prod.yml` sets `build: !reset null` and pulls
-`${REGISTRY}/rangon-api:${TAG}`. CI builds and scans images but **does not push them** — no registry is
-configured. So you must either push to a registry first, or build on the server (§4.3).
-
----
-
-## 3. The topology to aim for
-
-Webuzo already owns ports 80 and 443 and already automates Let's Encrypt. Running the project's own
-Nginx container as well would mean two proxies fighting for the same ports. The project's own
-[deployment.md](deployment.md#reverse-proxy) says exactly what to do:
-
-> If the hosting platform already provides a managed load balancer with TLS, drop the Nginx service and
-> record that decision here rather than running two proxies.
-
-So:
+## 1. What runs where
 
 ```text
-Internet
-   │  :80 / :443  + Let's Encrypt
-   ▼
-Webuzo's Nginx (or Apache)            ← the only public web server, and the one
-                                        trusted hop: keep DJANGO_TRUSTED_PROXY_HOPS=1
-                                        and make sure it forwards X-Forwarded-For
-   ├── /api/  ──► 127.0.0.1:8001      ← api container (Gunicorn)
-   └── /      ──► 127.0.0.1:8080      ← web container (Next.js)
-                     │
-   docker network (private): db, redis, worker, beat
+browser ── https ──> Webuzo's web server ──> Next.js       127.0.0.1:30248   (a Webuzo application)
+                                                │
+                                                └──> NestJS API   127.0.0.1:30249   (cron + start script)
+                                                        │
+                                                        ├──> PostgreSQL 16   localhost:5432  (Webuzo's)
+                                                        └──> Redis            127.0.0.1:6380  (built in ~)
 ```
 
-Database and Redis publish **no** ports and stay on the private Docker network.
+**Only Next.js is public.** Every call a browser makes already goes through it: sign-in and sign-out
+(`/api/auth/*`), the admin's and the POS's calls (`/api/proxy/*`, which attach the httpOnly token),
+the pages, rendered on the server, and uploads (`/media/*`, which `next.config.ts` rewrites to the
+API). So the API listens on 127.0.0.1 alone (`RANGON_LISTEN_ADDRESS`), and is not a Webuzo
+application: every Webuzo application gets a public address.
 
-**Dropping the container Nginx drops what it was doing.** HSTS, CSP, the other security headers and the
-rate-limit zones live in that config. §5 reproduces them in the Webuzo vhost. Do not skip it — going
-live without them is a security regression, not a simplification.
+The one thing that would need the API public is a payment gateway's webhook
+(`POST /api/v1/shop/payments/<provider>/webhook/`). The demo takes cash on delivery. See §11.
 
----
+The ports are this account's. Webuzo offers a free port in its application form; the API's port was
+checked free with `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:30249/` (`000`).
 
-## 4. Steps
+## 2. Does the account qualify?
 
-### 4.1 Install Docker (Webuzo does not provide it)
+What was checked, and what it showed there:
 
-Over root SSH, on Debian/Ubuntu:
+| Needs | Check | There |
+|---|---|---|
+| A shell | SSH | `bash-5.1` |
+| PostgreSQL 16, server side | `psql "<address>" -c "select version();"` | 16.10. `psql --version` is the client only |
+| A user that can create schemas (pg-boss keeps its own) | `-c "create schema t; drop schema t;"` | yes |
+| Node 22 | the banner in Webuzo's application form | `/usr/local/apps/nodejs22/bin/node` |
+| Long-running processes allowed | a Redis started from the shell still answers hours later | yes |
+| Cron | `crontab -l` | yes |
+| A C compiler, for Redis | `make` in §3 | gcc |
+
+`free` and `ulimit` show the server, not the account. The account's limits are real and do not show
+until something is killed: §6 is built around two of them.
+
+## 3. Redis
+
+The API needs Redis for its rate limits, which are checked on almost every request: without it,
+nearly every request is a 500. It also caches the marketing feeds. Nothing in it must survive a
+restart.
 
 ```bash
-curl -fsSL https://get.docker.com | sh
-docker --version && docker compose version
+cd ~
+curl -LO https://download.redis.io/releases/redis-7.2.5.tar.gz
+tar xzf redis-7.2.5.tar.gz
+cd redis-7.2.5
+make
+umask 077
+openssl rand -hex 24 > ~/.redis-pass
 ```
 
-Webuzo manages its own Apache/Nginx/MySQL; Docker sits alongside and does not interfere, provided the
-containers never bind 80/443.
+**One command per line.** Pasted onto one line, `curl` takes the rest for addresses to download.
+The `make` output's complaints about `python3` and `pkg-config` are optional extras; `LINK
+redis-server` is what matters. The start script (§5) starts it; the "Memory overcommit" warning it
+prints is about saving to disk, which is off.
 
-### 4.2 Get the code and write the production env
+A generated password, not a typed one: an `@`, `:` or `/` in it breaks `REDIS_URL`.
+
+## 4. The database and the API
+
+**The database.** Create it and its user in Webuzo. The API takes the password from `~/.pgpass`
+(`localhost:5432:*:<user>:<password>`, mode 600) when the address has none, as `psql` does:
 
 ```bash
-mkdir -p /opt/rangon && cd /opt/rangon
-git clone https://github.com/IbrahimAllMamun/Rangon.git .
-cp .env.example .env
-chmod 600 .env
+umask 077
+printf 'DATABASE_URL=postgres://<user>@localhost:5432/<database>\n' > ~/rangon-db.env
 ```
 
-Now edit `.env`. These are the values that differ from development, and the ones that cause the most
-first-deploy failures:
+`pg` 8 warns on every start that this is deprecated; at `pg` 9 the password moves into the address.
+
+**The code and the API's build:**
 
 ```bash
+git clone https://github.com/IbrahimAllMamun/Rangon.git ~/rangon
+cd ~/rangon/apps/api-nest
+export PATH=/usr/local/apps/nodejs22/bin:$PATH
+npm ci
+npm run build
+```
+
+`npm ci` reports moderate advisories: all of them in development tools (`npm audit --omit=dev`: 0).
+Never `npm audit fix --force` on the server.
+
+**The shop's data.** For the demo, the committed snapshot, then this build's schema:
+
+```bash
+set -a; . ~/rangon-db.env; set +a
+psql "$DATABASE_URL" -Atc "select count(*) from information_schema.tables where table_schema='public';"   # 0
+cd ~/rangon
+pg_restore --exit-on-error --no-owner --no-privileges -d "$DATABASE_URL" infrastructure/snapshots/demo/demo.dump
+mkdir -p ~/rangon-media && tar -xzf infrastructure/snapshots/demo/media.tar.gz -C ~/rangon-media
+cd apps/api-nest
+node dist/cli.js migrate            # adopted: Django built this database ...; applied 1 migration
+node dist/cli.js sync-permissions
+```
+
+`--no-privileges`: the dump's grants name a role this server does not have.
+
+**The demo's accounts carry the README's password, which is public.** Before the site is reachable,
+every one gets yours:
+
+```bash
+read -rs -p "New password for the demo accounts: " NEW_PASSWORD; echo; export NEW_PASSWORD
+for email in $(psql "$DATABASE_URL" -Atc "select email from accounts_user order by email;"); do
+  node dist/cli.js set-password --email "$email" || echo "FAILED: $email"
+done
+unset NEW_PASSWORD
+```
+
+A shop that trades starts instead from its own backup, or from nothing:
+[new-store-from-scratch.md](new-store-from-scratch.md), steps 5 to 7: the same `node dist/cli.js`
+commands, run here from `apps/api-nest` rather than in a container.
+
+**The API's settings**, `~/rangon-api.env`, readable by you alone:
+
+```bash
+umask 077
+cat > ~/rangon-api.env <<EOF
 DJANGO_SETTINGS_MODULE=config.settings.prod
 DJANGO_DEBUG=0
-DJANGO_SECRET_KEY=<50+ random chars>          # python -c "import secrets;print(secrets.token_urlsafe(64))"
-
-# prod.py REFUSES to boot if this is empty or contains "*"
-DJANGO_ALLOWED_HOSTS=rangonfashion.com,www.rangonfashion.com,api,web
-DJANGO_CSRF_TRUSTED_ORIGINS=https://rangonfashion.com,https://www.rangonfashion.com
-DJANGO_CORS_ALLOWED_ORIGINS=https://rangonfashion.com,https://www.rangonfashion.com
-
-POSTGRES_PASSWORD=<strong random>
-DATABASE_URL=postgresql://rangon:<same password>@db:5432/rangon
-
-# Browser-visible. Baked into the JS bundle at BUILD time — see 4.3.
-NEXT_PUBLIC_API_URL=https://rangonfashion.com/api/v1
-NEXT_PUBLIC_SITE_URL=https://rangonfashion.com
-# Server-side, inside the Docker network. Stays http and internal.
-API_INTERNAL_URL=http://api:8000/api/v1
-
-USE_S3=0                                       # or configure real S3 credentials
-EMAIL_HOST=<your SMTP host>                    # Mailpit is development-only
-EMAIL_PORT=587
-EMAIL_USE_TLS=1
+DJANGO_SECRET_KEY=$(openssl rand -hex 32)
+PORT=30249
+RANGON_LISTEN_ADDRESS=127.0.0.1
+DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost
+DJANGO_SECURE_SSL_REDIRECT=0
+DJANGO_TRUSTED_PROXY_HOPS=0
+DJANGO_CSRF_TRUSTED_ORIGINS=https://rangon.stataisrt.org
+DJANGO_CORS_ALLOWED_ORIGINS=https://rangon.stataisrt.org
+RANGON_PUBLIC_URL=https://rangon.stataisrt.org
+REDIS_URL=redis://:$(cat ~/.redis-pass)@127.0.0.1:6380/0
+MEDIA_ROOT=$HOME/rangon-media
+WEB_REVALIDATE_URL=http://127.0.0.1:30248/api/revalidate
+WEB_REVALIDATE_SECRET=$(openssl rand -hex 24)
+EOF
 ```
 
-> **`WEB_PORT=4000` in the example file is a Windows workaround** for the development machine and is
-> irrelevant here. The dev overlay is not used in production.
+Two of these differ from the Docker stack on purpose:
 
-### 4.3 Build the images on the server
+- **`DJANGO_SECURE_SSL_REDIRECT=0`.** The only caller is Next.js, over plain HTTP on 127.0.0.1, and
+  with the redirect on the API answers its every call with a 301 to `https://127.0.0.1:30249/...`.
+  The browser's HTTPS is Webuzo's.
+- **`DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost`.** The only names the API is called by. Production
+  settings refuse to start without the list, and with a `*` in it.
 
-CI does not push images, so build locally on the box. **The `NEXT_PUBLIC_*` values are compiled into the
-browser bundle at build time** (see `apps/web/Dockerfile` — they are `ARG`s). Build with the real domain
-or the shipped JavaScript will call `localhost`:
+Email is not configured: jobs that send mail fail and retry. `EMAIL_HOST`, `EMAIL_PORT`,
+`EMAIL_USER`, `EMAIL_PASSWORD` and `DEFAULT_FROM_EMAIL` go in this file when there is a mail server.
+
+## 5. Keeping Redis and the API running
+
+[`scripts/webuzo-start.sh`](../../scripts/webuzo-start.sh) starts Redis when it does not answer a
+`PING`, and the API when `/api/health/` does not answer, stopping a hung one first. Cron runs it every
+five minutes and at reboot; it leaves a healthy process alone.
 
 ```bash
-cd /opt/rangon
-docker compose build api
-docker compose build web \
-  --build-arg NEXT_PUBLIC_API_URL=https://rangonfashion.com/api/v1 \
-  --build-arg NEXT_PUBLIC_SITE_URL=https://rangonfashion.com
+cp ~/rangon/scripts/webuzo-start.sh ~/rangon-start.sh
+chmod 700 ~/rangon-start.sh
+(crontab -l; echo '*/5 * * * * $HOME/rangon-start.sh'; echo '@reboot $HOME/rangon-start.sh') | crontab -
+~/rangon-start.sh
+sleep 20
+curl -s http://127.0.0.1:30249/api/ready/; echo                     # "status":"ready"
+curl -s -o /dev/null -w 'products %{http_code}\n' http://127.0.0.1:30249/api/v1/shop/products/
 ```
 
-The web build needs roughly 2 GB of free RAM. If it is OOM-killed, add swap or build elsewhere and
-`docker save` / `docker load` the image across.
+Logs: `~/rangon-logs/api.log`, `redis.log`, and `start.log`, one line per start.
 
-### 4.4 Create a Webuzo-specific compose overlay
+## 6. Building the web app
 
-Create `/opt/rangon/docker-compose.webuzo.yml`. This drops the Nginx service, binds the two app
-containers to **localhost only**, and keeps the data services private:
-
-```yaml
-# Webuzo overlay: Webuzo's own web server is the public edge, so the project's
-# Nginx container is not used (docs/operations/deployment.md, "Reverse proxy").
-# Ports bind to 127.0.0.1 so nothing is reachable except through Webuzo.
-services:
-  api:
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-      DJANGO_DEBUG: "0"
-    ports:
-      - "127.0.0.1:8001:8000"
-    restart: unless-stopped
-
-  web:
-    environment:
-      NODE_ENV: production
-    ports:
-      - "127.0.0.1:8080:3000"
-    restart: unless-stopped
-
-  worker:
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-    restart: unless-stopped
-
-  beat:
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.prod
-    restart: unless-stopped
-
-  db:
-    volumes:
-      - /var/lib/rangon/postgres:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  redis:
-    volumes:
-      - /var/lib/rangon/redis:/data
-    restart: unless-stopped
-```
-
-Note this deliberately extends the **base** `docker-compose.yml`, not `docker-compose.prod.yml` — the
-latter demands a registry and a `TAG`, which you do not have. You lose the prod overlay's hardening
-(`read_only`, `cap_drop`, replica counts). Copy those blocks across once the stack is up and you have a
-baseline that works; do not do both at once, or you will not know which change broke it.
-
-### 4.5 Start the stack and migrate
+`NEXT_PUBLIC_SITE_URL` is baked into the build: the links, the sitemap, and the check that refuses a
+form posted from another site, which refuses sign-in when it is wrong. So is `API_INTERNAL_URL`, for
+the `/media/` rewrite, although the server reads it again when it runs.
 
 ```bash
-cd /opt/rangon
-mkdir -p /var/lib/rangon/postgres /var/lib/rangon/redis
-
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml up -d db redis
-sleep 10
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml run --rm api python manage.py migrate
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml up -d
-
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml ps
+cd ~/rangon/apps/web
+export PATH=/usr/local/apps/nodejs22/bin:$PATH
+npm ci
+rm -rf .next
+CIRCLE_NODE_TOTAL=2 UV_THREADPOOL_SIZE=2 NODE_OPTIONS="--max-old-space-size=768 --v8-pool-size=2" \
+  NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_SITE_URL=https://rangon.stataisrt.org \
+  API_INTERNAL_URL=http://127.0.0.1:30249/api/v1 npx next build --no-lint
+cp -r .next/static .next/standalone/.next/static
+cp -r public .next/standalone/public
 ```
 
-Create the shop itself first. `migrate` makes the roles and permissions but **no organization**, and
-nothing in the app creates one, so without this step Settings has no shop to edit and a branch
-cannot be added. `scripts/bootstrap-store.py` makes the organization, the first branch and a
-zero-balance cash drawer, and is safe to re-run
-([new-store-from-scratch.md §6](new-store-from-scratch.md#6-create-the-organization-first-branch-and-cash-drawer)):
+**A plain `next build` does not survive the account's limits.** The server reports 48 cores, and
+Node and Next.js size themselves by them:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec -T -e SHOP_NAME="Rangon Fashion" -e BRANCH_NAME="Rangon Panthapath" -e BRANCH_CODE=DHK1 api python manage.py shell < scripts/bootstrap-store.py
-```
+| Attempt there | What happened |
+|---|---|
+| `next build` | killed while compiling (`SIGKILL`): memory |
+| with `--max-old-space-size=768` | compiled, then `pthread_create: Resource temporarily unavailable` and `SIGABRT` in the type check: threads |
+| all of the above | built |
 
-Then the first real user (**do not** run `seed_demo` on a production database — it wipes and
-reseeds). Interactive on purpose: `--noinput` skips the password rules:
+Measured on a 4-core machine with the same code:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec api python manage.py createsuperuser
-```
-
-Confirm both services answer locally before touching the web server:
-
-```bash
-curl -s -o /dev/null -w "api %{http_code}\n" http://127.0.0.1:8001/api/health/
-curl -s -o /dev/null -w "web %{http_code}\n" http://127.0.0.1:8080/
-```
-
-### 4.6 Point the domain at the server
-
-In the Webuzo panel: add the domain, then issue a **Let's Encrypt** certificate for it. Confirm
-`https://rangonfashion.com` serves Webuzo's default page over a valid certificate **before** adding the
-proxy rules — debugging TLS and proxying at the same time wastes an afternoon.
-
----
-
-## 5. The Webuzo vhost configuration
-
-Add this as custom Nginx configuration for the domain in the Webuzo panel (Webuzo writes its own vhost
-files; use its custom-config field rather than hand-editing files it will regenerate). This replaces the
-container Nginx, including the security headers and rate limits that came with it.
-
-```nginx
-# Rate-limit zones — must sit in the http{} context. Webuzo may require these in
-# its global nginx.conf rather than the vhost; if the config test rejects them
-# here, move just these two lines.
-limit_req_zone $binary_remote_addr zone=rangon_general:10m rate=30r/s;
-limit_req_zone $binary_remote_addr zone=rangon_auth:10m    rate=1r/s;
-```
-
-```nginx
-# --- inside the HTTPS server block for rangonfashion.com -------------------
-
-client_max_body_size 12m;              # product image uploads; the API caps at 10 MB
-
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-add_header X-Content-Type-Options    "nosniff" always;
-add_header X-Frame-Options           "DENY" always;
-add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy        "camera=(), microphone=(), geolocation=(), payment=()" always;
-# Do NOT add a Content-Security-Policy header here. The web app sends its own,
-# built around a per-request nonce minted in `apps/web/src/middleware.ts`, so
-# the App Router's inline RSC scripts run without 'unsafe-inline'. `add_header`
-# appends rather than replaces, and a browser enforces the intersection of every
-# policy it receives, so a second header would block the nonced scripts and
-# render a blank page — the failure recorded as D16 in docs/roadmap.md.
-
-# These four headers are not optional. Django's prod settings set
-# SECURE_SSL_REDIRECT=True and trust X-Forwarded-Proto; if Webuzo proxies over
-# plain http without setting it, Django sees an insecure request and redirects
-# to https forever — an infinite loop that looks like "the site is down".
-proxy_http_version 1.1;
-proxy_set_header Host              $host;
-proxy_set_header X-Real-IP         $remote_addr;
-proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-proxy_set_header X-Forwarded-Proto $scheme;
-
-# Next.js owns these two prefixes — they are route handlers in the web app, not
-# Django. `/api/proxy/*` attaches the httpOnly token to browser calls and
-# `/api/auth/*` sets those cookies at login. Send them to the API and every
-# interactive feature 404s (cart, checkout, POS sales, admin actions, sign-in)
-# while the pages still render. Longest prefix wins, so these override /api/.
-location /api/proxy/ {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_read_timeout 60s;
-}
-
-location /api/auth/ {
-    limit_req zone=rangon_auth burst=5 nodelay;
-    proxy_pass http://127.0.0.1:8080;
-}
-
-location /api/ {
-    limit_req zone=rangon_general burst=60 nodelay;
-    proxy_pass http://127.0.0.1:8001;
-    proxy_read_timeout 60s;
-}
-
-location ~ ^/api/v1/auth/(login|register|password) {
-    limit_req zone=rangon_auth burst=5 nodelay;
-    proxy_pass http://127.0.0.1:8001;
-}
-
-location /django-admin/ {
-    # Restrict to the office network before go-live.
-    # allow 203.0.113.0/24; deny all;
-    proxy_pass http://127.0.0.1:8001;
-}
-
-# Django serves /static/ itself via WhiteNoise (hashed + compressed).
-location /static/ {
-    proxy_pass http://127.0.0.1:8001;
-    expires 30d;
-    access_log off;
-    add_header Cache-Control "public, immutable";
-}
-
-location /_next/static/ {
-    proxy_pass http://127.0.0.1:8080;
-    expires 365d;
-    access_log off;
-    add_header Cache-Control "public, immutable";
-}
-
-location / {
-    limit_req zone=rangon_general burst=60 nodelay;
-    proxy_pass http://127.0.0.1:8080;
-    proxy_read_timeout 30s;
-}
-```
-
-**If Webuzo is running Apache instead of Nginx**, the equivalent is `ProxyPass` / `ProxyPassReverse` to
-the same two ports, plus `RequestHeader set X-Forwarded-Proto "https"` — that header is what stops the
-redirect loop described above. `Header always set` gives you the security headers.
-
-Reload the web server from the panel, then:
-
-```bash
-curl -sI https://rangonfashion.com | head -20
-curl -s https://rangonfashion.com/api/health/
-```
-
----
-
-## 6. Verify before you call it live
-
-```bash
-cd /opt/rangon
-./scripts/smoke-test.sh https://rangonfashion.com          # base URL is a positional argument
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec api \
-  python manage.py verify_inventory
-```
-
-Then by hand, because none of it has ever been done on a server:
-
-- [ ] Storefront home, shop, a product page, cart, checkout all load over HTTPS
-- [ ] `/admin` and `/pos` redirect to `/login` when signed out, and work when signed in
-- [ ] A test order completes end to end, then **cancel it** so it does not pollute real figures
-- [ ] `verify_inventory` still reports the ledger consistent afterwards
-- [ ] Celery: `docker compose ... logs worker beat --tail 50` shows no crash loop
-- [ ] Email actually sends (order confirmation), through the real SMTP host
-- [ ] HSTS/CSP present: `curl -sI https://rangonfashion.com | grep -i strict-transport`
-- [ ] `https://rangonfashion.com/api/docs/` is reachable — then decide whether it should be public
-- [ ] The nine `DECISION REQUIRED` business rules are settled — **especially VAT**, which rewrites every
-      historical total if changed later ([business-rules.md](../business-rules.md))
-
----
-
-## 7. Backups — do this on day one, not later
-
-`/var/lib/rangon/postgres` holds the only copy of every order, payment and ledger row.
-
-### Where `backup-db.sh` can actually run — this was tested
-
-`scripts/backup-db.sh` calls `pg_dump` against host `db`, which only resolves **inside** the Docker
-network. That rules out running it from the Webuzo host unless you publish the database port, which the
-overlay in §4.4 deliberately does not do. So it has to run in a container — and only one of them works:
-
-| Runs in | `pg_dump` | Result |
+| Build | Peak memory | Peak threads |
 |---|---|---|
-| `api` container | 15.19 (Debian bookworm) | **Fails** — `aborting because of server version mismatch` |
-| `db` container | 16.15 | **Works** — verified, produced a 398 KB dump |
+| `next build` | 1.55 GB | 73 |
+| `--max-old-space-size=768` | 1.33 GB | 73 |
+| the command above | 1.13 GB | 31 |
+| `experimental: { cpus: 1, webpackMemoryOptimizations, webpackBuildWorker: false }` | 2.26 GB | -- |
 
-`pg_dump` refuses to read a server newer than itself, and the API image ships the older client. Run
-backups from the **db** container, which has both `pg_dump` 16 and `bash`:
+What each part does:
 
-```bash
-# In Webuzo's cron manager, or the system crontab. Adjust the path to .env.
-0 2 * * * cd /opt/rangon && /usr/bin/docker compose -f docker-compose.yml -f docker-compose.webuzo.yml \
-  exec -T -e RANGON_ENV=prod -e BACKUP_DIR=/backups db bash /scripts/backup-db.sh scheduled \
-  >> /var/log/rangon-backup.log 2>&1
-```
+- `CIRCLE_NODE_TOTAL=2`: Next.js takes its worker count from this variable when it is set, and from
+  the core count less one when not -- 47 workers there.
+- `--v8-pool-size=2`, `UV_THREADPOOL_SIZE=2`: each Node process's thread pools, otherwise one thread
+  per core.
+- `--no-lint`: CI lints every change before it merges. The type check still runs.
+- Next.js's own low-memory settings made it worse, as the last row shows.
 
-That command needs two mounts added to the `db` service in your overlay, so the script and the output
-directory exist inside the container:
+`next start` cannot serve a `standalone` build; `server.js` is what runs, with `.next/static` and
+`public` copied in beside it, as the Dockerfile does.
 
-```yaml
-  db:
-    volumes:
-      - /var/lib/rangon/postgres:/var/lib/postgresql/data
-      - ./scripts:/scripts:ro
-      - /var/backups/rangon:/backups
-```
-
-`PGPASSWORD` is picked up from `POSTGRES_PASSWORD`, which the compose env already provides to `db`.
-
-If you would rather not mount the repo into the database container, the equivalent without the script —
-losing its size check, `pg_restore --list` verification, off-site upload and pruning — is:
+Before Webuzo, a test from the shell:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml exec -T db \
-  pg_dump -U rangon -d rangon --format=custom --compress=6 --no-owner --no-privileges \
-  > /var/backups/rangon/rangon-$(date -u +%Y%m%dT%H%M%SZ).dump
+cd ~/rangon/apps/web/.next/standalone
+NODE_ENV=production HOSTNAME=127.0.0.1 PORT=30248 API_INTERNAL_URL=http://127.0.0.1:30249/api/v1 \
+  /usr/local/apps/nodejs22/bin/node server.js &
+sleep 8
+curl -s -o /dev/null -w 'home %{http_code}\n' http://127.0.0.1:30248/    # home 200
+kill %1
 ```
 
-Set `BACKUP_S3_BUCKET` to get off-site copies; without it the script warns that the backup exists only
-on the same disk as the database it is protecting. Read [backups.md](backups.md) for retention and
-[disaster-recovery.md](disaster-recovery.md) for the restore drill.
+## 7. The Webuzo application
 
-**Rehearse a restore into a scratch database before go-live.** The scripts exist and have never been run
-end to end; a backup nobody has restored is not a backup
-([roadmap.md](../roadmap.md#still-unproven)).
+Application Manager, **Create**, the **Self Managed** tab:
 
----
+| Field | Value |
+|---|---|
+| Port | 30248 (offered by the form) |
+| Application Name | `rangon_web` |
+| Deployment Domain | `rangon.stataisrt.org`, its SSL switched on |
+| Base Application URL | empty: the site's root |
+| Application Path | `rangon/apps/web/.next/standalone` |
+| Application type | Node.js 22 |
+| Application startup file | `server.js` |
+| Deployment Environment | Production |
+| Start Command | `/usr/local/apps/nodejs22/bin/node /home/stataisr/rangon/apps/web/.next/standalone/server.js` |
+| Stop Command | `pkill -u stataisr -f "[s]tandalone/server.js"` |
 
-## 8. Updating a running deployment
+The `[s]` keeps `pkill` from matching the shell that runs it, whose own command line holds the
+pattern.
+
+Environment variables:
+
+| Name | Value |
+|---|---|
+| `NODE_ENV` | `production`: the session cookies are `Secure` |
+| `HOSTNAME` | `127.0.0.1`. `server.js` listens on `HOSTNAME`, and a shell sets that to the machine's name |
+| `PORT` | `30248` |
+| `API_INTERNAL_URL` | `http://127.0.0.1:30249/api/v1` |
+| `NEXT_TELEMETRY_DISABLED` | `1` |
+| `REVALIDATE_SECRET` | `sed -n 's/^WEB_REVALIDATE_SECRET=//p' ~/rangon-api.env`: the same string, or the API's requests to refresh cached pages are refused |
+
+## 8. Verify
+
+- `https://rangon.stataisrt.org` shows the twelve products, with their images.
+- `/login` as `owner@rangon.test`, with the password from §4, opens the admin.
+- `tail ~/rangon-logs/api.log` and Webuzo's log for the application show no errors.
+
+## 9. Updating
 
 ```bash
-cd /opt/rangon
-./scripts/backup-db.sh                                    # always first
-git pull
-docker compose build api
-docker compose build web \
-  --build-arg NEXT_PUBLIC_API_URL=https://rangonfashion.com/api/v1 \
-  --build-arg NEXT_PUBLIC_SITE_URL=https://rangonfashion.com
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml \
-  run --rm api python manage.py migrate
-docker compose -f docker-compose.yml -f docker-compose.webuzo.yml up -d
+pg_dump --format=custom --no-owner --no-privileges -d "$(cut -d= -f2- ~/rangon-db.env)" \
+  -f ~/rangon-backup-$(date -u +%Y%m%dT%H%M%SZ).dump                    # always first
+cd ~/rangon && git pull
+cd apps/api-nest && npm ci && npm run build
+set -a; . ~/rangon-db.env; set +a
+node dist/cli.js migrate
+node dist/cli.js sync-permissions
+kill "$(cat ~/rangon-logs/api.pid)"; ~/rangon-start.sh
 ```
 
-Migrations run as a **separate step**, never as a container start hook — otherwise every replica races
-to migrate the same database. Rollback and expand/contract rules: [deployment.md](deployment.md).
+Then §6's build and copies, and stop and start the application in Webuzo. A change to
+`NEXT_PUBLIC_SITE_URL` or to the API's port needs that rebuild; a change to the other variables in §7
+needs only the restart.
 
----
+**Backups.** [`scripts/backup-db.sh`](../../scripts/backup-db.sh) runs here with
+`BACKUP_VIA=direct POSTGRES_HOST=localhost POSTGRES_DB=<database> POSTGRES_USER=<user>
+BACKUP_DIR=$HOME/rangon-backups RANGON_ENV=prod`, the password from `~/.pgpass`, from cron like the
+start script. Not yet run there. Without `BACKUP_S3_BUCKET` the copies sit on the same disk as the
+database: see [backups.md](backups.md).
 
-## 9. Webuzo-specific gotchas
+## 10. What went wrong on the way
 
 | Symptom | Cause |
 |---|---|
-| Redirect loop, or "too many redirects" | `X-Forwarded-Proto` not set by the proxy. Django's prod settings force HTTPS and trust that header |
-| CSS/JS 404 on the storefront | `/_next/static/` not proxied to the web container |
-| Django admin unstyled | `/static/` not reaching the API container (WhiteNoise serves it from there) |
-| Browser calls `localhost:8000` | `NEXT_PUBLIC_API_URL` was wrong **at image build time**; rebuild the web image with the right build arg |
-| `docker compose up` fails on port 80 | You left the `nginx` service in; the Webuzo overlay must exclude it |
-| API refuses to start | `DJANGO_ALLOWED_HOSTS` empty or contains `*` — `prod.py` raises deliberately |
-| Panel unreachable after firewall changes | Webuzo's own ports (commonly 2002–2005) must stay open; confirm in your panel before locking the firewall down |
-| Stack dies overnight | OOM. Check `docker compose ps` and `dmesg | grep -i kill`; 4 GB is a floor, not a target |
+| `curl: (6) Could not resolve host: tar` | several commands pasted onto one line |
+| Next.js build `SIGKILL` | the account's memory limit; §6 |
+| `pthread_create: Resource temporarily unavailable`, `SIGABRT` | the account's thread limit, and pools sized for 48 cores; §6 |
+| Every page fails, the API log shows nothing | `DJANGO_SECURE_SSL_REDIRECT` left on: the API redirects Next.js's plain-HTTP calls; §4 |
+| `Error: Connection is closed.` on every API call | Redis not running; `~/rangon-start.sh` |
+| Sign-in "came from another website" | the web app built without `NEXT_PUBLIC_SITE_URL`, or with another address; rebuild |
+| Webuzo cannot reach the web app | `HOSTNAME` unset, so `server.js` listens on the machine's name |
+| `DeprecationWarning: pgpass support is deprecated` | `pg` 8 reading `~/.pgpass`; harmless |
 
----
+## 11. Before a shop trades on it
 
-## 10. What this document does not cover
-
-- **A real payment gateway.** COD only today; the card option is deliberately disabled in the UI.
-- **Object storage.** `USE_S3=0` stores uploads on the container filesystem, which does not survive a
-  rebuild. Configure S3-compatible storage before customers upload anything you care about.
-- **Multi-server or HA.** One box, one database. The prod overlay's `replicas` are for a single host.
-- **Anything verified.** No part of this has been executed against a Webuzo server.
+- **Rate limits see one visitor.** Next.js does not pass the shopper's address to the API, so every
+  anonymous visitor shares one bucket (`DJANGO_THROTTLE_ANON`, 60 a minute by default) and one
+  sign-in limit. True of the Docker stack too; not fixed yet.
+- **Next.js 15.5.24 has a moderate advisory** for self-hosted sites (cache poisoning of SSG and ISR
+  pages, GHSA-4jqv-mc3x-m676, GHSA-mcj8-r9mp-w47p); 15.5.28 fixes it.
+- **Payments.** A gateway's webhook needs the API reachable: a second Webuzo application on its own
+  subdomain, with the redirect and the allowed hosts changed to suit.
+- **Email**, §4. **Backups**, §9, with a restore rehearsed.
+- **Uploads** are in `~/rangon-media`, on the same disk; the database backup does not include them.
