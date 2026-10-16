@@ -366,7 +366,7 @@ npm install && npm run dev
 Staging/production procedures, migration strategy, rollback and backups are documented in:
 
 - [docs/operations/deployment.md](docs/operations/deployment.md)
-- [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — single-server Webuzo VPS
+- [docs/operations/webuzo-deployment.md](docs/operations/webuzo-deployment.md) — a Webuzo account: Next.js as the panel's application, the API beside it (done once, with the demo)
 - [docs/operations/self-hosting-with-a-domain.md](docs/operations/self-hosting-with-a-domain.md) — your own machine + your own domain
 - [docs/operations/local-production.md](docs/operations/local-production.md) — build and run the production images locally, from scratch
 - [docs/operations/new-store-from-scratch.md](docs/operations/new-store-from-scratch.md) — the same stack as a real shop: blank database, no demo, your own organization, branch and owner account

@@ -55,8 +55,8 @@ one above.
 | `COMPOSE_FILES` | `-f docker-compose.yml` | Which compose files identify the stack |
 | `DB_SERVICE` | `db` | The database service name |
 
-A worked cron example for a single-host Docker deployment is in
-[webuzo-deployment.md](webuzo-deployment.md#7-backups--do-this-on-day-one-not-later).
+How it runs on a Webuzo account, with no Docker and the local `pg_dump`, is in
+[webuzo-deployment.md](webuzo-deployment.md#9-updating).
 
 ## Scheduling
 
