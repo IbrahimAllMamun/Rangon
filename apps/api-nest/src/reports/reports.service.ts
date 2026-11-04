@@ -114,14 +114,71 @@ interface Scope {
   branchId: string | null;
 }
 
-interface GrossProfit {
-  revenue: Dec;
-  refunds: Dec;
-  netRevenue: Dec;
+/** The sums a period's statement is built from, each already rounded to the cent. */
+export interface StatementSums {
+  /** Goods sold, net of VAT and of every discount, by `placed_at`. */
+  sold: Dec;
+  /** What those goods cost: the frozen `unit_cost` × quantity. */
   cogs: Dec;
-  cogsRecovered: Dec;
+  /** Goods back on completed returns, valued as they were sold: net of VAT and discount. */
+  returns: Dec;
+  /** The VAT element of those returns (the VAT report's credit). */
+  returnedVat: Dec;
+  /** The frozen cost of every returned unit, whatever became of it. */
+  cogsReturned: Dec;
+  /** The part of `cogsReturned` that did not go back on the shelf (DAMAGED, QUARANTINE). */
+  writtenOff: Dec;
+  /** What completed returns paid out: `refund_amount`, VAT and shipping in it. */
+  refunds: Dec;
+  /** The order's shipping, on the completed returns that refund it (a shop-fault reason). */
+  shippingRefunded: Dec;
+  /** Money given back on a sold order with no return behind it: the goods stayed out. */
+  refundsWithoutReturn: Dec;
+}
+
+export interface GrossProfit extends StatementSums {
+  netRevenue: Dec;
   netCogs: Dec;
   grossProfit: Dec;
+  /**
+   * What a return paid beyond the goods and their VAT that is not shipping:
+   * an amount typed at completion, a cap, the rounding of a split discount.
+   * Negative where less was paid back than the goods were worth.
+   */
+  refundAdjustments: Dec;
+  /** Written off + shipping refunded + adjustments + refunds without a return. */
+  returnLosses: Dec;
+}
+
+/**
+ * The statement's arithmetic (business rules §4.1). A return reverses the sale
+ * it undoes on the sale's own terms -- its goods net of VAT out of revenue,
+ * every returned unit's frozen cost out of the cost of goods -- so a sale
+ * returned in full leaves gross profit where it was before the sale. What the
+ * shop lost on top of that is its own line below gross profit: the cost of
+ * goods that did not go back on the shelf, shipping paid back, and whatever a
+ * refund paid beyond (or short of) the goods and their VAT. The VAT itself is
+ * the VAT report's, credited there, and in no profit figure.
+ */
+export function incomeStatement(sums: StatementSums): GrossProfit {
+  const netRevenue = quantize(sums.sold.minus(sums.returns));
+  const netCogs = quantize(sums.cogs.minus(sums.cogsReturned));
+  const refundAdjustments = quantize(
+    sums.refunds.minus(sums.returns).minus(sums.returnedVat).minus(sums.shippingRefunded),
+  );
+  return {
+    ...sums,
+    netRevenue,
+    netCogs,
+    grossProfit: quantize(netRevenue.minus(netCogs)),
+    refundAdjustments,
+    returnLosses: quantize(
+      sums.writtenOff
+        .plus(sums.shippingRefunded)
+        .plus(refundAdjustments)
+        .plus(sums.refundsWithoutReturn),
+    ),
+  };
 }
 
 interface ExpenseTotals {
@@ -205,10 +262,9 @@ export class ReportsService {
     );
   }
 
-  /** The returns completed in the window: as a `FROM ... WHERE`, the order joined only for a branch. */
+  /** The returns completed in the window, as a `FROM ... WHERE`, each with its order. */
   private completedReturns(sql: SqlParams, scope: Scope): string {
-    const join = scope.branchId ? ` INNER JOIN ${O} ON (${R}."order_id" = ${O}."id")` : '';
-    return `FROM ${R}${join} WHERE (${this.window(
+    return `FROM ${R} INNER JOIN ${O} ON (${R}."order_id" = ${O}."id") WHERE (${this.window(
       sql,
       `${R}."completed_at"`,
       scope,
@@ -264,41 +320,63 @@ export class ReportsService {
     return kind === 'date' ? `(${local})::date` : `DATE_TRUNC('month', ${local})`;
   }
 
-  /** `_gross_profit`: the window's completed returns applied to its sales. */
+  /**
+   * Money given back in the window on an order that counts as a sale with no
+   * return behind it (the goods stayed out), by the moment it went back.
+   */
+  private refundsWithoutReturn(sql: SqlParams, scope: Scope): string {
+    return `FROM "orders_refund" INNER JOIN ${O} ON ("orders_refund"."order_id" = ${O}."id")
+      WHERE (${this.window(
+        sql,
+        `"orders_refund"."created_at"`,
+        scope,
+        `${O}."branch_id"`,
+        ` AND "orders_refund"."status" = 'COMPLETED' AND ${O}."status" IN ${SOLD}` +
+          ` AND "orders_refund"."return_request_id" IS NULL`,
+      )})`;
+  }
+
+  /**
+   * `_gross_profit`: the window's completed returns applied to its sales, by
+   * `incomeStatement`. Returns land on the day they were completed.
+   */
   private async grossProfit(scope: Scope, revenue: Dec, cogs: Dec): Promise<GrossProfit> {
     let sql = new SqlParams();
-    const refunds = quantize(
-      (
-        await this.one(
-          `SELECT COALESCE(SUM(${R}."refund_amount"), 0.00) AS "total" ${this.completedReturns(sql, scope)}`,
-          sql,
-        )
-      ).total as string,
+    const paid = await this.one(
+      `SELECT COALESCE(SUM(${R}."refund_amount"), 0.00) AS "total",
+              COALESCE(SUM(${O}."shipping_total") FILTER (WHERE ${R}."refund_shipping"), 0.00) AS "shipping"
+         ${this.completedReturns(sql, scope)}`,
+      sql,
     );
     sql = new SqlParams();
-    const cogsRecovered = quantize(
-      (
-        await this.one(
-          `SELECT COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity")), 0.00) AS "total"
-             FROM ${RI} INNER JOIN ${I} ON (${RI}."order_item_id" = ${I}."id")
-            WHERE (${RI}."restock_decision" = 'RESTOCK' AND ${this.completedReturnLines(sql, scope)})`,
-          sql,
-        )
-      ).total as string,
+    // Summed unrounded and rounded once, as the VAT report rounds its credit.
+    const lines = await this.one(
+      `SELECT COALESCE(SUM(${RETURNED_LINE_BASE}), 0.00) AS "goods",
+              COALESCE(SUM(${RETURNED_LINE_VAT}), 0.00) AS "vat",
+              COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity")), 0.00) AS "cost",
+              COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity"))
+                FILTER (WHERE ${RI}."restock_decision" IS DISTINCT FROM 'RESTOCK'), 0.00) AS "written_off"
+         FROM ${RI} INNER JOIN ${I} ON (${RI}."order_item_id" = ${I}."id")
+         INNER JOIN ${O} ON (${I}."order_id" = ${O}."id")
+        WHERE ${this.completedReturnLines(sql, scope)}`,
+      sql,
     );
-    const sold = quantize(revenue);
-    const cost = quantize(cogs);
-    const netRevenueValue = quantize(sold.minus(refunds));
-    const netCogs = quantize(cost.minus(cogsRecovered));
-    return {
-      revenue: sold,
-      refunds,
-      netRevenue: netRevenueValue,
-      cogs: cost,
-      cogsRecovered,
-      netCogs,
-      grossProfit: quantize(netRevenueValue.minus(netCogs)),
-    };
+    sql = new SqlParams();
+    const direct = await this.one(
+      `SELECT COALESCE(SUM("orders_refund"."amount"), 0.00) AS "total" ${this.refundsWithoutReturn(sql, scope)}`,
+      sql,
+    );
+    return incomeStatement({
+      sold: quantize(revenue),
+      cogs: quantize(cogs),
+      returns: quantize(lines.goods as string),
+      returnedVat: quantize(lines.vat as string),
+      cogsReturned: quantize(lines.cost as string),
+      writtenOff: quantize(lines.written_off as string),
+      refunds: quantize(paid.total as string),
+      shippingRefunded: quantize(paid.shipping as string),
+      refundsWithoutReturn: quantize(direct.total as string),
+    });
   }
 
   /** `finance.selectors.expense_totals`: what was spent, voids left out, and by category. */
@@ -357,15 +435,31 @@ export class ReportsService {
     return { total: quantize(row.total as string), orders: int(row.orders) };
   }
 
-  /** `_net_profit`: gross profit less the window's expenses and purchase shipping. */
-  private async netProfit(scope: Scope, grossProfit: Dec) {
+  /**
+   * `_net_profit`: gross profit less what returns and refunds lost beyond the
+   * goods, the window's expenses and purchase shipping.
+   */
+  private async netProfit(scope: Scope, gross: GrossProfit) {
     const expenses = await this.expenseTotals(scope);
     const shipping = await this.purchaseShipping(scope);
     const expensesTotal = quantize(expenses.total);
     return {
       expenses: { ...expenses, total: expensesTotal },
       shipping,
-      netProfit: quantize(grossProfit.minus(expensesTotal).minus(shipping.total)),
+      netProfit: quantize(
+        gross.grossProfit.minus(gross.returnLosses).minus(expensesTotal).minus(shipping.total),
+      ),
+    };
+  }
+
+  /** The statement's lines between gross profit and expenses. */
+  private returnLossLines(gross: GrossProfit): Payload {
+    return {
+      written_off: dcm(gross.writtenOff),
+      shipping_refunded: dcm(gross.shippingRefunded),
+      refund_adjustments: dcm(gross.refundAdjustments),
+      refunds_without_return: dcm(gross.refundsWithoutReturn),
+      total: dcm(gross.returnLosses),
     };
   }
 
@@ -392,8 +486,7 @@ export class ReportsService {
     let sql = new SqlParams();
     const totals = await this.one(
       `SELECT COUNT(${O}."id") AS "order_count", COALESCE(SUM(${O}."grand_total"), 0.00) AS "revenue",
-              COALESCE(SUM(${O}."discount_total"), 0.00) AS "discount",
-              COALESCE(SUM(${O}."refunded_total"), 0.00) AS "refunded"
+              COALESCE(SUM(${O}."discount_total"), 0.00) AS "discount"
          FROM ${O} WHERE (${this.sold(sql, O, scope)})`,
       sql,
     );
@@ -428,6 +521,36 @@ export class ReportsService {
          FROM ${O} WHERE (${this.sold(sql, O, scope)}) GROUP BY 1 ORDER BY 1 ASC`,
       sql.values,
     );
+    // Money given back, on the day it went back, from the statement's own
+    // sources: completed returns by `completed_at`, a refund with no return
+    // behind it by its own moment.
+    const refundsByDay = new Map<string, Dec>();
+    const given = (rows: Raw[]) => {
+      for (const row of rows) {
+        const day = row.day as string;
+        refundsByDay.set(day, (refundsByDay.get(day) ?? new Dec(ZERO)).plus(row.total as string));
+      }
+    };
+    sql = new SqlParams();
+    let refundDay = this.trunc(sql, 'date', `${R}."completed_at"`);
+    given(
+      await this.db.query<Raw>(
+        `SELECT ${refundDay} AS "day", COALESCE(SUM(${R}."refund_amount"), 0.00) AS "total"
+           ${this.completedReturns(sql, scope)} GROUP BY 1`,
+        sql.values,
+      ),
+    );
+    sql = new SqlParams();
+    refundDay = this.trunc(sql, 'date', `"orders_refund"."created_at"`);
+    given(
+      await this.db.query<Raw>(
+        `SELECT ${refundDay} AS "day", COALESCE(SUM("orders_refund"."amount"), 0.00) AS "total"
+           ${this.refundsWithoutReturn(sql, scope)} GROUP BY 1`,
+        sql.values,
+      ),
+    );
+    const salesDays = new Map(daily.map((row) => [row.day as string, row]));
+    const tradedDays = [...new Set([...salesDays.keys(), ...refundsByDay.keys()])].sort();
 
     sql = new SqlParams();
     const payments = await this.db.query<Raw>(
@@ -496,6 +619,7 @@ export class ReportsService {
     );
 
     const revenue = new Dec(totals.revenue as string);
+    const refunded = quantize(gross.refunds.plus(gross.refundsWithoutReturn));
     const orderCount = int(totals.order_count);
     const payload: Payload = {
       range: this.period(scope.range),
@@ -506,7 +630,8 @@ export class ReportsService {
         gross_profit: dcm(gross.grossProfit),
         margin_percent: dcm(percent(gross.grossProfit, gross.netRevenue)),
         discount_total: new Dcm(totals.discount as string),
-        refunded_total: new Dcm(totals.refunded as string),
+        refunded_total: dcm(refunded),
+        net_revenue: dcm(quantize(revenue.minus(refunded))),
         average_order_value: dcm(
           quantize(orderCount ? revenue.div(new Dec(String(orderCount))) : ZERO),
         ),
@@ -517,13 +642,20 @@ export class ReportsService {
         inventory_units: int(stock.units),
       },
       sales_over_time: this.fillMissingDays(
-        daily.map((row) => ({
-          day: row.day as string,
-          orders: int(row.orders),
-          revenue: new Dcm(row.revenue as string),
-          pos: new Dcm(row.pos as string),
-          online: new Dcm(row.online as string),
-        })),
+        tradedDays.map((day) => {
+          const row = salesDays.get(day);
+          const sold = quantize((row?.revenue as string | undefined) ?? ZERO);
+          const back = quantize(refundsByDay.get(day) ?? ZERO);
+          return {
+            day,
+            orders: row ? int(row.orders) : 0,
+            revenue: dcm(sold),
+            pos: dcm(quantize((row?.pos as string | undefined) ?? ZERO)),
+            online: dcm(quantize((row?.online as string | undefined) ?? ZERO)),
+            refunds: dcm(back),
+            net: dcm(quantize(sold.minus(back))),
+          };
+        }),
         scope.range,
         tz,
       ),
@@ -551,9 +683,10 @@ export class ReportsService {
     };
 
     if (financial) {
-      const net = await this.netProfit(scope, gross.grossProfit);
+      const net = await this.netProfit(scope, gross);
       payload.profit = {
         gross_profit: dcm(gross.grossProfit),
+        return_losses: dcm(gross.returnLosses),
         expenses: dcm(net.expenses.total),
         expense_count: net.expenses.count,
         top_expense_category: net.expenses.byCategory[0]?.category ?? '',
@@ -585,6 +718,8 @@ export class ReportsService {
           revenue: new Dcm('0.00'),
           pos: new Dcm('0.00'),
           online: new Dcm('0.00'),
+          refunds: new Dcm('0.00'),
+          net: new Dcm('0.00'),
         },
       );
       // `day += timedelta(days=1)` after the last day a date can hold: an
@@ -634,15 +769,21 @@ export class ReportsService {
     const rows = await this.db.query<Raw>(
       `SELECT ${I}."sku", ${I}."product_name", ${I}."variant_label", SUM(${I}."quantity") AS "units",
               ${netRevenue()} AS "revenue", ${COGS} AS "cost",
-              COALESCE(SUM(${I}."returned_quantity"), 0) AS "returned"
+              COALESCE(SUM(${I}."returned_quantity"), 0) AS "returned",
+              COALESCE(ROUND(SUM(((${NET_LINE} * ${I}."returned_quantity") / ${I}."quantity")), 2), 0.00) AS "returned_revenue",
+              COALESCE(SUM((${I}."unit_cost" * ${I}."returned_quantity")), 0.00) AS "returned_cost"
          ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)}
         GROUP BY ${I}."sku", ${I}."product_name", ${I}."variant_label"
         ORDER BY 5 DESC, ${I}."sku" ASC, ${I}."product_name" ASC, ${I}."variant_label" ASC`,
       sql.values,
     );
     return rows.map((row) => {
-      const revenue = new Dec(row.revenue as string);
-      const grossProfit = quantize(revenue.minus(row.cost as string));
+      // The units of these sales that have come back, at what they sold and cost for.
+      const netRevenue = quantize(
+        new Dec(row.revenue as string).minus(row.returned_revenue as string),
+      );
+      const netCost = quantize(new Dec(row.cost as string).minus(row.returned_cost as string));
+      const grossProfit = quantize(netRevenue.minus(netCost));
       return {
         sku: row.sku as string,
         product_name: row.product_name as string,
@@ -651,8 +792,10 @@ export class ReportsService {
         revenue: new Dcm(row.revenue as string),
         cost: new Dcm(row.cost as string),
         returned: int(row.returned),
+        returned_revenue: dcm(quantize(row.returned_revenue as string)),
+        returned_cost: dcm(quantize(row.returned_cost as string)),
         gross_profit: dcm(grossProfit),
-        margin_percent: dcm(percent(grossProfit, revenue)),
+        margin_percent: dcm(percent(grossProfit, netRevenue)),
       };
     });
   }
@@ -763,36 +906,82 @@ export class ReportsService {
     }));
   }
 
-  /** `profit_report`: revenue, cost and gross profit day by day, and their totals. */
+  /**
+   * `profit_report`: revenue, cost and gross profit day by day, and their
+   * totals. Sales land on the day they were placed and returns on the day
+   * they were completed, each reversing its goods and their cost as the
+   * business summary's gross profit does.
+   */
   async profit(scope: Scope): Promise<Payload> {
-    const sql = new SqlParams();
-    const day = this.trunc(sql, 'date', `${O}."placed_at"`);
-    const rows = await this.db.query<Raw>(
-      `SELECT ${day} AS "day", ${netRevenue()} AS "revenue", ${COGS} AS "cost"
-         ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)} GROUP BY 1 ORDER BY 1 ASC`,
-      sql.values,
+    let sql = new SqlParams();
+    let day = this.trunc(sql, 'date', `${O}."placed_at"`);
+    const sales = new Map(
+      (
+        await this.db.query<Raw>(
+          `SELECT ${day} AS "day", ${netRevenue()} AS "revenue", ${COGS} AS "cost"
+             ${ITEMS_FROM} WHERE ${this.soldLines(sql, scope)} GROUP BY 1`,
+          sql.values,
+        )
+      ).map((row) => [row.day as string, row]),
     );
-    let revenue = new Dec(ZERO);
-    let cost = new Dec(ZERO);
-    const daily: Row[] = rows.map((row) => {
-      revenue = revenue.plus(row.revenue as string);
-      cost = cost.plus(row.cost as string);
+    sql = new SqlParams();
+    day = this.trunc(sql, 'date', `${R}."completed_at"`);
+    const returns = new Map(
+      (
+        await this.db.query<Raw>(
+          `SELECT ${day} AS "day", COALESCE(SUM(${RETURNED_LINE_BASE}), 0.00) AS "goods",
+                  COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity")), 0.00) AS "cost"
+             FROM ${RI} INNER JOIN ${R} ON (${RI}."return_request_id" = ${R}."id")
+             INNER JOIN ${I} ON (${RI}."order_item_id" = ${I}."id")
+             INNER JOIN ${O} ON (${I}."order_id" = ${O}."id")
+            WHERE ${this.completedReturnLines(sql, scope)} GROUP BY 1`,
+          sql.values,
+        )
+      ).map((row) => [row.day as string, row]),
+    );
+    const total = {
+      revenue: new Dec(ZERO),
+      returns: new Dec(ZERO),
+      cost: new Dec(ZERO),
+      returnedCost: new Dec(ZERO),
+    };
+    const daily: Row[] = [...new Set([...sales.keys(), ...returns.keys()])].sort().map((date) => {
+      const sold = sales.get(date);
+      const back = returns.get(date);
+      const revenue = quantize((sold?.revenue as string | undefined) ?? ZERO);
+      const returned = quantize((back?.goods as string | undefined) ?? ZERO);
+      const cost = quantize((sold?.cost as string | undefined) ?? ZERO);
+      const returnedCost = quantize((back?.cost as string | undefined) ?? ZERO);
+      total.revenue = total.revenue.plus(revenue);
+      total.returns = total.returns.plus(returned);
+      total.cost = total.cost.plus(cost);
+      total.returnedCost = total.returnedCost.plus(returnedCost);
+      const net = quantize(revenue.minus(returned));
+      const netCost = quantize(cost.minus(returnedCost));
       return {
-        day: row.day as string,
-        revenue: new Dcm(row.revenue as string),
-        cost: new Dcm(row.cost as string),
-        gross_profit: dcm(quantize(new Dec(row.revenue as string).minus(row.cost as string))),
+        day: date,
+        revenue: dcm(revenue),
+        returns: dcm(returned),
+        net_revenue: dcm(net),
+        cost: dcm(cost),
+        returned_cost: dcm(returnedCost),
+        net_cost: dcm(netCost),
+        gross_profit: dcm(quantize(net.minus(netCost))),
       };
     });
-    revenue = quantize(revenue);
-    cost = quantize(cost);
-    const grossProfit = quantize(revenue.minus(cost));
+    const netRevenueTotal = quantize(total.revenue.minus(total.returns));
+    const netCostTotal = quantize(total.cost.minus(total.returnedCost));
+    const grossProfit = quantize(netRevenueTotal.minus(netCostTotal));
     return {
       totals: {
-        revenue: dcm(revenue),
-        cost: dcm(cost),
+        revenue: dcm(quantize(total.revenue)),
+        returns: dcm(quantize(total.returns)),
+        net_revenue: dcm(netRevenueTotal),
+        cost: dcm(quantize(total.cost)),
+        returned_cost: dcm(quantize(total.returnedCost)),
+        net_cost: dcm(netCostTotal),
         gross_profit: dcm(grossProfit),
-        margin_percent: dcm(percent(grossProfit, revenue)),
+        margin_percent: dcm(percent(grossProfit, netRevenueTotal)),
       },
       daily,
     };
@@ -831,27 +1020,31 @@ export class ReportsService {
       new Dec(sales.revenue as string),
       new Dec(sales.cogs as string),
     );
-    const net = await this.netProfit(scope, gross.grossProfit);
+    const net = await this.netProfit(scope, gross);
     sql = new SqlParams();
     const completed = await this.count(this.completedReturns(sql, scope), sql);
     const orders = int(orderTotals.count);
     return {
       period: this.period(scope.range),
       revenue: {
-        goods: dcm(gross.revenue),
-        refunds: dcm(gross.refunds),
+        goods: dcm(gross.sold),
+        returns: dcm(gross.returns),
         net: dcm(gross.netRevenue),
         shipping_charged: dcm(quantize(orderTotals.shipping as string)),
         discounts_given: dcm(quantize(orderTotals.discounts as string)),
         vat_collected: dcm(quantize(sales.tax as string)),
+        // Cash, not revenue: what completed returns paid out, and the VAT in it.
+        refunds: dcm(gross.refunds),
+        vat_returned: dcm(gross.returnedVat),
       },
       cost_of_goods: {
         sold: dcm(gross.cogs),
-        recovered_from_returns: dcm(gross.cogsRecovered),
+        returned: dcm(gross.cogsReturned),
         net: dcm(gross.netCogs),
       },
       gross_profit: dcm(gross.grossProfit),
       gross_margin_percent: dcm(percent(gross.grossProfit, gross.netRevenue)),
+      return_losses: this.returnLossLines(gross),
       expenses: {
         total: dcm(net.expenses.total),
         count: net.expenses.count,

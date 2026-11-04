@@ -219,6 +219,21 @@ labels are out (`GET`/`POST /products/{id}/labels/`).
 
 ---
 
+### 1.11 The order number on paper, as a barcode
+
+Every POS receipt, invoice and packing slip prints its order number as a **Code 128** barcode with
+the number beneath it (added 2026-11-04). EAN-13, which the shelf labels use, holds only digits;
+an order number has letters and hyphens (`RGN-POS-000123`). Set C packs the number's digits in
+pairs, so a receipt's barcode is about 47 mm wide with its quiet zones — inside the 75 mm roll — at
+a 0.25 mm module, two dots of a 203 DPI thermal printer. It is drawn as vector SVG, as the labels
+are (`lib/barcode/code128.ts`, `components/barcode/code128-svg.tsx`).
+
+**Scanning it finds the order.** A scanner types the number and Enter, so scanned into the back
+office's order search (`/admin/orders`) it opens that order: the way to a return, a reprint or a
+question about a sale without typing the number. An exact match on the number opens it; anything
+else is the list as before. Scanned at the POS register by mistake, a receipt is answered with
+where it belongs, not "not recognised". No new permission: the search is `orders.view`, as it was.
+
 ## 2. Returns and refunds
 
 ### 2.1 Flow
@@ -666,11 +681,15 @@ raise and receive a purchase order.
 
 ```text
   revenue from goods            net of VAT and of every discount, never the gross line total
-− refunds                       completed returns, by completed_at
+− sales returns                 the returned share of each line, net of VAT and discount, by completed_at
 = net revenue
 − cost of goods sold            frozen unit_cost × quantity
-+ cost recovered from returns   RESTOCK lines only
++ cost of goods returned        frozen unit_cost × returned quantity, every line whatever became of it
 = gross profit
+− returned goods written off    frozen cost of returned lines not restocked (DAMAGED, QUARANTINE)
+− shipping refunded             the order's shipping, on returns that refund it (a shop-fault reason)
+− refund adjustments            refund_amount − sales returns − their VAT − shipping refunded
+− refunds without a return      money given back on a sold order, goods kept, by the refund's moment
 − operating expenses            finance.selectors.expense_totals, voids excluded
 − purchase order shipping       "Shipping / other cost" on purchase orders, by first delivery
 = net profit
@@ -679,7 +698,51 @@ raise and receive a purchase order.
 Four rules decide which period a figure lands in, and each matches what the money did: sales by
 `placed_at`, returns by `completed_at`, expenses by `spent_at`, and purchase order shipping by the
 `received_at` of the order's **first** posted goods receipt. A refund in August of a July sale
-reduces August.
+reduces August. A refund with no return behind it lands on its own `created_at`.
+
+**A return reverses its sale on the sale's own terms** (fixed 2026-11-04). The sale entered revenue
+net of VAT and discount, at its frozen cost; the return leaves it the same way — the returned share
+of the line, as `RETURNED_LINE_BASE` computes it (the VAT report's own figure for taxable returns),
+and the frozen cost of every returned unit. So a sale returned in full leaves gross profit exactly
+where it was before the sale. Worked: a tee sold for ৳1,150 with ৳150 VAT inside it, cost ৳600,
+returned and restocked — the sale's day makes ৳400 gross, the return's day takes back ৳400, and
+together they come to nothing.
+
+Until then the statement took the **cash refunded** off revenue that had no VAT in it: every return
+understated gross profit by the VAT on its goods — VAT the VAT report was crediting back as well — and
+a shop-fault return also took shipping off goods revenue that shipping had never been in. On the
+fixture quarter that was ৳489.14 of net profit. And only RESTOCK lines gave their cost back, so a
+damaged return hid its loss inside gross profit.
+
+**What a return lost beyond the goods is its own line, below gross profit.** The VAT is no part of it:
+it was never revenue, and the VAT report credits it. What is:
+
+- *Returned goods written off*: a DAMAGED or QUARANTINE line is not back on the shelf, so its frozen
+  cost is a loss of the period. QUARANTINE is counted here too because the stock value does not hold
+  it either.
+  *`DECISION REQUIRED` — default chosen.* A quarantined unit later put back on the shelf by an
+  `ADJUSTMENT` raises stock value but does not credit this line back; until a quarantine has a
+  resolution of its own (§2.3), that unit's cost is counted as lost twice over in time.
+- *Shipping refunded*: shipping is not in goods revenue (it is reported apart, as *delivery
+  charged*), so paying it back is a cost, not a reduction of sales.
+  *`DECISION REQUIRED` — default chosen*: a cost of the period, not taken off sales.
+- *Refund adjustments*: whatever a return paid beyond, or short of, its goods, their VAT and its
+  shipping — an amount typed at completion (§2.5), the cap at what was paid, the 0.01 a split
+  discount rounds to. Negative where less was paid back than the goods were worth.
+- *Refunds without a return*: `POST /orders/<id>/refunds/` with no goods back, on an order that
+  counts as a sale (a cancelled order's refund is not, as its sale is not). The whole amount,
+  VAT included: nothing credits that VAT back yet.
+
+**The day's sales and its refunds share the statement's dates.** The dashboard's *Revenue* is the
+period's orders by `placed_at` (grand total: VAT and shipping in it, as cash is). *Refunded* is
+what the period gave back: completed returns' `refund_amount` by `completed_at` and refunds with no
+return by their own moment, whenever the sale was — before 2026-11-04 it was the `refunded_total` of
+the orders *placed* in the period, so a refund paid today moved the figures of the day the sale was
+made. *Net sales* is the difference, and the sales chart carries both by day. The *Profit* report
+(`/reports/profit/`) now takes returns off by day the same way, so its gross profit is the
+statement's; before, it ignored returns altogether. *Product performance* is a cohort, not a period:
+the units of the period's sales that have come back (`returned_quantity`, set when the goods are
+received), at what they sold and cost for, are taken off that product's gross profit.
 
 **Purchase order shipping is a cost of the period, not of the stock** (added 2026-10-05). Receiving
 puts each line into stock at its own `unit_cost` (`purchasing.services.receive_purchase`), so a
@@ -695,9 +758,10 @@ again, and a cancelled order never counts (cancelling is refused once anything h
 > valued from then on. Switching later needs no migration; it changes `receive_purchase`, and this
 > line would then have to stop subtracting what COGS already carries.
 
-**The dashboard shows the same statement.** Its *Profit* row — gross profit, expenses, purchase
-shipping, net profit — comes from the functions above, so the dashboard and the business summary
-agree for the same range and branch, and the row adds up as it reads. Its gross profit takes
+**The dashboard shows the same statement.** Its *Profit* row — gross profit, return losses (shown
+when not zero), expenses, purchase shipping, net profit — comes from the functions above, so the
+dashboard and the business summary agree for the same range and branch, and the row adds up as it
+reads. Its gross profit takes
 completed returns into account as the statement does; before 2026-10-05 it ignored them. The row is
 sent only to a reader holding `reports.financial`, the permission the business summary needs —
 everyone with `reports.view` keeps the rest of the dashboard, with gross profit in its *Sales* row.

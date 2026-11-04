@@ -21,19 +21,22 @@ interface ProductRow {
   gross_profit: string;
   margin_percent: string;
   returned: number;
+  /** What the units that came back had sold and cost for; gross profit is after them. */
+  returned_revenue: string;
+  returned_cost: string;
 }
 
 /** Every report the API exposes, so nothing is hidden behind a URL you must know. */
 const REPORTS = [
   { path: "/reports/sales/", label: "Sales", description: "Every order with totals, channel and payment status" },
-  { path: "/reports/products/performance/", label: "Product performance", description: "Units, revenue, COGS, margin" },
+  { path: "/reports/products/performance/", label: "Product performance", description: "Units, revenue, COGS, returns, margin" },
   { path: "/reports/inventory/valuation/", label: "Inventory valuation", description: "Stock at weighted average cost" },
   { path: "/reports/inventory/movement/", label: "Inventory movement", description: "Ledger totals by transaction type" },
   { path: "/reports/purchases/", label: "Purchases", description: "Purchase orders and supplier balances" },
   { path: "/reports/returns/", label: "Returns", description: "Reasons, quantities and refunds" },
-  { path: "/reports/profit/", label: "Profit", description: "Revenue minus frozen COGS, by day" },
+  { path: "/reports/profit/", label: "Profit", description: "Revenue and frozen COGS, less returns, by day" },
   { path: "/reports/expenses/", label: "Expenses", description: "Spending by category, with each category's share" },
-  { path: "/reports/business-summary/", label: "Business summary", description: "Revenue, COGS, expenses, purchase shipping and net profit as a statement" },
+  { path: "/reports/business-summary/", label: "Business summary", description: "Revenue, returns, COGS, return losses, expenses, purchase shipping and net profit as a statement" },
   { path: "/reports/vat/", label: "VAT return", description: "Output VAT less credits and input VAT, by month and by rate" },
 ];
 
@@ -41,6 +44,7 @@ const REPORTS = [
 interface ProfitLines {
   gross_profit: string;
   gross_margin_percent: string;
+  return_losses: { total: string };
   expenses: { total: string; count: number };
   purchase_shipping: { total: string; orders: number };
   net_profit: string;
@@ -89,8 +93,16 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
     },
     { header: "Units", numeric: true, cell: (row) => row.units },
     { header: "Returned", numeric: true, cell: (row) => row.returned || "—" },
-    { header: "Revenue", numeric: true, cell: (row) => money(row.revenue) },
-    { header: "Cost", numeric: true, cell: (row) => money(row.cost) },
+    {
+      header: "Revenue",
+      numeric: true,
+      cell: (row) => <WithReturned amount={row.revenue} returned={row.returned_revenue} />,
+    },
+    {
+      header: "Cost",
+      numeric: true,
+      cell: (row) => <WithReturned amount={row.cost} returned={row.returned_cost} />,
+    },
     { header: "Gross profit", numeric: true, cell: (row) => money(row.gross_profit) },
     { header: "Margin", numeric: true, cell: (row) => percent(row.margin_percent) },
   ];
@@ -131,7 +143,11 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
             <StatCard
               label="Gross profit"
               value={money(profit.gross_profit)}
-              context={`${percent(profit.gross_margin_percent)} margin`}
+              context={
+                Number(profit.return_losses.total) !== 0
+                  ? `${percent(profit.gross_margin_percent)} margin · ${money(profit.return_losses.total)} lost on returns`
+                  : `${percent(profit.gross_margin_percent)} margin`
+              }
               href={summaryHref}
               tone={loss(profit.gross_profit) ? "error" : "success"}
             />
@@ -163,8 +179,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           <span>
             <span className="block text-body font-semibold">Business summary</span>
             <span className="block text-body-sm text-muted">
-              The whole statement — revenue, refunds, cost of goods, expenses, purchase shipping
-              and net profit.
+              The whole statement — revenue, returns, cost of goods, return losses, expenses,
+              purchase shipping and net profit.
             </span>
           </span>
           <ArrowRight className="size-5 shrink-0 text-neutral-400" aria-hidden />
@@ -223,6 +239,18 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         CSV export needs the <code>reports.export</code> permission; financial reports additionally
         need <code>reports.financial</code>.
       </p>
+    </>
+  );
+}
+
+/** A sold figure, and beneath it what came back of it; gross profit is net of both. */
+function WithReturned({ amount, returned }: { amount: string; returned: string }) {
+  return (
+    <>
+      <span className="block">{money(amount)}</span>
+      {Number(returned) !== 0 && (
+        <span className="block text-caption text-muted">− {money(returned)} returned</span>
+      )}
     </>
   );
 }

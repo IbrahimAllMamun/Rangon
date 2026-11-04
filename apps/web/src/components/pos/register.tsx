@@ -36,6 +36,9 @@ import { useDelayedFlag } from "@/lib/use-delayed-flag";
 import { type PricedBasket, useSaleQuote } from "@/lib/use-sale-quote";
 import { usePos } from "@/lib/store/pos";
 
+/** An order number, as the receipt's barcode carries it (`RGN-POS-000123`). */
+const ORDER_NUMBER = /^RGN-(POS|WEB)-\d+$/i;
+
 /**
  * Delay before the scan field asks the server what it is looking at.
  *
@@ -279,8 +282,12 @@ export function PosRegister({ session }: { session: PosSession }) {
       setScan("");
       setResults([]);
     } catch (error) {
-      const message =
-        error instanceof ApiError ? error.message : "That code was not recognised.";
+      // A receipt scanned at the till by mistake: say where it belongs.
+      const message = ORDER_NUMBER.test(trimmed)
+        ? `${trimmed.toUpperCase()} is a receipt, not a product. Open it from Orders in the back office.`
+        : error instanceof ApiError
+          ? error.message
+          : "That code was not recognised.";
       setScanError(message);
       setAnnouncement(message);
     } finally {

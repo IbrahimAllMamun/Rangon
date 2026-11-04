@@ -598,7 +598,14 @@ export interface DashboardData {
     gross_profit: string;
     margin_percent: string;
     discount_total: string;
+    /**
+     * Money given back in the period, on the day it went back: completed
+     * returns by their completion, other refunds by their own moment --
+     * whenever the sale itself was.
+     */
     refunded_total: string;
+    /** `revenue` less `refunded_total`: the period's sales after what was given back. */
+    net_revenue: string;
     average_order_value: string;
     returns: number;
     pending_online_orders: number;
@@ -606,7 +613,16 @@ export interface DashboardData {
     inventory_value: string;
     inventory_units: number;
   };
-  sales_over_time: { day: string; orders: number; revenue: string; pos: string; online: string }[];
+  /** Sales by the day they were placed; refunds by the day they were paid; `net` the difference. */
+  sales_over_time: {
+    day: string;
+    orders: number;
+    revenue: string;
+    pos: string;
+    online: string;
+    refunds: string;
+    net: string;
+  }[];
   by_channel: { channel: Channel; orders: number; revenue: string }[];
   payment_methods: { method: PaymentMethod; amount: string; count: number }[];
   top_products: { sku: string; product_name: string; units: number; revenue: string }[];
@@ -621,6 +637,12 @@ export interface DashboardData {
 /** The dashboard's slice of the business summary (business-rules § 4.1). */
 export interface DashboardProfit {
   gross_profit: string;
+  /**
+   * What returns and refunds cost beyond the goods: returned stock written
+   * off, shipping paid back, refunds above (or below) the goods' worth, and
+   * refunds with no return behind them (business-rules § 4.1).
+   */
+  return_losses: string;
   expenses: string;
   expense_count: number;
   /** The category most was spent on, or "" when nothing was. */

@@ -102,8 +102,22 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           <StatCard
             label="Revenue"
             value={money(kpis.revenue)}
-            context={`${kpis.orders} order${kpis.orders === 1 ? "" : "s"}`}
+            context={`${plural(kpis.orders, "order")} · ${plural(kpis.units_sold, "item")}`}
             icon={<Wallet className="size-4" aria-hidden />}
+          />
+          <StatCard
+            label="Refunded"
+            value={money(kpis.refunded_total)}
+            context={`Paid back in this period · discounts ${moneyCompact(kpis.discount_total)}`}
+            href="/admin/returns"
+            icon={<HandCoins className="size-4" aria-hidden />}
+          />
+          <StatCard
+            label="Net sales"
+            value={money(kpis.net_revenue)}
+            context={`After refunds · avg order ${moneyCompact(kpis.average_order_value)}`}
+            icon={<ShoppingCart className="size-4" aria-hidden />}
+            tone={Number(kpis.net_revenue) < 0 ? "error" : "neutral"}
           />
           {/* With the profit row below, gross profit opens that row instead,
               so the row reads as the sum it is. */}
@@ -111,23 +125,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             <StatCard
               label="Gross profit"
               value={money(kpis.gross_profit)}
-              context={`${percent(kpis.margin_percent)} margin`}
+              context={`${percent(kpis.margin_percent)} margin, after returns`}
               icon={<TrendingUp className="size-4" aria-hidden />}
-              tone="success"
+              tone={Number(kpis.gross_profit) < 0 ? "error" : "success"}
             />
           )}
-          <StatCard
-            label="Items sold"
-            value={String(kpis.units_sold)}
-            context={`Avg order ${moneyCompact(kpis.average_order_value)}`}
-            icon={<ShoppingCart className="size-4" aria-hidden />}
-          />
-          <StatCard
-            label="Refunded"
-            value={money(kpis.refunded_total)}
-            context={`Discounts ${moneyCompact(kpis.discount_total)}`}
-            icon={<HandCoins className="size-4" aria-hidden />}
-          />
         </KpiGroup>
 
         {profit && (
@@ -139,6 +141,17 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               icon={<TrendingUp className="size-4" aria-hidden />}
               tone={Number(profit.gross_profit) < 0 ? "error" : "success"}
             />
+            {/* Zero in most periods, and then left out: the row still adds up. */}
+            {Number(profit.return_losses) !== 0 && (
+              <StatCard
+                label="Return losses"
+                value={money(profit.return_losses)}
+                context="Write-offs, shipping and refunds beyond the goods"
+                href={`/admin/reports/business?range=${range}`}
+                icon={<Undo2 className="size-4" aria-hidden />}
+                tone={Number(profit.return_losses) > 0 ? "warning" : "neutral"}
+              />
+            )}
             <StatCard
               label="Expenses"
               value={money(profit.expenses)}

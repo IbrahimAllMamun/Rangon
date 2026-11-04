@@ -23,15 +23,27 @@ interface BusinessSummary {
   period: { start: string; end: string; label: string };
   revenue: {
     goods: string;
-    refunds: string;
+    /** Goods back on completed returns, as they were sold: net of VAT and discount. */
+    returns: string;
     net: string;
     shipping_charged: string;
     discounts_given: string;
     vat_collected: string;
+    /** Cash paid out on completed returns, VAT and shipping in it. Not a revenue line. */
+    refunds: string;
+    /** The VAT in those returns: credited on the VAT return, in no profit figure. */
+    vat_returned: string;
   };
-  cost_of_goods: { sold: string; recovered_from_returns: string; net: string };
+  cost_of_goods: { sold: string; returned: string; net: string };
   gross_profit: string;
   gross_margin_percent: string;
+  return_losses: {
+    written_off: string;
+    shipping_refunded: string;
+    refund_adjustments: string;
+    refunds_without_return: string;
+    total: string;
+  };
   expenses: { total: string; count: number; by_category: ExpenseRow[] };
   /** "Shipping / other cost" on purchase orders whose goods arrived in the period. */
   purchase_shipping: { total: string; orders: number };
@@ -243,7 +255,9 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
                     VAT collected {money(summary.revenue.vat_collected)}
                   </strong>{" "}
                   is held for the government, not income, so it appears in neither revenue nor
-                  profit above.
+                  profit above. The {money(summary.revenue.vat_returned)} of it given back on returns
+                  is credited on the VAT return. Refunds paid on completed returns came to{" "}
+                  {money(summary.revenue.refunds)}.
                 </p>
               </CardContent>
             </Card>
@@ -257,15 +271,34 @@ export default async function BusinessSummaryPage({ searchParams }: { searchPara
 function statementLines(summary: BusinessSummary): Line[] {
   return [
     { label: "Revenue from goods", amount: summary.revenue.goods, note: "net of VAT" },
-    { label: "Refunds on completed returns", amount: summary.revenue.refunds, negative: true },
+    {
+      label: "Sales returns",
+      amount: summary.revenue.returns,
+      negative: true,
+      note: "net of VAT, by completion date",
+    },
     { label: "Net revenue", amount: summary.revenue.net, emphasis: "subtotal" },
     { label: "Cost of goods sold", amount: summary.cost_of_goods.sold, negative: true },
-    {
-      label: "Cost recovered from restocked returns",
-      amount: summary.cost_of_goods.recovered_from_returns,
-      note: "damaged and quarantined stock stays a cost",
-    },
+    { label: "Cost of goods returned", amount: summary.cost_of_goods.returned },
     { label: "Gross profit", amount: summary.gross_profit, emphasis: "subtotal" },
+    {
+      label: "Returned goods written off",
+      amount: summary.return_losses.written_off,
+      negative: true,
+      note: "damaged or quarantined, not back on the shelf",
+    },
+    { label: "Shipping refunded", amount: summary.return_losses.shipping_refunded, negative: true },
+    {
+      label: "Refund adjustments",
+      amount: summary.return_losses.refund_adjustments,
+      negative: true,
+      note: "refunded beyond the goods and their VAT",
+    },
+    {
+      label: "Refunds without a return",
+      amount: summary.return_losses.refunds_without_return,
+      negative: true,
+    },
     { label: "Operating expenses", amount: summary.expenses.total, negative: true },
     {
       label: "Purchase order shipping",
@@ -287,7 +320,9 @@ function StatementRow({ line }: { line: Line }) {
   // is always shown that way, and so is a total that came out negative --
   // rendering a loss as "-79,865" beside "(1,320)" would put two notations for
   // the same idea in one column.
-  const inParentheses = line.negative || isLoss;
+  // A deduction that came out negative (a refund short of the goods' worth) is
+  // added back, so it is the one deduction shown without them.
+  const inParentheses = line.negative ? !isLoss : isLoss;
   const magnitude = isLoss ? line.amount.replace("-", "") : line.amount;
 
   return (

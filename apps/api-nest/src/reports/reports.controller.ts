@@ -294,16 +294,21 @@ export class BusinessSummaryReportController extends ReportView {
         const cost = summary.cost_of_goods as Record<string, Dcm>;
         const expenses = summary.expenses as { total: Dcm; by_category: Record<string, unknown>[] };
         const shipping = summary.purchase_shipping as { total: Dcm };
+        const losses = summary.return_losses as Record<string, Dcm>;
         return [
           { line: 'Revenue (goods, net of VAT)', amount: revenue.goods as Dcm },
-          { line: 'Less refunds', amount: negated(revenue.refunds as Dcm) },
+          { line: 'Less sales returns (net of VAT)', amount: negated(revenue.returns as Dcm) },
           { line: 'Net revenue', amount: revenue.net as Dcm },
           { line: 'Cost of goods sold', amount: negated(cost.sold as Dcm) },
-          {
-            line: 'Cost recovered from restocked returns',
-            amount: cost.recovered_from_returns as Dcm,
-          },
+          { line: 'Cost of goods returned', amount: cost.returned as Dcm },
           { line: 'Gross profit', amount: summary.gross_profit as Dcm },
+          { line: 'Returned goods written off', amount: negated(losses.written_off as Dcm) },
+          { line: 'Shipping refunded', amount: negated(losses.shipping_refunded as Dcm) },
+          { line: 'Refund adjustments', amount: negated(losses.refund_adjustments as Dcm) },
+          {
+            line: 'Refunds without a return',
+            amount: negated(losses.refunds_without_return as Dcm),
+          },
           ...expenses.by_category.map((row) => ({
             line: `Expense — ${row.category as string}`,
             amount: negated(row.total as Dcm),

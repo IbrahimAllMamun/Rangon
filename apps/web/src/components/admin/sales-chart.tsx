@@ -19,6 +19,10 @@ interface Point {
   revenue: string;
   pos: string;
   online: string;
+  /** Refunds paid that day, whenever the sale was. */
+  refunds: string;
+  /** The day's sales less its refunds. */
+  net: string;
 }
 
 export function SalesChart({ data }: { data: Point[] }) {
@@ -35,6 +39,8 @@ export function SalesChart({ data }: { data: Point[] }) {
     Total: Number(point.revenue),
     POS: Number(point.pos),
     Online: Number(point.online),
+    Refunds: Number(point.refunds),
+    Net: Number(point.net),
   }));
 
   return (
@@ -83,6 +89,15 @@ export function SalesChart({ data }: { data: Point[] }) {
               strokeDasharray="1 3"
               dot={false}
             />
+            <Line
+              type="monotone"
+              dataKey="Net"
+              name="Net of refunds"
+              stroke="var(--neutral-500)"
+              strokeWidth={1.5}
+              strokeDasharray="8 3 2 3"
+              dot={false}
+            />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -99,6 +114,8 @@ export function SalesChart({ data }: { data: Point[] }) {
               <th scope="col" className="py-1 text-right">POS</th>
               <th scope="col" className="py-1 text-right">Online</th>
               <th scope="col" className="py-1 text-right">Total</th>
+              <th scope="col" className="py-1 text-right">Refunds</th>
+              <th scope="col" className="py-1 text-right">Net</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -108,6 +125,8 @@ export function SalesChart({ data }: { data: Point[] }) {
                 <td className="tabular py-1 text-right">{moneyCompact(row.POS)}</td>
                 <td className="tabular py-1 text-right">{moneyCompact(row.Online)}</td>
                 <td className="tabular py-1 text-right font-medium">{moneyCompact(row.Total)}</td>
+                <td className="tabular py-1 text-right">{moneyCompact(row.Refunds)}</td>
+                <td className="tabular py-1 text-right font-medium">{moneyCompact(row.Net)}</td>
               </tr>
             ))}
           </tbody>
