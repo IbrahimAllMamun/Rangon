@@ -3,6 +3,7 @@
 import { Printer } from "lucide-react";
 import Link from "next/link";
 
+import { OrderBarcode } from "@/components/barcode/code128-svg";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/primitives";
 import type { Order } from "@/lib/api/types";
@@ -61,7 +62,9 @@ export function PrintDocument({
           <Logo variant="full-on-light" height={36} />
           <div className="text-right text-caption">
             <h1 className="text-h3 font-bold">{isInvoice ? "INVOICE" : "PACKING SLIP"}</h1>
-            <p className="mt-1 font-medium">{order.number}</p>
+            {/* Scanned into the order search, it opens this order: a packing
+                slip at the bench, an invoice brought back by the customer. */}
+            <OrderBarcode number={order.number} moduleMm={0.3} heightMm={9} className="mt-1 inline-block" />
             <p className="text-neutral-600">{dateTime(order.placed_at)}</p>
           </div>
         </header>

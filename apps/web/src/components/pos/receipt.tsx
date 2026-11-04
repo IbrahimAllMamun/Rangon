@@ -2,6 +2,7 @@
 
 import { Check, Printer, ShoppingCart } from "lucide-react";
 
+import { OrderBarcode } from "@/components/barcode/code128-svg";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/primitives";
 import type { Order, PosSession } from "@/lib/api/types";
@@ -127,7 +128,11 @@ export function Receipt({
             )}
           </dl>
 
-          <p className="mt-4 whitespace-pre-line text-center text-caption text-neutral-600">
+          {/* Scanned into the back office's order search, it opens this sale:
+              the way to a return or a reprint, without typing the number. */}
+          <OrderBarcode number={order.number} className="mt-4" />
+
+          <p className="mt-3 whitespace-pre-line text-center text-caption text-neutral-600">
             {session.organization.receipt_footer}
           </p>
         </div>

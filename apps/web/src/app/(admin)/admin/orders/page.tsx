@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation";
+
 import { FilterField, FilterForm } from "@/components/admin/filter-form";
 import { FilterTabs } from "@/components/admin/filter-tabs";
 import { Pagination } from "@/components/admin/pagination";
@@ -52,6 +54,13 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
     error = caught instanceof Error ? caught.message : "Could not load orders.";
   }
 
+  // A receipt or invoice scanned into the search types its order number and
+  // presses Enter: open that order rather than a list of one. Outside the
+  // try, since `redirect` throws to do its work; it replaces this URL, so
+  // Back from the order does not land here and bounce forward again.
+  const exact = findByNumber(orders?.results ?? [], params.search);
+  if (exact) redirect(`/admin/orders/${exact.id}`);
+
   return (
     <>
       <PageHeader
@@ -96,7 +105,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
           type="search"
           label="Order number, customer or phone"
           defaultValue={params.search ?? ""}
-          placeholder="e.g. RGN-0042 or 01712…"
+          placeholder="Scan a receipt, or e.g. RGN-POS-000042 or 01712…"
           className="min-w-[14rem] flex-1"
         />
         <FilterField
@@ -183,4 +192,11 @@ export default async function OrdersPage({ searchParams }: { searchParams: Searc
       </Card>
     </>
   );
+}
+
+/** The order whose number is exactly what was searched for, case aside. */
+function findByNumber(orders: Order[], search: string | undefined): Order | undefined {
+  const wanted = search?.trim().toUpperCase();
+  if (!wanted) return undefined;
+  return orders.find((order) => order.number.toUpperCase() === wanted);
 }

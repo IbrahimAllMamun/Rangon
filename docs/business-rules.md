@@ -219,6 +219,21 @@ labels are out (`GET`/`POST /products/{id}/labels/`).
 
 ---
 
+### 1.11 The order number on paper, as a barcode
+
+Every POS receipt, invoice and packing slip prints its order number as a **Code 128** barcode with
+the number beneath it (added 2026-11-04). EAN-13, which the shelf labels use, holds only digits;
+an order number has letters and hyphens (`RGN-POS-000123`). Set C packs the number's digits in
+pairs, so a receipt's barcode is about 47 mm wide with its quiet zones — inside the 75 mm roll — at
+a 0.25 mm module, two dots of a 203 DPI thermal printer. It is drawn as vector SVG, as the labels
+are (`lib/barcode/code128.ts`, `components/barcode/code128-svg.tsx`).
+
+**Scanning it finds the order.** A scanner types the number and Enter, so scanned into the back
+office's order search (`/admin/orders`) it opens that order: the way to a return, a reprint or a
+question about a sale without typing the number. An exact match on the number opens it; anything
+else is the list as before. Scanned at the POS register by mistake, a receipt is answered with
+where it belongs, not "not recognised". No new permission: the search is `orders.view`, as it was.
+
 ## 2. Returns and refunds
 
 ### 2.1 Flow
