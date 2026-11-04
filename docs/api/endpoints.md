@@ -332,13 +332,14 @@ guest-token based and does not touch them, so nothing is blocked.
 
 | Path | Perm |
 |---|---|
-| `dashboard/?range=<preset>` — see [§ Date ranges](#date-ranges). `kpis.gross_profit` is the business summary's (completed returns included). A `profit` object — `gross_profit`, `expenses`, `expense_count`, `top_expense_category`, `purchase_shipping`, `purchase_shipping_orders`, `net_profit`, `net_margin_percent` — is present only for a reader with `reports.financial`, and absent (not zero) otherwise | `reports.view` |
+| `dashboard/?range=<preset>` — see [§ Date ranges](#date-ranges). `kpis.gross_profit` is the business summary's (completed returns included). `kpis.refunded_total` is what the window gave back — completed returns by `completed_at`, refunds with no return by their own moment — and `kpis.net_revenue` is `revenue` less it; each `sales_over_time` day carries `refunds` and `net` the same way. A `profit` object — `gross_profit`, `return_losses`, `expenses`, `expense_count`, `top_expense_category`, `purchase_shipping`, `purchase_shipping_orders`, `net_profit`, `net_margin_percent` — is present only for a reader with `reports.financial`, and absent (not zero) otherwise | `reports.view` |
 | `sales/`, `sales/by-channel/`, `sales/by-payment/` | `reports.view` |
-| `products/performance/` | `reports.view` |
+| `products/performance/` — per SKU, the window's sales; `returned_revenue` and `returned_cost` are what the units that came back sold and cost for, and `gross_profit` is after them | `reports.view` |
 | `inventory/valuation/`, `inventory/movement/` | `reports.financial` |
-| `purchases/`, `returns/`, `profit/` | `reports.financial` |
+| `purchases/`, `returns/` | `reports.financial` |
+| `profit/` — by the shop's day: `revenue` and `cost` of the sales placed, `returns` and `returned_cost` of the returns completed, their nets and `gross_profit`; `totals` the same over the window | `reports.financial` |
 | `expenses/` — spend by category, with each category's share | `reports.financial` |
-| `business-summary/` — revenue to net profit ([business-rules § 4.1](../business-rules.md#41-net-profit-the-business-summary)); `purchase_shipping: {total, orders}` is the "Shipping / other cost" on purchase orders whose first delivery fell in the range, and `net_profit` is after it | `reports.financial` |
+| `business-summary/` — revenue to net profit ([business-rules § 4.1](../business-rules.md#41-net-profit-the-business-summary)); `revenue.returns` is the goods back on completed returns, net of VAT, and `cost_of_goods.returned` their frozen cost; `revenue.refunds` and `revenue.vat_returned` are the cash and the VAT in it, not revenue lines; `return_losses: {written_off, shipping_refunded, refund_adjustments, refunds_without_return, total}` sits between gross and net profit; `purchase_shipping: {total, orders}` is the "Shipping / other cost" on purchase orders whose first delivery fell in the range, and `net_profit` is after both | `reports.financial` |
 | any of the above + `&format=csv` | `reports.export` |
 
 ### Date ranges
