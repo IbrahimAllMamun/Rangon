@@ -428,6 +428,24 @@ jobs:
           cache-from: type=gha,scope=api-nest
           cache-to: type=gha,mode=max,scope=api-nest
 
+      # From the GitHub release, as gitleaks is, not through the action's own
+      # installer: that one fetches the binary from get.trivy.dev, and when
+      # that host could not be reached (2026-11-04) no image was scanned at
+      # all. The version is the one trivy-action v0.36.0 defaults to.
+      - name: Install Trivy (pinned, checksum-verified)
+        env:
+          TRIVY_VERSION: "0.70.0"
+          TRIVY_SHA256: "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9"
+        run: |
+          curl -sSfL -o trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum --check --strict
+          mkdir -p "$HOME/.local/bin/trivy-bin"
+          tar -xzf trivy.tgz -C "$HOME/.local/bin/trivy-bin" trivy
+          rm trivy.tgz
+          echo "$HOME/.local/bin/trivy-bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/trivy-bin/trivy" --version
+
       - name: Scan API image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -435,6 +453,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          skip-setup-trivy: true
 
       - name: Scan web image
         uses: aquasecurity/trivy-action@v0.36.0
@@ -443,3 +462,4 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          skip-setup-trivy: true
