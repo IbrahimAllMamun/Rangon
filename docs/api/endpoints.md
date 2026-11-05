@@ -131,6 +131,13 @@ an unknown `supplier` (D82). `receive/` refuses one order line named twice in a 
 **any money paid against it** (D80); `send/` and `cancel/` decide under the order's row lock (D81).
 See [business-rules.md §7c](../business-rules.md#7c-raising-and-cancelling-a-purchase-order).
 
+### Damaged returns — `/api/v1/damaged-returns/`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/` | `purchases.view` — damaged lines of received returns not yet sent back, each with the purchase-order lines (same item, same branch, units left) it can go back on; branch-scoped, paginated |
+| POST | `send/` | `purchases.receive` — `{purchase_order, lines: [{return_item, purchase_order_item}], reason?, notes?}`: one purchase return crediting the order at each line's cost, no stock moved; each item credited once. `Idempotency-Key` ([business-rules § 2.3](../business-rules.md#23-how-returns-affect-stock)) |
+
 ## Finance — `/api/v1/`
 
 Accounts and the append-only cash book (phase 35). See
@@ -210,6 +217,8 @@ CRUD (`customers.*`), `{id}/orders/`, `{id}/addresses/`, `{id}/notes/`,
 | POST | `sales/{id}/void/` | `sales.cancel` — gives a coupon's use back |
 | GET/POST | `holds/` · POST `holds/{id}/resume/` · DELETE `holds/{id}/` | `sales.create` |
 | POST | `returns/` | `sales.refund` — in-store return + refund in one step |
+| POST | `exchanges/quote/` | `sales.create` + `sales.refund` — `{return}`: what the goods coming back are worth (`credit`), from the return made and rolled back; writes nothing |
+| POST | `exchanges/` | `sales.create` + `sales.refund` — `{return, sale}`: the return and the new sale in one transaction; the goods' worth is taken as a cash payment up to the sale's total, the customer pays the rest or is given it back (`settlement`). `Idempotency-Key` required (≤ 64); a retry answers with the exchange made. Another branch's sale is a `409` ([business-rules § 2.6](../business-rules.md#26-exchanges-at-the-counter)) |
 | POST | `elevate/` | manager credential check → short-lived, signed `approval_token` |
 | GET | `sales/{id}/receipt/` | `sales.view` — receipt payload |
 
@@ -245,7 +254,7 @@ logged; the audit entry names both people.
 | POST | `{id}/status/` | `orders.update_status` — `{to_status, reason}` |
 | POST | `{id}/cancel/` | `sales.cancel` |
 | POST | `{id}/payments/` | `sales.payment_record` — record cash/COD/bank capture |
-| POST | `{id}/refunds/` | `sales.refund` — `Idempotency-Key` |
+| POST | `{id}/refunds/` | `sales.refund_without_return` (the Owner alone) — money back with no goods returned; anything brought back is a return. `Idempotency-Key` |
 | GET | `{id}/timeline/` | `orders.view` |
 | GET | `{id}/invoice/` · `packing-slip/` | `orders.view` — print payloads |
 | GET/POST | `returns/` | `orders.view` / `sales.refund` |

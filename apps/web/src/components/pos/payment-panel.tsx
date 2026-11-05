@@ -10,7 +10,7 @@ import type { Order, PaymentMethod, PosSession } from "@/lib/api/types";
 import { saleRequest } from "@/lib/commerce/pos-sale";
 import { money } from "@/lib/format";
 import { METHOD_KIND } from "@/lib/money-accounts";
-import { usePos } from "@/lib/store/pos";
+import { type PosExchange, usePos } from "@/lib/store/pos";
 import type { PricedBasket } from "@/lib/use-sale-quote";
 
 /**
@@ -46,14 +46,21 @@ export function PaymentPanel({
   onClose,
   onCompleted,
   onStale,
+  exchange = null,
 }: {
   /** The basket exactly as the server priced it; this is what gets sold. */
   priced: PricedBasket;
   accounts: PosSession["accounts"];
   onClose: () => void;
-  onCompleted: (order: Order) => void;
+  /** `giveBack`: cash handed to the customer when an exchange's credit was not all used. */
+  onCompleted: (order: Order, giveBack?: number) => void;
   /** The sale changed under the dialog; `message` says how. */
   onStale: (message: string) => void;
+  /**
+   * Goods coming back in exchange: their worth pays for this sale up to its
+   * total, and what it does not use is given back to the customer.
+   */
+  exchange?: PosExchange | null;
 }) {
   const pos = usePos();
   const total = Number(priced.quote.grand_total);
@@ -85,8 +92,11 @@ export function PaymentPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [method, accounts]);
 
+  // The exchange's credit, in whole paisa so a subtraction cannot leave 1e-13.
+  const credit = exchange ? Math.min(exchange.credit, total) : 0;
+  const giveBack = exchange ? Math.round((exchange.credit - credit) * 100) / 100 : 0;
   const paid = tenders.reduce((sum, tender) => sum + tender.amount, 0);
-  const due = Math.max(0, total - paid);
+  const due = Math.max(0, Math.round((total - credit - paid) * 100) / 100);
   const tendered = Number(amount) || 0;
   const change = method === "CASH" ? Math.max(0, tendered - due) : 0;
 
@@ -128,7 +138,7 @@ export function PaymentPanel({
   }
 
   async function complete() {
-    const outstanding = total - tenders.reduce((sum, tender) => sum + tender.amount, 0);
+    const outstanding = total - credit - tenders.reduce((sum, tender) => sum + tender.amount, 0);
     if (outstanding > 0.001) {
       setError(`${money(outstanding)} is still due.`);
       return;
@@ -137,25 +147,34 @@ export function PaymentPanel({
     setSubmitting(true);
     setError(null);
     try {
-      const order = await apiClient<Order>("/pos/sales/", {
-        method: "POST",
-        idempotencyKey,
-        // The basket that was priced, not whatever the register holds now,
-        // with the total that was read out: the server refuses any other.
-        body: saleRequest(priced.request, {
-          payments: tenders.map((tender) => ({
-            method: tender.method,
-            amount: tender.amount.toFixed(2),
-            tendered_amount: tender.tendered?.toFixed(2),
-            reference: tender.reference ?? "",
-            account: tender.account ?? null,
-          })),
-          register: pos.register,
-          note: pos.note,
-          expectedTotal: priced.quote.grand_total,
-        }),
+      // The basket that was priced, not whatever the register holds now,
+      // with the total that was read out: the server refuses any other.
+      const sale = saleRequest(priced.request, {
+        payments: tenders.map((tender) => ({
+          method: tender.method,
+          amount: tender.amount.toFixed(2),
+          tendered_amount: tender.tendered?.toFixed(2),
+          reference: tender.reference ?? "",
+          account: tender.account ?? null,
+        })),
+        register: pos.register,
+        note: pos.note,
+        expectedTotal: priced.quote.grand_total,
       });
-      onCompleted(order);
+      const order = exchange
+        ? // The goods back and the goods out, in one transaction.
+          (
+            await apiClient<{ sale: Order }>("/pos/exchanges/", {
+              method: "POST",
+              idempotencyKey,
+              body: {
+                return: { order: exchange.orderId, reason: exchange.reason, lines: exchange.lines },
+                sale,
+              },
+            })
+          ).sale
+        : await apiClient<Order>("/pos/sales/", { method: "POST", idempotencyKey, body: sale });
+      onCompleted(order, giveBack);
     } catch (caught) {
       if (caught instanceof ApiError && STALE_CODES.has(caught.code)) {
         onStale(caught.message);
@@ -190,6 +209,16 @@ export function PaymentPanel({
               <p className="tabular font-display text-[2.5rem] font-bold leading-none">
                 {money(due)}
               </p>
+              {exchange && (
+                <p className="tabular mt-2 text-body-sm">
+                  Exchange credit − {money(credit)} ({exchange.summary})
+                </p>
+              )}
+              {giveBack > 0 && (
+                <p className="tabular mt-2 text-body font-semibold text-[var(--success-text)]">
+                  Give back: {money(giveBack)} in cash
+                </p>
+              )}
               {change > 0 && (
                 <p className="tabular mt-2 text-body font-semibold text-[var(--success-text)]">
                   Change: {money(change)}
@@ -330,7 +359,7 @@ export function PaymentPanel({
                 Add payment
               </Button>
               <Button size="lg" onClick={() => void complete()} loading={submitting} disabled={due > 0.001}>
-                Complete sale
+                {exchange ? "Complete exchange" : "Complete sale"}
               </Button>
             </div>
             <p className="mt-2 text-center text-caption text-muted">

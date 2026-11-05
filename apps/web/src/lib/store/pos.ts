@@ -11,6 +11,7 @@
 import { create } from "zustand";
 
 import type { PosVariant } from "@/lib/api/types";
+import type { ReturnLineRequest } from "@/lib/commerce/returns";
 
 export interface PosLine {
   variantId: string;
@@ -39,6 +40,22 @@ export interface PosApprovalState {
   percent: string;
 }
 
+/**
+ * Goods a customer brought back to exchange: what comes back, and what it is
+ * worth as the server worked it out. The sale on screen is what goes out;
+ * paying for it records both at once (`/pos/exchanges/`).
+ */
+export interface PosExchange {
+  orderId: string;
+  orderNumber: string;
+  reason: string;
+  lines: ReturnLineRequest[];
+  /** Taka, from `/pos/exchanges/quote/`: taken off what the new sale costs. */
+  credit: number;
+  /** "2 items from RGN-POS-000085", for the banner. */
+  summary: string;
+}
+
 interface PosState {
   lines: PosLine[];
   customerId: string | null;
@@ -51,6 +68,8 @@ interface PosState {
   approval: PosApprovalState | null;
   note: string;
   register: string;
+  exchange: PosExchange | null;
+  setExchange: (exchange: PosExchange | null) => void;
   addVariant: (variant: PosVariant, quantity?: number) => void;
   setQuantity: (variantId: string, quantity: number) => void;
   setLineDiscount: (variantId: string, discount: number) => void;
@@ -84,6 +103,9 @@ export const usePos = create<PosState>((set, get) => ({
   approval: null,
   note: "",
   register: "REG-01",
+  exchange: null,
+
+  setExchange: (exchange) => set({ exchange }),
 
   addVariant: (variant, quantity = 1) =>
     set((state) => {
@@ -159,6 +181,7 @@ export const usePos = create<PosState>((set, get) => ({
       couponCode: "",
       approval: null,
       note: "",
+      exchange: null,
     }),
 
   restore: (payload) => {

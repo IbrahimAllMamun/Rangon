@@ -17,7 +17,7 @@ of them.
 |---|---|
 | Products | `products.view` `products.create` `products.update` `products.delete` |
 | Inventory | `inventory.view` `inventory.adjust` `inventory.transfer` `inventory.count` |
-| Sales | `sales.view` `sales.create` `sales.discount` `sales.discount_override` `sales.cancel` `sales.refund` `sales.refund_override` `sales.payment_record` |
+| Sales | `sales.view` `sales.create` `sales.discount` `sales.discount_override` `sales.cancel` `sales.refund` `sales.refund_override` `sales.refund_without_return` `sales.payment_record` |
 | Orders | `orders.view` `orders.update_status` `orders.fulfil` |
 | Purchases | `purchases.view` `purchases.create` `purchases.receive` `purchases.pay` |
 | Finance | `finance.view` `finance.manage` `finance.transfer` `finance.adjust` `finance.expense` |
@@ -51,6 +51,12 @@ owner holds every permission whatever its row lists (`holds_every_permission` on
 | sales.cancel | ✔ | ✔ | ✔ | — | — | — | — |
 | sales.refund | ✔ | ✔ | ✔ | — | — | — | — |
 | sales.refund_override | ✔ | ✔ | — | — | — | — | — |
+| sales.refund_without_return | ✔ | — | — | — | — | — | — |
+
+`sales.refund_without_return` is the one code an administrator does not hold (`OWNER_ONLY` in
+`auth/permission-catalogue.ts`): money handed back with no goods coming back is the owner's call
+alone (business rules §2.4). Everything a customer brings back is a return, under `sales.refund`.
+
 | sales.payment_record | ✔ | ✔ | ✔ | ✔ | — | ✔ | — |
 | orders.view | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | — |
 | orders.update_status / fulfil | ✔ | ✔ | ✔ | — | ✔ | — | — |

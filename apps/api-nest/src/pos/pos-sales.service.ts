@@ -53,7 +53,7 @@ interface PaymentData {
   account?: string | null;
 }
 
-interface SaleData extends BasketData {
+export interface SaleData extends BasketData {
   payments: PaymentData[];
   register?: string;
   note?: string;
@@ -294,230 +294,287 @@ export class PosSales {
     idempotencyKey: string | null,
     context: AuditContext,
   ) {
+    const sale = await this.validated(data);
+    const branch = await this.permissions.resolveBranch(user, sale.branch ?? null);
+    const orderId = await this.stock.run((tx: Queryable, after: AfterCommit) =>
+      this.createIn(tx, after, context, user, branch, sale, idempotencyKey),
+    );
+    return this.staffOrders.detail((await this.staffOrders.byId(orderId)) as StaffOrderRow);
+  }
+
+  /** `PosSaleSerializer(data=...).is_valid(raise_exception=True)`. */
+  async validated(data: unknown): Promise<SaleData> {
     const validated = await runSerializer<SaleData>(this.fields(), data, BASKET_RULES);
     if (!validated.ok)
       throw new ValidationError('Invalid input.', { details: errorMessages(validated.errors) });
-    const sale = validated.values;
-    const branch = await this.permissions.resolveBranch(user, sale.branch ?? null);
+    return validated.values;
+  }
+
+  /** The order a sale's `Idempotency-Key` already made, if any. */
+  saleByKey(q: Queryable, key: string): Promise<string | null> {
+    return this.byKey(q, key);
+  }
+
+  /**
+   * `create_pos_sale`, inside a transaction someone else holds -- the sale's
+   * own, or an exchange's (pos-exchanges.service.ts). `credit` is an
+   * exchange's: what the returned goods were worth, taken as a cash payment
+   * up to the sale's total before the payments the customer makes, so the
+   * drawer moves by the difference alone. Answers the sale's id.
+   */
+  async createIn(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    user: RequestUser,
+    branch: BranchRow,
+    sale: SaleData,
+    idempotencyKey: string | null,
+    credit: { amount: Dec; reference: string } | null = null,
+  ): Promise<string> {
     const actor = { id: user.id, email: user.email };
+    if (idempotencyKey) {
+      const existing = await this.byKey(tx, idempotencyKey);
+      if (existing) return existing;
+    }
 
-    const orderId = await this.stock.run(async (tx: Queryable, after: AfterCommit) => {
-      if (idempotencyKey) {
-        const existing = await this.byKey(tx, idempotencyKey);
-        if (existing) return existing;
+    const quote = await this.pricing.priceSale(branch, user, basketInput(sale));
+    const priced = quote.priced;
+    const expected = sale.expected_total;
+    if (expected !== null && expected !== undefined) {
+      if (!quantize(expected).eq(priced.grandTotal)) {
+        throw new PriceChanged('The total has changed since the register showed it.', {
+          details: { expected: money(quantize(expected)), actual: money(priced.grandTotal) },
+        });
       }
+    }
 
-      const quote = await this.pricing.priceSale(branch, user, basketInput(sale));
-      const priced = quote.priced;
-      const expected = sale.expected_total;
-      if (expected !== null && expected !== undefined) {
-        if (!quantize(expected).eq(priced.grandTotal)) {
-          throw new PriceChanged('The total has changed since the register showed it.', {
-            details: { expected: money(quantize(expected)), actual: money(priced.grandTotal) },
-          });
-        }
-      }
+    const customer: CustomerRow | null = quote.customer;
+    const customerId = customer?.id ?? (await this.walkInCustomer(tx, branch));
 
-      const customer: CustomerRow | null = quote.customer;
-      const customerId = customer?.id ?? (await this.walkInCustomer(tx, branch));
-
-      // Under a savepoint: a retry that loses the race for its key answers
-      // with the winner's sale instead of failing (D90).
-      const id = randomUUID();
-      let number: string;
-      await tx.query('SAVEPOINT pos_sale');
-      try {
-        number = await nextNumber(tx, 'order:POS', 'RGN-POS');
-        await tx.query(
-          `INSERT INTO orders_order
-             (id, created_at, updated_at, number, channel, status, payment_status, branch_id,
-              customer_id, created_by_id, register, subtotal, coupon_discount, manual_discount,
-              discount_total, tax_total, tax_rate, tax_mode, shipping_total, grand_total, paid_total,
-              refunded_total, currency, coupon_id, shipping_method_id, shipping_address,
-              billing_address, customer_note, internal_note, idempotency_key, guest_token, placed_at,
-              confirmed_at, packed_at, shipped_at, delivered_at, cancelled_at, cancel_reason,
-              stock_committed)
-           VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2, 'POS', 'DELIVERED', 'UNPAID',
-                   $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13, 0.00, $14, 0.00,
-                   0.00, $15, $16::uuid, NULL, '{}'::jsonb, '{}'::jsonb, $17, '', $18, '',
-                   clock_timestamp(), NULL, NULL, NULL, clock_timestamp(), NULL, '', true)`,
-          [
-            id,
-            number,
-            branch.id,
-            customerId,
-            user.id,
-            sale.register ?? '',
-            money(priced.subtotal),
-            money(priced.couponDiscount),
-            money(priced.manualDiscount),
-            money(priced.discountTotal),
-            money(priced.taxTotal),
-            quote.taxRateText,
-            priced.taxMode,
-            money(priced.grandTotal),
-            this.env.RANGON_CURRENCY,
-            quote.coupon?.id ?? null,
-            sale.note ?? '',
-            idempotencyKey,
-          ],
-        );
-        await tx.query('RELEASE SAVEPOINT pos_sale');
-      } catch (error) {
-        if (!String((error as { code?: string }).code).startsWith('23')) throw error;
-        await tx.query('ROLLBACK TO SAVEPOINT pos_sale');
-        const winner = await this.byKey(tx, idempotencyKey);
-        if (winner) return winner;
-        throw error;
-      }
-
-      for (const line of priced.lines) {
-        await tx.query(
-          `INSERT INTO orders_orderitem
-             (id, created_at, updated_at, order_id, variant_id, sku, product_name, variant_label,
-              quantity, unit_price, unit_cost, line_discount, tax_amount, line_total,
-              fulfilled_quantity, returned_quantity)
-           VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4, $5, $6, $7,
-                   $8, $9, $10, $11, $12, $7, 0)`,
-          [
-            randomUUID(),
-            id,
-            line.variant.id,
-            line.variant.sku,
-            line.variant.productName,
-            await line.variant.label(),
-            line.quantity.toString(),
-            money(line.unitPrice),
-            money(line.unitCost),
-            money(line.lineDiscount),
-            money(line.taxAmount),
-            money(lineTotal(line)),
-          ],
-        );
-      }
-
-      // Stock out, under the row lock: this is where an oversell is caught.
-      const sold = priced.lines.map(
-        (line) => [line.variant.id, line.quantity] as [string, number | bigint],
-      );
-      await this.stock.sell(tx, after, {
-        branch,
-        lines: sold,
-        actor,
-        referenceType: 'order',
-        referenceId: id,
-      });
-      await this.flagShortOrders(tx, branch, sold, { number }, user.id);
-
-      // The coupon's use, counted after the stock: every sale takes the
-      // inventory rows first and the coupon row second.
-      if (quote.coupon)
-        await this.coupons.redeem(
-          tx,
-          quote.coupon.id,
+    // Under a savepoint: a retry that loses the race for its key answers
+    // with the winner's sale instead of failing (D90).
+    const id = randomUUID();
+    let number: string;
+    await tx.query('SAVEPOINT pos_sale');
+    try {
+      number = await nextNumber(tx, 'order:POS', 'RGN-POS');
+      await tx.query(
+        `INSERT INTO orders_order
+           (id, created_at, updated_at, number, channel, status, payment_status, branch_id,
+            customer_id, created_by_id, register, subtotal, coupon_discount, manual_discount,
+            discount_total, tax_total, tax_rate, tax_mode, shipping_total, grand_total, paid_total,
+            refunded_total, currency, coupon_id, shipping_method_id, shipping_address,
+            billing_address, customer_note, internal_note, idempotency_key, guest_token, placed_at,
+            confirmed_at, packed_at, shipped_at, delivered_at, cancelled_at, cancel_reason,
+            stock_committed)
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2, 'POS', 'DELIVERED', 'UNPAID',
+                 $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13, 0.00, $14, 0.00,
+                 0.00, $15, $16::uuid, NULL, '{}'::jsonb, '{}'::jsonb, $17, '', $18, '',
+                 clock_timestamp(), NULL, NULL, NULL, clock_timestamp(), NULL, '', true)`,
+        [
           id,
-          priced.couponDiscount,
-          customer?.id ?? null,
-        );
+          number,
+          branch.id,
+          customerId,
+          user.id,
+          sale.register ?? '',
+          money(priced.subtotal),
+          money(priced.couponDiscount),
+          money(priced.manualDiscount),
+          money(priced.discountTotal),
+          money(priced.taxTotal),
+          quote.taxRateText,
+          priced.taxMode,
+          money(priced.grandTotal),
+          this.env.RANGON_CURRENCY,
+          quote.coupon?.id ?? null,
+          sale.note ?? '',
+          idempotencyKey,
+        ],
+      );
+      await tx.query('RELEASE SAVEPOINT pos_sale');
+    } catch (error) {
+      if (!String((error as { code?: string }).code).startsWith('23')) throw error;
+      await tx.query('ROLLBACK TO SAVEPOINT pos_sale');
+      const winner = await this.byKey(tx, idempotencyKey);
+      if (winner) return winner;
+      throw error;
+    }
 
-      const order = {
+    for (const line of priced.lines) {
+      await tx.query(
+        `INSERT INTO orders_orderitem
+           (id, created_at, updated_at, order_id, variant_id, sku, product_name, variant_label,
+            quantity, unit_price, unit_cost, line_discount, tax_amount, line_total,
+            fulfilled_quantity, returned_quantity)
+         VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4, $5, $6, $7,
+                 $8, $9, $10, $11, $12, $7, 0)`,
+        [
+          randomUUID(),
+          id,
+          line.variant.id,
+          line.variant.sku,
+          line.variant.productName,
+          await line.variant.label(),
+          line.quantity.toString(),
+          money(line.unitPrice),
+          money(line.unitCost),
+          money(line.lineDiscount),
+          money(line.taxAmount),
+          money(lineTotal(line)),
+        ],
+      );
+    }
+
+    // Stock out, under the row lock: this is where an oversell is caught.
+    const sold = priced.lines.map(
+      (line) => [line.variant.id, line.quantity] as [string, number | bigint],
+    );
+    await this.stock.sell(tx, after, {
+      branch,
+      lines: sold,
+      actor,
+      referenceType: 'order',
+      referenceId: id,
+    });
+    await this.flagShortOrders(tx, branch, sold, { number }, user.id);
+
+    // The coupon's use, counted after the stock: every sale takes the
+    // inventory rows first and the coupon row second.
+    if (quote.coupon)
+      await this.coupons.redeem(
+        tx,
+        quote.coupon.id,
         id,
-        number,
-        branchId: branch.id,
-        branchCode: branch.code,
-        currency: this.env.RANGON_CURRENCY,
-        grandTotal: money(priced.grandTotal),
-      };
-      let paid = ZERO;
-      for (const payment of sale.payments) {
-        const amount = quantize(payment.amount);
-        if (amount.lte(ZERO)) continue;
+        priced.couponDiscount,
+        customer?.id ?? null,
+      );
+
+    const order = {
+      id,
+      number,
+      branchId: branch.id,
+      branchCode: branch.code,
+      currency: this.env.RANGON_CURRENCY,
+      grandTotal: money(priced.grandTotal),
+    };
+    let paid = ZERO;
+    if (credit) {
+      const applied = credit.amount.lt(priced.grandTotal)
+        ? quantize(credit.amount)
+        : quantize(priced.grandTotal);
+      if (applied.gt(ZERO)) {
         await this.payments.recordCaptured(
           tx,
           context,
           order,
           {
-            method: payment.method,
-            amount,
-            tenderedAmount: payment.tendered_amount ?? null,
-            reference: payment.reference ?? '',
-            accountId: payment.account ?? null,
+            method: 'CASH',
+            amount: applied,
+            tenderedAmount: null,
+            reference: pySlice(credit.reference, 128),
+            accountId: null,
           },
           actor,
         );
-        paid = paid.plus(amount);
+        paid = paid.plus(applied);
       }
-      if (paid.lt(priced.grandTotal)) {
-        throw new ValidationError('Payment does not cover the sale total.', {
-          details: { total: money(priced.grandTotal), paid: money(quantize(paid)) },
-        });
-      }
-
-      // `_touch_customer`: from the figures read when the sale was priced.
-      const placedAt = (
-        (await tx.one<{ placed_at: string }>(
-          `SELECT "placed_at" FROM "orders_order" WHERE "id" = $1`,
-          [id],
-        )) as { placed_at: string }
-      ).placed_at;
-      if (customer) {
-        await tx.query(
-          `UPDATE "customers_customer" SET "total_orders" = $2, "total_spent" = $3,
-                  "last_order_at" = $4::timestamptz WHERE "customers_customer"."id" = $1`,
-          [
-            customer.id,
-            customer.total_orders + 1,
-            money(quantize(priced.grandTotal.plus(customer.total_spent))),
-            placedAt,
-          ],
-        );
-      }
-
-      // A lead chased by phone is usually rung up at the counter.
-      await this.notices.recoverLead(tx, {
-        id,
-        customerPhone: customer?.phone ?? null,
-        shippingPhone: undefined,
+    }
+    for (const payment of sale.payments) {
+      const amount = quantize(payment.amount);
+      if (amount.lte(ZERO)) continue;
+      await this.payments.recordCaptured(
+        tx,
+        context,
+        order,
+        {
+          method: payment.method,
+          amount,
+          tenderedAmount: payment.tendered_amount ?? null,
+          reference: payment.reference ?? '',
+          accountId: payment.account ?? null,
+        },
+        actor,
+      );
+      paid = paid.plus(amount);
+    }
+    if (paid.lt(priced.grandTotal)) {
+      throw new ValidationError('Payment does not cover the sale total.', {
+        details: { total: money(priced.grandTotal), paid: money(quantize(paid)) },
       });
-
-      const couponCode = quote.coupon?.code ?? '';
-      await this.orders.logEvent(tx, id, 'CREATED', `POS sale at ${branch.code}`, {
-        data: { register: sale.register ?? '', items: priced.lines.length, coupon: couponCode },
-        actorId: user.id,
+    }
+    // An exchange whose goods already pay for the sale takes nothing more: the
+    // customer is given back what the credit did not use, not charged for it.
+    if (credit && paid.gt(priced.grandTotal)) {
+      throw new ValidationError('More was paid than the exchange leaves to pay.', {
+        details: { total: money(priced.grandTotal), paid: money(quantize(paid)) },
       });
-      if (quote.override) {
-        await recordAudit(tx, context, {
-          action: 'DISCOUNT_OVERRIDE',
-          entity: { type: 'Order', id, label: number },
-          actor,
-          newValues: {
-            discount: money(quote.override.discount),
-            percent: money(quote.override.percent),
-            threshold: quote.override.threshold,
-            approved_by: quote.override.approver.email,
-          },
-          reason: 'Discount above threshold approved',
-          // The till's branch: an override is that shop's business (D95).
-          branchId: branch.id,
-        });
-      }
+    }
+
+    // `_touch_customer`: from the figures read when the sale was priced.
+    const placedAt = (
+      (await tx.one<{ placed_at: string }>(
+        `SELECT "placed_at" FROM "orders_order" WHERE "id" = $1`,
+        [id],
+      )) as { placed_at: string }
+    ).placed_at;
+    if (customer) {
+      await tx.query(
+        `UPDATE "customers_customer" SET "total_orders" = $2, "total_spent" = $3,
+                "last_order_at" = $4::timestamptz WHERE "customers_customer"."id" = $1`,
+        [
+          customer.id,
+          customer.total_orders + 1,
+          money(quantize(priced.grandTotal.plus(customer.total_spent))),
+          placedAt,
+        ],
+      );
+    }
+
+    // A lead chased by phone is usually rung up at the counter.
+    await this.notices.recoverLead(tx, {
+      id,
+      customerPhone: customer?.phone ?? null,
+      shippingPhone: undefined,
+    });
+
+    const couponCode = quote.coupon?.code ?? '';
+    await this.orders.logEvent(tx, id, 'CREATED', `POS sale at ${branch.code}`, {
+      data: { register: sale.register ?? '', items: priced.lines.length, coupon: couponCode },
+      actorId: user.id,
+    });
+    if (quote.override) {
       await recordAudit(tx, context, {
-        action: 'SALE_CREATED',
+        action: 'DISCOUNT_OVERRIDE',
         entity: { type: 'Order', id, label: number },
         actor,
         newValues: {
-          number,
-          total: money(priced.grandTotal),
-          items: priced.lines.length,
-          register: sale.register ?? '',
-          discount_total: money(priced.discountTotal),
-          coupon: couponCode,
+          discount: money(quote.override.discount),
+          percent: money(quote.override.percent),
+          threshold: quote.override.threshold,
+          approved_by: quote.override.approver.email,
         },
+        reason: 'Discount above threshold approved',
+        // The till's branch: an override is that shop's business (D95).
         branchId: branch.id,
       });
-      return id;
+    }
+    await recordAudit(tx, context, {
+      action: 'SALE_CREATED',
+      entity: { type: 'Order', id, label: number },
+      actor,
+      newValues: {
+        number,
+        total: money(priced.grandTotal),
+        items: priced.lines.length,
+        register: sale.register ?? '',
+        discount_total: money(priced.discountTotal),
+        coupon: couponCode,
+      },
+      branchId: branch.id,
     });
-    return this.staffOrders.detail((await this.staffOrders.byId(orderId)) as StaffOrderRow);
+    return id;
   }
 
   /**

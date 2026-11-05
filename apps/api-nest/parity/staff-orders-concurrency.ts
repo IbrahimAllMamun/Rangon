@@ -59,7 +59,8 @@ export async function staffOrdersConcurrencyChecks(apis: {
         method: 'POST',
         path: `/api/v1/orders/${id}/${action}/`,
         headers: {
-          ...auth('manager'),
+          // A refund with no goods coming back is the owner's alone (business rules 2.4).
+          ...auth(action === 'refunds' ? 'owner' : 'manager'),
           'content-type': 'application/json',
           ...(key === undefined ? {} : { 'idempotency-key': key }),
         },

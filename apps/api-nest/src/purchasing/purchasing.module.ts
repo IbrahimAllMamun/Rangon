@@ -6,6 +6,7 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { PurchaseDocuments } from './purchase-documents';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import {
+  DamagedReturnsController,
   PurchaseOrdersController,
   SupplierPaymentsController,
   SupplierProductsController,
@@ -23,6 +24,7 @@ import { SuppliersService } from './suppliers.service';
     SupplierProductsController,
     PurchaseOrdersController,
     SupplierPaymentsController,
+    DamagedReturnsController,
   ],
   providers: [
     SuppliersService,

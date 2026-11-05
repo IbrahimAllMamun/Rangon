@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { OrderActions } from "@/components/admin/order-actions";
 import { OrderFulfilment } from "@/components/admin/order-fulfilment";
+import { ReturnItems } from "@/components/admin/return-items";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/admin/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { type Paginated } from "@/lib/api/client";
@@ -183,6 +184,7 @@ export default async function OrderDetailPage({ params }: { params: Params }) {
         </div>
 
         <div className="space-y-6">
+          <ReturnItems order={order} permissions={permissions} />
           <OrderActions order={order} permissions={permissions} accounts={accounts} />
 
           <Card>

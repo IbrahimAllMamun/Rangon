@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from '../../src/auth/permission-catalogue';
+import {
+  OWNER_ONLY,
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
+  ROLES,
+} from '../../src/auth/permission-catalogue';
 import { againstTheBaseline, MIGRATIONS, Refusal } from '../../src/cli/migrate';
 import { parseFlags, text } from '../../src/cli/session';
 
@@ -83,9 +88,15 @@ describe('the permission catalogue', () => {
     }
   });
 
-  it('gives an administrator every code, and a customer none', () => {
-    expect(ROLE_PERMISSIONS.ADMIN).toEqual(codes);
+  it("gives an administrator every code but the owner's own, and a customer none", () => {
+    expect(ROLE_PERMISSIONS.ADMIN).toEqual(codes.filter((code) => !OWNER_ONLY.has(code)));
     expect(ROLE_PERMISSIONS.CUSTOMER).toEqual([]);
+  });
+
+  it('keeps a refund with no goods returned to the owner alone', () => {
+    expect(codes).toContain('sales.refund_without_return');
+    for (const held of Object.values(ROLE_PERMISSIONS))
+      expect(held).not.toContain('sales.refund_without_return');
   });
 
   it('leaves the owner out of the matrix: it holds every code implicitly', () => {

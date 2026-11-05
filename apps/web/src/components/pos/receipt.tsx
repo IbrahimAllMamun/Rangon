@@ -20,12 +20,18 @@ export function Receipt({
   order,
   session,
   onNewSale,
+  givenBack = 0,
 }: {
   order: Order;
   session: PosSession;
   onNewSale: () => void;
+  /** Cash handed back when an exchange's credit came to more than the new goods. */
+  givenBack?: number;
 }) {
-  const cashPayment = order.payments?.find((payment) => payment.method === "CASH");
+  // The customer's own cash, not an exchange's credit (which gives no change).
+  const cashPayment = order.payments?.find(
+    (payment) => payment.method === "CASH" && !isExchangeCredit(payment),
+  );
   // The registration number and the tax line are one fact; neither prints on a
   // memo that charged no VAT.
   const showsVat = memoShowsVat(order);
@@ -45,6 +51,11 @@ export function Receipt({
           {cashPayment && Number(cashPayment.change_amount) > 0 && (
             <p className="tabular mt-2 rounded-md bg-white/15 px-3 py-2 text-h4 font-bold">
               Change due: {money(cashPayment.change_amount)}
+            </p>
+          )}
+          {givenBack > 0 && (
+            <p className="tabular mt-2 rounded-md bg-white/15 px-3 py-2 text-h4 font-bold">
+              Give back: {money(givenBack)}
             </p>
           )}
         </div>
@@ -119,7 +130,13 @@ export function Receipt({
             {order.payments?.map((payment) => (
               <Line
                 key={payment.id}
-                term={payment.method === "MOBILE_MFS" ? "bKash / Nagad" : payment.method}
+                term={
+                  isExchangeCredit(payment)
+                    ? "Exchange credit"
+                    : payment.method === "MOBILE_MFS"
+                      ? "bKash / Nagad"
+                      : payment.method
+                }
                 value={money(payment.amount, false)}
               />
             ))}
@@ -157,4 +174,9 @@ function Line({ term, value }: { term: string; value: string }) {
       <dd className="tabular">{value}</dd>
     </div>
   );
+}
+
+/** The cash an exchange's returned goods were worth, taken against this sale. */
+function isExchangeCredit(payment: { reference?: string | null }): boolean {
+  return (payment.reference ?? "").startsWith("Exchange ");
 }

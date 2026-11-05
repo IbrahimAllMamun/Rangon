@@ -231,8 +231,8 @@ are (`lib/barcode/code128.ts`, `components/barcode/code128-svg.tsx`).
 **Scanning it finds the order.** A scanner types the number and Enter, so scanned into the back
 office's order search (`/admin/orders`) it opens that order: the way to a return, a reprint or a
 question about a sale without typing the number. An exact match on the number opens it; anything
-else is the list as before. Scanned at the POS register by mistake, a receipt is answered with
-where it belongs, not "not recognised". No new permission: the search is `orders.view`, as it was.
+else is the list as before. Scanned at the POS register, a receipt opens *Return or exchange* for
+that sale (§2.6). No new permission: the search is `orders.view`, as it was.
 
 ## 2. Returns and refunds
 
@@ -254,16 +254,35 @@ reason, which is recorded in the audit log.
 
 ### 2.3 How returns affect stock
 
-Restock decision is per returned line:
+**A customer bringing goods back is always a return** (the owner's rule, 2026-11-05): the goods come
+back and are decided one line at a time, and only then does money go back. Restock decision per
+returned line:
 
 | Decision | Ledger effect | Meaning |
 |---|---|---|
 | `RESTOCK` | `RETURN` (+) | Sellable again, back on the shelf |
-| `DAMAGED` | none | Written off; recorded on the return line, not added to stock |
-| `QUARANTINE` | none | Held pending inspection; not sellable, not written off |
+| `DAMAGED` | none | Not sellable; **goes back to the supplier**, who credits it (below) |
+| `QUARANTINE` | none | Held pending inspection; not sellable. Read on older returns, no longer offered |
 
 `DAMAGED` and `QUARANTINE` lines never increase `available`. A quarantined item that is later cleared
 is brought back with an explicit `ADJUSTMENT` carrying the return reference as its reason.
+
+**Damaged goods go back to the supplier, and the supplier takes all of them** (the owner's rule,
+2026-11-05). A damaged line, once its return is received, waits in **Purchasing → Damaged returns**
+(`GET /damaged-returns/`) until it is sent back on a purchase return against a purchase order that
+brought the same item into the same branch (`POST /damaged-returns/send/`). That purchase return is an
+ordinary one -- it credits the order (`credited_total`), counts against the line's
+`quantity_returned`, and carries its input VAT back on the VAT return -- with two differences: **no
+stock moves**, because a damaged item never went back on the shelf, and each line names the damaged
+customer-return line it credits (`purchasing_purchasereturnitem.return_item_id`, unique), so one
+damaged item is credited once. The supplier credits at the purchase line's cost.
+
+Because the supplier takes it back, **a damaged return is not a loss**: the business summary's
+*returned goods written off* counts only quarantined lines (§4.1). Before 2026-11-05 every damaged
+line was written off.
+*`DECISION REQUIRED` — default chosen.* The supplier credits the purchase line's cost while the sale
+reversed the line's frozen average cost; the difference, usually small, is in no profit line. Which
+purchase order an item goes back on is chosen by staff (the newest that can take it is offered first).
 
 **The decision is made at receipt**, not when the return is raised: that is the first moment anybody
 has the item in their hands. Whatever was chosen when the return was requested stands as the default
@@ -272,6 +291,15 @@ decision happens before stock moves, so a line marked `DAMAGED` on inspection ne
 stock even if it was raised as `RESTOCK`.
 
 ### 2.4 Refunds
+
+**Money goes back without goods only on the owner's say** (2026-11-05). A refund on an order with no
+return behind it (`POST /orders/<id>/refunds/`) needs `sales.refund_without_return`, which the Owner
+alone holds -- not an administrator, not a manager. It is for money owed with nothing coming back: a
+payment taken by mistake, a parcel lost in delivery. Anything a customer brings back is a return
+(§2.3), which managers do with `sales.refund` as before. Cancelling an order still refunds what was
+paid; that is the cancellation's, under `sales.cancel`. Until then a manager's plain refund with the
+reason "Customer returned the item" put money back and no stock: found on a shop's own data
+(RGN-POS-000055).
 
 - A refund never exceeds the amount actually paid against the order (`SUM(payments.captured)` −
   `SUM(refunds)`), enforced in `orders.services.returns`.
@@ -345,6 +373,33 @@ methods, as a return completed from the back office does. Left out, it is cash; 
 way the money came in.
 
 ---
+
+### 2.6 Exchanges at the counter
+
+A customer who brings goods back and takes others is an **exchange** (`POST /pos/exchanges/`, the
+register's *Return or exchange*, F6, or a scanned receipt): a return and a new sale **in one
+transaction**, so neither happens without the other.
+
+- **What the goods are worth** is the return's refund, worked out as any return's is (§2.4: the
+  line's share of the sale's discount taken off, VAT added where it sat on top, never more than is
+  left to refund). The register asks for it first (`POST /pos/exchanges/quote/`, which makes the
+  return and rolls it back, so the figure and every refusal are the return's own).
+- **The credit pays for the new sale up to its total.** The customer pays the rest, or is given back
+  what the credit did not use, in cash. A payment beyond what is left is refused.
+- **The money is two ordinary movements through the branch's cash drawer**: the return refunds the
+  goods' worth in cash, and the sale takes that much as a cash payment before the customer's own. The
+  drawer moves by the difference alone, every report reads a return and a sale as it always has, and
+  the receipt prints the credit as *Exchange credit*. The sale is rung up before the refund leaves, so
+  a drawer short of the whole refund but not of the difference is not refused.
+- **At the branch that sold the goods**: both movements go through one drawer. Another branch's sale
+  is refused: exchange it there, or return it.
+- **Once per `Idempotency-Key`**, held under an advisory lock for the transaction: a double-click
+  answers with the exchange already made. A key an ordinary sale holds is refused.
+- **Stock is locked once, up front**: the rows of the goods coming back and going out, lowest id first,
+  as every sale locks its own, so an exchange cannot deadlock with a sale.
+- Each order's timeline names the other (`EXCHANGE` events).
+- It sells and it refunds, so it needs `sales.create` and `sales.refund`: a cashier fetches a manager,
+  as for a return.
 
 ## 3. Pricing, discounts, tax
 
@@ -686,7 +741,7 @@ raise and receive a purchase order.
 − cost of goods sold            frozen unit_cost × quantity
 + cost of goods returned        frozen unit_cost × returned quantity, every line whatever became of it
 = gross profit
-− returned goods written off    frozen cost of returned lines not restocked (DAMAGED, QUARANTINE)
+− returned goods written off    frozen cost of QUARANTINE lines: DAMAGED goes back to the supplier (§2.3)
 − shipping refunded             the order's shipping, on returns that refund it (a shop-fault reason)
 − refund adjustments            refund_amount − sales returns − their VAT − shipping refunded
 − refunds without a return      money given back on a sold order, goods kept, by the refund's moment
@@ -717,9 +772,9 @@ damaged return hid its loss inside gross profit.
 **What a return lost beyond the goods is its own line, below gross profit.** The VAT is no part of it:
 it was never revenue, and the VAT report credits it. What is:
 
-- *Returned goods written off*: a DAMAGED or QUARANTINE line is not back on the shelf, so its frozen
-  cost is a loss of the period. QUARANTINE is counted here too because the stock value does not hold
-  it either.
+- *Returned goods written off*: a QUARANTINE line is on neither the shelf nor its way back to the
+  supplier, so its frozen cost is a loss of the period. A DAMAGED line is not (since 2026-11-05): the
+  supplier takes it back and credits it (§2.3).
   *`DECISION REQUIRED` — default chosen.* A quarantined unit later put back on the shelf by an
   `ADJUSTMENT` raises stock value but does not credit this line back; until a quarantine has a
   resolution of its own (§2.3), that unit's cost is counted as lost twice over in time.
@@ -758,13 +813,13 @@ again, and a cancelled order never counts (cancelling is refused once anything h
 > valued from then on. Switching later needs no migration; it changes `receive_purchase`, and this
 > line would then have to stop subtracting what COGS already carries.
 
-**The dashboard shows the same statement.** Its *Profit* row — gross profit, return losses (shown
-when not zero), expenses, purchase shipping, net profit — comes from the functions above, so the
-dashboard and the business summary agree for the same range and branch, and the row adds up as it
-reads. Its gross profit takes
-completed returns into account as the statement does; before 2026-10-05 it ignored them. The row is
-sent only to a reader holding `reports.financial`, the permission the business summary needs —
-everyone with `reports.view` keeps the rest of the dashboard, with gross profit in its *Sales* row.
+**The dashboard shows the same statement.** Its first row is *Revenue* -- the period's sales less
+what it gave back (`net_revenue`) -- then *Refunded*, *Gross profit* and, for a reader holding
+`reports.financial`, *Net profit* (owner's layout, 2026-11-05). The row under it holds what lies
+between gross and net profit -- return losses (shown when not zero), expenses, purchase shipping --
+from the functions above, so the dashboard and the business summary agree for the same range and
+branch. Its gross profit takes completed returns into account as the statement does; before
+2026-10-05 it ignored them. Everyone with `reports.view` keeps the rest of the dashboard.
 
 **VAT is reported but never counted as revenue or profit.** It is money held for the government. Under
 inclusive pricing it sits inside the line total, so it is removed per line — the order's own frozen

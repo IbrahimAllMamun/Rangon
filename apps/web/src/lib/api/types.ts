@@ -1021,3 +1021,31 @@ export interface ReturnRequest {
   received_at: string | null;
   completed_at: string | null;
 }
+
+/**
+ * A damaged item a customer brought back, waiting to go back to the supplier
+ * (`GET /damaged-returns/`), with the purchase-order lines it can go back on.
+ */
+export interface DamagedReturn {
+  id: string;
+  quantity: number;
+  condition_note: string;
+  return_request: { id: string; number: string };
+  order: { id: string; number: string };
+  branch: { id: string; code: string };
+  variant: string;
+  sku: string;
+  product_name: string;
+  variant_label: string;
+  /** What it cost the shop when it was sold (the frozen cost). */
+  unit_cost: string;
+  received_at: string | null;
+  purchase_lines: {
+    id: string;
+    purchase_order: { id: string; number: string };
+    supplier: { id: string; name: string };
+    /** What the supplier will credit for one unit. */
+    unit_cost: string;
+    returnable: number;
+  }[];
+}

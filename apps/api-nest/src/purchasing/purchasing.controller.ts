@@ -258,6 +258,40 @@ export class PurchaseOrdersController {
   }
 }
 
+/**
+ * Damaged goods customers brought back, on their way to the supplier
+ * (business rules 2.3): listed for whoever sees purchases, sent back by
+ * whoever may return to a supplier.
+ */
+@StaffView('damaged-returns', { list: VIEW, send: RECEIVE })
+export class DamagedReturnsController {
+  constructor(
+    private readonly orders: PurchaseOrdersService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  @Get('damaged-returns/')
+  @Action('list')
+  list(@Params() query: QueryDict, @Req() request: FastifyRequest) {
+    return this.orders.damagedReturns(
+      request.user as RequestUser,
+      query,
+      absoluteUri(request, this.env),
+    );
+  }
+
+  @Post('damaged-returns/send/')
+  @Action('send')
+  send(@Req() request: FastifyRequest) {
+    return this.orders.sendDamaged(
+      request.user as RequestUser,
+      requestData(request),
+      idempotencyKey(request),
+      auditContext(request, this.env),
+    );
+  }
+}
+
 /** `SupplierPaymentViewSet`: recorded and listed, never edited or deleted. */
 @StaffView('supplier-payments', { list: VIEW, create: ['purchases.pay'] })
 export class SupplierPaymentsController {

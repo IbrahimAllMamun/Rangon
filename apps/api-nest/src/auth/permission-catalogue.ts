@@ -25,6 +25,7 @@ export const PERMISSIONS: Readonly<Record<string, readonly [group: string, name:
   'sales.cancel': ['sales', 'Cancel or void a sale'],
   'sales.refund': ['sales', 'Refund a sale'],
   'sales.refund_override': ['sales', 'Refund outside the return window'],
+  'sales.refund_without_return': ['sales', 'Refund money with no goods returned'],
   'sales.payment_record': ['sales', 'Record a payment'],
   'orders.view': ['orders', 'View orders'],
   'orders.update_status': ['orders', 'Change order status'],
@@ -70,13 +71,20 @@ export const ROLES: readonly (readonly [code: string, name: string])[] = [
 export const CUSTOMER_ROLE = 'CUSTOMER';
 
 /**
+ * Codes only the OWNER holds, which ADMIN's "every code" leaves out. Money
+ * handed back with no goods coming back is the owner's call alone: a customer
+ * who brings a product back is a return (business rules 2.4).
+ */
+export const OWNER_ONLY: ReadonlySet<string> = new Set(['sales.refund_without_return']);
+
+/**
  * What each role may do. OWNER is not here: it holds every permission
  * implicitly, and `sync-permissions` grants it every row as well, so that the
- * roles screen says what the role can do. ADMIN is every code, by decision
- * pending (business rule 7.1, D221).
+ * roles screen says what the role can do. ADMIN is every code but the
+ * owner's own, by decision pending (business rule 7.1, D221).
  */
 export const ROLE_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
-  ADMIN: Object.keys(PERMISSIONS),
+  ADMIN: Object.keys(PERMISSIONS).filter((code) => !OWNER_ONLY.has(code)),
   MANAGER: [
     'products.view',
     'products.create',
