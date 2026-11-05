@@ -285,7 +285,7 @@ function statementLines(summary: BusinessSummary): Line[] {
       label: "Returned goods written off",
       amount: summary.return_losses.written_off,
       negative: true,
-      note: "damaged or quarantined, not back on the shelf",
+      note: "quarantined: neither back on the shelf nor back to the supplier",
     },
     { label: "Shipping refunded", amount: summary.return_losses.shipping_refunded, negative: true },
     {

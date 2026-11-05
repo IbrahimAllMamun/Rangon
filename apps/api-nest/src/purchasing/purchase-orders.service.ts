@@ -6,6 +6,7 @@ import type { RequestUser } from '../auth/authentication';
 import { branchCondition, type BranchRow, RolePermissions } from '../auth/permissions';
 import { money, quantize, ZERO } from '../checkout/pricing';
 import { type AuditContext, recordAudit } from '../common/audit';
+import { localIso } from '../common/datetime';
 import { parseWindow } from '../common/dates';
 import { Dec } from '../common/decimal';
 import {
@@ -33,7 +34,7 @@ import {
   uniqueLast,
 } from '../common/filtering';
 import { paginated, pageSizeFrom, resolvePage, STANDARD_PAGINATION } from '../common/pagination';
-import type { QueryDict } from '../common/query-dict';
+import { QueryDict } from '../common/query-dict';
 import { nextNumber } from '../common/sequence';
 import { parseUuid } from '../common/uuid';
 import { ENV, Env } from '../config/env';
@@ -910,6 +911,349 @@ export class PurchaseOrdersService {
           credited_total: money(credited),
         },
         reason: notes || `Returned to supplier: ${reason}`,
+        branchId: order.branch_id,
+      });
+      return id;
+    });
+
+    const rows = await this.documents.returnRows(this.db, `"purchasing_purchasereturn"."id" = $1`, [
+      returnId,
+    ]);
+    const [purchaseReturn] = await this.documents.returns(this.db, rows);
+    return {
+      purchase_return: purchaseReturn,
+      purchase_order: await this.documents.order(rows[0]?.purchase_order_id as string),
+    };
+  }
+
+  // --- Damaged customer returns, back to the supplier ------------------------------------------
+
+  /**
+   * Damaged goods a customer brought back, still in the shop: received on a
+   * return, decided DAMAGED, and named by no purchase-return line yet. Each
+   * comes with the purchase-order lines it can go back on -- the same item,
+   * received at the same branch, with that many units not yet sent back --
+   * newest order first (business rules 2.3).
+   */
+  async damagedReturns(user: RequestUser, query: QueryDict, absoluteUrl: string) {
+    const sql = new SqlParams();
+    const where = [
+      `ri."restock_decision" = 'DAMAGED'`,
+      `r."status" IN ('RECEIVED', 'COMPLETED')`,
+      `NOT EXISTS (SELECT 1 FROM "purchasing_purchasereturnitem" pri WHERE pri."return_item_id" = ri."id")`,
+    ];
+    const scope = branchCondition(user, ['o."branch_id"'], sql.values.length + 1);
+    if (scope) {
+      where.push(scope.sql);
+      for (const value of scope.values) sql.add(value, 'uuid');
+    }
+    const from = `FROM "orders_returnitem" ri
+      INNER JOIN "orders_returnrequest" r ON (r."id" = ri."return_request_id")
+      INNER JOIN "orders_orderitem" i ON (i."id" = ri."order_item_id")
+      INNER JOIN "orders_order" o ON (o."id" = i."order_id")
+      INNER JOIN "accounts_branch" b ON (b."id" = o."branch_id")
+      WHERE ${where.join(' AND ')}`;
+    const count = Number(
+      (await this.db.one<{ count: string }>(`SELECT COUNT(*) AS "count" ${from}`, sql.values))
+        ?.count ?? 0,
+    );
+    const page = resolvePage(query, count, pageSizeFrom(query, STANDARD_PAGINATION));
+    const rows = await this.db.query<{
+      id: string;
+      quantity: number;
+      condition_note: string;
+      return_id: string;
+      return_number: string;
+      received_at: string | null;
+      order_id: string;
+      order_number: string;
+      branch_id: string;
+      branch_code: string;
+      variant_id: string;
+      sku: string;
+      product_name: string;
+      variant_label: string;
+      unit_cost: string;
+    }>(
+      `SELECT ri."id", ri."quantity", ri."condition_note", r."id" AS "return_id",
+              r."number" AS "return_number", r."received_at", o."id" AS "order_id",
+              o."number" AS "order_number", b."id" AS "branch_id", b."code" AS "branch_code",
+              i."variant_id", i."sku", i."product_name", i."variant_label", i."unit_cost"
+         ${from}
+        ORDER BY r."received_at" ASC, ri."id" ASC LIMIT ${page.limit} OFFSET ${page.offset}`,
+      sql.values,
+    );
+    const candidates = rows.length
+      ? await this.db.query<{
+          id: string;
+          variant_id: string;
+          branch_id: string;
+          returnable: number;
+          unit_cost: string;
+          po_id: string;
+          po_number: string;
+          supplier_id: string;
+          supplier_name: string;
+        }>(
+          `SELECT ${I}."id", ${I}."variant_id", ${PO}."branch_id",
+                  (${I}."quantity_received" - ${I}."quantity_returned") AS "returnable",
+                  ${I}."unit_cost", ${PO}."id" AS "po_id", ${PO}."number" AS "po_number",
+                  s."id" AS "supplier_id", s."name" AS "supplier_name"
+             FROM ${I} INNER JOIN ${PO} ON (${PO}."id" = ${I}."purchase_order_id")
+             INNER JOIN "purchasing_supplier" s ON (s."id" = ${PO}."supplier_id")
+            WHERE ${I}."variant_id" = ANY($1::uuid[])
+              AND NOT (${PO}."status" IN ('DRAFT', 'CANCELLED'))
+              AND ${I}."quantity_received" > ${I}."quantity_returned"
+            ORDER BY ${PO}."created_at" DESC, ${I}."id" ASC`,
+          [[...new Set(rows.map((row) => row.variant_id))]],
+        )
+      : [];
+    const results = rows.map((row) => ({
+      id: row.id,
+      quantity: row.quantity,
+      condition_note: row.condition_note,
+      return_request: { id: row.return_id, number: row.return_number },
+      order: { id: row.order_id, number: row.order_number },
+      branch: { id: row.branch_id, code: row.branch_code },
+      variant: row.variant_id,
+      sku: row.sku,
+      product_name: row.product_name,
+      variant_label: row.variant_label,
+      unit_cost: row.unit_cost,
+      received_at: localIso(row.received_at, this.env.DJANGO_TIME_ZONE),
+      purchase_lines: candidates
+        .filter(
+          (line) =>
+            line.variant_id === row.variant_id &&
+            line.branch_id === row.branch_id &&
+            Number(line.returnable) >= row.quantity,
+        )
+        .map((line) => ({
+          id: line.id,
+          purchase_order: { id: line.po_id, number: line.po_number },
+          supplier: { id: line.supplier_id, name: line.supplier_name },
+          unit_cost: line.unit_cost,
+          returnable: Number(line.returnable),
+        })),
+    }));
+    return paginated(page, results, absoluteUrl);
+  }
+
+  /**
+   * Damaged customer returns sent back on one purchase order: a purchase
+   * return whose lines each name the damaged return line they credit, at
+   * the purchase line's cost. **No stock moves** -- a damaged item never went
+   * back on the shelf -- but the purchase line's returned count does, and
+   * the order is credited, as any return to the supplier. Once per
+   * `Idempotency-Key`; the return lines are locked, so one item is credited
+   * once however many sends race for it (and the unique column holds if
+   * they did not).
+   */
+  async sendDamaged(
+    user: RequestUser,
+    data: unknown,
+    idempotencyKey: string | null,
+    context: AuditContext,
+  ) {
+    const validated = await runSerializer<{
+      purchase_order: string;
+      lines: { return_item: string; purchase_order_item: string }[];
+      reason: string;
+      notes?: string;
+    }>(
+      {
+        purchase_order: uuidField(),
+        lines: nestedListField({ return_item: uuidField(), purchase_order_item: uuidField() }),
+        reason: withDefault(
+          choiceField(Object.keys(RETURN_REASONS), { required: false }),
+          () => 'DAMAGED',
+        ),
+        notes: charField({ required: false, allowBlank: true }),
+      } as Fields,
+      data,
+    );
+    if (!validated.ok)
+      throw new ValidationError('Invalid input.', { details: errorMessages(validated.errors) });
+    const { lines, reason } = validated.values;
+    const notes = validated.values.notes ?? '';
+    if (!lines.length) throw new ValidationError('Choose at least one damaged item to send back.');
+    const seen = new Set<string>();
+    for (const line of lines) {
+      if (seen.has(line.return_item))
+        throw new ValidationError(`${line.return_item} appears twice; send each item once.`);
+      seen.add(line.return_item);
+    }
+    const found = await this.find(user, validated.values.purchase_order, new QueryDict(''));
+    const actor = { id: user.id, email: user.email };
+    const key = idempotencyKey || null;
+
+    const returnId = await this.stock.run(async (tx: Queryable) => {
+      const order = await this.lockOrder(tx, found.id);
+      if (key) {
+        const existing = await this.returnByKey(tx, key);
+        if (existing) return existing;
+      }
+      if (order.status === 'DRAFT' || order.status === 'CANCELLED') {
+        throw new Conflict(
+          `A ${order.status} purchase order has received nothing, so nothing can be sent back.`,
+        );
+      }
+      const items = new Map(
+        (
+          await tx.query<LockedItem>(
+            `SELECT ${ITEM_COLUMNS} FROM ${I} WHERE ${I}."purchase_order_id" = $1
+              ORDER BY ${I}."id" FOR UPDATE`,
+            [order.id],
+          )
+        ).map((item) => [item.id, item]),
+      );
+      // The return lines first, locked: a second send of the same item, on any
+      // purchase order, waits here for the first.
+      const damaged = new Map(
+        (
+          await tx.query<{
+            id: string;
+            quantity: number;
+            restock_decision: string | null;
+            status: string;
+            return_number: string;
+            variant_id: string;
+            sku: string;
+            branch_id: string;
+            sent?: boolean;
+          }>(
+            `SELECT ri."id", ri."quantity", ri."restock_decision", r."status",
+                    r."number" AS "return_number", i."variant_id", i."sku", o."branch_id"
+               FROM "orders_returnitem" ri
+               INNER JOIN "orders_returnrequest" r ON (r."id" = ri."return_request_id")
+               INNER JOIN "orders_orderitem" i ON (i."id" = ri."order_item_id")
+               INNER JOIN "orders_order" o ON (o."id" = i."order_id")
+              WHERE ri."id" = ANY($1::uuid[]) ORDER BY ri."id" FOR UPDATE OF ri`,
+            [lines.map((line) => line.return_item)],
+          )
+        ).map((row) => [row.id, row]),
+      );
+      // Then, in a statement of its own, what has gone back: read after the
+      // lock, so it sees what the send it waited for committed. (Asked in the
+      // locking statement, it would be read as that statement began.)
+      for (const row of await tx.query<{ return_item_id: string }>(
+        `SELECT "return_item_id" FROM "purchasing_purchasereturnitem"
+          WHERE "return_item_id" = ANY($1::uuid[])`,
+        [[...damaged.keys()]],
+      )) {
+        const item = damaged.get(row.return_item_id);
+        if (item) item.sent = true;
+      }
+      const taking = new Map<string, number>();
+      for (const line of lines) {
+        const item = damaged.get(line.return_item);
+        if (!item) throw new ValidationError(`${line.return_item} is not a returned item.`);
+        if (item.restock_decision !== 'DAMAGED')
+          throw new ValidationError(
+            `${item.sku} on ${item.return_number} was not returned damaged.`,
+          );
+        if (item.status !== 'RECEIVED' && item.status !== 'COMPLETED')
+          throw new Conflict(`${item.return_number} has not been received yet.`);
+        if (item.sent)
+          throw new Conflict(
+            `${item.sku} on ${item.return_number} has already gone back to the supplier.`,
+          );
+        if (item.branch_id !== order.branch_id)
+          throw new ValidationError(
+            `${item.sku} on ${item.return_number} is at another branch than ${order.number}.`,
+          );
+        const purchased = items.get(line.purchase_order_item);
+        if (!purchased)
+          throw new ValidationError(
+            `Line ${line.purchase_order_item} does not belong to ${order.number}.`,
+          );
+        if (purchased.variant_id !== item.variant_id)
+          throw new ValidationError(`${order.number} line ${purchased.id} is not ${item.sku}.`);
+        const already = taking.get(purchased.id) ?? 0;
+        const returnable = purchased.quantity_received - purchased.quantity_returned - already;
+        if (item.quantity > returnable) {
+          throw new ValidationError(
+            `Cannot send ${item.quantity} of ${item.sku} back on ${order.number}: only ` +
+              `${returnable} received there and not already sent back.`,
+            {
+              details: { purchase_order_item: purchased.id, requested: item.quantity, returnable },
+            },
+          );
+        }
+        taking.set(purchased.id, already + item.quantity);
+      }
+
+      const id = randomUUID();
+      let number: string;
+      await tx.query('SAVEPOINT purchase_return');
+      try {
+        number = await nextNumber(tx, 'purchase_return', 'PRN');
+        await tx.query(
+          `INSERT INTO "purchasing_purchasereturn"
+             ("id", "created_at", "updated_at", "number", "purchase_order_id", "reason", "notes",
+              "returned_at", "returned_by_id", "credit_total", "idempotency_key")
+           VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2, $3::uuid, $4, $5,
+                   $6::timestamptz, $7::uuid, 0.00, $8)`,
+          [id, number, order.id, reason, notes, await this.now(tx), actor.id, key],
+        );
+        await tx.query('RELEASE SAVEPOINT purchase_return');
+      } catch (error) {
+        if (!String((error as { code?: string }).code).startsWith('23')) throw error;
+        await tx.query('ROLLBACK TO SAVEPOINT purchase_return');
+        const winner = key === null ? null : await this.returnByKey(tx, key);
+        if (winner) return winner;
+        throw error;
+      }
+
+      let credit = ZERO;
+      for (const line of lines) {
+        const item = damaged.get(line.return_item) as { id: string; quantity: number };
+        const purchased = items.get(line.purchase_order_item) as LockedItem;
+        const unitCost = quantize(purchased.unit_cost);
+        await tx.query(
+          `INSERT INTO "purchasing_purchasereturnitem"
+             ("id", "created_at", "updated_at", "purchase_return_id", "purchase_order_item_id",
+              "quantity", "unit_cost", "return_item_id")
+           VALUES ($1::uuid, clock_timestamp(), clock_timestamp(), $2::uuid, $3::uuid, $4, $5, $6::uuid)`,
+          [randomUUID(), id, purchased.id, item.quantity, money(unitCost), item.id],
+        );
+        purchased.quantity_returned += item.quantity;
+        await tx.query(
+          `UPDATE ${I} SET "quantity_returned" = $2, "updated_at" = clock_timestamp()
+            WHERE ${I}."id" = $1`,
+          [purchased.id, purchased.quantity_returned],
+        );
+        credit = credit.plus(quantize(unitCost.times(item.quantity)));
+      }
+
+      const creditTotal = quantize(credit);
+      await tx.query(
+        `UPDATE "purchasing_purchasereturn" SET "credit_total" = $2, "updated_at" = clock_timestamp()
+          WHERE "id" = $1`,
+        [id, money(creditTotal)],
+      );
+      const credited = quantize(new Dec(order.credited_total).plus(credit));
+      await tx.query(
+        `UPDATE ${PO} SET "credited_total" = $2, "updated_at" = clock_timestamp()
+          WHERE ${PO}."id" = $1`,
+        [order.id, money(credited)],
+      );
+      await this.refreshPaymentStatus(tx, { ...order, credited_total: money(credited) });
+      await recordAudit(tx, context, {
+        action: 'PURCHASE_RECEIVED',
+        entity: { type: 'PurchaseOrder', id: order.id, label: await this.label(tx, order) },
+        actor,
+        oldValues: { credited_total: money(credited.minus(credit)) },
+        newValues: {
+          return: number,
+          credit: money(creditTotal),
+          credited_total: money(credited),
+          damaged_returns: lines.map((line) => {
+            const item = damaged.get(line.return_item) as { sku: string; return_number: string };
+            return `${item.return_number} ${item.sku}`;
+          }),
+        },
+        reason: notes || 'Damaged customer returns sent back to the supplier',
         branchId: order.branch_id,
       });
       return id;

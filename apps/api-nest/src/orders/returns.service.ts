@@ -192,7 +192,7 @@ interface CompleteData {
 }
 
 /** What a request for a return asks for, once validated. */
-interface ReturnAsk {
+export interface ReturnAsk {
   orderId: string;
   lines: { orderItem: string; quantity: number | bigint; restockDecision: string }[];
   reason: string;
@@ -1036,22 +1036,92 @@ export class ReturnsService {
   async posReturn(user: RequestUser, data: unknown, context: AuditContext) {
     // `pos_return` takes no comment: one sent is validated and dropped.
     const ask = { ...(await this.asked(data, POS_RETURN_FIELDS)), customerComment: '' };
-    const actor = { id: user.id, email: user.email };
-    const opened = await this.stock.run(async (tx: Queryable, after: AfterCommit) => {
-      const request = await this.requestReturn(tx, context, user, ask);
-      await this.approveLocked(tx, request.id, actor, '');
-      await this.receiveLocked(tx, after, request.id, actor, null);
-      await this.completeLocked(tx, context, request.id, actor, {
-        method: ask.refundMethod || null,
-      });
-      return request;
-    });
+    const opened = await this.stock.run((tx: Queryable, after: AfterCommit) =>
+      this.counterReturn(tx, after, context, user, ask, { method: ask.refundMethod || null }),
+    );
     await this.notify(opened);
     return this.answer(opened.id);
   }
+
+  /** A return's request validated as a counter return's is, without how the money goes back. */
+  async counterAsk(data: unknown): Promise<ReturnAsk> {
+    return { ...(await this.asked(data, CREATE_FIELDS)), customerComment: '' };
+  }
+
+  /**
+   * A return at the counter, inside the caller's transaction: requested,
+   * approved and received -- the goods decided line by line, RESTOCK back on
+   * the shelf -- then refunded. `beforeRefund` runs between the two, with
+   * what the refund will be: an exchange rings its new sale up there, so the
+   * drawer takes that sale's cash before the refund leaves it.
+   */
+  async counterReturn(
+    tx: Queryable,
+    after: AfterCommit,
+    context: AuditContext,
+    user: RequestUser,
+    ask: ReturnAsk,
+    refund: { method: string | null; idempotencyKey?: string | null },
+    beforeRefund?: (request: Opened, amount: Dec) => Promise<void>,
+  ): Promise<Opened> {
+    const actor = { id: user.id, email: user.email };
+    const request = await this.requestReturn(tx, context, user, ask);
+    await this.approveLocked(tx, request.id, actor, '');
+    await this.receiveLocked(tx, after, request.id, actor, null);
+    if (beforeRefund) {
+      const amount = (
+        (await tx.one<{ refund_amount: string }>(
+          `SELECT "refund_amount" FROM ${R} WHERE ${R}."id" = $1 LIMIT 21`,
+          [request.id],
+        )) as { refund_amount: string }
+      ).refund_amount;
+      await beforeRefund(request, quantize(amount));
+    }
+    await this.completeLocked(tx, context, request.id, actor, {
+      method: refund.method,
+      idempotencyKey: refund.idempotencyKey ?? null,
+    });
+    return request;
+  }
+
+  /**
+   * What a counter return would refund, asked before the customer pays for
+   * an exchange: the request itself, made and rolled back, so the figure --
+   * every refusal on the way to it, too -- is the one the return will have.
+   */
+  async worth(user: RequestUser, context: AuditContext, ask: ReturnAsk): Promise<Dec> {
+    let amount = ZERO;
+    try {
+      await this.db.transaction(async (tx) => {
+        const opened = await this.requestReturn(tx, context, user, ask);
+        amount = quantize(
+          (
+            (await tx.one<{ refund_amount: string }>(
+              `SELECT "refund_amount" FROM ${R} WHERE ${R}."id" = $1 LIMIT 21`,
+              [opened.id],
+            )) as { refund_amount: string }
+          ).refund_amount,
+        );
+        throw new RolledBack();
+      });
+    } catch (error) {
+      if (!(error instanceof RolledBack)) throw error;
+    }
+    return amount;
+  }
+
+  /** After the commit: the staff who refund hear of the return. */
+  notifyOpened(opened: Opened): Promise<void> {
+    return this.notify(opened);
+  }
+
+  /** The return as its own routes answer it. */
+  answerFor(id: string) {
+    return this.answer(id);
+  }
 }
 
-interface Opened {
+export interface Opened {
   id: string;
   number: string;
   orderNumber: string;
@@ -1088,3 +1158,6 @@ interface OrderLine {
   line_total: string;
   tax_amount: string;
 }
+
+/** Thrown to undo a transaction whose work was only asked about. */
+class RolledBack extends Error {}

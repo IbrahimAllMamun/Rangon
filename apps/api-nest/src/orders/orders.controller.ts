@@ -31,7 +31,8 @@ const VIEW = ['orders.view'] as const;
   status: ['orders.update_status'],
   cancel: ['sales.cancel'],
   payments: ['sales.payment_record'],
-  refunds: ['sales.refund'],
+  // Money with no goods coming back: the owner's alone (business rules 2.4).
+  refunds: ['sales.refund_without_return'],
 })
 export class OrdersController {
   constructor(

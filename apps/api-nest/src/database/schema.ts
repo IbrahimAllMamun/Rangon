@@ -1777,10 +1777,13 @@ export const purchasingPurchasereturnitem = pgTable("purchasing_purchasereturnit
 	unitCost: numeric("unit_cost", { precision: 14, scale:  2 }).notNull(),
 	purchaseOrderItemId: uuid("purchase_order_item_id").notNull(),
 	purchaseReturnId: uuid("purchase_return_id").notNull(),
+	// A damaged customer-return line this one sends back to the supplier: credited once.
+	returnItemId: uuid("return_item_id"),
 }, (table) => [
 	index("purchasing_purchasereturnitem_created_at_bd5b8a9a").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")),
 	index("purchasing_purchasereturnitem_purchase_order_item_id_45e07402").using("btree", table.purchaseOrderItemId.asc().nullsLast().op("uuid_ops")),
 	index("purchasing_purchasereturnitem_purchase_return_id_e9e325ba").using("btree", table.purchaseReturnId.asc().nullsLast().op("uuid_ops")),
+	unique("purchasing_purchasereturnitem_return_item_id_uniq").on(table.returnItemId),
 	check("purchasing_pri_return_qty_gt_0", sql`quantity > 0`),
 	check("purchasing_purchasereturnitem_quantity_check", sql`quantity >= 0`),
 ]);

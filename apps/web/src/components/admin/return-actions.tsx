@@ -24,6 +24,7 @@ import type {
   ReturnItem,
   ReturnRequest,
 } from "@/lib/api/types";
+import { RETURN_DECISIONS } from "@/lib/commerce/returns";
 import { money } from "@/lib/format";
 import {
   METHOD_KIND,
@@ -37,19 +38,21 @@ import {
 type FieldError = { field: string; message: string };
 
 /**
- * What happens to each returned line. Only `RESTOCK` puts goods back into
- * sellable stock — the other two are recorded on the line and never increase
- * availability (docs/business-rules.md §2.3).
+ * What happens to each returned line: back on the shelf, or damaged and back
+ * to the supplier (docs/business-rules.md §2.3). Quarantine is offered only
+ * on a line that already holds it, from before the shop chose the supplier.
  */
+const QUARANTINE = {
+  value: "QUARANTINE" as RestockDecision,
+  label: "Quarantine",
+  hint: "Held for inspection. Not sellable and not written off.",
+};
 const DECISIONS: { value: RestockDecision; label: string; hint: string }[] = [
-  { value: "RESTOCK", label: "Back on the shelf", hint: "Sellable again." },
-  { value: "DAMAGED", label: "Damaged", hint: "Written off. Never re-enters stock." },
-  {
-    value: "QUARANTINE",
-    label: "Quarantine",
-    hint: "Held for inspection. Not sellable and not written off.",
-  },
+  ...RETURN_DECISIONS,
+  QUARANTINE,
 ];
+const offered = (current: RestockDecision | undefined) =>
+  current === "QUARANTINE" ? DECISIONS : RETURN_DECISIONS;
 
 function apiError(caught: unknown, field: string): FieldError[] {
   if (caught instanceof ApiError) {
@@ -242,7 +245,7 @@ export function ReturnActions({
                             }))
                           }
                         >
-                          {DECISIONS.map((option) => (
+                          {offered(item.restock_decision).map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>

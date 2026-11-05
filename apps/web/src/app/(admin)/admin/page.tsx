@@ -8,7 +8,6 @@ import {
   type LucideIcon,
   Package,
   Receipt,
-  ShoppingCart,
   Smartphone,
   TrendingDown,
   TrendingUp,
@@ -98,12 +97,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
       />
 
       <div className="space-y-6">
+        {/* Revenue is net of what was given back; net profit sits beside it for
+            whoever may read it (`reports.financial`). The costs between gross
+            and net profit follow in their own row. */}
         <KpiGroup id="kpi-sales" title="Sales">
           <StatCard
             label="Revenue"
-            value={money(kpis.revenue)}
-            context={`${plural(kpis.orders, "order")} · ${plural(kpis.units_sold, "item")}`}
+            value={money(kpis.net_revenue)}
+            context={
+              Number(kpis.refunded_total) > 0
+                ? `${moneyCompact(kpis.revenue)} sold, less refunds · ${plural(kpis.orders, "order")}`
+                : `${plural(kpis.orders, "order")} · ${plural(kpis.units_sold, "item")}`
+            }
             icon={<Wallet className="size-4" aria-hidden />}
+            tone={Number(kpis.net_revenue) < 0 ? "error" : "neutral"}
           />
           <StatCard
             label="Refunded"
@@ -113,40 +120,38 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             icon={<HandCoins className="size-4" aria-hidden />}
           />
           <StatCard
-            label="Net sales"
-            value={money(kpis.net_revenue)}
-            context={`After refunds · avg order ${moneyCompact(kpis.average_order_value)}`}
-            icon={<ShoppingCart className="size-4" aria-hidden />}
-            tone={Number(kpis.net_revenue) < 0 ? "error" : "neutral"}
+            label="Gross profit"
+            value={money(profit?.gross_profit ?? kpis.gross_profit)}
+            context={`${percent(kpis.margin_percent)} margin, after returns`}
+            icon={<TrendingUp className="size-4" aria-hidden />}
+            tone={Number(profit?.gross_profit ?? kpis.gross_profit) < 0 ? "error" : "success"}
           />
-          {/* With the profit row below, gross profit opens that row instead,
-              so the row reads as the sum it is. */}
-          {!profit && (
+          {profit && (
             <StatCard
-              label="Gross profit"
-              value={money(kpis.gross_profit)}
-              context={`${percent(kpis.margin_percent)} margin, after returns`}
-              icon={<TrendingUp className="size-4" aria-hidden />}
-              tone={Number(kpis.gross_profit) < 0 ? "error" : "success"}
+              label="Net profit"
+              value={money(profit.net_profit)}
+              context={`${percent(profit.net_margin_percent)} net margin`}
+              href={`/admin/reports/business?range=${range}`}
+              icon={
+                Number(profit.net_profit) < 0 ? (
+                  <TrendingDown className="size-4" aria-hidden />
+                ) : (
+                  <TrendingUp className="size-4" aria-hidden />
+                )
+              }
+              tone={Number(profit.net_profit) < 0 ? "error" : "success"}
             />
           )}
         </KpiGroup>
 
         {profit && (
-          <KpiGroup id="kpi-profit" title="Profit">
-            <StatCard
-              label="Gross profit"
-              value={money(profit.gross_profit)}
-              context={`${percent(kpis.margin_percent)} margin, after returns`}
-              icon={<TrendingUp className="size-4" aria-hidden />}
-              tone={Number(profit.gross_profit) < 0 ? "error" : "success"}
-            />
-            {/* Zero in most periods, and then left out: the row still adds up. */}
+          <KpiGroup id="kpi-profit" title="Between gross and net profit">
+            {/* Zero in most periods, and then left out. */}
             {Number(profit.return_losses) !== 0 && (
               <StatCard
                 label="Return losses"
                 value={money(profit.return_losses)}
-                context="Write-offs, shipping and refunds beyond the goods"
+                context="Quarantined stock, shipping and refunds beyond the goods"
                 href={`/admin/reports/business?range=${range}`}
                 icon={<Undo2 className="size-4" aria-hidden />}
                 tone={Number(profit.return_losses) > 0 ? "warning" : "neutral"}
@@ -175,20 +180,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               }
               href="/admin/purchases"
               icon={<Truck className="size-4" aria-hidden />}
-            />
-            <StatCard
-              label="Net profit"
-              value={money(profit.net_profit)}
-              context={`${percent(profit.net_margin_percent)} net margin`}
-              href={`/admin/reports/business?range=${range}`}
-              icon={
-                Number(profit.net_profit) < 0 ? (
-                  <TrendingDown className="size-4" aria-hidden />
-                ) : (
-                  <TrendingUp className="size-4" aria-hidden />
-                )
-              }
-              tone={Number(profit.net_profit) < 0 ? "error" : "success"}
             />
           </KpiGroup>
         )}

@@ -126,7 +126,11 @@ export interface StatementSums {
   returnedVat: Dec;
   /** The frozen cost of every returned unit, whatever became of it. */
   cogsReturned: Dec;
-  /** The part of `cogsReturned` that did not go back on the shelf (DAMAGED, QUARANTINE). */
+  /**
+   * The part of `cogsReturned` that is lost: QUARANTINE, on neither the shelf
+   * nor its way back. DAMAGED goes back to the supplier, who credits it
+   * (business rules 2.3), so it is not a loss of the shop's.
+   */
   writtenOff: Dec;
   /** What completed returns paid out: `refund_amount`, VAT and shipping in it. */
   refunds: Dec;
@@ -355,7 +359,8 @@ export class ReportsService {
               COALESCE(SUM(${RETURNED_LINE_VAT}), 0.00) AS "vat",
               COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity")), 0.00) AS "cost",
               COALESCE(SUM((${I}."unit_cost" * ${RI}."quantity"))
-                FILTER (WHERE ${RI}."restock_decision" IS DISTINCT FROM 'RESTOCK'), 0.00) AS "written_off"
+                FILTER (WHERE ${RI}."restock_decision" IS DISTINCT FROM 'RESTOCK'
+                          AND ${RI}."restock_decision" IS DISTINCT FROM 'DAMAGED'), 0.00) AS "written_off"
          FROM ${RI} INNER JOIN ${I} ON (${RI}."order_item_id" = ${I}."id")
          INNER JOIN ${O} ON (${I}."order_id" = ${O}."id")
         WHERE ${this.completedReturnLines(sql, scope)}`,

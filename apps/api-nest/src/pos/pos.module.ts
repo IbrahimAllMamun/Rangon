@@ -24,6 +24,8 @@ import {
   PosSessionController,
 } from './pos.controller';
 import { PosCounterService } from './pos-counter.service';
+import { PosExchangesController } from './pos-exchanges.controller';
+import { PosExchanges } from './pos-exchanges.service';
 import { PosReadsService } from './pos-reads.service';
 import { PosSales } from './pos-sales.service';
 import { SalePricing } from './sale-pricing.service';
@@ -40,6 +42,7 @@ import { SalePricing } from './sale-pricing.service';
     PosSalesController,
     HeldSalesController,
     PosReturnsController,
+    PosExchangesController,
     ReturnsController,
     OrdersController,
   ],
@@ -49,6 +52,7 @@ import { SalePricing } from './sale-pricing.service';
     SalePricing,
     PosCounterService,
     PosSales,
+    PosExchanges,
     StaffOrders,
     OrderPayments,
     OrderWritesService,

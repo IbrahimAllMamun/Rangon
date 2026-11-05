@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowLeftRight,
   Barcode,
   CircleAlert,
   Loader2,
@@ -25,10 +26,12 @@ import { CustomerPanel } from "@/components/pos/customer-panel";
 import { DiscountPanel } from "@/components/pos/discount-panel";
 import { PaymentPanel } from "@/components/pos/payment-panel";
 import { Receipt } from "@/components/pos/receipt";
+import { ReturnDialog } from "@/components/pos/return-dialog";
 import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiClient } from "@/lib/api/client";
 import type { Order, PosQuoteIssue, PosSession, PosVariant } from "@/lib/api/types";
 import { discountLabel, shownTotals } from "@/lib/commerce/pos-sale";
+import { ORDER_NUMBER } from "@/lib/commerce/returns";
 import { isBlankClick, redirectsToScan } from "@/lib/commerce/scan-focus";
 import { money } from "@/lib/format";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
@@ -36,8 +39,6 @@ import { useDelayedFlag } from "@/lib/use-delayed-flag";
 import { type PricedBasket, useSaleQuote } from "@/lib/use-sale-quote";
 import { usePos } from "@/lib/store/pos";
 
-/** An order number, as the receipt's barcode carries it (`RGN-POS-000123`). */
-const ORDER_NUMBER = /^RGN-(POS|WEB)-\d+$/i;
 
 /**
  * Delay before the scan field asks the server what it is looking at.
@@ -88,6 +89,10 @@ export function PosRegister({ session }: { session: PosSession }) {
   /** Why payment closed on its own: the sale changed under it. */
   const [notice, setNotice] = useState<string | null>(null);
   const [completed, setCompleted] = useState<Order | null>(null);
+  /** What the exchange that just completed gave back in cash, for the receipt screen. */
+  const [givenBack, setGivenBack] = useState(0);
+  /** The return dialog, with the receipt number a scan brought, if one did. */
+  const [returning, setReturning] = useState<{ number?: string } | null>(null);
   const [holds, setHolds] = useState(session.holds);
   const [announcement, setAnnouncement] = useState("");
   const searchAbort = useRef<AbortController | null>(null);
@@ -99,7 +104,7 @@ export function PosRegister({ session }: { session: PosSession }) {
   const paymentOpen = paying !== null;
   // Two Radix dialogs at once fight over the focus trap, so a shortcut never
   // opens one on top of another.
-  const dialogOpen = paymentOpen || customerOpen || discountOpen;
+  const dialogOpen = paymentOpen || customerOpen || discountOpen || returning !== null;
 
   // A failed answer is for this basket but carries the last good quote, which
   // is some other basket's: never shown as settled.
@@ -152,6 +157,9 @@ export function PosRegister({ session }: { session: PosSession }) {
       } else if (event.key === "F4") {
         event.preventDefault();
         if (!dialogOpen) void hold();
+      } else if (event.key === "F6") {
+        event.preventDefault();
+        if (!dialogOpen) setReturning({});
       } else if (event.key === "F8") {
         event.preventDefault();
         if (!dialogOpen && pos.lines.length && confirm("Clear the current sale?")) pos.clear();
@@ -162,6 +170,7 @@ export function PosRegister({ session }: { session: PosSession }) {
         setPaying(null);
         setCustomerOpen(false);
         setDiscountOpen(false);
+        setReturning(null);
         setCompleted(null);
         focusScan();
       }
@@ -249,6 +258,16 @@ export function PosRegister({ session }: { session: PosSession }) {
     const trimmed = code.trim();
     if (!trimmed) return;
 
+    // A receipt scanned at the till: the customer is bringing something back.
+    if (ORDER_NUMBER.test(trimmed)) {
+      cancelSearch();
+      setScan("");
+      setResults([]);
+      setScanError(null);
+      setReturning({ number: trimmed.toUpperCase() });
+      return;
+    }
+
     // The scan is the answer; a half-typed search for the same barcode is not.
     // Dropping it here frees the connection this lookup is about to need.
     cancelSearch();
@@ -282,12 +301,8 @@ export function PosRegister({ session }: { session: PosSession }) {
       setScan("");
       setResults([]);
     } catch (error) {
-      // A receipt scanned at the till by mistake: say where it belongs.
-      const message = ORDER_NUMBER.test(trimmed)
-        ? `${trimmed.toUpperCase()} is a receipt, not a product. Open it from Orders in the back office.`
-        : error instanceof ApiError
-          ? error.message
-          : "That code was not recognised.";
+      const message =
+        error instanceof ApiError ? error.message : "That code was not recognised.";
       setScanError(message);
       setAnnouncement(message);
     } finally {
@@ -391,8 +406,10 @@ export function PosRegister({ session }: { session: PosSession }) {
       <Receipt
         order={completed}
         session={session}
+        givenBack={givenBack}
         onNewSale={() => {
           setCompleted(null);
+          setGivenBack(0);
           pos.clear();
           focusScan();
         }}
@@ -526,7 +543,7 @@ export function PosRegister({ session }: { session: PosSession }) {
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted">
                   <Search className="size-8" aria-hidden />
                   <p className="text-body-sm">Scan an item, or type at least 2 characters to search.</p>
-                  <p className="text-caption">F2 payment · F4 hold · F8 clear · F9 discount</p>
+                  <p className="text-caption">F2 payment · F4 hold · F6 return or exchange · F8 clear · F9 discount</p>
                 </div>
               )
             )}
@@ -592,6 +609,31 @@ export function PosRegister({ session }: { session: PosSession }) {
               </button>
             )}
           </div>
+
+          {pos.exchange && (
+            <div
+              role="status"
+              className="flex items-start gap-2 border-b border-border bg-[var(--info-bg)] px-4 py-2 text-body-sm"
+            >
+              <ArrowLeftRight className="mt-0.5 size-4 shrink-0" aria-hidden />
+              <p className="min-w-0 flex-1">
+                <span className="font-semibold">Exchange:</span> {pos.exchange.summary} back,
+                worth <span className="tabular font-semibold">{money(pos.exchange.credit)}</span>.
+                Scan the new items.
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  pos.setExchange(null);
+                  setAnnouncement("Exchange cancelled");
+                  focusScan();
+                }}
+              >
+                <X aria-hidden /> Cancel
+              </Button>
+            </div>
+          )}
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             {pos.lines.length === 0 ? (
@@ -768,13 +810,23 @@ export function PosRegister({ session }: { session: PosSession }) {
             >
               <TicketPercent aria-hidden /> Discount or coupon (F9)
             </Button>
+            <Button
+              variant="secondary"
+              size="lg"
+              full
+              className="mt-2"
+              onClick={() => setReturning({})}
+              disabled={pos.exchange !== null}
+            >
+              <ArrowLeftRight aria-hidden /> Return or exchange (F6)
+            </Button>
 
             <div className="mt-2 grid grid-cols-2 gap-2">
               <Button
                 variant="secondary"
                 size="lg"
                 onClick={() => void hold()}
-                disabled={!pos.lines.length}
+                disabled={!pos.lines.length || pos.exchange !== null}
               >
                 <Pause aria-hidden /> Hold (F4)
               </Button>
@@ -796,7 +848,9 @@ export function PosRegister({ session }: { session: PosSession }) {
               loading={openingPayment}
               disabled={!pos.lines.length || blocked}
             >
-              Payment (F2) · {money(shown.total)}
+              {pos.exchange
+                ? `Payment (F2) · ${money(Math.max(0, shown.total - pos.exchange.credit))} after exchange`
+                : `Payment (F2) · ${money(shown.total)}`}
             </Button>
           </div>
         </section>
@@ -831,16 +885,35 @@ export function PosRegister({ session }: { session: PosSession }) {
         />
       )}
 
+      {returning && (
+        <ReturnDialog
+          session={session}
+          number={returning.number}
+          onClose={() => {
+            setReturning(null);
+            focusScan();
+          }}
+          onExchange={(exchange) => {
+            pos.setExchange(exchange);
+            setReturning(null);
+            setAnnouncement(`Exchange started: ${exchange.summary}. Scan the new items.`);
+            focusScan();
+          }}
+        />
+      )}
+
       {paying && (
         <PaymentPanel
           priced={paying}
+          exchange={pos.exchange}
           accounts={session.accounts ?? []}
           onClose={() => {
             setPaying(null);
             focusScan();
           }}
-          onCompleted={(order) => {
+          onCompleted={(order, giveBack) => {
             setPaying(null);
+            setGivenBack(giveBack ?? 0);
             setCompleted(order);
           }}
           onStale={(message) => {

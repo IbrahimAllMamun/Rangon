@@ -61,6 +61,8 @@ import { posSaleCases } from './pos-sale-cases.ts';
 import { posVoidCases } from './pos-void-cases.ts';
 import { reportsCases } from './reports-cases.ts';
 import { returnsCases } from './returns-cases.ts';
+import { exchangeCases } from './exchange-cases.ts';
+import { exchangeConcurrencyChecks } from './exchange-concurrency.ts';
 import { returnsConcurrencyChecks } from './returns-concurrency.ts';
 import { emptyShopCases, type Stage } from './empty-shop-cases.ts';
 import { expensesCases } from './expenses-cases.ts';
@@ -980,6 +982,8 @@ async function buildCases(): Promise<Case[]> {
   cases.push(...(await jobsCases()));
   cases.push(...mediaCases());
   cases.push(...djangoOnlyCases());
+  // Last: written after Django went, so no recorded case after them moves.
+  cases.push(...(await exchangeCases()));
 
   return ONLY ? cases.filter((c) => c.name.includes(ONLY)) : cases;
 }
@@ -1425,6 +1429,7 @@ async function main(): Promise<void> {
       ['pos', () => posConcurrencyChecks({ DJANGO, NEST })],
       ['pos-sale', () => posSaleConcurrencyChecks({ DJANGO, NEST })],
       ['returns', () => returnsConcurrencyChecks({ DJANGO, NEST })],
+      ['exchanges', () => exchangeConcurrencyChecks({ DJANGO, NEST })],
       ['staff-orders', () => staffOrdersConcurrencyChecks({ DJANGO, NEST })],
       ['labels', () => labelsConcurrencyChecks({ DJANGO, NEST })],
       ['finance', () => financeConcurrencyChecks({ DJANGO, NEST })],

@@ -210,8 +210,16 @@ export function OrderActions({
           </div>
         )}
 
-        {can("sales.refund") && refundable > 0.001 && (
+        {/* Money with no goods coming back: the owner's call alone. A
+            customer bringing a product back is a return (Return items). */}
+        {can("sales.refund_without_return") && refundable > 0.001 && (
           <div className="space-y-3 border-t border-border pt-4">
+            <h3 className="text-body-sm font-semibold">Refund without a return</h3>
+            <p className="text-caption text-muted">
+              Only for money owed with no goods coming back: a payment taken by mistake, or a parcel
+              lost in delivery. Goods coming back? Use <strong>Return items</strong> instead: a
+              refund alone does not put stock back.
+            </p>
             <p className="text-body-sm">
               Refundable: <span className="tabular font-semibold">{money(refundable)}</span>
             </p>
@@ -233,10 +241,8 @@ export function OrderActions({
                 onChange={(event) => setRefundReason(event.target.value)}
               >
                 <option value="">Choose a reason…</option>
-                <option value="Customer returned the item">Customer returned the item</option>
-                <option value="Item was defective">Item was defective</option>
-                <option value="Wrong item delivered">Wrong item delivered</option>
-                <option value="Goodwill">Goodwill</option>
+                <option value="Payment taken by mistake">Payment taken by mistake</option>
+                <option value="Lost in delivery">Lost in delivery</option>
               </Select>
             </Field>
             <Field label="Refund as" htmlFor="refund-method">

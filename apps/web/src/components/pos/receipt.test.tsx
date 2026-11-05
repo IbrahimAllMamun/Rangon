@@ -158,3 +158,51 @@ describe("Receipt, discounts", () => {
     expect(screen.getByText("- 100.00")).toBeTruthy();
   });
 });
+
+describe("Receipt, an exchange", () => {
+  /** ৳2,790 of new goods: ৳886.93 of returned goods' worth, the rest paid in cash. */
+  function exchanged(): Order {
+    const payment = (id: string, amount: string, reference: string, tendered: string | null, change: string) => ({
+      id,
+      method: "CASH" as const,
+      status: "CAPTURED",
+      amount,
+      tendered_amount: tendered,
+      change_amount: change,
+      currency: "BDT",
+      provider: "manual",
+      provider_reference: "",
+      reference,
+      created_at: "2026-11-05T10:00:00Z",
+    });
+    return {
+      ...order("0.00"),
+      subtotal: "2790.00",
+      grand_total: "2790.00",
+      paid_total: "2790.00",
+      payments: [
+        payment("p-1", "886.93", "Exchange RET-000011", null, "0.00"),
+        payment("p-2", "1903.07", "", "2000.00", "96.93"),
+      ],
+    } as unknown as Order;
+  }
+
+  it("prints the returned goods' worth as an exchange credit, not as cash", () => {
+    render(<Receipt order={exchanged()} session={session()} onNewSale={() => {}} />);
+
+    expect(screen.getByText("Exchange credit")).toBeTruthy();
+    expect(screen.getByText("886.93")).toBeTruthy();
+  });
+
+  it("gives change from the customer's own cash, not from the credit", () => {
+    render(<Receipt order={exchanged()} session={session()} onNewSale={() => {}} />);
+
+    expect(screen.getByText(/Change due/).textContent).toContain("96.93");
+  });
+
+  it("says what to give back when the credit was more than the new goods", () => {
+    render(<Receipt order={order("0.00")} session={session()} givenBack={436.93} onNewSale={() => {}} />);
+
+    expect(screen.getByText(/Give back/).textContent).toContain("436.93");
+  });
+});

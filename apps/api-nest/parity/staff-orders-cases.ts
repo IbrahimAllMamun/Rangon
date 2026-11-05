@@ -666,6 +666,15 @@ export async function staffOrdersCases(): Promise<Case[]> {
 
   // === Refunds ===============================================================================
   const back = (amount: unknown, extra: Record<string, unknown> = {}) => ({ amount, ...extra });
+  // A refund with no goods coming back is the owner's alone (sales.refund_without_return,
+  // business rules 2.4): every refund case below is the owner's, unless it says whose.
+  const refund = (
+    name: string,
+    path: string,
+    body: unknown,
+    who: Who = 'owner',
+    extra: Partial<Case> = {},
+  ) => write(name, path, body, who, extra);
   for (const who of everyone) write(`[${who}] refund`, one(S(8), 'refunds'), back('100.00'), who);
   for (const [name, body] of [
     ['part of it', back('100.00', { reason: 'Seam split' })],
@@ -707,7 +716,7 @@ export async function staffOrdersCases(): Promise<Case[]> {
     ['broken JSON', '{"amount":'],
     ['no body', undefined],
   ] as [string, unknown][]) {
-    write(`refund: ${name}`, one(S(8), 'refunds'), body);
+    refund(`refund: ${name}`, one(S(8), 'refunds'), body);
   }
   for (const [name, key] of [
     ['a key of its own', 'parity-refund-1'],
@@ -716,43 +725,48 @@ export async function staffOrdersCases(): Promise<Case[]> {
     ['a key of 64 characters', 'k'.repeat(64)],
     ['a key of 65 characters', 'k'.repeat(65)],
   ] as [string, string][]) {
-    write(`refund: with ${name}`, one(S(8), 'refunds'), back('100.00'), 'manager', {
+    refund(`refund: with ${name}`, one(S(8), 'refunds'), back('100.00'), 'owner', {
       headers: { 'idempotency-key': key },
     });
   }
-  write('refund: an order paid by card', one(S(2), 'refunds'), back('602.00'));
-  write(
+  refund('refund: an order paid by card', one(S(2), 'refunds'), back('602.00'));
+  refund(
     'refund: an order paid by card, in cash',
     one(S(2), 'refunds'),
     back('602.00', { method: 'CASH' }),
   );
-  write('refund: a part-paid order, what was paid', one(S(3), 'refunds'), back('500.00'));
-  write('refund: a part-paid order, its whole total', one(S(3), 'refunds'), back('890.00'));
-  write('refund: an order nothing was paid on', one(S(1), 'refunds'), back('100.00'));
-  write('refund: an order refunded in full', one(S(7), 'refunds'), back('1.00'));
-  write(
+  refund('refund: a part-paid order, what was paid', one(S(3), 'refunds'), back('500.00'));
+  refund('refund: a part-paid order, its whole total', one(S(3), 'refunds'), back('890.00'));
+  refund('refund: an order nothing was paid on', one(S(1), 'refunds'), back('100.00'));
+  refund('refund: an order refunded in full', one(S(7), 'refunds'), back('1.00'));
+  refund(
     'refund: a counter sale paid in cash and by card',
     one(posSale, 'refunds'),
     back('3000.00'),
   );
-  write('refund: a voided sale', one(voided, 'refunds'), back('1.00'));
-  write('refund: another branch’s order, by a branch manager', one(S(6), 'refunds'), back('1.00'));
-  write('refund: an order at their own branch', one(S(6), 'refunds'), back('1.00'), 'mirpur');
-  write('refund: an order that is not there', one(MISSING, 'refunds'), back('1.00'));
-  write('refund: an order that is not there, with a bad body', one(MISSING, 'refunds'), {});
-  write(
+  refund('refund: a voided sale', one(voided, 'refunds'), back('1.00'));
+  refund(
+    'refund: another branch’s order, by a branch manager',
+    one(S(6), 'refunds'),
+    back('1.00'),
+    'manager',
+  );
+  refund('refund: an order at their own branch', one(S(6), 'refunds'), back('1.00'), 'mirpur');
+  refund('refund: an order that is not there', one(MISSING, 'refunds'), back('1.00'));
+  refund('refund: an order that is not there, with a bad body', one(MISSING, 'refunds'), {});
+  refund(
     'refund: filtered to another status',
     `${one(S(8), 'refunds')}?status=PENDING`,
     back('1.00'),
   );
-  write('refund: the drawer short of it', one(S(8), 'refunds'), back('4230.00'), 'manager', {
+  refund('refund: the drawer short of it', one(S(8), 'refunds'), back('4230.00'), 'owner', {
     prepare: drawerShort,
   });
-  write(
+  refund(
     'refund: the drawer short but allowed to go overdrawn',
     one(S(8), 'refunds'),
     back('4230.00'),
-    'manager',
+    'owner',
     {
       prepare: after(
         `UPDATE finance_account SET balance = 100.00, allow_overdraft = true WHERE name = 'Counter Cash Drawer'`,
